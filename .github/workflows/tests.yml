@@ -108,6 +108,9 @@ jobs:
         # Cheap smoke test that the capability graph still wires up: these are
         # the only places adapters are named, and a bad constructor signature
         # would not otherwise fail a test.
+        # `engine-web` would start a server, so it gets `--check`: compose,
+        # report, exit.
         run: |
           uv run engine-control-server
           uv run engine-worker
+          uv run engine-web --check

@@ -1,0 +1,43 @@
+[project]
+name = "engine-web"
+version = "0.0.0"
+description = "Web control interface: a Streamlit view of the engine, and a chat with its agents."
+requires-python = ">=3.11"
+# Composition root: the only layer allowed to depend on concrete adapters.
+# Streamlit is a UI dependency and stays here -- nothing below apps/ knows the
+# interface exists, let alone which framework draws it.
+dependencies = [
+    "engine-core",
+    "engine-runtime",
+    # One adapter per capability, named <capability>-<vendor>: what is needed
+    # first, who provides it second. This app takes the in-memory state store
+    # rather than Postgres: chat needs a store that works today more than it
+    # needs one that survives a restart.
+    "engine-adapter-agent-runner-codex",
+    "engine-adapter-communications-buzz",
+    "engine-adapter-source-control-github",
+    "engine-adapter-state-store-memory",
+    "engine-adapter-workflow-runtime-temporal",
+    "engine-adapter-workspace-provider-git-worktree",
+    "streamlit>=1.40",
+]
+
+[project.scripts]
+engine-web = "engine.apps.web.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]
+
+[tool.uv.sources]
+engine-core = { workspace = true }
+engine-runtime = { workspace = true }
+engine-adapter-agent-runner-codex = { workspace = true }
+engine-adapter-communications-buzz = { workspace = true }
+engine-adapter-source-control-github = { workspace = true }
+engine-adapter-state-store-memory = { workspace = true }
+engine-adapter-workflow-runtime-temporal = { workspace = true }
+engine-adapter-workspace-provider-git-worktree = { workspace = true }
