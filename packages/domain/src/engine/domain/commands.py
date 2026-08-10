@@ -12,7 +12,8 @@ Placeholder set for Ticket 1; the real vocabulary lands with the engine itself.
 
 from dataclasses import dataclass
 
-from engine.domain.ids import AttemptId, RunId, WorkspaceId
+from engine.domain.agents import AgentProfile
+from engine.domain.ids import AgentInstanceId, AgentRunId, RunId, WorkspaceId
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,12 +32,23 @@ class ProvisionWorkspace(Command):
 
 
 @dataclass(frozen=True, slots=True)
-class StartAttempt(Command):
-    """Fulfilled by the Agent Runner capability."""
+class StartAgentRun(Command):
+    """Fulfilled by the Agent Runner capability.
 
-    attempt_id: AttemptId
-    workspace_id: WorkspaceId
+    Carries the whole `AgentProfile` rather than an `AgentId` to look up. The
+    command is then self-contained: dispatch needs no registry, and a durable
+    replay reruns the agent that was configured when the run started rather than
+    whatever the config says today.
+
+    `workspace_id` is optional because not every agent works on code -- a
+    conversation with the foreman has no checkout.
+    """
+
+    agent_run_id: AgentRunId
+    instance_id: AgentInstanceId
+    profile: AgentProfile
     prompt: str
+    workspace_id: WorkspaceId | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,5 +89,5 @@ __all__ = [
     "ProvisionWorkspace",
     "PublishChanges",
     "ScheduleTimer",
-    "StartAttempt",
+    "StartAgentRun",
 ]

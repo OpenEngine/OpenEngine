@@ -9,7 +9,7 @@ Placeholder set for Ticket 1; the real vocabulary lands with the engine itself.
 
 from dataclasses import dataclass, field
 
-from engine.domain.ids import AttemptId, RunId, TaskId, WorkspaceId
+from engine.domain.ids import AgentRunId, RunId, TaskId, WorkspaceId
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,10 +37,10 @@ class WorkspaceProvisioned(Event):
 
 
 @dataclass(frozen=True, slots=True)
-class AttemptCompleted(Event):
-    """An agent runner finished an attempt, successfully or not."""
+class AgentRunCompleted(Event):
+    """An agent runner finished one execution, successfully or not."""
 
-    attempt_id: AttemptId
+    agent_run_id: AgentRunId
     succeeded: bool
     summary: str
     changed_files: tuple[str, ...] = field(default=())
@@ -61,7 +61,7 @@ class RunFailed(Event):
 
 
 __all__ = [
-    "AttemptCompleted",
+    "AgentRunCompleted",
     "ChangesPublished",
     "Event",
     "RunFailed",

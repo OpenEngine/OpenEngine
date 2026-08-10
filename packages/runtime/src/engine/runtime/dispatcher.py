@@ -12,6 +12,7 @@ their adapters.
 
 from collections.abc import Iterable
 
+from engine.domain.chat import Message
 from engine.domain.commands import (
     Command,
     Notify,
@@ -19,7 +20,7 @@ from engine.domain.commands import (
     ProvisionWorkspace,
     PublishChanges,
     ScheduleTimer,
-    StartAttempt,
+    StartAgentRun,
 )
 from engine.runtime.capabilities import Capabilities
 
@@ -49,9 +50,16 @@ class Dispatcher:
         match command:
             case ProvisionWorkspace():
                 await caps.workspace_provider.provision(command.repository, command.base_ref)
-            case StartAttempt():
-                await caps.agent_runner.run_attempt(
-                    command.attempt_id, command.workspace_id, command.prompt
+            case StartAgentRun():
+                # One turn, cold: no history loaded and no tools offered.
+                # Threading the stored conversation through here, resolving the
+                # profile's grants to tool specs, and looping until the model
+                # stops asking for tools all land with the agent-session ticket.
+                await caps.agent_runner.run_turn(
+                    command.agent_run_id,
+                    command.profile,
+                    (Message.user(command.prompt),),
+                    workspace_id=command.workspace_id,
                 )
             case PublishChanges():
                 await caps.source_control.publish(command.workspace_id, command.branch)
