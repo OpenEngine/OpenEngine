@@ -1,0 +1,39 @@
+[project]
+name = "engine-web"
+version = "0.0.0"
+description = "Web control interface: a Streamlit view of the engine."
+requires-python = ">=3.11"
+# Composition root: the only layer allowed to depend on concrete adapters.
+# Streamlit is a UI dependency and stays here -- nothing below apps/ knows the
+# interface exists, let alone which framework draws it.
+dependencies = [
+    "engine-core",
+    "engine-runtime",
+    "engine-adapter-temporal",
+    "engine-adapter-github",
+    "engine-adapter-codex",
+    "engine-adapter-communications",
+    "engine-adapter-workspace",
+    "engine-adapter-postgres",
+    "streamlit>=1.40",
+]
+
+[project.scripts]
+engine-web = "engine.apps.web.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]
+
+[tool.uv.sources]
+engine-core = { workspace = true }
+engine-runtime = { workspace = true }
+engine-adapter-temporal = { workspace = true }
+engine-adapter-github = { workspace = true }
+engine-adapter-codex = { workspace = true }
+engine-adapter-communications = { workspace = true }
+engine-adapter-workspace = { workspace = true }
+engine-adapter-postgres = { workspace = true }

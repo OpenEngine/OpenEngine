@@ -1,0 +1,201 @@
+flowchart TB
+
+    %% ─────────────────────────────────────────────
+    %% HUMAN / EXTERNAL INPUTS
+    %% ─────────────────────────────────────────────
+
+    Human["Human"]
+
+    Web["Web Control UI<br/>Planner / Tasks / Changes"]
+    Buzz["Buzz / Slack / Other Comms"]
+    GitHub["GitHub"]
+
+    Human --> Web
+    Human --> Buzz
+
+
+    %% ─────────────────────────────────────────────
+    %% APPLICATIONS / COMPOSITION ROOT
+    %% ─────────────────────────────────────────────
+
+    subgraph Apps["Applications / Composition Root"]
+        Control["Control Server<br/>FastAPI"]
+        Worker["Worker Process"]
+        Wiring["Adapter Wiring / Registry"]
+    end
+
+    Web --> Control
+    Buzz --> Control
+    GitHub -->|"webhooks"| Control
+
+    Wiring --> Control
+    Wiring --> Worker
+
+
+    %% ─────────────────────────────────────────────
+    %% PURE CORE
+    %% ─────────────────────────────────────────────
+
+    subgraph Core["Zero / Near-Zero Dependency Core"]
+
+        subgraph Domain["Domain"]
+            Agent["Agent<br/>logical role"]
+            AgentInstance["AgentInstance<br/>persistent identity + conversation"]
+            AgentRun["AgentRun<br/>single execution"]
+
+            Task["Task"]
+            Conversation["Conversation"]
+            Message["Message"]
+
+            Change["ChangeRequest"]
+            Review["Review / Finding"]
+            Workspace["Workspace<br/>logical workspace identity"]
+
+            Agent --> AgentInstance
+            AgentInstance --> AgentRun
+            AgentInstance --> Conversation
+            Conversation --> Message
+            Task --> Workspace
+            Task --> Change
+            Change --> Review
+        end
+
+        subgraph Workflows["Workflow Definitions"]
+            Workflow["Workflow"]
+            Rule["Rules<br/>Event + condition → Commands"]
+            Profile["AgentProfile<br/>logical configuration"]
+
+            Workflow --> Rule
+            Rule --> Profile
+        end
+
+        subgraph Engine["Engine"]
+            Transition["transition(State, Event)"]
+            State["State"]
+            Event["Events"]
+            Command["Commands"]
+
+            State --> Transition
+            Event --> Transition
+            Transition --> State
+            Transition --> Command
+        end
+    end
+
+    Workflows --> Engine
+
+
+    %% ─────────────────────────────────────────────
+    %% PORTS
+    %% ─────────────────────────────────────────────
+
+    subgraph Ports["Ports / Capability Interfaces"]
+        WorkflowPort["Workflow Runtime"]
+        StorePort["Store"]
+        AgentPort["Agent Runner"]
+        GitPort["Source Control"]
+        CommsPort["Communications"]
+        WorkspacePort["Workspace Provider"]
+    end
+
+
+    %% ─────────────────────────────────────────────
+    %% RUNTIME
+    %% ─────────────────────────────────────────────
+
+    subgraph Runtime["Runtime / Command Interpretation"]
+        Dispatcher["Command Dispatcher"]
+        AgentRouter["Agent Router"]
+        AdapterRegistry["Configured Adapter Registry"]
+    end
+
+    Command --> Dispatcher
+
+    Dispatcher --> WorkflowPort
+    Dispatcher --> StorePort
+    Dispatcher --> AgentRouter
+    Dispatcher --> GitPort
+    Dispatcher --> CommsPort
+    Dispatcher --> WorkspacePort
+
+    AgentRouter --> AdapterRegistry
+
+
+    %% ─────────────────────────────────────────────
+    %% ADAPTERS
+    %% ─────────────────────────────────────────────
+
+    subgraph Adapters["Adapters"]
+
+        subgraph WorkflowAdapters["Workflow Runtime"]
+            LocalRuntime["LocalWorkflowRuntime<br/>asyncio / in-memory"]
+            Temporal["TemporalWorkflowRuntime"]
+        end
+
+        subgraph StoreAdapters["Store"]
+            SQLite["SQLiteStore"]
+            Postgres["PostgresStore"]
+        end
+
+        subgraph AgentAdapters["Agent Runners"]
+            Codex["Codex CLI"]
+            Claude["Claude Code CLI"]
+            OtherAgent["Other Coding CLI"]
+        end
+
+        subgraph GitAdapters["Source Control"]
+            GitHubAdapter["GitHub Adapter"]
+            GitLabAdapter["Future GitLab Adapter"]
+        end
+
+        subgraph CommsAdapters["Communications"]
+            WebComms["Web UI Communications"]
+            BuzzAdapter["Buzz Adapter"]
+            SlackAdapter["Slack Adapter"]
+        end
+
+        subgraph WorkspaceAdapters["Workspaces"]
+            LocalWorkspace["Local Git Worktree"]
+            ContainerWorkspace["Future Container / VM"]
+        end
+    end
+
+    WorkflowPort --> LocalRuntime
+    WorkflowPort --> Temporal
+
+    StorePort --> SQLite
+    StorePort --> Postgres
+
+    AgentPort --> Codex
+    AgentPort --> Claude
+    AgentPort --> OtherAgent
+
+    GitPort --> GitHubAdapter
+    GitPort --> GitLabAdapter
+
+    CommsPort --> WebComms
+    CommsPort --> BuzzAdapter
+    CommsPort --> SlackAdapter
+
+    WorkspacePort --> LocalWorkspace
+    WorkspacePort --> ContainerWorkspace
+
+    AdapterRegistry --> AgentPort
+
+
+    %% ─────────────────────────────────────────────
+    %% EXECUTION LOOP
+    %% ─────────────────────────────────────────────
+
+    Temporal -. "deliver event" .-> Event
+    LocalRuntime -. "deliver event" .-> Event
+
+    Control -->|"messages / task events"| WorkflowPort
+
+    GitHubAdapter --> GitHub
+
+    WebComms --> Control
+    BuzzAdapter --> Buzz
+
+    Codex --> LocalWorkspace
+    Claude --> LocalWorkspace
