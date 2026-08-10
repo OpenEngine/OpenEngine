@@ -57,6 +57,17 @@ def test_every_agent_can_be_chosen() -> None:
     assert "foreman" in app.session_state["instances"]
 
 
+def test_a_runner_can_be_chosen() -> None:
+    app = _run()
+
+    assert list(app.selectbox[1].options) == ["codex", "claude"]
+    assert app.selectbox[1].value == "codex", "the first wired runner is the default"
+
+    app.selectbox[1].set_value("claude").run()
+
+    assert not app.exception
+
+
 @pytest.mark.parametrize("page", ["Runs", "Request a run", "Inbox", "Wiring"])
 def test_the_other_pages_render(page: str) -> None:
     app = _run(page)
@@ -77,6 +88,19 @@ def test_the_wiring_page_reports_what_was_composed() -> None:
         "workspace_provider": "GitWorktreeWorkspaceProvider",
         "state_store": "InMemoryStateStore",
     }
+
+
+def test_the_wiring_page_lists_the_runners_on_offer() -> None:
+    """One port, one implementation -- plus the choice the chat page exposes,
+    which is the composition root's to name."""
+    app = _run("Wiring")
+
+    runners = app.dataframe[1].value
+    assert dict(zip(runners["name"], runners["implementation"])) == {
+        "codex": "CodexAgentRunner",
+        "claude": "ClaudeCodeAgentRunner",
+    }
+    assert list(runners["default"]) == [True, False]
 
 
 def test_demo_data_fills_the_run_pages() -> None:

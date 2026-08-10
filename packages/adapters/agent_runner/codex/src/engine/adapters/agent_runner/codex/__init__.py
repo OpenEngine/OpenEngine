@@ -74,22 +74,15 @@ and do not read the growing transcript as the reason.
 import asyncio
 import json
 import shutil
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from engine.domain.agents import AgentProfile
-from engine.domain.chat import Message, Role, ToolCall
+from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage
-
-#: How each role is labelled when a conversation is flattened into one prompt.
-ROLE_LABELS: Mapping[Role, str] = {
-    Role.SYSTEM: "System",
-    Role.USER: "User",
-    Role.ASSISTANT: "Assistant",
-    Role.TOOL: "Tool result",
-}
+from engine.runtime.transcript import flatten
 
 #: Sandbox policies the CLI accepts. Chat defaults to the read-only one: an
 #: agent you are talking to should not be able to edit the tree as a side
@@ -107,12 +100,6 @@ OUTPUT_FIELDS = ("aggregated_output", "output", "result", "error")
 
 #: Fields that describe the item rather than its arguments.
 NON_ARGUMENT_FIELDS = frozenset({"id", "type", "status", *OUTPUT_FIELDS})
-
-#: How much of a past step's output is replayed into a later prompt. The full
-#: text is always stored; this only bounds what a later turn re-reads, because
-#: an 8KB file dump from three questions ago is billed again every turn and
-#: rarely earns it.
-MAX_REPLAYED_OUTPUT_CHARS = 1000
 
 
 class CodexUnavailableError(RuntimeError):
@@ -138,37 +125,13 @@ class CodexToolsUnsupportedError(NotImplementedError):
         self.tool_names = tuple(tool_names)
 
 
-def render_message(message: Message) -> str:
-    """One conversation entry as a stable block of text.
-
-    Stable is the operative word: the same message must render identically
-    whenever it appears, or the append-only property below is lost.
-    """
-    if message.tool_calls:
-        return "\n\n".join(
-            f"{ROLE_LABELS[message.role]} ran {call.name}: {call.arguments}"
-            for call in message.tool_calls
-        )
-    body = message.content.strip()
-    if message.role is Role.TOOL and len(body) > MAX_REPLAYED_OUTPUT_CHARS:
-        omitted = len(body) - MAX_REPLAYED_OUTPUT_CHARS
-        body = f"{body[:MAX_REPLAYED_OUTPUT_CHARS]}\n… ({omitted} more characters, stored in full)"
-    return f"{ROLE_LABELS[message.role]}: {body}"
-
-
 def render_prompt(profile: AgentProfile, messages: Sequence[Message]) -> str:
     """Flatten a profile and a conversation into one prompt.
 
-    Codex takes a single block of text, so the structure a chat API carries in
-    roles has to be spelled out.
-
-    **Append-only.** Every message renders to a fixed block and the blocks are
-    joined in order, so the prompt for turn N is a strict prefix of the prompt
-    for turn N+1. Prompt caches match on prefixes, and an earlier version of this
-    function moved the latest message between two headings each turn, which broke
-    the prefix one line after the instructions and made a cache hit impossible.
-    Nothing may be inserted, reordered, or reworded after the fact -- including
-    any trailing "now answer this" instruction, which is why there isn't one.
+    `codex exec` has no channel for a system prompt, so the instructions go in
+    ahead of the conversation. They are first and never change, which keeps the
+    whole prompt append-only -- see `engine.runtime.transcript`, which owns that
+    invariant and the rendering that maintains it.
     """
     if not messages:
         raise ValueError("cannot run a turn with no messages")
@@ -176,9 +139,7 @@ def render_prompt(profile: AgentProfile, messages: Sequence[Message]) -> str:
     sections: list[str] = []
     if profile.instructions.strip():
         sections.append(f"# Your instructions\n\n{profile.instructions.strip()}")
-
-    rendered = [render_message(m) for m in messages if m.content.strip() or m.tool_calls]
-    sections.append("# Conversation\n\n" + "\n\n".join(rendered))
+    sections.append(flatten(messages))
     return "\n\n".join(sections)
 
 
@@ -420,7 +381,6 @@ __all__ = [
     "CodexUnavailableError",
     "action_messages",
     "parse_events",
-    "render_message",
     "render_prompt",
     "thread_id_of",
     "turn_from_events",

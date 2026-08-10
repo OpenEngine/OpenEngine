@@ -52,6 +52,8 @@ class TokenUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_prompt_tokens: int = 0
+    cost_usd: float | None = None
+    """What the provider says the turn cost, when it says. Few do."""
 
     @property
     def total_tokens(self) -> int:

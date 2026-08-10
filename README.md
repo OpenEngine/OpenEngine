@@ -83,7 +83,7 @@ inherit, no import required at runtime.
 | --- | --- | --- | --- |
 | Workflow Runtime | `WorkflowRuntime` | Temporal | `adapters/workflow_runtime/temporal` |
 | Source Control | `SourceControl` | GitHub | `adapters/source_control/github` |
-| Agent Runner | `AgentRunner` | Codex | `adapters/agent_runner/codex` |
+| Agent Runner | `AgentRunner` | Codex, Claude Code | `adapters/agent_runner/codex`, `adapters/agent_runner/claude_code` |
 | Communications | `Communications` | Buzz | `adapters/communications/buzz` |
 | Workspace Provider | `WorkspaceProvider` | local git worktrees | `adapters/workspace_provider/git_worktree` |
 | State Store | `StateStore` | Postgres, in-memory | `adapters/state_store/postgres`, `adapters/state_store/memory` |
@@ -147,8 +147,16 @@ both messages. Every chat surface goes through it, so the Streamlit page and the
 control server cannot drift into two different notions of what a conversation
 is. The profiles themselves are values in `engine.runtime.profiles` — adding an
 agent is adding an entry there, and nothing about it is special-cased anywhere
-else. A profile never names its runner; which one executes it comes from
-`Capabilities.agent_runner`, chosen by the composition root.
+else. A profile never names its runner: `Capabilities.agent_runner` holds the
+one a port is entitled to, and that is what anything non-interactive uses.
+
+A process may additionally offer a *choice* of runner — `AgentSession` takes a
+name-to-runner mapping, and the chat page turns it into a dropdown. The names
+mean nothing below `apps/`, exactly like tool grants; binding "codex" and
+"claude" to implementations happens in one function in the composition root.
+Switching mid-conversation is allowed and is the point: we hold the transcript,
+so whichever runner answers next is handed everything the other one said and
+did.
 
 ## Layout
 
@@ -165,6 +173,7 @@ packages/
       github/                engine.adapters.source_control.github
     agent_runner/
       codex/                 engine.adapters.agent_runner.codex
+      claude_code/           engine.adapters.agent_runner.claude_code
     communications/
       buzz/                  engine.adapters.communications.buzz
     workspace_provider/
@@ -198,7 +207,7 @@ separate rather than shared because the processes are expected to diverge.
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
 
 ```bash
-uv sync            # install all 14 workspace packages, editable
+uv sync            # install all 15 workspace packages, editable
 uv run pytest      # run the suite, including the boundary checks
 ```
 
@@ -217,21 +226,22 @@ uv run engine-web            # http://localhost:8501
 ```
 
 The **Chat** page is the one part of the system that works end to end. Pick an
-agent, type, and the reply comes from a real model:
+agent and a runner, type, and the reply comes from a real model:
 
 ```text
 you        ->  Streamlit page
                engine.runtime.AgentSession    load history, record the run
                engine.ports.AgentRunner       one turn
-               engine.adapters.agent_runner.codex
-                 codex exec --json            <- the actual model
-               engine.adapters.state_store.memory   store both messages
+               engine.adapters.agent_runner.codex        codex exec --json
+                 …or.claude_code                         claude -p            <- the model
+               engine.adapters.state_store.memory   store the whole turn
 ```
 
-It needs the [Codex CLI](https://developers.openai.com/codex/cli) on `PATH` and
-logged in (`codex login`); the page reports it plainly if either is missing.
-Codex runs sandboxed read-only by default, so an agent you are talking to cannot
-edit the tree as a side effect of answering.
+It needs the [Codex CLI](https://developers.openai.com/codex/cli) or
+[Claude Code](https://claude.com/claude-code) on `PATH` and logged in; the page
+reports it plainly if the one you picked is missing. Both run read-only by
+default — Codex sandboxed, Claude Code restricted to `Read`/`Glob`/`Grep` — so an
+agent you are talking to cannot edit the tree as a side effect of answering.
 
 The transcript records what the agent *did*, not just what it concluded — the
 commands it ran and their output are stored beside its messages, and the chat
@@ -239,17 +249,25 @@ page draws them as collapsible blocks. That is what lets a stateless runner stay
 coherent: asked a follow-up, the agent reads the earlier command's output back
 out of our transcript instead of re-running it.
 
+It is also what makes the **Runner** dropdown more than a preference. Because the
+conversation is ours rather than a provider's, either runner can pick up a
+conversation the other started — including the other's tool output. Asked what
+the previous assistant had run, Claude quoted the exact `find` command Codex
+had used, having executed nothing itself.
+
 Three limits worth knowing before you read anything into a conversation:
 
 - **Conversations die with the process.** The store is the in-memory one.
-- **The agent has no engine tools.** Codex brings its own (it reads files, runs
-  commands); it cannot be handed ours, so the foreman can discuss dispatching
-  work but not dispatch it. See `CodexToolsUnsupportedError`, which is raised
-  rather than ignored.
-- **Turns are expensive and barely cached.** Each one spends ~15k prompt tokens
-  per model request on Codex's own preamble, of which ~10k is cache-served and
-  none of ours is. See the `TODO(caching)` block at the top of the Codex
-  adapter, which has the measurements and the two candidate fixes.
+- **The agent has no engine tools.** Both CLIs bring their own (they read files,
+  run commands) and neither can be handed ours, so the foreman can discuss
+  dispatching work but not dispatch it. See `CodexToolsUnsupportedError` and
+  `ClaudeToolsUnsupportedError`, which are raised rather than ignored.
+- **Turns are expensive, and Codex turns are barely cached.** `codex exec` spends
+  ~15k prompt tokens per model request on its own preamble and serves a flat ~10k
+  of it from cache no matter what we send; Claude Code reaches ~86%. See the
+  `TODO(caching)` block at the top of the Codex adapter for the measurements —
+  the gap is `codex exec` rebuilding a process per turn, not something inherent
+  to driving a CLI.
 
 The other pages — Runs, Inbox, Request a run — are unwired and say so.
 
@@ -321,7 +339,7 @@ UV_PYTHON=3.11 uv sync --locked && UV_PYTHON=3.11 uv run pytest
 
 Ticket 1 — scaffolding — is complete. In place:
 
-- All 14 packages exist, install, and import.
+- All 15 packages exist, install, and import.
 - The six capabilities have ports, a `Capabilities` container covering every
   one, and at least one adapter each.
 - `decide` handles one representative transition (`RunRequested` →
@@ -332,11 +350,13 @@ The agent vocabulary — profile, instance, run, conversation, tools — sits on
 of that, with `AgentRunner` reshaped around turns and `StateStore` given the
 methods that make conversations ours.
 
-**Chat works end to end.** Two of the six capabilities are real: the Codex
-adapter runs `codex exec` and parses its event stream, and the in-memory state
-store holds instances and conversations. `engine.runtime.AgentSession` joins
-them, `apps/web` draws them, and two agents ship — `foreman` and `coder`, both
-just values in `engine.runtime.profiles`.
+**Chat works end to end.** Two of the six capabilities are real: two agent
+runners drive the Codex and Claude Code CLIs and parse their event streams, and
+the in-memory state store holds instances and conversations.
+`engine.runtime.AgentSession` joins them, `apps/web` draws them, and two agents
+ship — `foreman` and `coder`, both just values in `engine.runtime.profiles`. A
+conversation records the commands an agent ran and their output, and either
+runner can continue one the other started.
 
 Not yet implemented, by design — the remaining adapter methods raise
 `NotImplementedError` naming the ticket that fills them in:

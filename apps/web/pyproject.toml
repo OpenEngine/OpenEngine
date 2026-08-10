@@ -13,7 +13,10 @@ dependencies = [
     # first, who provides it second. This app takes the in-memory state store
     # rather than Postgres: chat needs a store that works today more than it
     # needs one that survives a restart.
+    # Two vendors under one capability: the chat page offers a choice between
+    # them, and the composition root is the only thing that knows their names.
     "engine-adapter-agent-runner-codex",
+    "engine-adapter-agent-runner-claude-code",
     "engine-adapter-communications-buzz",
     "engine-adapter-source-control-github",
     "engine-adapter-state-store-memory",
@@ -36,6 +39,7 @@ packages = ["src/engine"]
 engine-core = { workspace = true }
 engine-runtime = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }
+engine-adapter-agent-runner-claude-code = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
 engine-adapter-source-control-github = { workspace = true }
 engine-adapter-state-store-memory = { workspace = true }

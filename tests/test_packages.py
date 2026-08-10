@@ -20,6 +20,7 @@ EXPECTED_PACKAGE_ROOTS = [
     "packages/adapters/workflow_runtime/temporal",
     "packages/adapters/source_control/github",
     "packages/adapters/agent_runner/codex",
+    "packages/adapters/agent_runner/claude_code",
     "packages/adapters/communications/buzz",
     "packages/adapters/workspace_provider/git_worktree",
     "packages/adapters/state_store/postgres",

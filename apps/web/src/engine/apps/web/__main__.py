@@ -17,7 +17,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from engine.apps.web.composition import Settings, build_capabilities, build_session
+from engine.apps.web.composition import (
+    Settings,
+    build_capabilities,
+    build_runners,
+    build_session,
+)
 
 #: The script Streamlit runs. A sibling file, not a package entry point --
 #: Streamlit reruns it top to bottom on every interaction.
@@ -27,11 +32,13 @@ APP_SCRIPT = Path(__file__).with_name("app.py")
 def report_wiring(settings: Settings) -> None:
     """Print the composed capability graph, as the other two roots do."""
     capabilities = build_capabilities(settings)
-    session = build_session(capabilities)
+    runners = build_runners(settings)
+    session = build_session(capabilities, runners)
     print(f"engine web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
     print(f"agents: {', '.join(sorted(session.profiles))}")
+    print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
     print("chat is live; the run pages read nothing yet.")
 
 
