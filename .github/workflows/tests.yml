@@ -107,7 +107,9 @@ jobs:
       - name: Composition roots start
         # Cheap smoke test that the capability graph still wires up: these are
         # the only places adapters are named, and a bad constructor signature
-        # would not otherwise fail a test.
+        # would not otherwise fail a test. `--check` stops the web interface
+        # short of serving, which would block.
         run: |
           uv run engine-control-server
           uv run engine-worker
+          uv run engine-web --check

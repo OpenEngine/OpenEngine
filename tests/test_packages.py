@@ -25,6 +25,7 @@ EXPECTED_PACKAGE_ROOTS = [
     "packages/adapters/postgres",
     "apps/control_server",
     "apps/worker",
+    "apps/web",
 ]
 
 #: Capability -> the port protocol that defines it.

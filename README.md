@@ -111,6 +111,7 @@ packages/
 apps/
   control_server/            engine.apps.control_server
   worker/                    engine.apps.worker
+  web/                       engine.apps.web
 ```
 
 Every package publishes into the shared `engine.*` namespace (PEP 420), so the
@@ -127,16 +128,42 @@ separate rather than shared because the processes are expected to diverge.
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
 
 ```bash
-uv sync            # install all 12 workspace packages, editable
+uv sync            # install all 13 workspace packages, editable
 uv run pytest      # run the suite, including the boundary checks
 ```
 
-Both entrypoints run today and report their wiring:
+All three entrypoints run today. The two services report their wiring and exit;
+the web interface serves a UI on <http://localhost:8501>:
 
 ```bash
 uv run engine-control-server
 uv run engine-worker
+uv run engine-web
+uv run engine-web --check   # compose and report, without serving
 ```
+
+## Web interface
+
+`apps/web` is a Streamlit control interface and the third composition root. It
+is **unwired**: no page calls a capability, and the read model behind every table
+is empty by construction. Four pages —
+
+| Page | Shows |
+| --- | --- |
+| Runs | The runs table and a detail panel. Empty. |
+| Request a run | A form that builds the `RunRequested` event and shows what `decide` returns for it. Sends nothing. |
+| Inbox | Where an agent's clarifying question will surface. Empty. |
+| Wiring | The capability graph this process composed, one implementation per port. |
+
+Two of those are honest about doing real work, and neither reaches the outside
+world: Wiring reads the *types* on the composed `Capabilities`, and the request
+form calls `engine.core.decide`, which is pure. A sidebar toggle swaps in fixed
+demo rows so the layout can be judged before there is data to put in it; they are
+labelled as invented wherever they appear.
+
+The seam is `engine.apps.web.readmodel.ReadModel` — a `Protocol`, for the same
+reason the ports are one, so a page cannot reach past it into a database. Wiring
+the interface up is a change to `composition.build_read_model` and nothing else.
 
 ## The boundaries are enforced, not just documented
 
@@ -184,8 +211,9 @@ the Python version is irrelevant), and additionally:
 
 **`tests (py3.11 … py3.14)`** — did someone break the code? The full suite across
 the whole range `requires-python` claims, with `fail-fast: false` so one
-version's failure does not mask the others, then a smoke test that both
-composition roots still start. `UV_PYTHON` is set at job level; without it the
+version's failure does not mask the others, then a smoke test that all three
+composition roots still start (`engine-web --check` composes and reports rather
+than serving, which would block). `UV_PYTHON` is set at job level; without it the
 `.python-version` pin (3.14) would win and all four legs would quietly test the
 same interpreter.
 
@@ -200,7 +228,7 @@ UV_PYTHON=3.11 uv sync --locked && UV_PYTHON=3.11 uv run pytest
 
 Ticket 1 — scaffolding — is complete. In place:
 
-- All 12 packages exist, install, and import.
+- All 13 packages exist, install, and import.
 - The six capabilities have ports, placeholder adapters, and a `Capabilities`
   container covering every one.
 - `decide` handles one representative transition (`RunRequested` →
@@ -214,7 +242,9 @@ Not yet implemented, by design — every adapter method raises
 - No GitHub API calls, no git operations, no agent execution.
 - No message delivery, no database, no schema, no migrations.
 - No HTTP surface on the control server, no task-queue polling in the worker.
-- No web UI.
+- The web interface renders but is wired to nothing: an empty read model, no
+  capability called from any page, and a request form that previews rather than
+  submits.
 
 The domain vocabulary (`events.py`, `commands.py`, `state.py`) is a coherent
 placeholder chosen to make the boundaries concrete; expect it to change when the
