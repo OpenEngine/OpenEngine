@@ -164,6 +164,38 @@ To add a package, create it under `packages/` or `apps/` with a `pyproject.toml`
 and a `src/engine/...` tree; discovery in `tests/layout.py` picks it up, and
 `_layer_for` decides which rules apply.
 
+## Continuous integration
+
+`.github/workflows/tests.yml` runs on every push to `main`, every pull request,
+and on demand. Two jobs, kept separate because they answer different questions:
+
+**`dependency boundaries`** — did someone break the architecture? Runs the
+boundary and checker tests on a single interpreter (they are static analysis, so
+the Python version is irrelevant), and additionally:
+
+- `uv lock --check`, so an edited dependency that was never relocked fails here
+  rather than making every `--locked` install below test something other than
+  what the pyprojects say.
+- Installs `domain` and `engine` into an empty virtualenv, asserts that exactly
+  two packages are present, and runs `decide` there. This is the strongest form
+  of "no third-party dependencies" — not *we declared none* but *nothing else is
+  installed and the core still works* — and it catches a dependency that arrives
+  through packaging rather than through an `import`.
+
+**`tests (py3.11 … py3.14)`** — did someone break the code? The full suite across
+the whole range `requires-python` claims, with `fail-fast: false` so one
+version's failure does not mask the others, then a smoke test that both
+composition roots still start. `UV_PYTHON` is set at job level; without it the
+`.python-version` pin (3.14) would win and all four legs would quietly test the
+same interpreter.
+
+To reproduce a CI leg locally:
+
+```bash
+uv lock --check
+UV_PYTHON=3.11 uv sync --locked && UV_PYTHON=3.11 uv run pytest
+```
+
 ## Status
 
 Ticket 1 — scaffolding — is complete. In place:
@@ -187,3 +219,22 @@ Not yet implemented, by design — every adapter method raises
 The domain vocabulary (`events.py`, `commands.py`, `state.py`) is a coherent
 placeholder chosen to make the boundaries concrete; expect it to change when the
 engine's real state machine lands.
+
+## Shape of the system
+
+```
+                   Workflow DSL
+                  zero-dep Python
+                       │
+                       ▼
+               ┌──────────────┐
+Event + State →│    Engine    │→ Commands
+               └──────────────┘
+                       │
+                       ▼
+                    Runtime
+                       │
+             ┌─────────┼─────────┐
+             ▼         ▼         ▼
+          Temporal   Agents    Git/Buzz
+```

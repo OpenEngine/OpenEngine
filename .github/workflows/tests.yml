@@ -1,0 +1,113 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a branch makes the in-flight run for that branch irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a uv release cannot change what CI means without a commit saying so.
+  UV_VERSION: "0.9.28"
+
+jobs:
+  boundaries:
+    # Separated from the test matrix on purpose: this job answers "did someone
+    # break the architecture?", which is a different question from "did someone
+    # break the code", and deserves its own red X. It is version-independent --
+    # the checks are static analysis over the source tree.
+    name: dependency boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: uv.lock is current
+        # Fails if a pyproject dependency was edited without relocking, which
+        # would make every --locked install below silently test something else.
+        run: uv lock --check
+
+      - name: Install workspace
+        run: uv sync --locked
+
+      - name: Dependency direction holds
+        # domain <- engine, ports <- runtime <- adapters, apps compose.
+        # Verbose so a violation names the offending package and import.
+        run: uv run pytest tests/test_boundaries.py tests/test_layout_helpers.py -v
+
+      - name: domain and engine install on a bare interpreter
+        # The strongest form of "no third-party dependencies": not "we declared
+        # none" but "nothing else is present and the code still runs". Catches a
+        # dependency that arrives through packaging rather than an import.
+        run: |
+          set -euo pipefail
+          uv venv /tmp/bare
+          uv pip install --python /tmp/bare/bin/python packages/domain packages/engine
+          uv pip freeze --python /tmp/bare/bin/python
+          installed=$(uv pip freeze --python /tmp/bare/bin/python | wc -l)
+          if [ "$installed" -ne 2 ]; then
+            echo "::error::expected only engine-domain and engine-core, found $installed packages"
+            exit 1
+          fi
+          /tmp/bare/bin/python -c "
+          from engine.core import decide
+          from engine.domain import RunId, RunRequested, RunState, TaskId
+          run, task = RunId('r'), TaskId('t')
+          _, commands = decide(
+              RunState(run_id=run, task_id=task),
+              RunRequested(run_id=run, task_id=task, prompt='p', repository='acme/api'),
+          )
+          assert commands, 'engine emitted no command'
+          print('core decided:', commands[0].__class__.__name__)
+          "
+
+  tests:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every version's result; one old-version failure should not hide
+      # the others.
+      fail-fast: false
+      matrix:
+        # The full range the packages claim to support via requires-python.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      # Set at job level so every uv command in the job agrees on the
+      # interpreter. Without it, `.python-version` (3.14) would win and all four
+      # matrix legs would quietly test the same thing.
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Composition roots start
+        # Cheap smoke test that the capability graph still wires up: these are
+        # the only places adapters are named, and a bad constructor signature
+        # would not otherwise fail a test.
+        run: |
+          uv run engine-control-server
+          uv run engine-worker
