@@ -100,6 +100,47 @@ either one being the privileged implementation. The capability directory is
 checked against the fields of `engine.runtime.Capabilities`, which is therefore
 the list a seventh capability has to be added to first.
 
+## Agent identity
+
+An agent is described by data, not by a class, and the description is separate
+from any execution of it. Three levels, in `engine.domain.agents`:
+
+```python
+AgentProfile(                       # the logical role. Configuration.
+    agent_id=AgentId("foreman"),
+    instructions="Coordinate implementation work, answer coder questions, ...",
+    capabilities=("dispatch", "author_workflow"),
+)
+  ↓
+AgentInstance                       # a durable instance, owning one conversation
+  ↓
+AgentRun                            # one execution of that instance
+```
+
+An instance outlives any single run, which is what lets an agent stop for
+clarification and resume later as the same logical entity with the same history.
+`capabilities` on a profile names the **tools** the agent is granted; the runtime
+resolves each name to a concrete tool and a runner may offer the model nothing
+outside that list, so a profile reads as the complete statement of what an agent
+may do.
+
+Conversations belong to the State Store, never to a model provider. An adapter
+may keep a native session open for efficiency, but if the store is not the
+source of truth then history cannot be resumed after a restart, inspected by a
+human, or moved to another provider.
+
+The `AgentRunner` port is **turn-shaped** rather than task-shaped:
+
+```python
+async def run_turn(agent_run_id, profile, messages, tools=(), workspace_id=None) -> AgentTurn
+```
+
+Tool use is a conversation, so the runner returns the tool calls the model asked
+for and stops; executing them and deciding whether to go round again belongs to
+the caller. One consequence is that chatting with the foreman and running a
+headless coder are the *same call* with different profiles — a workspace is
+optional context, not a mode.
+
 ## Layout
 
 ```text
@@ -232,6 +273,10 @@ Ticket 1 — scaffolding — is complete. In place:
   `ProvisionWorkspace`) end to end, through the dispatcher, against a fake.
 - The dependency rules are enforced by tests.
 
+The agent vocabulary — profile, instance, run, conversation, tools — is in place
+on top of that, with `AgentRunner` reshaped around turns and `StateStore` given
+the methods that make conversations ours. No runner implements it yet.
+
 Not yet implemented, by design — every adapter method raises
 `NotImplementedError` naming the ticket that fills it in:
 
@@ -241,9 +286,14 @@ Not yet implemented, by design — every adapter method raises
 - No HTTP surface on the control server, no task-queue polling in the worker.
 - No web UI.
 
-The domain vocabulary (`events.py`, `commands.py`, `state.py`) is a coherent
+- No chat surface, and no agent profiles defined — the foreman is a profile like
+  any other, and arrives with the interface for talking to one.
+
+The run vocabulary (`events.py`, `commands.py`, `state.py`) is a coherent
 placeholder chosen to make the boundaries concrete; expect it to change when the
-engine's real state machine lands.
+engine's real state machine lands. `engine.domain.agents` and
+`engine.domain.chat` are meant to be more durable — they describe identity, not
+a state machine.
 
 ## Shape of the system
 

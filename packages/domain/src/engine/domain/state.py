@@ -7,7 +7,7 @@ trivially serialisable -- no handles, no connections, no adapter objects.
 from dataclasses import dataclass, field
 from enum import Enum
 
-from engine.domain.ids import AttemptId, RunId, TaskId, WorkspaceId
+from engine.domain.ids import AgentRunId, RunId, TaskId, WorkspaceId
 
 
 class RunPhase(Enum):
@@ -15,7 +15,7 @@ class RunPhase(Enum):
 
     PENDING = "pending"
     PREPARING_WORKSPACE = "preparing_workspace"
-    ATTEMPTING = "attempting"
+    RUNNING_AGENT = "running_agent"
     PUBLISHING = "publishing"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -31,12 +31,12 @@ class RunState:
     repository: str = ""
     prompt: str = ""
     workspace_id: WorkspaceId | None = None
-    attempts: tuple[AttemptId, ...] = field(default=())
-    max_attempts: int = 3
+    agent_runs: tuple[AgentRunId, ...] = field(default=())
+    max_agent_runs: int = 3
 
     @property
-    def attempts_remaining(self) -> int:
-        return max(0, self.max_attempts - len(self.attempts))
+    def agent_runs_remaining(self) -> int:
+        return max(0, self.max_agent_runs - len(self.agent_runs))
 
     @property
     def is_terminal(self) -> bool:
