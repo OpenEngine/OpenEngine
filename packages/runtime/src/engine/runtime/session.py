@@ -131,7 +131,10 @@ class AgentSession:
             )
             raise
 
-        await store.append_messages(instance_id, (turn.message,))
+        # The whole turn, not just the conclusion: an agent that read three
+        # files before answering leaves those reads in the transcript, so a
+        # later reader can see why it said what it said.
+        await store.append_messages(instance_id, turn.transcript)
         await store.record_agent_run(
             replace(
                 agent_run,

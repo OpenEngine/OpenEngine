@@ -18,6 +18,7 @@ from engine.domain import (
     AgentRunStatus,
     Message,
     Role,
+    ToolCall,
     ToolSpec,
 )
 from engine.ports import AgentTurn, StateStore
@@ -157,6 +158,63 @@ def test_a_turn_stores_both_sides() -> None:
     assert [(m.role, m.content) for m in history] == [
         (Role.USER, "what is 2+2"),
         (Role.ASSISTANT, "4"),
+    ]
+
+
+def test_what_the_agent_did_is_stored_alongside_what_it_said() -> None:
+    """An agent that read a file before answering leaves the read in the
+    transcript. Without it, nobody can later tell why the answer is what it is."""
+    store = InMemoryStateStore()
+    call = ToolCall(call_id="c1", name="command_execution", arguments='{"command": "ls"}')
+    steps = (Message.assistant(tool_calls=(call,)), Message.tool_result("c1", "README.md"))
+
+    class StepRunner:
+        async def run_turn(self, agent_run_id, profile, messages, tools=(), workspace_id=None):
+            return AgentTurn(Message.assistant("one file"), steps=steps)
+
+        async def cancel(self, agent_run_id) -> None:
+            pass
+
+    session = _session(StepRunner(), store)
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "what is in there?"))
+    history = asyncio.run(session.history(instance.instance_id))
+
+    assert [(m.role, m.content) for m in history] == [
+        (Role.USER, "what is in there?"),
+        (Role.ASSISTANT, ""),
+        (Role.TOOL, "README.md"),
+        (Role.ASSISTANT, "one file"),
+    ]
+    assert history[1].tool_calls == (call,)
+    assert history[2].tool_call_id == "c1"
+
+
+def test_recorded_steps_go_back_to_the_agent_next_turn() -> None:
+    """A stateless runner starts cold, so the steps are how it remembers what it
+    already did."""
+    store = InMemoryStateStore()
+    runner = ScriptedRunner(["first", "second"])
+
+    class OneStepRunner(ScriptedRunner):
+        async def run_turn(self, agent_run_id, profile, messages, tools=(), workspace_id=None):
+            turn = await super().run_turn(agent_run_id, profile, messages)
+            return AgentTurn(turn.message, steps=(Message.assistant("(looked something up)"),))
+
+    runner = OneStepRunner(["first", "second"])
+    session = _session(runner, store)
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "one"))
+    asyncio.run(session.say(instance.instance_id, "two"))
+
+    _, _, second_call = runner.seen[1]
+    assert [m.content for m in second_call] == [
+        "one",
+        "(looked something up)",
+        "first",
+        "two",
     ]
 
 

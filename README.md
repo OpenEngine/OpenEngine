@@ -233,13 +233,23 @@ logged in (`codex login`); the page reports it plainly if either is missing.
 Codex runs sandboxed read-only by default, so an agent you are talking to cannot
 edit the tree as a side effect of answering.
 
-Two limits worth knowing before you read anything into a conversation:
+The transcript records what the agent *did*, not just what it concluded — the
+commands it ran and their output are stored beside its messages, and the chat
+page draws them as collapsible blocks. That is what lets a stateless runner stay
+coherent: asked a follow-up, the agent reads the earlier command's output back
+out of our transcript instead of re-running it.
+
+Three limits worth knowing before you read anything into a conversation:
 
 - **Conversations die with the process.** The store is the in-memory one.
 - **The agent has no engine tools.** Codex brings its own (it reads files, runs
   commands); it cannot be handed ours, so the foreman can discuss dispatching
   work but not dispatch it. See `CodexToolsUnsupportedError`, which is raised
   rather than ignored.
+- **Turns are expensive and barely cached.** Each one spends ~15k prompt tokens
+  per model request on Codex's own preamble, of which ~10k is cache-served and
+  none of ours is. See the `TODO(caching)` block at the top of the Codex
+  adapter, which has the measurements and the two candidate fixes.
 
 The other pages — Runs, Inbox, Request a run — are unwired and say so.
 

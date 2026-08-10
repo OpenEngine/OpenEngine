@@ -6,7 +6,17 @@ from stdout. The event vocabulary this parses is small and stable:
     {"type": "thread.started",  "thread_id": "019f..."}
     {"type": "turn.started"}
     {"type": "item.completed", "item": {"type": "agent_message", "text": "..."}}
-    {"type": "turn.completed", "usage": {"input_tokens": 15276, ...}}
+    {"type": "item.completed", "item": {"type": "command_execution",
+                                        "command": "/bin/zsh -lc 'ls packages'",
+                                        "aggregated_output": "...",
+                                        "exit_code": 0, "status": "completed"}}
+    {"type": "turn.completed", "usage": {"input_tokens": 15276,
+                                         "cached_input_tokens": 9984, ...}}
+
+Every item except the final message becomes an `AgentTurn.step`, so the
+conversation records what the agent *did* and not merely what it concluded.
+Unrecognised item types are recorded generically rather than dropped: a Codex
+release that adds one should leave a gap in nobody's audit trail.
 
 Two consequences of Codex being an *agent* rather than a chat completion, both
 of which this adapter is deliberately loud about rather than papering over:
@@ -25,6 +35,40 @@ of which this adapter is deliberately loud about rather than papering over:
   keep it, and is worth doing only once conversations outlive a process.
 
 Stdlib only: `asyncio.create_subprocess_exec` and `json`. No SDK.
+
+TODO(caching): we are effectively uncached, and the fix is not in this file.
+----------------------------------------------------------------------------
+Measured against codex-cli 0.144.4, `cached_input_tokens` comes back as exactly
+9984 per model request no matter what we send -- one word or a whole
+conversation, first turn or fifth:
+
+    one-word question, 1 model call     15,276 in   9,984 cached
+    question + one command, 2 calls     30,527 in  19,968 cached  (2 x 9,984)
+    fifth turn of a real conversation   15,497 in   9,984 cached
+
+That constant is Codex's own preamble -- sandbox rules, agent identity, plugin
+and tool schemas, ~15k tokens of which ~10k caches. It is re-sent on every model
+request, and a turn that runs two commands makes three of them. Nothing we
+contribute is cached, and the dominant cost is not our transcript but Codex's
+per-request overhead, which this adapter cannot influence at all.
+
+Two things follow, and only the first is done:
+
+* `render_prompt` is append-only, so turn N's prompt is a strict prefix of turn
+  N+1's. That is a *precondition* for a cache hit, not a fix: our transcripts are
+  a few hundred tokens, far below the ~1024-token block a cache entry is cut at,
+  so there is nothing there to cache yet. It starts paying on long conversations,
+  and only inside the cache's few-minute TTL, which a human chat routinely
+  exceeds anyway.
+* The real fix is `codex exec resume <thread_id>`: one growing prefix on the
+  provider side instead of a fresh process rebuilding the preamble every turn.
+  It needs somewhere on `AgentInstance` to keep the thread id, and a fallback to
+  full replay when the rollout is gone -- without that the conversation stops
+  being ours, which is the whole reason we hold it. `thread_id_of` already reads
+  the id; nothing stores it yet.
+
+Until then: assume every turn costs ~15k prompt tokens per model call it makes,
+and do not read the growing transcript as the reason.
 """
 
 import asyncio
@@ -34,7 +78,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from engine.domain.agents import AgentProfile
-from engine.domain.chat import Message, Role
+from engine.domain.chat import Message, Role, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage
@@ -51,6 +95,24 @@ ROLE_LABELS: Mapping[Role, str] = {
 #: agent you are talking to should not be able to edit the tree as a side
 #: effect of answering a question.
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
+
+#: Items that are not actions worth recording. Codex's reasoning items arrive
+#: with their content stripped, and half a thought is worse in a transcript than
+#: no thought at all.
+IGNORED_ITEM_TYPES = frozenset({"reasoning"})
+
+#: Where an item keeps its result, in preference order. Anything without one of
+#: these is recorded as an action with an empty result rather than skipped.
+OUTPUT_FIELDS = ("aggregated_output", "output", "result", "error")
+
+#: Fields that describe the item rather than its arguments.
+NON_ARGUMENT_FIELDS = frozenset({"id", "type", "status", *OUTPUT_FIELDS})
+
+#: How much of a past step's output is replayed into a later prompt. The full
+#: text is always stored; this only bounds what a later turn re-reads, because
+#: an 8KB file dump from three questions ago is billed again every turn and
+#: rarely earns it.
+MAX_REPLAYED_OUTPUT_CHARS = 1000
 
 
 class CodexUnavailableError(RuntimeError):
@@ -76,13 +138,37 @@ class CodexToolsUnsupportedError(NotImplementedError):
         self.tool_names = tuple(tool_names)
 
 
+def render_message(message: Message) -> str:
+    """One conversation entry as a stable block of text.
+
+    Stable is the operative word: the same message must render identically
+    whenever it appears, or the append-only property below is lost.
+    """
+    if message.tool_calls:
+        return "\n\n".join(
+            f"{ROLE_LABELS[message.role]} ran {call.name}: {call.arguments}"
+            for call in message.tool_calls
+        )
+    body = message.content.strip()
+    if message.role is Role.TOOL and len(body) > MAX_REPLAYED_OUTPUT_CHARS:
+        omitted = len(body) - MAX_REPLAYED_OUTPUT_CHARS
+        body = f"{body[:MAX_REPLAYED_OUTPUT_CHARS]}\n… ({omitted} more characters, stored in full)"
+    return f"{ROLE_LABELS[message.role]}: {body}"
+
+
 def render_prompt(profile: AgentProfile, messages: Sequence[Message]) -> str:
     """Flatten a profile and a conversation into one prompt.
 
-    Codex takes a single block of text, so the structure a chat API would carry
-    in roles has to be spelled out. Prior turns become a labelled transcript and
-    the latest message is set apart, so the model can tell what it is answering
-    from what it is merely remembering.
+    Codex takes a single block of text, so the structure a chat API carries in
+    roles has to be spelled out.
+
+    **Append-only.** Every message renders to a fixed block and the blocks are
+    joined in order, so the prompt for turn N is a strict prefix of the prompt
+    for turn N+1. Prompt caches match on prefixes, and an earlier version of this
+    function moved the latest message between two headings each turn, which broke
+    the prefix one line after the instructions and made a cache hit impossible.
+    Nothing may be inserted, reordered, or reworded after the fact -- including
+    any trailing "now answer this" instruction, which is why there isn't one.
     """
     if not messages:
         raise ValueError("cannot run a turn with no messages")
@@ -91,23 +177,8 @@ def render_prompt(profile: AgentProfile, messages: Sequence[Message]) -> str:
     if profile.instructions.strip():
         sections.append(f"# Your instructions\n\n{profile.instructions.strip()}")
 
-    *prior, latest = messages
-    if prior:
-        transcript = "\n\n".join(
-            f"{ROLE_LABELS[m.role]}: {m.content}".strip() for m in prior if m.content.strip()
-        )
-        if transcript:
-            sections.append(f"# Conversation so far\n\n{transcript}")
-
-    if latest.role is Role.USER:
-        sections.append(f"# Message to answer\n\n{latest.content.strip()}")
-    else:
-        # Not a user message -- the caller wants the conversation continued
-        # rather than a reply to anything in particular.
-        sections.append(
-            f"# Continue the conversation\n\n"
-            f"{ROLE_LABELS[latest.role]}: {latest.content}".strip()
-        )
+    rendered = [render_message(m) for m in messages if m.content.strip() or m.tool_calls]
+    sections.append("# Conversation\n\n" + "\n\n".join(rendered))
     return "\n\n".join(sections)
 
 
@@ -131,41 +202,94 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
     return tuple(events)
 
 
+def action_messages(item: dict[str, Any], call_id: str) -> tuple[Message, Message]:
+    """One completed action as the pair of messages that records it.
+
+    An assistant message carrying the call, then the tool message carrying its
+    result -- the same shape a chat API would have produced had it asked us to
+    run the thing. The arguments are whatever the item said minus its bookkeeping
+    fields, so an item type this adapter has never heard of still records what
+    the agent did with it.
+    """
+    arguments = {k: v for k, v in item.items() if k not in NON_ARGUMENT_FIELDS}
+    call = ToolCall(
+        call_id=call_id,
+        name=str(item.get("type", "action")),
+        arguments=json.dumps(arguments, sort_keys=True),
+    )
+    output = next(
+        (str(item[field]) for field in OUTPUT_FIELDS if item.get(field) not in (None, "")),
+        "",
+    )
+    exit_code = item.get("exit_code")
+    if exit_code is not None:
+        output = f"{output}\n(exit {exit_code})".strip()
+    return Message.assistant(tool_calls=(call,)), Message.tool_result(call_id, output)
+
+
 def turn_from_events(events: Iterable[dict[str, Any]]) -> AgentTurn:
-    """Assemble the assistant's answer out of Codex's event stream."""
-    texts: list[str] = []
+    """Assemble the answer, and everything the agent did to reach it.
+
+    The last `agent_message` is the answer. Every earlier message is narration
+    and every other item is an action, and both are steps -- so the conversation
+    ends up holding the commands and their output, not just the conclusion.
+    """
+    events = tuple(events)
+    thread = thread_id_of(events) or "codex"
+    entries: list[tuple[str, Any]] = []
     usage: TokenUsage | None = None
     failed = False
 
-    for event in events:
+    for index, event in enumerate(events):
         match event.get("type"):
             case "item.completed":
                 item = event.get("item") or {}
-                if item.get("type") == "agent_message" and item.get("text"):
-                    texts.append(str(item["text"]))
+                kind = item.get("type")
+                if kind in IGNORED_ITEM_TYPES:
+                    continue
+                if kind == "agent_message":
+                    if item.get("text"):
+                        entries.append(("message", str(item["text"])))
+                else:
+                    call_id = f"{thread}:{item.get('id') or f'item-{index}'}"
+                    entries.append(("action", action_messages(item, call_id)))
             case "turn.completed":
                 reported = event.get("usage") or {}
                 usage = TokenUsage(
                     prompt_tokens=int(reported.get("input_tokens", 0)),
                     completion_tokens=int(reported.get("output_tokens", 0)),
+                    cached_prompt_tokens=int(reported.get("cached_input_tokens", 0)),
                 )
             case "turn.failed" | "error":
                 failed = True
 
-    if failed:
-        detail = "\n\n".join(texts) or "Codex reported a failed turn"
-        return AgentTurn(
-            message=Message.assistant(detail),
-            finish_reason=FinishReason.ERROR,
-            usage=usage,
-        )
-    if not texts:
+    spoken = [index for index, (kind, _) in enumerate(entries) if kind == "message"]
+    answer_at = spoken[-1] if spoken else None
+
+    steps: list[Message] = []
+    for index, (kind, payload) in enumerate(entries):
+        if index == answer_at:
+            continue
+        if kind == "message":
+            steps.append(Message.assistant(payload))
+        else:
+            steps.extend(payload)
+
+    if answer_at is None:
+        if failed:
+            return AgentTurn(
+                message=Message.assistant("Codex reported a failed turn"),
+                finish_reason=FinishReason.ERROR,
+                usage=usage,
+                steps=tuple(steps),
+            )
         raise CodexExecutionError("Codex produced no agent message")
 
     return AgentTurn(
-        message=Message.assistant("\n\n".join(texts)),
-        finish_reason=FinishReason.STOP,
+        message=Message.assistant(entries[answer_at][1]),
+        finish_reason=FinishReason.ERROR if failed else FinishReason.STOP,
         usage=usage,
+        steps=tuple(steps),
     )
 
 
@@ -294,7 +418,9 @@ __all__ = [
     "CodexExecutionError",
     "CodexToolsUnsupportedError",
     "CodexUnavailableError",
+    "action_messages",
     "parse_events",
+    "render_message",
     "render_prompt",
     "thread_id_of",
     "turn_from_events",

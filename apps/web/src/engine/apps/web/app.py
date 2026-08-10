@@ -21,6 +21,7 @@ them the in-memory store holding the conversation itself).
 """
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import fields
 
 import streamlit as st
@@ -36,6 +37,7 @@ from engine.core import decide
 from engine.domain import (
     AgentId,
     AgentInstanceId,
+    Message,
     Role,
     RunId,
     RunPhase,
@@ -43,6 +45,7 @@ from engine.domain import (
     RunState,
     TaskId,
 )
+from engine.ports import AgentTurn
 from engine.runtime import AgentSession, Capabilities
 
 #: Sidebar order. Chat first: it is the one that does something.
@@ -117,12 +120,7 @@ def chat_page(session: AgentSession, capabilities: Capabilities) -> None:
     with st.expander("Instructions this agent is running with"):
         st.write(profile.instructions)
 
-    for message in asyncio.run(session.history(instance_id)):
-        avatar = CHAT_ROLES.get(message.role)
-        if avatar is None or not message.content:
-            continue
-        with st.chat_message(avatar):
-            st.markdown(message.content)
+    _draw_messages(asyncio.run(session.history(instance_id)))
 
     question = st.chat_input(f"Message {agent_id}")
     if not question:
@@ -131,21 +129,59 @@ def chat_page(session: AgentSession, capabilities: Capabilities) -> None:
     with st.chat_message("user"):
         st.markdown(question)
 
-    with st.chat_message("assistant"):
-        try:
-            with st.spinner(f"{agent_id} is working…"):
-                turn = asyncio.run(session.say(instance_id, question))
-        except Exception as error:  # noqa: BLE001 -- the page reports, never crashes
+    try:
+        with st.spinner(f"{agent_id} is working…"):
+            turn = asyncio.run(session.say(instance_id, question))
+    except Exception as error:  # noqa: BLE001 -- the page reports, never crashes
+        with st.chat_message("assistant"):
             st.error(f"**{type(error).__name__}**\n\n{error}")
-            return
+        return
 
-        st.markdown(turn.message.content or "_(the agent said nothing)_")
-        details = [f"finished: `{turn.finish_reason.value}`"]
-        if turn.usage:
-            details.append(
-                f"tokens: {turn.usage.prompt_tokens} in / {turn.usage.completion_tokens} out"
-            )
-        st.caption(" · ".join(details))
+    _draw_messages(turn.transcript)
+    st.caption(" · ".join(_turn_details(turn)))
+
+
+def _draw_messages(messages: Sequence[Message]) -> None:
+    """Render a conversation, actions included.
+
+    An action is two messages -- the call and its result -- so they are paired
+    back up here and drawn as one collapsed block. Expanded by default would
+    bury the answer under whatever the agent read to find it.
+    """
+    results = {m.tool_call_id: m.content for m in messages if m.role is Role.TOOL}
+
+    for message in messages:
+        if message.role is Role.TOOL:
+            continue  # drawn with the call that asked for it
+        if message.tool_calls:
+            for call in message.tool_calls:
+                with st.chat_message("assistant", avatar="🔧"):
+                    with st.expander(f"ran `{call.name}`"):
+                        st.code(call.arguments, language="json")
+                        st.code(results.get(call.call_id, "(no output)"))
+            continue
+        avatar = CHAT_ROLES.get(message.role)
+        if avatar and message.content:
+            with st.chat_message(avatar):
+                st.markdown(message.content)
+
+
+def _turn_details(turn: AgentTurn) -> list[str]:
+    """The footnote under a reply: how it ended, and what it cost.
+
+    Cached tokens are shown because they are the difference between a prompt
+    that is merely long and one being re-billed in full on every turn.
+    """
+    details = [f"finished: `{turn.finish_reason.value}`"]
+    if turn.steps:
+        details.append(f"{len(turn.steps)} steps recorded")
+    if turn.usage:
+        details.append(
+            f"tokens: {turn.usage.prompt_tokens} in "
+            f"({turn.usage.cached_prompt_tokens} cached) / "
+            f"{turn.usage.completion_tokens} out"
+        )
+    return details
 
 
 # --- run pages (unwired) ----------------------------------------------------
