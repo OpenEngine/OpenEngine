@@ -21,7 +21,7 @@ them the in-memory store holding the conversation itself).
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import fields
 
 import streamlit as st
@@ -30,6 +30,7 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_read_model,
+    build_runners,
     build_session,
 )
 from engine.apps.web.readmodel import DemoReadModel, ReadModel, RunSummary
@@ -45,7 +46,7 @@ from engine.domain import (
     RunState,
     TaskId,
 )
-from engine.ports import AgentTurn
+from engine.ports import AgentRunner, AgentTurn
 from engine.runtime import AgentSession, Capabilities
 
 #: Sidebar order. Chat first: it is the one that does something.
@@ -65,7 +66,7 @@ st.set_page_config(page_title="engine", page_icon="⚙", layout="wide")
 
 
 @st.cache_resource
-def wiring(_settings: Settings) -> tuple[Capabilities, AgentSession]:
+def wiring(_settings: Settings) -> tuple[Capabilities, Mapping[str, AgentRunner], AgentSession]:
     """Compose once per process, not once per rerun.
 
     The cache is what makes the conversation persist: the in-memory state store
@@ -75,7 +76,8 @@ def wiring(_settings: Settings) -> tuple[Capabilities, AgentSession]:
     object here.
     """
     capabilities = build_capabilities(_settings)
-    return capabilities, build_session(capabilities)
+    runners = build_runners(_settings)
+    return capabilities, runners, build_session(capabilities, runners)
 
 
 # --- chat -------------------------------------------------------------------
@@ -94,27 +96,36 @@ def _instance_for(session: AgentSession, agent_id: AgentId) -> AgentInstanceId:
     return instances[agent_id]
 
 
-def chat_page(session: AgentSession, capabilities: Capabilities) -> None:
+def chat_page(session: AgentSession, runners: Mapping[str, AgentRunner]) -> None:
     st.title("Chat")
 
     agent_ids = sorted(session.profiles)
-    header = st.columns([4, 1])
+    header = st.columns([3, 1, 1])
     agent_id = header[0].selectbox(
         "Agent",
         agent_ids,
         format_func=lambda a: f"{a} — {session.profiles[a].description}",
     )
+    runner = header[1].selectbox(
+        "Runner",
+        session.runners,
+        help=(
+            "Which agent runner answers. Switching mid-conversation is fine: the "
+            "transcript is ours, so the next one is handed everything the last "
+            "one said and did."
+        ),
+    )
     profile = session.profiles[agent_id]
     instance_id = _instance_for(session, agent_id)
 
-    header[1].write("")  # push the button down to sit level with the selectbox
-    if header[1].button("New conversation", use_container_width=True):
+    header[2].write("")  # push the button down to sit level with the selectboxes
+    if header[2].button("New conversation", use_container_width=True):
         st.session_state["instances"].pop(agent_id, None)
         st.rerun()
 
-    runner = type(capabilities.agent_runner).__name__
     st.caption(
-        f"Instance `{instance_id}` · answers come from **{runner}** · "
+        f"Instance `{instance_id}` · answered by **{runner}** "
+        f"({type(runners[runner]).__name__}) · "
         f"grants: {', '.join(profile.capabilities) or 'none yet'}"
     )
     with st.expander("Instructions this agent is running with"):
@@ -130,15 +141,15 @@ def chat_page(session: AgentSession, capabilities: Capabilities) -> None:
         st.markdown(question)
 
     try:
-        with st.spinner(f"{agent_id} is working…"):
-            turn = asyncio.run(session.say(instance_id, question))
+        with st.spinner(f"{agent_id} is working on {runner}…"):
+            turn = asyncio.run(session.say(instance_id, question, runner=runner))
     except Exception as error:  # noqa: BLE001 -- the page reports, never crashes
         with st.chat_message("assistant"):
             st.error(f"**{type(error).__name__}**\n\n{error}")
         return
 
     _draw_messages(turn.transcript)
-    st.caption(" · ".join(_turn_details(turn)))
+    st.caption(" · ".join([runner, *_turn_details(turn)]))
 
 
 def _draw_messages(messages: Sequence[Message]) -> None:
@@ -181,6 +192,8 @@ def _turn_details(turn: AgentTurn) -> list[str]:
             f"({turn.usage.cached_prompt_tokens} cached) / "
             f"{turn.usage.completion_tokens} out"
         )
+        if turn.usage.cost_usd is not None:
+            details.append(f"cost: ${turn.usage.cost_usd:.4f}")
     return details
 
 
@@ -303,7 +316,7 @@ def inbox_page(model: ReadModel) -> None:
                 st.warning("Not sent: replies land with the communications ticket.")
 
 
-def wiring_page(capabilities: Capabilities) -> None:
+def wiring_page(capabilities: Capabilities, runners: Mapping[str, AgentRunner]) -> None:
     st.title("Wiring")
     st.caption(
         "What this process composed at startup: one implementation per port, "
@@ -324,9 +337,28 @@ def wiring_page(capabilities: Capabilities) -> None:
         hide_index=True,
     )
     st.caption(
-        "Two of these work: the agent runner shells out to the Codex CLI, and the "
+        "Two of these work: the agent runner shells out to a coding CLI, and the "
         "state store keeps conversations in memory for as long as this process "
         "lives. The rest are placeholders whose methods raise."
+    )
+
+    st.subheader("Runners")
+    st.caption(
+        "A port has one implementation, and that is the `agent_runner` above -- "
+        "what anything non-interactive uses. Chat additionally offers a choice, "
+        "bound to these names in `composition.build_runners` and nowhere else."
+    )
+    st.dataframe(
+        [
+            {
+                "name": name,
+                "implementation": type(runner).__name__,
+                "module": type(runner).__module__,
+                "default": name == next(iter(runners)),
+            }
+            for name, runner in runners.items()
+        ],
+        hide_index=True,
     )
 
 
@@ -334,7 +366,7 @@ def wiring_page(capabilities: Capabilities) -> None:
 
 
 def main() -> None:
-    capabilities, session = wiring(SETTINGS)
+    capabilities, runners, session = wiring(SETTINGS)
 
     st.sidebar.title("engine")
     st.sidebar.caption("control interface")
@@ -343,11 +375,11 @@ def main() -> None:
     if page == "Chat":
         st.sidebar.divider()
         st.sidebar.success("Chat is live. Conversations are lost when this process stops.")
-        chat_page(session, capabilities)
+        chat_page(session, runners)
         return
 
     if page == "Wiring":
-        wiring_page(capabilities)
+        wiring_page(capabilities, runners)
         return
 
     demo = st.sidebar.toggle(

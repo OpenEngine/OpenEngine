@@ -15,6 +15,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "engine-adapter-agent-runner-claude-code",
     "engine-adapter-agent-runner-codex",
     "engine-adapter-communications-buzz",
     "engine-adapter-source-control-github",
@@ -186,6 +187,17 @@ wheels = [
 ]
 
 [[package]]
+name = "engine-adapter-agent-runner-claude-code"
+version = "0.0.0"
+source = { editable = "packages/adapters/agent_runner/claude_code" }
+dependencies = [
+    { name = "engine-runtime" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
+
+[[package]]
 name = "engine-adapter-agent-runner-codex"
 version = "0.0.0"
 source = { editable = "packages/adapters/agent_runner/codex" }
@@ -338,6 +350,7 @@ name = "engine-web"
 version = "0.0.0"
 source = { editable = "apps/web" }
 dependencies = [
+    { name = "engine-adapter-agent-runner-claude-code" },
     { name = "engine-adapter-agent-runner-codex" },
     { name = "engine-adapter-communications-buzz" },
     { name = "engine-adapter-source-control-github" },
@@ -351,6 +364,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "engine-adapter-agent-runner-claude-code", editable = "packages/adapters/agent_runner/claude_code" },
     { name = "engine-adapter-agent-runner-codex", editable = "packages/adapters/agent_runner/codex" },
     { name = "engine-adapter-communications-buzz", editable = "packages/adapters/communications/buzz" },
     { name = "engine-adapter-source-control-github", editable = "packages/adapters/source_control/github" },

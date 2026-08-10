@@ -23,10 +23,12 @@ from engine.domain import (
 )
 from engine.ports import AgentTurn, StateStore
 from engine.runtime import (
+    DEFAULT_RUNNER,
     AgentSession,
     Capabilities,
     UnknownAgentError,
     UnknownInstanceError,
+    UnknownRunnerError,
     UnknownToolGrantError,
 )
 
@@ -376,6 +378,94 @@ def test_a_resolvable_grant_reaches_the_runner() -> None:
     asyncio.run(session.say(instance.instance_id, "dispatch ENG-42"))
 
     assert captured == [(dispatch,)]
+
+
+# --- choosing a runner -------------------------------------------------------
+
+
+def test_one_wired_runner_needs_no_name() -> None:
+    session = _session(ScriptedRunner(), InMemoryStateStore())
+
+    assert session.runners == (DEFAULT_RUNNER,)
+    assert session.default_runner == DEFAULT_RUNNER
+
+
+def _two_runner_session(store: InMemoryStateStore, first, second) -> AgentSession:
+    missing = object()
+    return AgentSession(
+        Capabilities(
+            workflow_runtime=missing,
+            source_control=missing,
+            agent_runner=first,
+            communications=missing,
+            workspace_provider=missing,
+            state_store=store,
+        ),
+        profiles=PROFILES,
+        runners={"first": first, "second": second},
+    )
+
+
+def test_the_named_runner_answers() -> None:
+    store = InMemoryStateStore()
+    first, second = ScriptedRunner(["from first"]), ScriptedRunner(["from second"])
+    session = _two_runner_session(store, first, second)
+    instance = asyncio.run(session.start(CODER))
+
+    turn = asyncio.run(session.say(instance.instance_id, "hello", runner="second"))
+
+    assert turn.message.content == "from second"
+    assert first.seen == []
+
+
+def test_the_first_wired_runner_is_the_default() -> None:
+    store = InMemoryStateStore()
+    first, second = ScriptedRunner(["from first"]), ScriptedRunner(["from second"])
+    session = _two_runner_session(store, first, second)
+    instance = asyncio.run(session.start(CODER))
+
+    turn = asyncio.run(session.say(instance.instance_id, "hello"))
+
+    assert turn.message.content == "from first"
+    assert session.runners == ("first", "second")
+
+
+def test_one_conversation_may_be_continued_by_either_runner() -> None:
+    """The payoff of holding the transcript ourselves: whoever answers next is
+    handed everything the other one said."""
+    store = InMemoryStateStore()
+    first, second = ScriptedRunner(["from first"]), ScriptedRunner(["from second"])
+    session = _two_runner_session(store, first, second)
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "one", runner="first"))
+    asyncio.run(session.say(instance.instance_id, "two", runner="second"))
+
+    _, _, seen_by_second = second.seen[0]
+    assert [m.content for m in seen_by_second] == ["one", "from first", "two"]
+
+
+def test_which_runner_answered_is_recorded() -> None:
+    store = InMemoryStateStore()
+    first, second = ScriptedRunner(["a"]), ScriptedRunner(["b"])
+    session = _two_runner_session(store, first, second)
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "hello", runner="second"))
+
+    agent_run_id = second.seen[0][0]
+    assert asyncio.run(store.agent_run(agent_run_id)).runner == "second"
+
+
+def test_an_unknown_runner_stops_before_anything_is_stored() -> None:
+    store = InMemoryStateStore()
+    session = _session(ScriptedRunner(), store)
+    instance = asyncio.run(session.start(CODER))
+
+    with pytest.raises(UnknownRunnerError):
+        asyncio.run(session.say(instance.instance_id, "hello", runner="gpt-9"))
+
+    assert asyncio.run(session.history(instance.instance_id)) == ()
 
 
 # --- the profiles that ship --------------------------------------------------
