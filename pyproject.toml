@@ -1,0 +1,11 @@
+[tool.uv.workspace]
+members = ["packages/*", "packages/adapters/*", "apps/*"]
+# `packages/adapters` is a grouping directory, not a distribution.
+exclude = ["packages/adapters"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
