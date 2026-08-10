@@ -26,6 +26,16 @@ APP = "app"
 #: The layers that make up the dependency-free core of the system.
 CORE_LAYERS = frozenset({DOMAIN, ENGINE, PORTS, RUNTIME})
 
+#: Adapters are grouped by capability, so a distribution sits two levels under
+#: here: `packages/adapters/<capability>/<vendor>`.
+ADAPTERS_ROOT = REPO_ROOT / "packages" / "adapters"
+
+#: Where the capability names come from. `Capabilities` has one field per
+#: capability, which makes it the only list that cannot drift -- adding a
+#: seventh capability there is what permits a seventh adapter directory. Read
+#: with `ast` rather than imported, so this module stays static analysis.
+CAPABILITIES_SOURCE = REPO_ROOT / "packages/runtime/src/engine/runtime/capabilities.py"
+
 #: Acceptance criterion: these two must not pull in any third-party code.
 NO_THIRD_PARTY_LAYERS = frozenset({DOMAIN, ENGINE})
 
@@ -95,11 +105,37 @@ def _modules_in(src: Path) -> tuple[str, ...]:
     )
 
 
+def capability_names() -> tuple[str, ...]:
+    """The capability slots, in declaration order, read off `Capabilities`."""
+    tree = ast.parse(CAPABILITIES_SOURCE.read_text(), filename=str(CAPABILITIES_SOURCE))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Capabilities":
+            return tuple(
+                statement.target.id
+                for statement in node.body
+                if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+            )
+    raise AssertionError(f"no Capabilities class in {CAPABILITIES_SOURCE}")
+
+
+CAPABILITIES = capability_names()
+
+
+def adapter_path_parts(package: Package) -> tuple[str, ...]:
+    """An adapter's position under `packages/adapters`, as directory names.
+
+    Returned whole rather than unpacked so a package at the wrong depth reaches
+    the assertion that explains it instead of raising here.
+    """
+    return package.root.relative_to(ADAPTERS_ROOT).parts
+
+
 def discover_packages() -> tuple[Package, ...]:
     """Every workspace member, found the same way uv finds them."""
     roots = [
         *(REPO_ROOT / "packages").glob("*/pyproject.toml"),
-        *(REPO_ROOT / "packages" / "adapters").glob("*/pyproject.toml"),
+        # Two levels: the capability directory groups, the vendor directory ships.
+        *ADAPTERS_ROOT.glob("*/*/pyproject.toml"),
         *(REPO_ROOT / "apps").glob("*/pyproject.toml"),
     ]
     packages = []
@@ -126,7 +162,8 @@ def imported_modules(path: Path) -> set[str]:
     """Every module name imported by a source file, absolute form.
 
     Relative imports are resolved against the file's own package so that a
-    sneaky `from ...adapters.github import X` cannot slip past the check.
+    sneaky `from ...adapters.source_control.github import X` cannot slip past the
+    check.
     """
     tree = ast.parse(path.read_text(), filename=str(path))
     found: set[str] = set()

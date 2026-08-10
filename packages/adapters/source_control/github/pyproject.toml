@@ -1,5 +1,5 @@
 [project]
-name = "engine-adapter-github"
+name = "engine-adapter-source-control-github"
 version = "0.0.0"
 description = "Source Control capability backed by GitHub."
 requires-python = ">=3.11"

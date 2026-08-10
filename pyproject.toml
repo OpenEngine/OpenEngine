@@ -1,6 +1,10 @@
 [tool.uv.workspace]
-members = ["packages/*", "packages/adapters/*", "apps/*"]
-# `packages/adapters` is a grouping directory, not a distribution.
+# Adapters are grouped by the capability they implement, so a distribution sits
+# two levels down: packages/adapters/<capability>/<vendor>.
+members = ["packages/*", "packages/adapters/*/*", "apps/*"]
+# `packages/adapters` is a grouping directory, not a distribution. The
+# capability directories under it are the same, and `packages/*` does not reach
+# them.
 exclude = ["packages/adapters"]
 
 [dependency-groups]

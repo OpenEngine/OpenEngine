@@ -2,9 +2,10 @@
 
 A boundary test that silently fails to parse an import is worse than no test at
 all -- it reports green while the wall it guards has a hole. An earlier version
-of `_resolve_relative` resolved `from ..adapters.github import X` inside
-`engine/runtime/dispatcher.py` to `engine.runtime.adapters.github`, which
-matched no rule and so passed. These pin the parsing down directly.
+of `_resolve_relative` resolved `from ..adapters.source_control.github import X`
+inside `engine/runtime/dispatcher.py` to
+`engine.runtime.adapters.source_control.github`, which matched no rule and so
+passed. These pin the parsing down directly.
 """
 
 import ast
@@ -43,13 +44,26 @@ def test_absolute_imports_are_collected(tmp_path: Path) -> None:
         ("engine/runtime/dispatcher.py", "from . import capabilities", "engine.runtime"),
         ("engine/runtime/dispatcher.py", "from .capabilities import C", "engine.runtime.capabilities"),
         # Level 2 climbs to `engine` -- the escape that used to slip through.
-        ("engine/runtime/dispatcher.py", "from ..adapters.github import G", "engine.adapters.github"),
+        (
+            "engine/runtime/dispatcher.py",
+            "from ..adapters.source_control.github import G",
+            "engine.adapters.source_control.github",
+        ),
         ("engine/runtime/dispatcher.py", "from ..domain import Command", "engine.domain"),
         # From a package's __init__.py: the file *is* the package.
         ("engine/runtime/__init__.py", "from .dispatcher import D", "engine.runtime.dispatcher"),
-        ("engine/runtime/__init__.py", "from ..adapters.codex import C", "engine.adapters.codex"),
-        # Nested one deeper.
-        ("engine/adapters/github/__init__.py", "from ..codex import C", "engine.adapters.codex"),
+        (
+            "engine/runtime/__init__.py",
+            "from ..adapters.agent_runner.codex import C",
+            "engine.adapters.agent_runner.codex",
+        ),
+        # One vendor reaching sideways for the one filed beside it, which is the
+        # escape that grouping adapters by capability makes convenient.
+        (
+            "engine/adapters/communications/buzz/__init__.py",
+            "from ..slack import S",
+            "engine.adapters.communications.slack",
+        ),
     ],
 )
 def test_relative_imports_resolve_to_absolute(
@@ -66,11 +80,11 @@ def test_imports_inside_functions_are_still_seen(tmp_path: Path) -> None:
         "engine/core/decide.py",
         """
         def decide(state, event):
-            from engine.adapters.github import GitHubSourceControl
+            from engine.adapters.source_control.github import GitHubSourceControl
             return state
         """,
     )
-    assert imported_modules(path) == {"engine.adapters.github"}
+    assert imported_modules(path) == {"engine.adapters.source_control.github"}
 
 
 def test_imports_inside_type_checking_blocks_are_still_seen(tmp_path: Path) -> None:
@@ -83,10 +97,10 @@ def test_imports_inside_type_checking_blocks_are_still_seen(tmp_path: Path) -> N
         from typing import TYPE_CHECKING
 
         if TYPE_CHECKING:
-            from engine.adapters.postgres import PostgresStateStore
+            from engine.adapters.state_store.postgres import PostgresStateStore
         """,
     )
-    assert "engine.adapters.postgres" in imported_modules(path)
+    assert "engine.adapters.state_store.postgres" in imported_modules(path)
 
 
 def test_syntax_error_is_not_silently_swallowed(tmp_path: Path) -> None:
@@ -106,7 +120,9 @@ def test_third_party_is_not_stdlib(module: str) -> None:
     assert not is_first_party(module)
 
 
-@pytest.mark.parametrize("module", ["engine", "engine.domain", "engine.adapters.github"])
+@pytest.mark.parametrize(
+    "module", ["engine", "engine.domain", "engine.adapters.source_control.github"]
+)
 def test_first_party_is_recognised(module: str) -> None:
     assert is_first_party(module)
 

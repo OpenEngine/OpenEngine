@@ -4,12 +4,12 @@ requires-python = ">=3.11"
 
 [manifest]
 members = [
-    "engine-adapter-codex",
-    "engine-adapter-communications",
-    "engine-adapter-github",
-    "engine-adapter-postgres",
-    "engine-adapter-temporal",
-    "engine-adapter-workspace",
+    "engine-adapter-agent-runner-codex",
+    "engine-adapter-communications-buzz",
+    "engine-adapter-source-control-github",
+    "engine-adapter-state-store-postgres",
+    "engine-adapter-workflow-runtime-temporal",
+    "engine-adapter-workspace-provider-git-worktree",
     "engine-control-server",
     "engine-core",
     "engine-domain",
@@ -31,9 +31,9 @@ wheels = [
 ]
 
 [[package]]
-name = "engine-adapter-codex"
+name = "engine-adapter-agent-runner-codex"
 version = "0.0.0"
-source = { editable = "packages/adapters/codex" }
+source = { editable = "packages/adapters/agent_runner/codex" }
 dependencies = [
     { name = "engine-runtime" },
 ]
@@ -42,9 +42,9 @@ dependencies = [
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
 
 [[package]]
-name = "engine-adapter-communications"
+name = "engine-adapter-communications-buzz"
 version = "0.0.0"
-source = { editable = "packages/adapters/communications" }
+source = { editable = "packages/adapters/communications/buzz" }
 dependencies = [
     { name = "engine-runtime" },
 ]
@@ -53,9 +53,9 @@ dependencies = [
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
 
 [[package]]
-name = "engine-adapter-github"
+name = "engine-adapter-source-control-github"
 version = "0.0.0"
-source = { editable = "packages/adapters/github" }
+source = { editable = "packages/adapters/source_control/github" }
 dependencies = [
     { name = "engine-runtime" },
 ]
@@ -64,9 +64,9 @@ dependencies = [
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
 
 [[package]]
-name = "engine-adapter-postgres"
+name = "engine-adapter-state-store-postgres"
 version = "0.0.0"
-source = { editable = "packages/adapters/postgres" }
+source = { editable = "packages/adapters/state_store/postgres" }
 dependencies = [
     { name = "engine-runtime" },
 ]
@@ -75,9 +75,9 @@ dependencies = [
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
 
 [[package]]
-name = "engine-adapter-temporal"
+name = "engine-adapter-workflow-runtime-temporal"
 version = "0.0.0"
-source = { editable = "packages/adapters/temporal" }
+source = { editable = "packages/adapters/workflow_runtime/temporal" }
 dependencies = [
     { name = "engine-runtime" },
 ]
@@ -86,9 +86,9 @@ dependencies = [
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
 
 [[package]]
-name = "engine-adapter-workspace"
+name = "engine-adapter-workspace-provider-git-worktree"
 version = "0.0.0"
-source = { editable = "packages/adapters/workspace" }
+source = { editable = "packages/adapters/workspace_provider/git_worktree" }
 dependencies = [
     { name = "engine-runtime" },
 ]
@@ -101,24 +101,24 @@ name = "engine-control-server"
 version = "0.0.0"
 source = { editable = "apps/control_server" }
 dependencies = [
-    { name = "engine-adapter-codex" },
-    { name = "engine-adapter-communications" },
-    { name = "engine-adapter-github" },
-    { name = "engine-adapter-postgres" },
-    { name = "engine-adapter-temporal" },
-    { name = "engine-adapter-workspace" },
+    { name = "engine-adapter-agent-runner-codex" },
+    { name = "engine-adapter-communications-buzz" },
+    { name = "engine-adapter-source-control-github" },
+    { name = "engine-adapter-state-store-postgres" },
+    { name = "engine-adapter-workflow-runtime-temporal" },
+    { name = "engine-adapter-workspace-provider-git-worktree" },
     { name = "engine-core" },
     { name = "engine-runtime" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "engine-adapter-codex", editable = "packages/adapters/codex" },
-    { name = "engine-adapter-communications", editable = "packages/adapters/communications" },
-    { name = "engine-adapter-github", editable = "packages/adapters/github" },
-    { name = "engine-adapter-postgres", editable = "packages/adapters/postgres" },
-    { name = "engine-adapter-temporal", editable = "packages/adapters/temporal" },
-    { name = "engine-adapter-workspace", editable = "packages/adapters/workspace" },
+    { name = "engine-adapter-agent-runner-codex", editable = "packages/adapters/agent_runner/codex" },
+    { name = "engine-adapter-communications-buzz", editable = "packages/adapters/communications/buzz" },
+    { name = "engine-adapter-source-control-github", editable = "packages/adapters/source_control/github" },
+    { name = "engine-adapter-state-store-postgres", editable = "packages/adapters/state_store/postgres" },
+    { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },
+    { name = "engine-adapter-workspace-provider-git-worktree", editable = "packages/adapters/workspace_provider/git_worktree" },
     { name = "engine-core", editable = "packages/engine" },
     { name = "engine-runtime", editable = "packages/runtime" },
 ]
@@ -172,24 +172,24 @@ name = "engine-worker"
 version = "0.0.0"
 source = { editable = "apps/worker" }
 dependencies = [
-    { name = "engine-adapter-codex" },
-    { name = "engine-adapter-communications" },
-    { name = "engine-adapter-github" },
-    { name = "engine-adapter-postgres" },
-    { name = "engine-adapter-temporal" },
-    { name = "engine-adapter-workspace" },
+    { name = "engine-adapter-agent-runner-codex" },
+    { name = "engine-adapter-communications-buzz" },
+    { name = "engine-adapter-source-control-github" },
+    { name = "engine-adapter-state-store-postgres" },
+    { name = "engine-adapter-workflow-runtime-temporal" },
+    { name = "engine-adapter-workspace-provider-git-worktree" },
     { name = "engine-core" },
     { name = "engine-runtime" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "engine-adapter-codex", editable = "packages/adapters/codex" },
-    { name = "engine-adapter-communications", editable = "packages/adapters/communications" },
-    { name = "engine-adapter-github", editable = "packages/adapters/github" },
-    { name = "engine-adapter-postgres", editable = "packages/adapters/postgres" },
-    { name = "engine-adapter-temporal", editable = "packages/adapters/temporal" },
-    { name = "engine-adapter-workspace", editable = "packages/adapters/workspace" },
+    { name = "engine-adapter-agent-runner-codex", editable = "packages/adapters/agent_runner/codex" },
+    { name = "engine-adapter-communications-buzz", editable = "packages/adapters/communications/buzz" },
+    { name = "engine-adapter-source-control-github", editable = "packages/adapters/source_control/github" },
+    { name = "engine-adapter-state-store-postgres", editable = "packages/adapters/state_store/postgres" },
+    { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },
+    { name = "engine-adapter-workspace-provider-git-worktree", editable = "packages/adapters/workspace_provider/git_worktree" },
     { name = "engine-core", editable = "packages/engine" },
     { name = "engine-runtime", editable = "packages/runtime" },
 ]

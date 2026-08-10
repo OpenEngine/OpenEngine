@@ -1,7 +1,7 @@
 [project]
-name = "engine-adapter-temporal"
+name = "engine-adapter-workspace-provider-git-worktree"
 version = "0.0.0"
-description = "Workflow Runtime capability backed by Temporal."
+description = "Workspace Provider capability backed by local git worktrees."
 requires-python = ">=3.11"
 # Depends on the runtime (and through it ports + domain). Infrastructure SDKs
 # get added here when the capability is actually implemented -- Ticket 1 ships

@@ -1,7 +1,7 @@
 [project]
-name = "engine-adapter-codex"
+name = "engine-adapter-communications-buzz"
 version = "0.0.0"
-description = "Agent Runner capability backed by Codex."
+description = "Communications capability backed by Buzz."
 requires-python = ">=3.11"
 # Depends on the runtime (and through it ports + domain). Infrastructure SDKs
 # get added here when the capability is actually implemented -- Ticket 1 ships

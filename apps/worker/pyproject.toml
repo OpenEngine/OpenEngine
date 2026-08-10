@@ -7,12 +7,14 @@ requires-python = ">=3.11"
 dependencies = [
     "engine-core",
     "engine-runtime",
-    "engine-adapter-temporal",
-    "engine-adapter-github",
-    "engine-adapter-codex",
-    "engine-adapter-communications",
-    "engine-adapter-workspace",
-    "engine-adapter-postgres",
+    # One adapter per capability, named <capability>-<vendor>: what is needed
+    # first, who provides it second.
+    "engine-adapter-agent-runner-codex",
+    "engine-adapter-communications-buzz",
+    "engine-adapter-source-control-github",
+    "engine-adapter-state-store-postgres",
+    "engine-adapter-workflow-runtime-temporal",
+    "engine-adapter-workspace-provider-git-worktree",
 ]
 
 [project.scripts]
@@ -28,9 +30,9 @@ packages = ["src/engine"]
 [tool.uv.sources]
 engine-core = { workspace = true }
 engine-runtime = { workspace = true }
-engine-adapter-temporal = { workspace = true }
-engine-adapter-github = { workspace = true }
-engine-adapter-codex = { workspace = true }
-engine-adapter-communications = { workspace = true }
-engine-adapter-workspace = { workspace = true }
-engine-adapter-postgres = { workspace = true }
+engine-adapter-agent-runner-codex = { workspace = true }
+engine-adapter-communications-buzz = { workspace = true }
+engine-adapter-source-control-github = { workspace = true }
+engine-adapter-state-store-postgres = { workspace = true }
+engine-adapter-workflow-runtime-temporal = { workspace = true }
+engine-adapter-workspace-provider-git-worktree = { workspace = true }

@@ -17,12 +17,12 @@ EXPECTED_PACKAGE_ROOTS = [
     "packages/engine",
     "packages/ports",
     "packages/runtime",
-    "packages/adapters/temporal",
-    "packages/adapters/github",
-    "packages/adapters/codex",
-    "packages/adapters/communications",
-    "packages/adapters/workspace",
-    "packages/adapters/postgres",
+    "packages/adapters/workflow_runtime/temporal",
+    "packages/adapters/source_control/github",
+    "packages/adapters/agent_runner/codex",
+    "packages/adapters/communications/buzz",
+    "packages/adapters/workspace_provider/git_worktree",
+    "packages/adapters/state_store/postgres",
     "apps/control_server",
     "apps/worker",
 ]
@@ -37,14 +37,19 @@ CAPABILITIES = {
     "State Store": "StateStore",
 }
 
-#: Capability -> the placeholder implementation wired in `apps/`.
+#: Capability -> the placeholder implementation wired in `apps/`. The module
+#: path names the capability before the vendor, because that is where the
+#: adapter lives: `packages/adapters/<capability>/<vendor>`.
 IMPLEMENTATIONS = {
-    "Workflow Runtime": ("engine.adapters.temporal", "TemporalWorkflowRuntime"),
-    "Source Control": ("engine.adapters.github", "GitHubSourceControl"),
-    "Agent Runner": ("engine.adapters.codex", "CodexAgentRunner"),
-    "Communications": ("engine.adapters.communications", "BuzzCommunications"),
-    "Workspace Provider": ("engine.adapters.workspace", "GitWorktreeWorkspaceProvider"),
-    "State Store": ("engine.adapters.postgres", "PostgresStateStore"),
+    "Workflow Runtime": ("engine.adapters.workflow_runtime.temporal", "TemporalWorkflowRuntime"),
+    "Source Control": ("engine.adapters.source_control.github", "GitHubSourceControl"),
+    "Agent Runner": ("engine.adapters.agent_runner.codex", "CodexAgentRunner"),
+    "Communications": ("engine.adapters.communications.buzz", "BuzzCommunications"),
+    "Workspace Provider": (
+        "engine.adapters.workspace_provider.git_worktree",
+        "GitWorktreeWorkspaceProvider",
+    ),
+    "State Store": ("engine.adapters.state_store.postgres", "PostgresStateStore"),
 }
 
 ALL_MODULES = sorted(m for p in PACKAGES for m in p.modules)

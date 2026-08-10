@@ -23,10 +23,12 @@ from layout import (
     ADAPTER,
     ALLOWED_ENGINE_PREFIXES,
     APP,
+    CAPABILITIES,
     CORE_LAYERS,
     NO_THIRD_PARTY_LAYERS,
     PACKAGES,
     Package,
+    adapter_path_parts,
     by_layer,
     core_packages,
     engine_imports,
@@ -135,12 +137,67 @@ def test_imports_stay_within_allowed_layers(package: Package) -> None:
     )
 
 
+# --- adapters are filed under the capability they implement ----------------
+
+
+@pytest.mark.parametrize("package", by_layer(ADAPTER), ids=_ids(by_layer(ADAPTER)))
+def test_adapter_sits_under_the_capability_it_implements(package: Package) -> None:
+    """`packages/adapters/<capability>/<vendor>`: what first, who second.
+
+    A package named for a capability but holding one vendor's code quietly
+    claims the whole capability -- the Buzz adapter is `communications/buzz`,
+    not `communications`, because Slack has to be able to sit beside it without
+    either one being privileged.
+    """
+    parts = adapter_path_parts(package)
+    assert len(parts) == 2, (
+        f"{package.rel_root} is at the wrong depth; adapters live at "
+        "packages/adapters/<capability>/<vendor>"
+    )
+
+    capability, vendor = parts
+    assert capability in CAPABILITIES, (
+        f"{package.rel_root}: '{capability}' is not a capability. Expected one of "
+        f"{sorted(CAPABILITIES)} -- the fields on `Capabilities`, which is the "
+        "list a seventh capability has to be added to first."
+    )
+    assert vendor != capability, (
+        f"{package.rel_root}: an implementation named after its own capability "
+        "claims more scope than it has; name it for who provides it"
+    )
+
+
+@pytest.mark.parametrize("package", by_layer(ADAPTER), ids=_ids(by_layer(ADAPTER)))
+def test_adapter_module_path_mirrors_its_directory(package: Package) -> None:
+    """The import path is the directory path, so neither can be read alone."""
+    expected = "engine.adapters." + ".".join(adapter_path_parts(package))
+    assert package.modules == (expected,), (
+        f"{package.rel_root} ships {list(package.modules)}, expected [{expected!r}]"
+    )
+
+
+def test_every_capability_groups_at_least_one_adapter() -> None:
+    """The mirror of `Capabilities` being total: a capability with no
+    implementation filed under it is a hole in the composition root."""
+    grouped = {adapter_path_parts(p)[0] for p in by_layer(ADAPTER)}
+    assert grouped == set(CAPABILITIES), (
+        f"capabilities with no adapter: {sorted(set(CAPABILITIES) - grouped)}; "
+        f"adapter directories naming no capability: {sorted(grouped - set(CAPABILITIES))}"
+    )
+
+
 # --- adapters are siblings, not a stack ------------------------------------
 
 
 @pytest.mark.parametrize("package", by_layer(ADAPTER), ids=_ids(by_layer(ADAPTER)))
 def test_adapters_do_not_import_each_other(package: Package) -> None:
-    """Two adapters that need each other belong behind one port."""
+    """Two adapters that need each other belong behind one port.
+
+    Grouping by capability puts vendors next to each other, which makes this the
+    easy mistake to make: `communications/slack` importing `communications/buzz`
+    turns one implementation into the other's base class, and the port stops
+    being the only thing they have in common.
+    """
     own = set(package.modules)
     violations: list[str] = []
     for file, modules in engine_imports(package).items():

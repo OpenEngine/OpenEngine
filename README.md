@@ -34,7 +34,7 @@ depends on `domain`, `runtime` depends on `ports`, `adapters` depend on
 | `packages/engine` | The decision function. Pure. | `domain` |
 | `packages/ports` | The six capability protocols. | `domain` |
 | `packages/runtime` | Dispatches commands to capabilities. | `domain`, `engine`, `ports` |
-| `packages/adapters/*` | Concrete implementations. | `domain`, `engine`, `ports`, `runtime` |
+| `packages/adapters/*/*` | Concrete implementations, filed under the capability they implement. | `domain`, `engine`, `ports`, `runtime` |
 | `apps/*` | Composition roots. | everything |
 
 The core — `domain`, `engine`, `ports`, `runtime` — never names an
@@ -79,18 +79,26 @@ Six things the engine needs from the world. Each is a `Protocol` in
 `packages/ports`, so an adapter satisfies it by shape alone — no base class to
 inherit, no import required at runtime.
 
-| Capability | Port | Intended first implementation |
-| --- | --- | --- |
-| Workflow Runtime | `WorkflowRuntime` | Temporal |
-| Source Control | `SourceControl` | GitHub |
-| Agent Runner | `AgentRunner` | Codex |
-| Communications | `Communications` | Buzz |
-| Workspace Provider | `WorkspaceProvider` | local git worktrees |
-| State Store | `StateStore` | Postgres |
+| Capability | Port | First implementation | Adapter package |
+| --- | --- | --- | --- |
+| Workflow Runtime | `WorkflowRuntime` | Temporal | `adapters/workflow_runtime/temporal` |
+| Source Control | `SourceControl` | GitHub | `adapters/source_control/github` |
+| Agent Runner | `AgentRunner` | Codex | `adapters/agent_runner/codex` |
+| Communications | `Communications` | Buzz | `adapters/communications/buzz` |
+| Workspace Provider | `WorkspaceProvider` | local git worktrees | `adapters/workspace_provider/git_worktree` |
+| State Store | `StateStore` | Postgres | `adapters/state_store/postgres` |
 
 Ports are named for *what* is needed, never *who* provides it — `publish` and
 `request_review`, not `open_pr`. Every command in `engine.domain.commands` is
 fulfilled by exactly one capability.
+
+Adapters are filed the same way: `packages/adapters/<capability>/<vendor>`, so
+the directory answers *what* and the leaf answers *who*. The Buzz adapter is
+`communications/buzz`, not `communications` — a package named for the capability
+silently claims all of it, and Slack has to be able to sit beside Buzz without
+either one being the privileged implementation. The capability directory is
+checked against the fields of `engine.runtime.Capabilities`, which is therefore
+the list a seventh capability has to be added to first.
 
 ## Layout
 
@@ -101,12 +109,18 @@ packages/
   ports/                     engine.ports
   runtime/                   engine.runtime
   adapters/
-    temporal/                engine.adapters.temporal
-    github/                  engine.adapters.github
-    codex/                   engine.adapters.codex
-    communications/          engine.adapters.communications
-    workspace/               engine.adapters.workspace
-    postgres/                engine.adapters.postgres
+    workflow_runtime/
+      temporal/              engine.adapters.workflow_runtime.temporal
+    source_control/
+      github/                engine.adapters.source_control.github
+    agent_runner/
+      codex/                 engine.adapters.agent_runner.codex
+    communications/
+      buzz/                  engine.adapters.communications.buzz
+    workspace_provider/
+      git_worktree/          engine.adapters.workspace_provider.git_worktree
+    state_store/
+      postgres/              engine.adapters.state_store.postgres
 
 apps/
   control_server/            engine.apps.control_server
@@ -117,6 +131,11 @@ Every package publishes into the shared `engine.*` namespace (PEP 420), so the
 import path mirrors the directory tree. The one exception is
 `packages/engine`, which imports as `engine.core` — `engine.engine` would
 read poorly.
+
+The capability directories under `adapters/` are namespace only: they hold no
+`pyproject.toml` and no `__init__.py`. That is what lets a second vendor ship
+`engine.adapters.communications.slack` from its own distribution, into the same
+`engine.adapters.communications` namespace, without either package owning it.
 
 `apps/` is the composition root, and the only layer permitted to name a
 concrete adapter. Each app owns its own `composition.py`; the two are kept
@@ -144,7 +163,7 @@ uv run engine-worker
 with `ast` — statically, so a violation fails the moment it is written, whether
 or not any test executes that line. It catches deferred imports inside
 functions, imports hidden behind `if TYPE_CHECKING:`, and relative-import
-escapes like `from ..adapters.github import ...`.
+escapes like `from ..adapters.source_control.github import ...`.
 
 The rules, one test each:
 
@@ -152,8 +171,12 @@ The rules, one test each:
   declare no third-party dependencies.
 - No core package imports `engine.adapters.*` or `engine.apps.*`.
 - Every package imports only from the layers permitted to it.
+- Every adapter sits under the capability it implements, named for its vendor
+  rather than that capability, and its import path mirrors that directory.
+- Every capability has at least one adapter filed under it.
 - Adapters do not import each other (two adapters that need each other belong
-  behind one port).
+  behind one port). Grouping by capability puts vendors side by side, which
+  makes this the easy rule to break.
 - Only `apps/` depends on adapters, and apps do not depend on each other.
 
 `tests/test_layout_helpers.py` tests the checker itself, because a boundary test
@@ -162,7 +185,9 @@ has a hole.
 
 To add a package, create it under `packages/` or `apps/` with a `pyproject.toml`
 and a `src/engine/...` tree; discovery in `tests/layout.py` picks it up, and
-`_layer_for` decides which rules apply.
+`_layer_for` decides which rules apply. A new adapter goes one level deeper, in
+`packages/adapters/<capability>/`, and its distribution is named
+`engine-adapter-<capability>-<vendor>` — the same order as the path.
 
 ## Continuous integration
 
