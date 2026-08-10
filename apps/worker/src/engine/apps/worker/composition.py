@@ -9,13 +9,12 @@ move independently.
 
 from dataclasses import dataclass
 
-from engine.adapters.codex import CodexAgentRunner
 from engine.adapters.communications import BuzzCommunications
 from engine.adapters.github import GitHubSourceControl
 from engine.adapters.postgres import PostgresStateStore
 from engine.adapters.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace import GitWorktreeWorkspaceProvider
-from engine.runtime import Capabilities, Dispatcher
+from engine.runtime import Capabilities, Dispatcher, resolve_agent_runner
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,14 +28,29 @@ class Settings:
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
     postgres_dsn: str = ""
+    #: Agent backends to try, in order. Resolved from installed plugins, so the
+    #: worker names no agent vendor either -- same rule as the control server.
+    runner_preference: tuple[str, ...] = ("anthropic", "scripted")
+
+
+def choose_agent_runner(settings: Settings) -> object:
+    """First installed, usable backend from the preference list."""
+    runner, _ = resolve_agent_runner(settings.runner_preference)
+    return runner
 
 
 def build_capabilities(settings: Settings) -> Capabilities:
-    """Wire every port to its concrete implementation."""
+    """Wire every port to its concrete implementation.
+
+    The five infrastructure capabilities are imported directly: the worker is a
+    deployable we operate, so their composition root is genuinely ours. The agent
+    runner is not -- which backend runs an agent is the operator's call, so it
+    resolves by name.
+    """
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host, task_queue=settings.task_queue),
         source_control=GitHubSourceControl(settings.github_token),
-        agent_runner=CodexAgentRunner(),
+        agent_runner=choose_agent_runner(settings),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
         workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
         state_store=PostgresStateStore(settings.postgres_dsn),
@@ -48,4 +62,4 @@ def build_dispatcher(settings: Settings) -> Dispatcher:
     return Dispatcher(build_capabilities(settings))
 
 
-__all__ = ["Settings", "build_capabilities", "build_dispatcher"]
+__all__ = ["Settings", "build_capabilities", "build_dispatcher", "choose_agent_runner"]

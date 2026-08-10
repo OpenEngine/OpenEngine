@@ -9,7 +9,6 @@ dependencies = [
     "engine-runtime",
     "engine-adapter-temporal",
     "engine-adapter-github",
-    "engine-adapter-codex",
     "engine-adapter-communications",
     "engine-adapter-workspace",
     "engine-adapter-postgres",
@@ -30,7 +29,6 @@ engine-core = { workspace = true }
 engine-runtime = { workspace = true }
 engine-adapter-temporal = { workspace = true }
 engine-adapter-github = { workspace = true }
-engine-adapter-codex = { workspace = true }
 engine-adapter-communications = { workspace = true }
 engine-adapter-workspace = { workspace = true }
 engine-adapter-postgres = { workspace = true }

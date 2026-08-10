@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>engine · planner</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="dot" id="conn-dot" title="disconnected"></span>
+      <strong>engine</strong>
+      <span class="muted">planner</span>
+    </div>
+    <div class="bar-right">
+      <span class="badge" id="backend">…</span>
+      <button id="reset" class="ghost" type="button">New plan</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="pane conversation" aria-label="Conversation">
+      <div id="feed" class="feed">
+        <div class="empty" id="empty">
+          <h1>Tell the foreman what you need.</h1>
+          <p>It will set a goal, break the work into tasks, and dispatch workers to run them.</p>
+          <div class="suggestions">
+            <button type="button" data-fill="Write me a short project brief and a matching README.">Write a brief and a README</button>
+            <button type="button" data-fill="Audit this workspace and summarise what's here.">Audit the workspace</button>
+          </div>
+        </div>
+      </div>
+      <form id="composer" class="composer">
+        <textarea id="input" rows="1" placeholder="Describe the work…" autocomplete="off"></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+
+    <aside class="pane board" aria-label="Plan">
+      <div class="board-head">
+        <h2>Plan</h2>
+        <span class="counts" id="counts"></span>
+      </div>
+      <p class="goal" id="goal">No goal set yet.</p>
+      <ol class="tasks" id="tasks">
+        <li class="placeholder">Tasks appear here as the foreman creates them.</li>
+      </ol>
+    </aside>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

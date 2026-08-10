@@ -17,9 +17,12 @@ EXPECTED_PACKAGE_ROOTS = [
     "packages/engine",
     "packages/ports",
     "packages/runtime",
+    "packages/web",
     "packages/adapters/temporal",
     "packages/adapters/github",
-    "packages/adapters/codex",
+    "packages/adapters/openai",
+    "packages/adapters/anthropic",
+    "packages/adapters/scripted",
     "packages/adapters/communications",
     "packages/adapters/workspace",
     "packages/adapters/postgres",
@@ -37,15 +40,19 @@ CAPABILITIES = {
     "State Store": "StateStore",
 }
 
-#: Capability -> the placeholder implementation wired in `apps/`.
+#: Capability -> an implementation of it.
 IMPLEMENTATIONS = {
     "Workflow Runtime": ("engine.adapters.temporal", "TemporalWorkflowRuntime"),
     "Source Control": ("engine.adapters.github", "GitHubSourceControl"),
-    "Agent Runner": ("engine.adapters.codex", "CodexAgentRunner"),
+    "Agent Runner": ("engine.adapters.openai", "OpenAIAgentRunner"),
     "Communications": ("engine.adapters.communications", "BuzzCommunications"),
     "Workspace Provider": ("engine.adapters.workspace", "GitWorktreeWorkspaceProvider"),
     "State Store": ("engine.adapters.postgres", "PostgresStateStore"),
 }
+
+#: Agent runners registered as plugins. Two real ones plus a placeholder, so the
+#: port is proven against more than a single vendor.
+AGENT_RUNNERS = ["anthropic", "openai", "scripted"]
 
 ALL_MODULES = sorted(m for p in PACKAGES for m in p.modules)
 
@@ -79,6 +86,31 @@ def test_capability_has_a_placeholder_implementation(
     module_name, class_name = target
     module = importlib.import_module(module_name)
     assert hasattr(module, class_name), f"{capability}: {module_name}.{class_name} is missing"
+
+
+@pytest.mark.parametrize("name", AGENT_RUNNERS)
+def test_agent_runner_is_registered_as_a_plugin(name: str) -> None:
+    """Backends must be discoverable by name, not only by import.
+
+    This is what lets a consumer install their own adapter and select it with
+    `ENGINE_AGENT_RUNNER` instead of forking the control server.
+    """
+    from engine.runtime import available_agent_runners
+
+    assert name in available_agent_runners()
+
+
+def test_registered_runners_satisfy_the_port() -> None:
+    """Every plugin builds something with the shape the ports declare."""
+    from engine.ports import AgentRunner
+    from engine.runtime import RunnerUnavailable, load_agent_runner
+
+    for name in AGENT_RUNNERS:
+        try:
+            runner = load_agent_runner(name)
+        except RunnerUnavailable:
+            continue  # installed but unusable here (e.g. no credentials)
+        assert isinstance(runner, AgentRunner), f"{name} does not satisfy AgentRunner"
 
 
 def test_capabilities_container_covers_every_port() -> None:

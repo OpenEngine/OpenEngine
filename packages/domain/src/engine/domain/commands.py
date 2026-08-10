@@ -12,7 +12,7 @@ Placeholder set for Ticket 1; the real vocabulary lands with the engine itself.
 
 from dataclasses import dataclass
 
-from engine.domain.ids import AttemptId, RunId, WorkspaceId
+from engine.domain.ids import AttemptId, RunId, TaskId, WorkspaceId
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,11 +32,18 @@ class ProvisionWorkspace(Command):
 
 @dataclass(frozen=True, slots=True)
 class StartAttempt(Command):
-    """Fulfilled by the Agent Runner capability."""
+    """Fulfilled by the Agent Runner capability.
+
+    `task_id` is set when the attempt is a planner-dispatched task, and None for
+    a plain single-shot run. One command rather than two, because it is the same
+    capability doing the same thing either way -- the tools handed to the agent
+    differ, not the act of running it.
+    """
 
     attempt_id: AttemptId
     workspace_id: WorkspaceId
     prompt: str
+    task_id: TaskId | None = None
 
 
 @dataclass(frozen=True, slots=True)

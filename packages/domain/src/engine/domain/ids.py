@@ -18,4 +18,10 @@ AttemptId = NewType("AttemptId", str)
 WorkspaceId = NewType("WorkspaceId", str)
 """A checked-out, isolated filesystem an agent works in."""
 
-__all__ = ["AttemptId", "RunId", "TaskId", "WorkspaceId"]
+AgentId = NewType("AgentId", str)
+"""One agent instance -- a planner or a worker. See `engine.ports.AgentSpec`."""
+
+PlanId = NewType("PlanId", str)
+"""A plan the planner is working from."""
+
+__all__ = ["AgentId", "AttemptId", "PlanId", "RunId", "TaskId", "WorkspaceId"]

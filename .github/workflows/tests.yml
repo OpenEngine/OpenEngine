@@ -104,10 +104,11 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
-      - name: Composition roots start
-        # Cheap smoke test that the capability graph still wires up: these are
-        # the only places adapters are named, and a bad constructor signature
-        # would not otherwise fail a test.
+      - name: Composition roots build
+        # Cheap smoke test that the capability graph still wires up -- a bad
+        # constructor signature or a missing plugin entry point would not
+        # otherwise fail a test. `--check` builds everything and exits; running
+        # the control server for real would block on uvicorn forever.
         run: |
-          uv run engine-control-server
+          uv run engine-control-server --check
           uv run engine-worker

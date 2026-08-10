@@ -26,8 +26,10 @@ from layout import (
     CORE_LAYERS,
     NO_THIRD_PARTY_LAYERS,
     PACKAGES,
+    REPO_ROOT,
     Package,
     by_layer,
+    code_without_docstrings,
     core_packages,
     engine_imports,
     third_party_imports,
@@ -189,10 +191,69 @@ def test_apps_do_not_depend_on_each_other(package: Package) -> None:
     )
 
 
-def test_apps_actually_wire_adapters() -> None:
-    """If no app names an adapter, the composition root is not composing."""
-    for package in by_layer(APP):
-        imported = {m for modules in engine_imports(package).values() for m in modules}
-        assert any(m.startswith("engine.adapters") for m in imported), (
-            f"{package.dist_name} imports no adapters; it is not a composition root"
+@pytest.mark.parametrize("package", by_layer(APP), ids=_ids(by_layer(APP)))
+def test_apps_choose_implementations_somehow(package: Package) -> None:
+    """An app must decide which implementations run -- one way or the other.
+
+    Two legitimate shapes, and the difference is whose composition root it is:
+
+    - Import adapters directly. Correct for a deployable we operate.
+    - Resolve them by name from installed plugins. Correct for a surface shipped
+      to consumers, where welding in a vendor would force a fork to swap it.
+
+    What is *not* legitimate is an app that does neither, which would mean
+    nothing anywhere selects an implementation.
+    """
+    imported = {m for modules in engine_imports(package).values() for m in modules}
+    imports_adapters = any(m.startswith("engine.adapters") for m in imported)
+    uses_registry = any(
+        "resolve_agent_runner" in text or "load_agent_runner" in text
+        for text in (f.read_text() for f in package.source_files())
+    )
+    assert imports_adapters or uses_registry, (
+        f"{package.dist_name} neither imports an adapter nor resolves one; "
+        "no implementation is ever chosen"
+    )
+
+
+# --- the shipped surface stays provider-agnostic ---------------------------
+
+
+def test_shipped_surface_declares_no_required_adapter() -> None:
+    """`engine-web` and the control server must install without a vendor.
+
+    They are what a consumer deploys. A required adapter dependency would decide
+    the backend for them. Optional extras are fine -- those are opt-in bundles,
+    which is why this reads `dependencies` and not `optional-dependencies`.
+    """
+    shipped = {"engine-web", "engine-control-server"}
+    for package in PACKAGES:
+        if package.dist_name not in shipped:
+            continue
+        offenders = [
+            dep for dep in package.declared_dependencies if dep.startswith("engine-adapter")
+        ]
+        assert not offenders, (
+            f"{package.dist_name} requires {offenders}; a consumer could not "
+            "choose their own backend without uninstalling ours"
+        )
+
+
+def test_registry_names_no_adapter() -> None:
+    """The plugin seam must stay data-driven.
+
+    `engine.runtime.registry` loads adapters at runtime, which static analysis
+    cannot see -- so the AST checks above pass whatever it does. This is the one
+    place that matters, checked directly: if a vendor name appears here, the
+    'resolved by name' claim is a fiction.
+    """
+    registry = REPO_ROOT / "packages/runtime/src/engine/runtime/registry.py"
+    # Docstrings are exempt: the module documents the entry-point format with a
+    # worked example, which is prose about a vendor rather than a dependency on
+    # one. What matters is that no executable line names one.
+    code = code_without_docstrings(registry)
+    for vendor in ("engine.adapters", "anthropic", "openai", "codex", "claude", "strands"):
+        assert vendor not in code, (
+            f"registry.py's code mentions {vendor!r}; "
+            "backend selection must be data, not code"
         )

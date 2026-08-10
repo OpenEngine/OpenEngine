@@ -4,7 +4,19 @@ members = ["packages/*", "packages/adapters/*", "apps/*"]
 exclude = ["packages/adapters"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+# The adapters are no longer dependencies of any app -- apps resolve backends
+# by name from plugins. Install them here so the dev venv can actually run one.
+dev = [
+    "pytest>=8.0",
+    "engine-adapter-anthropic",
+    "engine-adapter-scripted",
+    "engine-adapter-openai",
+]
+
+[tool.uv.sources]
+engine-adapter-anthropic = { workspace = true }
+engine-adapter-scripted = { workspace = true }
+engine-adapter-openai = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

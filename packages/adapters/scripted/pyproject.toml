@@ -1,0 +1,19 @@
+[project]
+name = "engine-adapter-scripted"
+version = "0.0.0"
+description = "Agent Runner capability backed by a deterministic script. For tests and offline demos."
+requires-python = ">=3.11"
+dependencies = ["engine-runtime"]
+
+[project.entry-points."engine.agent_runners"]
+scripted = "engine.adapters.scripted:build_agent_runner"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]
+
+[tool.uv.sources]
+engine-runtime = { workspace = true }

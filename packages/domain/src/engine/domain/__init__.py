@@ -17,21 +17,39 @@ from engine.domain.events import (
     AttemptCompleted,
     ChangesPublished,
     Event,
+    GoalSet,
     RunFailed,
     RunRequested,
+    TaskAdded,
+    TaskDispatchRequested,
+    TaskFinished,
+    TaskStarted,
     WorkspaceProvisioned,
 )
-from engine.domain.ids import AttemptId, RunId, TaskId, WorkspaceId
+from engine.domain.ids import (
+    AgentId,
+    AttemptId,
+    PlanId,
+    RunId,
+    TaskId,
+    WorkspaceId,
+)
+from engine.domain.planning import Plan, PlanTask, TaskStatus
 from engine.domain.state import RunPhase, RunState
 
 __all__ = [
+    "AgentId",
     "AttemptCompleted",
     "AttemptId",
     "ChangesPublished",
     "Command",
     "Event",
+    "GoalSet",
     "Notify",
     "PersistRun",
+    "Plan",
+    "PlanId",
+    "PlanTask",
     "ProvisionWorkspace",
     "PublishChanges",
     "RunFailed",
@@ -41,7 +59,12 @@ __all__ = [
     "RunState",
     "ScheduleTimer",
     "StartAttempt",
+    "TaskAdded",
+    "TaskDispatchRequested",
+    "TaskFinished",
     "TaskId",
+    "TaskStarted",
+    "TaskStatus",
     "WorkspaceId",
     "WorkspaceProvisioned",
 ]

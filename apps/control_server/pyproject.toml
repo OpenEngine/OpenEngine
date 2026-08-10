@@ -1,19 +1,24 @@
 [project]
 name = "engine-control-server"
 version = "0.0.0"
-description = "Control server: ingress and composition root for the agent engine."
+description = "Serves the planner surface. Provider-agnostic: backends resolve by name from installed plugins."
 requires-python = ">=3.11"
-# Composition root: the only layer allowed to depend on concrete adapters.
+# No adapter dependencies. This app is shipped to consumers, so the agent backend
+# is theirs to choose -- install an adapter package and set ENGINE_AGENT_RUNNER.
+# Enforced by tests/test_boundaries.py.
 dependencies = [
     "engine-core",
     "engine-runtime",
-    "engine-adapter-temporal",
-    "engine-adapter-github",
-    "engine-adapter-codex",
-    "engine-adapter-communications",
-    "engine-adapter-workspace",
-    "engine-adapter-postgres",
+    "engine-web",
+    "uvicorn>=0.30",
 ]
+
+[project.optional-dependencies]
+# Convenience bundles. `uv sync --extra claude` for a live planner; `demo` needs
+# no credentials and is what the tests run against.
+anthropic = ["engine-adapter-anthropic"]
+demo = ["engine-adapter-scripted"]
+all = ["engine-adapter-anthropic", "engine-adapter-scripted", "engine-adapter-openai"]
 
 [project.scripts]
 engine-control-server = "engine.apps.control_server.__main__:main"
@@ -28,9 +33,7 @@ packages = ["src/engine"]
 [tool.uv.sources]
 engine-core = { workspace = true }
 engine-runtime = { workspace = true }
-engine-adapter-temporal = { workspace = true }
-engine-adapter-github = { workspace = true }
-engine-adapter-codex = { workspace = true }
-engine-adapter-communications = { workspace = true }
-engine-adapter-workspace = { workspace = true }
-engine-adapter-postgres = { workspace = true }
+engine-web = { workspace = true }
+engine-adapter-anthropic = { workspace = true }
+engine-adapter-scripted = { workspace = true }
+engine-adapter-openai = { workspace = true }

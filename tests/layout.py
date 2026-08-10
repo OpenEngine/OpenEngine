@@ -20,11 +20,14 @@ DOMAIN = "domain"
 ENGINE = "engine"
 PORTS = "ports"
 RUNTIME = "runtime"
+WEB = "web"
 ADAPTER = "adapter"
 APP = "app"
 
-#: The layers that make up the dependency-free core of the system.
-CORE_LAYERS = frozenset({DOMAIN, ENGINE, PORTS, RUNTIME})
+#: Layers that must never name a concrete implementation. `web` is in here
+#: because it is the surface shipped to consumers: if it imported a vendor, the
+#: neutrality of every layer beneath it would be decorative.
+CORE_LAYERS = frozenset({DOMAIN, ENGINE, PORTS, RUNTIME, WEB})
 
 #: Acceptance criterion: these two must not pull in any third-party code.
 NO_THIRD_PARTY_LAYERS = frozenset({DOMAIN, ENGINE})
@@ -36,8 +39,16 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
     ENGINE: ("engine.domain", "engine.core"),
     PORTS: ("engine.domain", "engine.ports"),
     RUNTIME: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
+    WEB: ("engine.domain", "engine.core", "engine.ports", "engine.runtime", "engine.web"),
     ADAPTER: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
-    APP: ("engine.domain", "engine.core", "engine.ports", "engine.runtime", "engine.adapters"),
+    APP: (
+        "engine.domain",
+        "engine.core",
+        "engine.ports",
+        "engine.runtime",
+        "engine.web",
+        "engine.adapters",
+    ),
 }
 
 
@@ -81,6 +92,8 @@ def _layer_for(root: Path) -> str:
             return PORTS
         case ("packages", "runtime"):
             return RUNTIME
+        case ("packages", "web"):
+            return WEB
         case _:
             raise AssertionError(f"unclassified package at {root}")
 
@@ -160,6 +173,33 @@ def _src_root_for(path: Path) -> Path:
         if parent.name == "src":
             return parent
     raise AssertionError(f"{path} is not under a src/ root")
+
+
+def code_without_docstrings(path: Path) -> str:
+    """A file's executable code, with docstrings and comments removed.
+
+    For checks about what a file *does* rather than what it *says*. A docstring
+    is free to show an example naming a vendor; code doing the same thing is the
+    coupling we care about. Round-tripping through `ast.unparse` drops comments
+    for free -- they never enter the tree.
+    """
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body.pop(0)
+            if not body:
+                body.append(ast.Pass())
+    return ast.unparse(ast.fix_missing_locations(tree))
 
 
 def is_stdlib(module: str) -> bool:

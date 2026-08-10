@@ -4,9 +4,16 @@ An agent engine: it takes a request ("fix the flaky auth test"), provisions a
 workspace, runs a coding agent in it, and publishes the result for review —
 durably, across process restarts.
 
-This repository is currently a **scaffold**. The package layout, the capability
-boundaries, and the rules that keep them honest are in place; the behaviour
-behind them is not. See [Status](#status).
+The first real capability is the **planner** — a foreman that decomposes a
+request into tasks, dispatches workers to run them, and reports back. It has a
+small web UI. Everything else is still scaffold; see [Status](#status).
+
+```bash
+uv sync && uv run engine-control-server   # → http://localhost:8000
+```
+
+No credentials needed to try it: with none present it runs a scripted demo that
+plans, dispatches, and writes real files. `ant auth login` switches it to Claude.
 
 ## Dependency direction
 
@@ -30,17 +37,23 @@ depends on `domain`, `runtime` depends on `ports`, `adapters` depend on
 
 | Package | Role | May import |
 | --- | --- | --- |
-| `packages/domain` | Ids, events, commands, run state. Data only. | *(nothing)* |
-| `packages/engine` | The decision function. Pure. | `domain` |
+| `packages/domain` | Ids, events, commands, plan, run state. Data only. | *(nothing)* |
+| `packages/engine` | The decision functions. Pure. | `domain` |
 | `packages/ports` | The six capability protocols. | `domain` |
-| `packages/runtime` | Dispatches commands to capabilities. | `domain`, `engine`, `ports` |
+| `packages/runtime` | Foreman, dispatcher, plugin registry. | `domain`, `engine`, `ports` |
+| `packages/web` | The planner surface: HTTP, SSE, UI. | `domain`, `engine`, `ports`, `runtime` |
 | `packages/adapters/*` | Concrete implementations. | `domain`, `engine`, `ports`, `runtime` |
 | `apps/*` | Composition roots. | everything |
 
-The core — `domain`, `engine`, `ports`, `runtime` — never names an
-implementation. It does not know Temporal, GitHub, Codex, or Buzz exist.
+The core — `domain`, `engine`, `ports`, `runtime`, `web` — never names an
+implementation. It does not know Anthropic, OpenAI, Temporal, GitHub, Buzz,
+or Postgres exist.
 `domain` and `engine` additionally have **no third-party dependencies at all**:
 they install on a bare interpreter.
+
+`web` is in that list deliberately. It is the surface a consumer embeds, so a
+vendor import there would make the neutrality of every layer beneath it
+decorative — see [Provider-agnostic by construction](#provider-agnostic-by-construction).
 
 ## The central rule: the engine emits commands
 
@@ -73,6 +86,78 @@ Three things fall out of that split, and they are the reason for it:
 If you ever want to `import` an adapter from core, the thing you actually want
 is a new command.
 
+## The planner is an agent with different tools
+
+A planner and a worker are the same kind of thing, running through the same
+`AgentRunner` port. The only difference is what they are handed:
+
+| | Planner (foreman) | Worker |
+| --- | --- | --- |
+| Tools | `set_goal`, `add_task`, `dispatch_task`, `await_tasks`, `list_tasks` | `list_files`, `read_file`, `write_file`, `report` |
+| Can delegate | yes | **no** |
+| Touches files | no | yes |
+
+The worker's list has no `dispatch_task`, so a runaway delegation tree isn't
+something the prompt discourages — it isn't expressible. Delegation is one level
+deep by construction.
+
+### The model proposes; the engine disposes
+
+The planner never mutates the plan. It calls a tool; the tool becomes a domain
+event; `engine.core.planning.decide_plan` folds it and decides what is legal:
+
+```python
+def decide_plan(plan: Plan, event: Event) -> PlanDecision:  # -> (Plan, commands)
+```
+
+A task can't be dispatched twice, can't start before its dependencies finish,
+and can't be reopened once terminal. A confused planner therefore gets a refused
+tool call it can read and recover from — not a corrupt plan:
+
+```
+dispatch_task(task_id="readme")
+→ "readme is blocked on brief. Await those first."
+```
+
+None of those rules need an LLM, so none of them are left to one. Dispatch still
+comes back as a `StartAttempt` command; `engine.runtime.Foreman` is what turns it
+into a running worker.
+
+## Provider-agnostic by construction
+
+The planner runs on Claude, but nothing that ships names a vendor. Backends
+are resolved **by name** from packaging entry points:
+
+```toml
+# in an adapter's pyproject.toml
+[project.entry-points."engine.agent_runners"]
+anthropic = "engine.adapters.anthropic:build_agent_runner"
+```
+
+```bash
+ENGINE_AGENT_RUNNER=anthropic            # exactly this, fail if unusable
+ENGINE_AGENT_RUNNER=anthropic,scripted   # first that works (the default)
+ENGINE_AGENT_RUNNER=strands              # a backend we've never heard of
+```
+
+That last line is the point. A consumer installs their own adapter package and
+selects it with one environment variable — no fork, no edit to our code. Neither
+`engine-web` nor `engine-control-server` has a required dependency on any
+adapter; they install without a vendor, and the convenience bundles are extras
+(`uv sync --extra anthropic`).
+
+Three runners ship today — `anthropic` (real), `scripted` (offline demo and
+test double), and `openai` (placeholder). Adapters are named for the provider,
+not the product: which agent a provider offers is a `model` choice, not a
+separate adapter. The scripted one matters more than it looks:
+if it and the Anthropic runner both drive the identical planner unchanged, the port
+is genuinely neutral rather than neutral-shaped.
+
+> **One honest caveat.** The registry loads adapters at runtime, which static
+> analysis cannot see — so the AST boundary checks pass regardless of what it
+> does. `test_registry_names_no_adapter` covers that gap directly by asserting no
+> executable line in `registry.py` names a vendor.
+
 ## Capabilities
 
 Six things the engine needs from the world. Each is a `Protocol` in
@@ -83,7 +168,7 @@ inherit, no import required at runtime.
 | --- | --- | --- |
 | Workflow Runtime | `WorkflowRuntime` | Temporal |
 | Source Control | `SourceControl` | GitHub |
-| Agent Runner | `AgentRunner` | Codex |
+| Agent Runner | `AgentRunner` | Anthropic (live), OpenAI (placeholder) |
 | Communications | `Communications` | Buzz |
 | Workspace Provider | `WorkspaceProvider` | local git worktrees |
 | State Store | `StateStore` | Postgres |
@@ -100,10 +185,13 @@ packages/
   engine/                    engine.core
   ports/                     engine.ports
   runtime/                   engine.runtime
+  web/                       engine.web
   adapters/
+    anthropic/               engine.adapters.anthropic     (runner: anthropic)
+    scripted/                engine.adapters.scripted      (runner: scripted)
+    openai/                  engine.adapters.openai        (runner: openai)
     temporal/                engine.adapters.temporal
     github/                  engine.adapters.github
-    codex/                   engine.adapters.codex
     communications/          engine.adapters.communications
     workspace/               engine.adapters.workspace
     postgres/                engine.adapters.postgres
@@ -118,8 +206,11 @@ import path mirrors the directory tree. The one exception is
 `packages/engine`, which imports as `engine.core` — `engine.engine` would
 read poorly.
 
-`apps/` is the composition root, and the only layer permitted to name a
-concrete adapter. Each app owns its own `composition.py`; the two are kept
+`apps/` is where implementations get chosen — but the two apps choose
+differently, and the difference is whose composition root it is. `worker` is a
+deployable we operate, so it imports its infrastructure adapters directly.
+`control_server` is shipped to consumers, so it imports none and resolves the
+agent backend by name. Each app owns its own `composition.py`; they are kept
 separate rather than shared because the processes are expected to diverge.
 
 ## Getting started
@@ -127,16 +218,30 @@ separate rather than shared because the processes are expected to diverge.
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
 
 ```bash
-uv sync            # install all 12 workspace packages, editable
+uv sync            # install every workspace package, editable
 uv run pytest      # run the suite, including the boundary checks
 ```
 
-Both entrypoints run today and report their wiring:
+Run the planner UI:
 
 ```bash
-uv run engine-control-server
-uv run engine-worker
+uv run engine-control-server           # → http://localhost:8000
 ```
+
+It reports which backend it resolved on startup. With no credentials that is
+`scripted`, which plans and dispatches for real against a canned transcript —
+the workers genuinely write files. To drive it with Claude, authenticate
+(`ant auth login`, or export `ANTHROPIC_API_KEY`) and restart.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ENGINE_AGENT_RUNNER` | `anthropic,scripted` | Backends to try, in order |
+| `ENGINE_WORKSPACE` | `.engine-workspace` | Where workers read and write |
+| `ENGINE_MODEL` | adapter's default | Model hint passed to the backend |
+| `ENGINE_HOST` / `ENGINE_PORT` | `127.0.0.1` / `8000` | Bind address |
+
+Force the offline demo on a machine that *does* have credentials with
+`ENGINE_AGENT_RUNNER=scripted`.
 
 ## The boundaries are enforced, not just documented
 
@@ -150,11 +255,17 @@ The rules, one test each:
 
 - `domain` and `engine` import nothing outside the standard library, and
   declare no third-party dependencies.
-- No core package imports `engine.adapters.*` or `engine.apps.*`.
+- No core package imports `engine.adapters.*` or `engine.apps.*` — and `web` is
+  a core package, so the shipped surface is covered by that rule.
 - Every package imports only from the layers permitted to it.
 - Adapters do not import each other (two adapters that need each other belong
   behind one port).
 - Only `apps/` depends on adapters, and apps do not depend on each other.
+- `engine-web` and `engine-control-server` declare no *required* adapter
+  dependency, so a consumer installs them without inheriting our vendor.
+- Every app either imports an adapter or resolves one — an app that does
+  neither means nothing anywhere chooses an implementation.
+- No executable line in `registry.py` names a vendor.
 
 `tests/test_layout_helpers.py` tests the checker itself, because a boundary test
 that silently fails to parse an import reports green while the wall it guards
@@ -198,27 +309,40 @@ UV_PYTHON=3.11 uv sync --locked && UV_PYTHON=3.11 uv run pytest
 
 ## Status
 
-Ticket 1 — scaffolding — is complete. In place:
+**Scaffolding** (Ticket 1) is complete: 15 packages, six capability ports, and
+the dependency rules enforced by tests rather than documented.
 
-- All 12 packages exist, install, and import.
-- The six capabilities have ports, placeholder adapters, and a `Capabilities`
-  container covering every one.
-- `decide` handles one representative transition (`RunRequested` →
-  `ProvisionWorkspace`) end to end, through the dispatcher, against a fake.
-- The dependency rules are enforced by tests.
+**The planner** works end to end. A foreman decomposes a request, dispatches
+workers in dependency order, and the workers do real work in a real workspace.
+It runs on Claude when credentials resolve and on a scripted transcript when they
+don't — the same planner code either way. The web UI streams planner text, tool
+calls, worker output, and a live plan board.
 
-Not yet implemented, by design — every adapter method raises
-`NotImplementedError` naming the ticket that fills it in:
+Not yet implemented, by design — these adapters raise `NotImplementedError`
+naming the ticket that fills them in:
 
 - No Temporal client, worker, or workflow definition.
-- No GitHub API calls, no git operations, no agent execution.
+- No GitHub API calls and no git operations.
 - No message delivery, no database, no schema, no migrations.
-- No HTTP surface on the control server, no task-queue polling in the worker.
-- No web UI.
+- No task-queue polling in the worker; the control server holds one planner
+  session in memory, so a restart loses it.
+- No OpenAI agent execution — the adapter registers and constructs, nothing more.
 
-The domain vocabulary (`events.py`, `commands.py`, `state.py`) is a coherent
-placeholder chosen to make the boundaries concrete; expect it to change when the
-engine's real state machine lands.
+Two deliberate limits worth knowing about:
+
+- **Workers have no shell.** They read, write, and list files inside a confined
+  workspace root. A model-authored `run_command` needs an executable allowlist,
+  argument rejection, timeouts, and real isolation — and the workspace provider
+  that would supply the last of those is still a placeholder. Adding one before
+  then would ship an unsandboxed shell driven by an LLM.
+- **Filesystem confinement is path-based**, not kernel-enforced: every model-
+  supplied path is resolved to canonical form and rejected if it escapes the
+  root (`tests/test_planner.py` covers traversal, absolute paths, and the
+  lookalike-sibling case). That is the right check, but it is a check — not a
+  sandbox.
+
+The domain vocabulary is a coherent placeholder chosen to make the boundaries
+concrete; expect it to change when the engine's real state machine lands.
 
 ## Shape of the system
 

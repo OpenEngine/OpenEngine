@@ -47,9 +47,9 @@ def test_absolute_imports_are_collected(tmp_path: Path) -> None:
         ("engine/runtime/dispatcher.py", "from ..domain import Command", "engine.domain"),
         # From a package's __init__.py: the file *is* the package.
         ("engine/runtime/__init__.py", "from .dispatcher import D", "engine.runtime.dispatcher"),
-        ("engine/runtime/__init__.py", "from ..adapters.codex import C", "engine.adapters.codex"),
+        ("engine/runtime/__init__.py", "from ..adapters.openai import C", "engine.adapters.openai"),
         # Nested one deeper.
-        ("engine/adapters/github/__init__.py", "from ..codex import C", "engine.adapters.codex"),
+        ("engine/adapters/github/__init__.py", "from ..openai import C", "engine.adapters.openai"),
     ],
 )
 def test_relative_imports_resolve_to_absolute(
