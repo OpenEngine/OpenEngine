@@ -7,11 +7,18 @@ adapter. Adapters depend on the runtime, not the other way around.
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher, UnhandledCommandError
 from engine.runtime.profiles import BUILT_IN, CODER, FOREMAN, UnknownAgentError, profile_for
-from engine.runtime.session import AgentSession, UnknownInstanceError, UnknownToolGrantError
+from engine.runtime.session import (
+    DEFAULT_RUNNER,
+    AgentSession,
+    UnknownInstanceError,
+    UnknownRunnerError,
+    UnknownToolGrantError,
+)
 
 __all__ = [
     "BUILT_IN",
     "CODER",
+    "DEFAULT_RUNNER",
     "FOREMAN",
     "AgentSession",
     "Capabilities",
@@ -19,6 +26,7 @@ __all__ = [
     "UnhandledCommandError",
     "UnknownAgentError",
     "UnknownInstanceError",
+    "UnknownRunnerError",
     "UnknownToolGrantError",
     "profile_for",
 ]

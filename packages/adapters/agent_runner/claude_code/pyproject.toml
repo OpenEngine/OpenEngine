@@ -1,0 +1,19 @@
+[project]
+name = "engine-adapter-agent-runner-claude-code"
+version = "0.0.0"
+description = "Agent Runner capability backed by the Claude Code CLI."
+requires-python = ">=3.11"
+# The CLI is driven as a subprocess, so there is no SDK here -- the runtime
+# dependency is for the shared transcript rendering, and through it ports and
+# domain.
+dependencies = ["engine-runtime"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]
+
+[tool.uv.sources]
+engine-runtime = { workspace = true }

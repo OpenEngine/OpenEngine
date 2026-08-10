@@ -96,6 +96,14 @@ class AgentRun:
     status: AgentRunStatus = AgentRunStatus.PENDING
     summary: str = ""
     changed_files: tuple[str, ...] = field(default=())
+    runner: str = ""
+    """Which runner executed this, by the name the composition root gave it.
+
+    Provenance, not configuration: a profile still does not choose its runner,
+    but a conversation continued by two different ones should record which
+    answered when. A name, never an implementation -- the domain stays unable to
+    tell you what "claude" is.
+    """
 
     @property
     def is_terminal(self) -> bool:

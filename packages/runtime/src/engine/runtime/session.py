@@ -19,13 +19,17 @@ from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRun
 from engine.domain.chat import Message
 from engine.domain.ids import AgentId, AgentInstanceId, AgentRunId, TaskId
 from engine.domain.tools import ToolSpec
-from engine.ports.agent_runner import AgentTurn
+from engine.ports.agent_runner import AgentRunner, AgentTurn
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.profiles import BUILT_IN, profile_for
 
 #: Grant name -> the tool it resolves to. Empty until tools exist; a profile
 #: granting anything therefore fails loudly, which is the intended behaviour.
 NO_TOOLS: Mapping[str, ToolSpec] = {}
+
+#: What the single wired runner is called when the composition root does not
+#: name several.
+DEFAULT_RUNNER = "default"
 
 
 class UnknownInstanceError(KeyError):
@@ -34,6 +38,14 @@ class UnknownInstanceError(KeyError):
     def __init__(self, instance_id: AgentInstanceId) -> None:
         super().__init__(f"no agent instance {instance_id!r}")
         self.instance_id = instance_id
+
+
+class UnknownRunnerError(KeyError):
+    """No runner is registered under that name."""
+
+    def __init__(self, name: str, known: Sequence[str]) -> None:
+        super().__init__(f"no runner {name!r}; wired: {sorted(known)}")
+        self.name = name
 
 
 class UnknownToolGrantError(RuntimeError):
@@ -60,14 +72,38 @@ class AgentSession:
         capabilities: Capabilities,
         profiles: Mapping[AgentId, AgentProfile] = BUILT_IN,
         tools: Mapping[str, ToolSpec] = NO_TOOLS,
+        runners: Mapping[str, AgentRunner] | None = None,
     ) -> None:
+        """`runners` lets one process offer a choice of agent runner.
+
+        The names are the composition root's to invent and mean nothing here --
+        the same arrangement as tool grants. Omit it and the single runner from
+        `Capabilities` is used, which is what the dispatcher does for runs that
+        nobody is sitting in front of.
+
+        Switching runner mid-conversation is allowed, and is the point: we hold
+        the transcript, so whichever one answers next is handed everything that
+        came before it, including what the other one did.
+        """
         self._capabilities = capabilities
         self._profiles = profiles
         self._tools = tools
+        self._runners: Mapping[str, AgentRunner] = (
+            dict(runners) if runners else {DEFAULT_RUNNER: capabilities.agent_runner}
+        )
 
     @property
     def profiles(self) -> Mapping[AgentId, AgentProfile]:
         return self._profiles
+
+    @property
+    def runners(self) -> tuple[str, ...]:
+        """The runner names this process offers, in the order it wired them."""
+        return tuple(self._runners)
+
+    @property
+    def default_runner(self) -> str:
+        return next(iter(self._runners))
 
     async def start(self, agent_id: AgentId, task_id: TaskId | None = None) -> AgentInstance:
         """Begin a conversation with an agent. Fails before touching the store
@@ -84,13 +120,20 @@ class AgentSession:
             raise UnknownInstanceError(instance_id)
         return conversation.messages
 
-    async def say(self, instance_id: AgentInstanceId, text: str) -> AgentTurn:
+    async def say(
+        self, instance_id: AgentInstanceId, text: str, runner: str | None = None
+    ) -> AgentTurn:
         """Add a message to the conversation and get the agent's reply.
 
         The user's message is stored before the agent runs, so a failed turn
         leaves an accurate transcript -- a question with no answer -- rather
         than losing what was asked.
+
+        `runner` names which one answers, defaulting to the first wired.
         """
+        runner_name = runner or self.default_runner
+        if runner_name not in self._runners:
+            raise UnknownRunnerError(runner_name, self.runners)
         store = self._capabilities.state_store
 
         instance = await store.load_instance(instance_id)
@@ -110,11 +153,12 @@ class AgentSession:
             agent_run_id=_new_agent_run_id(),
             instance_id=instance_id,
             status=AgentRunStatus.RUNNING,
+            runner=runner_name,
         )
         await store.record_agent_run(agent_run)
 
         try:
-            turn = await self._capabilities.agent_runner.run_turn(
+            turn = await self._runners[runner_name].run_turn(
                 agent_run.agent_run_id,
                 profile,
                 (*conversation.messages, question),
@@ -162,4 +206,10 @@ def _new_agent_run_id() -> AgentRunId:
     return AgentRunId(f"ar-{uuid4().hex[:12]}")
 
 
-__all__ = ["AgentSession", "UnknownInstanceError", "UnknownToolGrantError"]
+__all__ = [
+    "DEFAULT_RUNNER",
+    "AgentSession",
+    "UnknownInstanceError",
+    "UnknownRunnerError",
+    "UnknownToolGrantError",
+]
