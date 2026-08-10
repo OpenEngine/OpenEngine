@@ -1,0 +1,92 @@
+"""Composition root for the web control interface.
+
+The one file in this app allowed to name concrete adapters, and a sibling of the
+other two compositions rather than shared code with them -- for the same reason
+the worker's is: these processes will diverge, and sharing now would couple
+three deployables that should be free to move independently.
+
+Two of the six capabilities here are real. `agent_runner` shells out to the
+Codex CLI and `state_store` keeps conversations in a dict, which between them
+are exactly what a chat needs. The other four are still placeholders whose
+methods raise, which is why the pages that would use them say so on screen.
+
+The state store is the in-memory one rather than Postgres, and that is a choice
+with a cost worth stating: conversations die with the process. Swapping it is a
+one-line edit here, which is the point of the seam.
+"""
+
+from dataclasses import dataclass
+
+from engine.adapters.agent_runner.codex import CodexAgentRunner
+from engine.adapters.communications.buzz import BuzzCommunications
+from engine.adapters.source_control.github import GitHubSourceControl
+from engine.adapters.state_store.memory import InMemoryStateStore
+from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
+from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+from engine.apps.web.readmodel import EmptyReadModel, ReadModel
+from engine.runtime import AgentSession, Capabilities
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    """Everything the interface needs from the environment.
+
+    `host` and `port` are handed to Streamlit's own server by `__main__`; the
+    rest are adapter arguments. Loading them from the environment lands with the
+    deployment ticket, along with the other two roots.
+
+    Frozen and hashable so Streamlit can cache the wiring on it.
+    """
+
+    host: str = "localhost"
+    port: int = 8501
+    codex_binary: str = "codex"
+    codex_sandbox: str = "read-only"
+    """Chat should not be able to edit the tree as a side effect of answering."""
+    codex_working_directory: str = "."
+    codex_timeout_seconds: float = 600.0
+    codex_model: str = ""
+    temporal_host: str = "localhost:7233"
+    github_token: str = ""
+    buzz_base_url: str = ""
+    buzz_api_token: str = ""
+    workspace_root: str = "/tmp/engine-workspaces"
+
+
+def build_capabilities(settings: Settings) -> Capabilities:
+    """Wire every port to its concrete implementation."""
+    return Capabilities(
+        workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
+        source_control=GitHubSourceControl(settings.github_token),
+        agent_runner=CodexAgentRunner(
+            binary_path=settings.codex_binary,
+            timeout_seconds=settings.codex_timeout_seconds,
+            sandbox=settings.codex_sandbox,
+            working_directory=settings.codex_working_directory,
+            model=settings.codex_model,
+        ),
+        communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
+        workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
+        state_store=InMemoryStateStore(),
+    )
+
+
+def build_session(capabilities: Capabilities) -> AgentSession:
+    """Conversations, over the capabilities this process composed.
+
+    Takes the capability set rather than settings so the interface and the chat
+    share one store -- two `build_capabilities` calls would give the Wiring page
+    a different dict from the one the conversation is in.
+    """
+    return AgentSession(capabilities)
+
+
+def build_read_model(settings: Settings) -> ReadModel:
+    """Where the run pages get their data. Unwired: there are no runs yet.
+
+    The one line that changes when runs start being recorded.
+    """
+    return EmptyReadModel()
+
+
+__all__ = ["Settings", "build_capabilities", "build_read_model", "build_session"]

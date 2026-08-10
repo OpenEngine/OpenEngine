@@ -86,7 +86,7 @@ inherit, no import required at runtime.
 | Agent Runner | `AgentRunner` | Codex | `adapters/agent_runner/codex` |
 | Communications | `Communications` | Buzz | `adapters/communications/buzz` |
 | Workspace Provider | `WorkspaceProvider` | local git worktrees | `adapters/workspace_provider/git_worktree` |
-| State Store | `StateStore` | Postgres | `adapters/state_store/postgres` |
+| State Store | `StateStore` | Postgres, in-memory | `adapters/state_store/postgres`, `adapters/state_store/memory` |
 
 Ports are named for *what* is needed, never *who* provides it — `publish` and
 `request_review`, not `open_pr`. Every command in `engine.domain.commands` is
@@ -141,6 +141,15 @@ the caller. One consequence is that chatting with the foreman and running a
 headless coder are the *same call* with different profiles — a workspace is
 optional context, not a mode.
 
+The caller in practice is `engine.runtime.AgentSession`: it loads the
+conversation, resolves the profile's grants to tools, runs the turn, and stores
+both messages. Every chat surface goes through it, so the Streamlit page and the
+control server cannot drift into two different notions of what a conversation
+is. The profiles themselves are values in `engine.runtime.profiles` — adding an
+agent is adding an entry there, and nothing about it is special-cased anywhere
+else. A profile never names its runner; which one executes it comes from
+`Capabilities.agent_runner`, chosen by the composition root.
+
 ## Layout
 
 ```text
@@ -162,10 +171,12 @@ packages/
       git_worktree/          engine.adapters.workspace_provider.git_worktree
     state_store/
       postgres/              engine.adapters.state_store.postgres
+      memory/                engine.adapters.state_store.memory
 
 apps/
   control_server/            engine.apps.control_server
   worker/                    engine.apps.worker
+  web/                       engine.apps.web
 ```
 
 Every package publishes into the shared `engine.*` namespace (PEP 420), so the
@@ -187,16 +198,60 @@ separate rather than shared because the processes are expected to diverge.
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
 
 ```bash
-uv sync            # install all 12 workspace packages, editable
+uv sync            # install all 14 workspace packages, editable
 uv run pytest      # run the suite, including the boundary checks
 ```
 
-Both entrypoints run today and report their wiring:
+All three entrypoints run today and report their wiring:
 
 ```bash
 uv run engine-control-server
 uv run engine-worker
+uv run engine-web --check
 ```
+
+### Chatting with an agent
+
+```bash
+uv run engine-web            # http://localhost:8501
+```
+
+The **Chat** page is the one part of the system that works end to end. Pick an
+agent, type, and the reply comes from a real model:
+
+```text
+you        ->  Streamlit page
+               engine.runtime.AgentSession    load history, record the run
+               engine.ports.AgentRunner       one turn
+               engine.adapters.agent_runner.codex
+                 codex exec --json            <- the actual model
+               engine.adapters.state_store.memory   store both messages
+```
+
+It needs the [Codex CLI](https://developers.openai.com/codex/cli) on `PATH` and
+logged in (`codex login`); the page reports it plainly if either is missing.
+Codex runs sandboxed read-only by default, so an agent you are talking to cannot
+edit the tree as a side effect of answering.
+
+The transcript records what the agent *did*, not just what it concluded — the
+commands it ran and their output are stored beside its messages, and the chat
+page draws them as collapsible blocks. That is what lets a stateless runner stay
+coherent: asked a follow-up, the agent reads the earlier command's output back
+out of our transcript instead of re-running it.
+
+Three limits worth knowing before you read anything into a conversation:
+
+- **Conversations die with the process.** The store is the in-memory one.
+- **The agent has no engine tools.** Codex brings its own (it reads files, runs
+  commands); it cannot be handed ours, so the foreman can discuss dispatching
+  work but not dispatch it. See `CodexToolsUnsupportedError`, which is raised
+  rather than ignored.
+- **Turns are expensive and barely cached.** Each one spends ~15k prompt tokens
+  per model request on Codex's own preamble, of which ~10k is cache-served and
+  none of ours is. See the `TODO(caching)` block at the top of the Codex
+  adapter, which has the measurements and the two candidate fixes.
+
+The other pages — Runs, Inbox, Request a run — are unwired and say so.
 
 ## The boundaries are enforced, not just documented
 
@@ -266,28 +321,36 @@ UV_PYTHON=3.11 uv sync --locked && UV_PYTHON=3.11 uv run pytest
 
 Ticket 1 — scaffolding — is complete. In place:
 
-- All 12 packages exist, install, and import.
-- The six capabilities have ports, placeholder adapters, and a `Capabilities`
-  container covering every one.
+- All 14 packages exist, install, and import.
+- The six capabilities have ports, a `Capabilities` container covering every
+  one, and at least one adapter each.
 - `decide` handles one representative transition (`RunRequested` →
   `ProvisionWorkspace`) end to end, through the dispatcher, against a fake.
 - The dependency rules are enforced by tests.
 
-The agent vocabulary — profile, instance, run, conversation, tools — is in place
-on top of that, with `AgentRunner` reshaped around turns and `StateStore` given
-the methods that make conversations ours. No runner implements it yet.
+The agent vocabulary — profile, instance, run, conversation, tools — sits on top
+of that, with `AgentRunner` reshaped around turns and `StateStore` given the
+methods that make conversations ours.
 
-Not yet implemented, by design — every adapter method raises
-`NotImplementedError` naming the ticket that fills it in:
+**Chat works end to end.** Two of the six capabilities are real: the Codex
+adapter runs `codex exec` and parses its event stream, and the in-memory state
+store holds instances and conversations. `engine.runtime.AgentSession` joins
+them, `apps/web` draws them, and two agents ship — `foreman` and `coder`, both
+just values in `engine.runtime.profiles`.
+
+Not yet implemented, by design — the remaining adapter methods raise
+`NotImplementedError` naming the ticket that fills them in:
 
 - No Temporal client, worker, or workflow definition.
-- No GitHub API calls, no git operations, no agent execution.
+- No GitHub API calls, no git operations.
 - No message delivery, no database, no schema, no migrations.
 - No HTTP surface on the control server, no task-queue polling in the worker.
-- No web UI.
-
-- No chat surface, and no agent profiles defined — the foreman is a profile like
-  any other, and arrives with the interface for talking to one.
+- No engine tools, so no profile grants any: the foreman can discuss dispatching
+  work but cannot dispatch it, and `AgentSession` refuses to run a profile whose
+  grants resolve to nothing rather than quietly dropping them.
+- No durable conversations — `apps/web` composes the in-memory store.
+- No workspace-aware agent runs: the Codex adapter refuses a `WorkspaceId` it
+  has no provider to resolve.
 
 The run vocabulary (`events.py`, `commands.py`, `state.py`) is a coherent
 placeholder chosen to make the boundaries concrete; expect it to change when the

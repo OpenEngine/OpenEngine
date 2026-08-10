@@ -16,7 +16,7 @@ adding it later is an additional method rather than a change to this one.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
@@ -41,23 +41,51 @@ class FinishReason(Enum):
 
 @dataclass(frozen=True, slots=True)
 class TokenUsage:
-    """What the turn cost, when the provider reports it."""
+    """What the turn cost, when the provider reports it.
+
+    `cached_prompt_tokens` is the part of `prompt_tokens` the provider served
+    from its prompt cache. Reported because it is the only way to tell a prompt
+    that is merely large from one that is large *and* being re-billed in full
+    every turn.
+    """
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_prompt_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
+    @property
+    def uncached_prompt_tokens(self) -> int:
+        return max(0, self.prompt_tokens - self.cached_prompt_tokens)
+
 
 @dataclass(frozen=True, slots=True)
 class AgentTurn:
-    """One assistant response, plus whatever the provider said about it."""
+    """One assistant response, plus whatever the provider said about it.
+
+    `steps` and `tool_calls` both concern tools and mean opposite things. Keeping
+    them apart is what lets one port serve two kinds of agent:
+
+    * **`steps`** -- what the agent *already did* on the way to this answer:
+      commands it ran, files it changed, narration along the way. Complete, in
+      order, and requiring nothing of the caller but storage. An agent that runs
+      its own tools (Codex) reports here.
+    * **`message.tool_calls`** -- what the agent *wants done* before it can
+      continue. The caller executes them, appends the results, and calls again.
+      A chat-completions model reports here.
+
+    Conflating them would be a live bug rather than an untidiness: `wants_tools`
+    drives the caller's loop, so recording an already-executed command as a
+    tool call would ask the caller to run it a second time.
+    """
 
     message: Message
     finish_reason: FinishReason = FinishReason.STOP
     usage: TokenUsage | None = None
+    steps: tuple[Message, ...] = field(default=())
 
     @property
     def tool_calls(self) -> tuple[ToolCall, ...]:
@@ -68,6 +96,14 @@ class AgentTurn:
     @property
     def wants_tools(self) -> bool:
         return bool(self.message.tool_calls)
+
+    @property
+    def transcript(self) -> tuple[Message, ...]:
+        """Everything this turn adds to the conversation, in order.
+
+        What a caller stores. The steps come first because they happened first.
+        """
+        return (*self.steps, self.message)
 
 
 @runtime_checkable

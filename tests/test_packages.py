@@ -23,8 +23,12 @@ EXPECTED_PACKAGE_ROOTS = [
     "packages/adapters/communications/buzz",
     "packages/adapters/workspace_provider/git_worktree",
     "packages/adapters/state_store/postgres",
+    # A second vendor under one capability, which is what the directory layout
+    # exists to allow: in-memory sits beside Postgres, neither privileged.
+    "packages/adapters/state_store/memory",
     "apps/control_server",
     "apps/worker",
+    "apps/web",
 ]
 
 #: Capability -> the port protocol that defines it.
