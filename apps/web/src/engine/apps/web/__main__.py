@@ -31,7 +31,7 @@ def report_wiring(settings: Settings) -> None:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
     print(f"agents: {', '.join(sorted(session.profiles))}")
     print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
-    print("assistant-ui chat is live; conversations are kept in memory.")
+    print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
 def main() -> int:

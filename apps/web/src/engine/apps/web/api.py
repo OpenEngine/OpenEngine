@@ -45,14 +45,19 @@ class ThreadService:
         self.session = session
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
+        self._restored = False
+        self._restore_lock = asyncio.Lock()
 
-    def list(self) -> tuple[ChatThread, ...]:
+    async def list(self) -> tuple[ChatThread, ...]:
+        await self._restore()
         return tuple(reversed(self._threads.values()))
 
-    def get(self, instance_id: AgentInstanceId) -> ChatThread | None:
+    async def get(self, instance_id: AgentInstanceId) -> ChatThread | None:
+        await self._restore()
         return self._threads.get(instance_id)
 
     async def create(self, agent_id: AgentId, runner: str) -> ChatThread:
+        await self._restore()
         if runner not in self.session.runners:
             raise ValueError(f"unknown runner {runner!r}")
         instance = await self.session.start(agent_id)
@@ -61,12 +66,13 @@ class ThreadService:
         self._locks[instance.instance_id] = asyncio.Lock()
         return thread
 
-    def delete(self, instance_id: AgentInstanceId) -> None:
+    async def delete(self, instance_id: AgentInstanceId) -> None:
+        await self._restore()
         self._threads.pop(instance_id, None)
         self._locks.pop(instance_id, None)
 
     async def history(self, instance_id: AgentInstanceId) -> tuple[Message, ...]:
-        self._require(instance_id)
+        await self._require(instance_id)
         return await self.session.history(instance_id)
 
     async def say(
@@ -76,7 +82,7 @@ class ThreadService:
         runner: str | None,
         observed: asyncio.Queue[Message],
     ) -> str:
-        thread = self._require(instance_id)
+        thread = await self._require(instance_id)
         selected_runner = runner or thread.runner
         if selected_runner not in self.session.runners:
             raise ValueError(f"unknown runner {selected_runner!r}")
@@ -91,11 +97,28 @@ class ThreadService:
             )
         return turn.message.content
 
-    def _require(self, instance_id: AgentInstanceId) -> ChatThread:
-        thread = self.get(instance_id)
+    async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
+        thread = await self.get(instance_id)
         if thread is None:
             raise KeyError(f"no chat thread {instance_id!r}")
         return thread
+
+    async def _restore(self) -> None:
+        """Populate the UI registry from the durable conversation store once."""
+        if self._restored:
+            return
+        async with self._restore_lock:
+            if self._restored:
+                return
+            instances = await self.session.instances()
+            for instance in reversed(instances):
+                self._threads[instance.instance_id] = ChatThread(
+                    instance.instance_id,
+                    instance.agent_id,
+                    self.session.default_runner,
+                )
+                self._locks[instance.instance_id] = asyncio.Lock()
+            self._restored = True
 
 
 def create_app(
@@ -127,7 +150,7 @@ def create_app(
         )
 
     async def list_threads(_request: Request) -> JSONResponse:
-        return JSONResponse({"threads": [_thread_json(t) for t in service.list()]})
+        return JSONResponse({"threads": [_thread_json(t) for t in await service.list()]})
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
@@ -141,13 +164,13 @@ def create_app(
         return JSONResponse(_thread_json(thread), status_code=201)
 
     async def get_thread(request: Request) -> JSONResponse:
-        thread = service.get(_thread_id(request))
+        thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
         return JSONResponse(_thread_json(thread))
 
     async def update_thread(request: Request) -> JSONResponse:
-        thread = service.get(_thread_id(request))
+        thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
@@ -163,7 +186,7 @@ def create_app(
         return JSONResponse(_thread_json(thread))
 
     async def archive_thread(request: Request) -> JSONResponse:
-        thread = service.get(_thread_id(request))
+        thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
         thread.archived = request.scope["route"].name == "archive"
@@ -171,9 +194,9 @@ def create_app(
 
     async def delete_thread(request: Request) -> Response:
         instance_id = _thread_id(request)
-        if service.get(instance_id) is None:
+        if await service.get(instance_id) is None:
             return _error("thread not found", 404)
-        service.delete(instance_id)
+        await service.delete(instance_id)
         return Response(status_code=204)
 
     async def messages(request: Request) -> JSONResponse:
@@ -184,7 +207,7 @@ def create_app(
         return JSONResponse({"messages": _messages_json(history)})
 
     async def title_thread(request: Request) -> JSONResponse:
-        thread = service.get(_thread_id(request))
+        thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
@@ -195,7 +218,7 @@ def create_app(
 
     async def run_thread(request: Request) -> Response:
         instance_id = _thread_id(request)
-        if service.get(instance_id) is None:
+        if await service.get(instance_id) is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
         try:
