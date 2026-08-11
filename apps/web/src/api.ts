@@ -24,6 +24,7 @@ export type ApiThread = {
   archived: boolean;
   agentId: string;
   runner: string;
+  workspaceRoot?: string;
 };
 
 export type ApiMessage = {

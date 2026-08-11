@@ -40,8 +40,8 @@ class StartAgentRun(Command):
     replay reruns the agent that was configured when the run started rather than
     whatever the config says today.
 
-    `workspace_id` is optional because not every agent works on code -- a
-    conversation with the foreman has no checkout.
+    `workspace_id` is optional because not every agent works on code. Interactive
+    repository chats do carry one even when they are not attached to a task.
     """
 
     agent_run_id: AgentRunId

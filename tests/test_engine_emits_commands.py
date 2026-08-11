@@ -70,6 +70,9 @@ class FakeWorkspaceProvider:
             workspace_id="ws-1", root_path="/tmp/ws-1", repository=repository, base_ref=base_ref
         )
 
+    async def root_path(self, workspace_id: str) -> str:
+        return f"/tmp/{workspace_id}"
+
     async def dispose(self, workspace_id: str) -> None:
         pass
 

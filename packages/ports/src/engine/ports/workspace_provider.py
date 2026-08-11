@@ -28,6 +28,10 @@ class WorkspaceProvider(Protocol):
     async def provision(self, repository: str, base_ref: str) -> Workspace:
         ...
 
+    async def root_path(self, workspace_id: WorkspaceId) -> str:
+        """Resolve an opaque workspace id to its checkout directory."""
+        ...
+
     async def dispose(self, workspace_id: WorkspaceId) -> None:
         """Release the workspace. Idempotent -- safe to call twice."""
         ...

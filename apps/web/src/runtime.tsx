@@ -45,7 +45,11 @@ function remoteMetadata(thread: ApiThread) {
     remoteId: thread.id,
     status: thread.archived ? ("archived" as const) : ("regular" as const),
     title: thread.title,
-    custom: { agentId: thread.agentId, runner: thread.runner },
+    custom: {
+      agentId: thread.agentId,
+      runner: thread.runner,
+      workspaceRoot: thread.workspaceRoot,
+    },
   };
 }
 
@@ -140,6 +144,14 @@ export function EngineRuntimeProvider({
         const lastUser = [...messages].reverse().find((message) => message.role === "user");
         const text = lastUser ? messageText(lastUser) : "";
         if (!text) throw new Error("Cannot send an empty message.");
+
+        // assistant-ui normally generates this after runEnd; doing it here
+        // makes the title the first model turn for a new conversation.
+        await api(`/api/threads/${threadId}/title`, {
+          method: "POST",
+          body: JSON.stringify({ text, runner: defaultsRef.current.runner }),
+          signal: abortSignal,
+        });
 
         const response = await fetch(`/api/threads/${threadId}/runs`, {
           method: "POST",

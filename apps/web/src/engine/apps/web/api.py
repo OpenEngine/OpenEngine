@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role
+from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role, WorkspaceId
 from engine.ports import AgentRunner
 from engine.runtime import AgentSession
 from starlette.applications import Starlette
@@ -37,6 +37,8 @@ class ChatThread:
     runner: str
     title: str = "New chat"
     archived: bool = False
+    workspace_root: str | None = None
+    workspace_id: WorkspaceId | None = None
 
 
 class ActiveRun:
@@ -140,7 +142,13 @@ class ThreadService:
         if runner not in self.session.runners:
             raise ValueError(f"unknown runner {runner!r}")
         instance = await self.session.start(agent_id)
-        thread = ChatThread(instance.instance_id, agent_id, runner)
+        thread = ChatThread(
+            instance.instance_id,
+            agent_id,
+            runner,
+            workspace_root=await self.session.workspace_root(instance.instance_id),
+            workspace_id=instance.workspace_id,
+        )
         self._threads[instance.instance_id] = thread
         self._locks[instance.instance_id] = asyncio.Lock()
         return thread
@@ -222,15 +230,31 @@ class ThreadService:
         """The latest run, including a just-finished run needed by a racing resume."""
         return self._active_runs.get(instance_id)
 
-    async def generate_title(self, instance_id: AgentInstanceId) -> str:
+    async def generate_title(
+        self,
+        instance_id: AgentInstanceId,
+        opening_text: str | None = None,
+        runner: str | None = None,
+    ) -> str:
         """Ask the thread's agent for a title without changing its transcript."""
         thread = await self._require(instance_id)
+        if thread.title != "New chat":
+            return thread.title
+        selected_runner = runner or thread.runner
+        if selected_runner not in self.session.runners:
+            raise ValueError(f"unknown runner {selected_runner!r}")
         async with self._locks[instance_id]:
+            if thread.title != "New chat":
+                return thread.title
             history = await self.session.history(instance_id)
-            turn = await self._runners[thread.runner].run_turn(
+            title_context = (
+                (*history, Message.user(opening_text)) if opening_text else history
+            )
+            turn = await self._runners[selected_runner].run_turn(
                 AgentRunId(f"ar-{uuid4().hex[:12]}"),
                 self.session.profiles[thread.agent_id],
-                (*history, Message.user(_TITLE_PROMPT)),
+                (*title_context, Message.user(_TITLE_PROMPT)),
+                workspace_id=thread.workspace_id,
             )
         title = _clean_title(turn.message.content)
         if title:
@@ -256,6 +280,8 @@ class ThreadService:
                     instance.instance_id,
                     instance.agent_id,
                     self.session.default_runner,
+                    workspace_root=await self.session.workspace_root(instance.instance_id),
+                    workspace_id=instance.workspace_id,
                 )
                 self._locks[instance.instance_id] = asyncio.Lock()
             self._restored = True
@@ -362,7 +388,13 @@ def create_app(
         instance_id = _thread_id(request)
         if await service.get(instance_id) is None:
             return _error("thread not found", 404)
-        title = await service.generate_title(instance_id)
+        body = await _json_body(request)
+        opening_text = str(body["text"]).strip() if body.get("text") else None
+        runner = str(body["runner"]) if body.get("runner") else None
+        try:
+            title = await service.generate_title(instance_id, opening_text, runner)
+        except ValueError as error:
+            return _error(str(error), 400)
         return JSONResponse({"title": title})
 
     async def run_thread(request: Request) -> Response:
@@ -437,13 +469,16 @@ def create_app(
 
 
 def _thread_json(thread: ChatThread) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "id": str(thread.instance_id),
         "title": thread.title,
         "archived": thread.archived,
         "agentId": str(thread.agent_id),
         "runner": thread.runner,
     }
+    if thread.workspace_root is not None:
+        result["workspaceRoot"] = thread.workspace_root
+    return result
 
 
 def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:

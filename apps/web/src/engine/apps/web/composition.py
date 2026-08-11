@@ -5,10 +5,10 @@ other two compositions rather than shared code with them -- for the same reason
 the worker's is: these processes will diverge, and sharing now would couple
 three deployables that should be free to move independently.
 
-Two of the six capabilities here are real. `agent_runner` shells out to a coding
-CLI and `state_store` persists conversations in SQLite, which between them are
-exactly what a chat needs. The other four remain wired for the composition
-report but are not exposed by the chat API.
+Three of the six capabilities here are real. `agent_runner` shells out to a
+coding CLI, `state_store` persists conversations in SQLite, and
+`workspace_provider` gives every chat an isolated Git worktree. The other three
+remain wired for the composition report but are not exposed by the chat API.
 
 `Capabilities` holds one runner because a port has one implementation, and that
 is the one anything non-interactive uses. The interface additionally offers a
@@ -71,6 +71,7 @@ class Settings:
 
 def build_capabilities(settings: Settings) -> Capabilities:
     """Wire every port to its concrete implementation."""
+    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=GitHubSourceControl(settings.github_token),
@@ -80,9 +81,10 @@ def build_capabilities(settings: Settings) -> Capabilities:
             sandbox=settings.codex_sandbox,
             working_directory=settings.codex_working_directory,
             model=settings.codex_model,
+            workspace_provider=workspace_provider,
         ),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
-        workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
+        workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
     )
 
@@ -95,6 +97,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     entry is the default, so it is also what a conversation gets when nobody
     picks.
     """
+    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
         "codex": CodexAgentRunner(
             binary_path=settings.codex_binary,
@@ -102,6 +105,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             sandbox=settings.codex_sandbox,
             working_directory=settings.codex_working_directory,
             model=settings.codex_model,
+            workspace_provider=workspace_provider,
         ),
         "claude": ClaudeCodeAgentRunner(
             binary_path=settings.claude_binary,
@@ -109,11 +113,16 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             allowed_tools=settings.claude_allowed_tools,
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
+            workspace_provider=workspace_provider,
         ),
     }
 
 
-def build_session(capabilities: Capabilities, runners: Mapping[str, AgentRunner]) -> AgentSession:
+def build_session(
+    capabilities: Capabilities,
+    runners: Mapping[str, AgentRunner],
+    repository: str = ".",
+) -> AgentSession:
     """Conversations, over the capabilities this process composed.
 
     Takes the capability set rather than settings so the interface and the chat
@@ -124,7 +133,11 @@ def build_session(capabilities: Capabilities, runners: Mapping[str, AgentRunner]
     not start it: we hold the transcript, so whichever answers next is handed
     everything the other one said and did.
     """
-    return AgentSession(capabilities, runners=runners)
+    return AgentSession(
+        capabilities,
+        runners=runners,
+        workspace_repository=repository,
+    )
 
 
 __all__ = [

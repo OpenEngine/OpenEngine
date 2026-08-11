@@ -19,7 +19,7 @@ from typing import Protocol, runtime_checkable
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
-from engine.domain.ids import AgentId, AgentInstanceId, RunId, TaskId
+from engine.domain.ids import AgentId, AgentInstanceId, RunId, TaskId, WorkspaceId
 from engine.domain.state import RunState
 
 
@@ -43,12 +43,16 @@ class StateStore(Protocol):
     # --- agent identity and conversation ---------------------------------
 
     async def create_instance(
-        self, agent_id: AgentId, task_id: TaskId | None = None
+        self,
+        agent_id: AgentId,
+        task_id: TaskId | None = None,
+        workspace_id: WorkspaceId | None = None,
     ) -> AgentInstance:
         """Start a durable instance of an agent role, with an empty conversation.
 
         The store mints both ids, so an instance and its conversation cannot
-        exist without each other.
+        exist without each other. A caller-provisioned workspace may be attached
+        atomically at creation.
         """
         ...
 

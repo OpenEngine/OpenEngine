@@ -72,8 +72,8 @@ class AgentInstance:
     """A durable instance of an agent role.
 
     Holds continuity: identity, conversation, and what the instance is attached
-    to. A chat instance has no task and no workspace; a coder working ENG-42 has
-    both.
+    to. Interactive coding chats may have a workspace without a task; a coder
+    working ENG-42 has both.
     """
 
     instance_id: AgentInstanceId
