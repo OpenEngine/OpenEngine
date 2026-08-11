@@ -232,9 +232,30 @@ uv run engine-web --check
 
 ### Chatting with an agent
 
+Run these commands from the repository root. To build the UI and serve it with
+the Python API:
+
 ```bash
-uv run engine-web            # http://localhost:8000
+npm --prefix apps/web install
+npm --prefix apps/web run build
+uv run engine-web
 ```
+
+Then open <http://localhost:8000>.
+
+For frontend development with live reload, run the API and Vite development
+server in separate terminals:
+
+```bash
+# Terminal 1
+uv run engine-web
+
+# Terminal 2
+npm --prefix apps/web run dev
+```
+
+Open <http://localhost:5173>; Vite proxies API requests to the Python server on
+port 8000.
 
 The assistant-ui client is the one part of the system that works end to end.
 Pick an agent and a runner, open as many conversations as you need, and the

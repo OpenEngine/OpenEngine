@@ -138,7 +138,7 @@ def _session(runner: ConcurrentRunner) -> AgentSession:
 
 def test_different_chats_can_run_at_the_same_time() -> None:
     runner = ConcurrentRunner(("one", "two"))
-    service = ThreadService(_session(runner))
+    service = ThreadService(_session(runner), {"test": runner})
 
     async def scenario() -> None:
         first = await service.create(CODER, "test")
@@ -155,7 +155,7 @@ def test_different_chats_can_run_at_the_same_time() -> None:
 
 def test_one_chat_serializes_its_own_turns() -> None:
     runner = ConcurrentRunner(("one", "two"))
-    service = ThreadService(_session(runner))
+    service = ThreadService(_session(runner), {"test": runner})
 
     async def scenario() -> tuple[Message, ...]:
         thread = await service.create(CODER, "test")
@@ -209,6 +209,39 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
     ] == [
         ("user", "hi"),
         ("assistant", "hello"),
+    ]
+
+
+def test_agent_names_chat_without_changing_conversation() -> None:
+    runner = ConcurrentRunner(("The answer.", '"SQLite Conversation Persistence"'))
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test"},
+            )
+            thread_id = created.json()["id"]
+            await client.post(
+                f"/api/threads/{thread_id}/runs",
+                json={"text": "Why are chats missing after restart?"},
+            )
+            title = await client.post(f"/api/threads/{thread_id}/title", json={})
+            messages = await client.get(f"/api/threads/{thread_id}/messages")
+            return title, messages
+
+    title, messages = asyncio.run(scenario())
+
+    assert title.json() == {"title": "SQLite Conversation Persistence"}
+    assert runner.seen[-1][-1] == Message.user(
+        "Name this chat based on the conversation above. Reply with only a concise "
+        "title of at most eight words, with no quotes or ending punctuation."
+    )
+    assert [message["role"] for message in messages.json()["messages"]] == [
+        "user",
+        "assistant",
     ]
 
 
