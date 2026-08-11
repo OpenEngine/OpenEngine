@@ -21,8 +21,9 @@ them the in-memory store holding the conversation itself).
 """
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import fields
+from typing import Any
 
 import streamlit as st
 
@@ -141,15 +142,49 @@ def chat_page(session: AgentSession, runners: Mapping[str, AgentRunner]) -> None
         st.markdown(question)
 
     try:
+        draw_streamed = _stream_renderer()
         with st.spinner(f"{agent_id} is working on {runner}…"):
-            turn = asyncio.run(session.say(instance_id, question, runner=runner))
+            turn = asyncio.run(
+                session.say(
+                    instance_id,
+                    question,
+                    runner=runner,
+                    on_message=draw_streamed,
+                )
+            )
     except Exception as error:  # noqa: BLE001 -- the page reports, never crashes
         with st.chat_message("assistant"):
             st.error(f"**{type(error).__name__}**\n\n{error}")
         return
 
-    _draw_messages(turn.transcript)
     st.caption(" · ".join([runner, *_turn_details(turn)]))
+
+
+def _stream_renderer() -> Callable[[Message], None]:
+    """Build a renderer that can pair tool results arriving after their calls."""
+    outputs: dict[str, Any] = {}
+
+    def draw(message: Message) -> None:
+        if message.role is Role.TOOL:
+            output = outputs.pop(message.tool_call_id or "", None)
+            if output is not None:
+                output.code(message.content or "(no output)")
+            return
+        if message.tool_calls:
+            for call in message.tool_calls:
+                with st.chat_message("assistant", avatar="🔧"):
+                    with st.expander(f"`{call.name}`", expanded=True):
+                        st.code(call.arguments, language="json")
+                        output = st.empty()
+                        output.code("(running…)")
+                        outputs[call.call_id] = output
+            return
+        avatar = CHAT_ROLES.get(message.role)
+        if avatar and message.content:
+            with st.chat_message(avatar):
+                st.markdown(message.content)
+
+    return draw
 
 
 def _draw_messages(messages: Sequence[Message]) -> None:

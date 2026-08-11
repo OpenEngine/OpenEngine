@@ -19,7 +19,12 @@ from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRun
 from engine.domain.chat import Message
 from engine.domain.ids import AgentId, AgentInstanceId, AgentRunId, TaskId
 from engine.domain.tools import ToolSpec
-from engine.ports.agent_runner import AgentRunner, AgentTurn
+from engine.ports.agent_runner import (
+    AgentRunner,
+    AgentTurn,
+    StreamingAgentRunner,
+    TurnObserver,
+)
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.profiles import BUILT_IN, profile_for
 
@@ -121,7 +126,11 @@ class AgentSession:
         return conversation.messages
 
     async def say(
-        self, instance_id: AgentInstanceId, text: str, runner: str | None = None
+        self,
+        instance_id: AgentInstanceId,
+        text: str,
+        runner: str | None = None,
+        on_message: TurnObserver | None = None,
     ) -> AgentTurn:
         """Add a message to the conversation and get the agent's reply.
 
@@ -129,7 +138,10 @@ class AgentSession:
         leaves an accurate transcript -- a question with no answer -- rather
         than losing what was asked.
 
-        `runner` names which one answers, defaulting to the first wired.
+        `runner` names which one answers, defaulting to the first wired. When
+        `on_message` is provided, streaming runners call it for narration, tool
+        activity, and the final answer as each becomes available. A non-streaming
+        runner still calls it, but only after the complete turn returns.
         """
         runner_name = runner or self.default_runner
         if runner_name not in self._runners:
@@ -158,13 +170,27 @@ class AgentSession:
         await store.record_agent_run(agent_run)
 
         try:
-            turn = await self._runners[runner_name].run_turn(
-                agent_run.agent_run_id,
-                profile,
-                (*conversation.messages, question),
-                tools=tools,
-                workspace_id=instance.workspace_id,
-            )
+            selected_runner = self._runners[runner_name]
+            if on_message is not None and isinstance(selected_runner, StreamingAgentRunner):
+                turn = await selected_runner.run_turn_streamed(
+                    agent_run.agent_run_id,
+                    profile,
+                    (*conversation.messages, question),
+                    on_message,
+                    tools=tools,
+                    workspace_id=instance.workspace_id,
+                )
+            else:
+                turn = await selected_runner.run_turn(
+                    agent_run.agent_run_id,
+                    profile,
+                    (*conversation.messages, question),
+                    tools=tools,
+                    workspace_id=instance.workspace_id,
+                )
+                if on_message is not None:
+                    for message in turn.transcript:
+                        on_message(message)
         except Exception as error:
             await store.record_agent_run(
                 replace(

@@ -11,11 +11,13 @@ Executing them, and deciding whether to go round again, belongs to the caller --
 the runner never invokes a tool itself, so what an agent may do stays governed
 by its profile rather than by whichever adapter happens to be running it.
 
-Streaming is deliberately absent for now. It is a presentation concern, and
-adding it later is an additional method rather than a change to this one.
+Runners whose providers expose progress may additionally implement
+`StreamingAgentRunner`. The original `run_turn` method remains the fallback, so
+callers do not need to special-case runners that can only return a completed
+turn.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
@@ -133,4 +135,37 @@ class AgentRunner(Protocol):
         ...
 
 
-__all__ = ["AgentRunner", "AgentTurn", "FinishReason", "TokenUsage"]
+TurnObserver = Callable[[Message], None]
+"""Receives each conversation message as soon as a runner completes it."""
+
+
+@runtime_checkable
+class StreamingAgentRunner(AgentRunner, Protocol):
+    """An agent runner that can report a turn while it is still running."""
+
+    async def run_turn_streamed(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_message: TurnObserver,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run a turn and synchronously observe its completed messages in order.
+
+        The observed messages are exactly the turn transcript: narration, tool
+        calls and their results, then the final assistant message. The returned
+        turn remains authoritative for persistence and finish metadata.
+        """
+        ...
+
+
+__all__ = [
+    "AgentRunner",
+    "AgentTurn",
+    "FinishReason",
+    "StreamingAgentRunner",
+    "TokenUsage",
+    "TurnObserver",
+]
