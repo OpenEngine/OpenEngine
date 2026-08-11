@@ -14,6 +14,8 @@ import asyncio
 
 import pytest
 
+import engine.adapters.agent_runner.codex as codex_module
+
 from engine.adapters.agent_runner.codex import (
     CodexAgentRunner,
     CodexExecutionError,
@@ -32,7 +34,7 @@ from engine.domain import (
     ToolSpec,
     WorkspaceId,
 )
-from engine.ports import AgentRunner, FinishReason
+from engine.ports import AgentRunner, FinishReason, StreamingAgentRunner
 
 #: Captured from `codex exec --json --sandbox read-only "Reply with exactly the
 #: word: pong"` against codex-cli 0.144.4.
@@ -72,6 +74,7 @@ PROFILE = AgentProfile(
 
 def test_runner_satisfies_the_port() -> None:
     assert isinstance(CodexAgentRunner(), AgentRunner)
+    assert isinstance(CodexAgentRunner(), StreamingAgentRunner)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -308,6 +311,82 @@ def test_a_workspace_it_cannot_resolve_is_refused() -> None:
 
 
 # --- invocation -------------------------------------------------------------
+
+
+class _FakeWriter:
+    def __init__(self) -> None:
+        self.written = b""
+
+    def write(self, data: bytes) -> None:
+        self.written += data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeReader:
+    def __init__(self, text: str = "") -> None:
+        self._lines = [line.encode() for line in text.splitlines(keepends=True)]
+        self.lines_read = 0
+
+    async def readline(self) -> bytes:
+        if not self._lines:
+            return b""
+        self.lines_read += 1
+        return self._lines.pop(0)
+
+    async def read(self) -> bytes:
+        return b""
+
+
+class _FakeProcess:
+    def __init__(self, stdout: str) -> None:
+        self.stdin = _FakeWriter()
+        self.stdout = _FakeReader(stdout)
+        self.stderr = _FakeReader()
+        self.returncode: int | None = None
+        self.waited = False
+
+    async def wait(self) -> int:
+        self.waited = True
+        self.returncode = 0
+        return 0
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+
+def test_messages_stream_before_the_process_finishes(monkeypatch) -> None:
+    process = _FakeProcess(REAL_TOOL_TRANSCRIPT)
+
+    async def create_process(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(codex_module.shutil, "which", lambda binary: binary)
+    monkeypatch.setattr(codex_module.asyncio, "create_subprocess_exec", create_process)
+    seen: list[tuple[Message, bool, int]] = []
+
+    async def capture(message: Message) -> None:
+        seen.append((message, process.waited, process.stdout.lines_read))
+
+    turn = asyncio.run(
+        CodexAgentRunner().run_turn_stream(
+            AgentRunId("ar-1"), PROFILE, (Message.user("inspect"),), capture
+        )
+    )
+
+    assert [message for message, _, _ in seen] == list(turn.transcript)
+    assert all(not waited for _, waited, _ in seen)
+    assert seen[1][2] == 4, "the tool call should appear on item.started"
+    assert seen[2][2] == 5, "the tool result should appear on item.completed"
+    assert process.waited
+    assert b"inspect" in process.stdin.written
 
 
 def test_the_command_line_is_inspectable_without_running_anything() -> None:

@@ -11,11 +11,12 @@ Executing them, and deciding whether to go round again, belongs to the caller --
 the runner never invokes a tool itself, so what an agent may do stays governed
 by its profile rather than by whichever adapter happens to be running it.
 
-Streaming is deliberately absent for now. It is a presentation concern, and
-adding it later is an additional method rather than a change to this one.
+Runners that can expose completed messages while a turn is in flight implement
+the separate `StreamingAgentRunner` protocol. Keeping that method additive means
+non-streaming providers still satisfy `AgentRunner` unchanged.
 """
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
@@ -133,4 +134,35 @@ class AgentRunner(Protocol):
         ...
 
 
-__all__ = ["AgentRunner", "AgentTurn", "FinishReason", "TokenUsage"]
+MessageCallback = Callable[[Message], Awaitable[None]]
+
+
+@runtime_checkable
+class StreamingAgentRunner(Protocol):
+    """An agent runner that reports complete transcript messages as they arrive."""
+
+    async def run_turn_stream(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_message: MessageCallback,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run a turn and call `on_message` once for each transcript message.
+
+        Messages arrive in transcript order. The returned turn remains the
+        authoritative complete result, including usage and finish metadata.
+        """
+        ...
+
+
+__all__ = [
+    "AgentRunner",
+    "AgentTurn",
+    "FinishReason",
+    "MessageCallback",
+    "StreamingAgentRunner",
+    "TokenUsage",
+]

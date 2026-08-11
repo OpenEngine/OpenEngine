@@ -8,7 +8,14 @@ inherit. Ports name *what* is needed (publish changes, run an agent), never
 Every command in `engine.domain.commands` is fulfilled by exactly one of these.
 """
 
-from engine.ports.agent_runner import AgentRunner, AgentTurn, FinishReason, TokenUsage
+from engine.ports.agent_runner import (
+    AgentRunner,
+    AgentTurn,
+    FinishReason,
+    MessageCallback,
+    StreamingAgentRunner,
+    TokenUsage,
+)
 from engine.ports.communications import Communications
 from engine.ports.source_control import SourceControl
 from engine.ports.state_store import StateStore
@@ -20,8 +27,10 @@ __all__ = [
     "AgentTurn",
     "Communications",
     "FinishReason",
+    "MessageCallback",
     "SourceControl",
     "StateStore",
+    "StreamingAgentRunner",
     "TokenUsage",
     "Workspace",
     "WorkflowRuntime",

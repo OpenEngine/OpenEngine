@@ -44,7 +44,7 @@ from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
-from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage
+from engine.ports.agent_runner import AgentTurn, FinishReason, MessageCallback, TokenUsage
 from engine.runtime.transcript import flatten
 
 #: Claude Code's own tools that only read. The default, because an agent you are
@@ -95,6 +95,42 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
         if isinstance(event, dict):
             events.append(event)
     return tuple(events)
+
+
+def _messages_of_event(event: dict[str, Any]) -> tuple[Message, ...]:
+    """The complete transcript messages made visible by one Claude event."""
+    messages: list[Message] = []
+    match event.get("type"):
+        case "assistant":
+            for block in (event.get("message") or {}).get("content") or ():
+                if not isinstance(block, dict):
+                    continue
+                kind = block.get("type")
+                if kind in IGNORED_BLOCK_TYPES:
+                    continue
+                if kind == "text" and str(block.get("text", "")).strip():
+                    messages.append(Message.assistant(str(block["text"])))
+                elif kind == "tool_use":
+                    messages.append(
+                        Message.assistant(
+                            tool_calls=(
+                                ToolCall(
+                                    call_id=str(block.get("id", "")),
+                                    name=str(block.get("name", "tool")),
+                                    arguments=json.dumps(block.get("input") or {}, sort_keys=True),
+                                ),
+                            )
+                        )
+                    )
+        case "user":
+            for block in (event.get("message") or {}).get("content") or ():
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                text = _block_text(block.get("content"))
+                if block.get("is_error"):
+                    text = f"error: {text}"
+                messages.append(Message.tool_result(str(block.get("tool_use_id", "")), text))
+    return tuple(messages)
 
 
 def session_id_of(events: Iterable[dict[str, Any]]) -> str | None:
@@ -263,6 +299,32 @@ class ClaudeCodeAgentRunner:
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
     ) -> AgentTurn:
+        return await self._run_turn(
+            agent_run_id, profile, messages, tools, workspace_id, on_message=None
+        )
+
+    async def run_turn_stream(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_message: MessageCallback,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._run_turn(
+            agent_run_id, profile, messages, tools, workspace_id, on_message
+        )
+
+    async def _run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec],
+        workspace_id: WorkspaceId | None,
+        on_message: MessageCallback | None,
+    ) -> AgentTurn:
         if tools:
             raise ClaudeToolsUnsupportedError([tool.name for tool in tools])
         if workspace_id is not None:
@@ -285,8 +347,8 @@ class ClaudeCodeAgentRunner:
         )
         self._running[agent_run_id] = process
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(flatten(messages).encode()),
+            events, stderr, emitted = await asyncio.wait_for(
+                self._read_events(process, flatten(messages), on_message),
                 timeout=self._timeout_seconds,
             )
         except asyncio.TimeoutError as timeout:
@@ -295,15 +357,59 @@ class ClaudeCodeAgentRunner:
             raise ClaudeExecutionError(
                 f"Claude Code did not finish within {self._timeout_seconds:.0f}s"
             ) from timeout
+        except Exception:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
         finally:
             self._running.pop(agent_run_id, None)
 
         if process.returncode != 0:
             raise ClaudeExecutionError(
-                f"claude exited {process.returncode}: "
-                f"{_tail(stderr.decode(errors='replace'))}"
+                f"claude exited {process.returncode}: {_tail(stderr)}"
             )
-        return turn_from_events(parse_events(stdout.decode(errors="replace")))
+        turn = turn_from_events(events)
+        if on_message is not None:
+            await _emit_unseen(turn, emitted, on_message)
+        return turn
+
+    async def _read_events(
+        self,
+        process: asyncio.subprocess.Process,
+        prompt: str,
+        on_message: MessageCallback | None,
+    ) -> tuple[tuple[dict[str, Any], ...], str, tuple[Message, ...]]:
+        """Feed stdin once, then consume stdout JSONL without buffering the turn."""
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        process.stdin.write(prompt.encode())
+        await process.stdin.drain()
+        process.stdin.close()
+
+        stderr_task = asyncio.create_task(process.stderr.read())
+        events: list[dict[str, Any]] = []
+        emitted: list[Message] = []
+        try:
+            while line := await process.stdout.readline():
+                parsed = parse_events(line.decode(errors="replace"))
+                if not parsed:
+                    continue
+                event = parsed[0]
+                events.append(event)
+                for message in _messages_of_event(event):
+                    emitted.append(message)
+                    if on_message is not None:
+                        await on_message(message)
+            await process.wait()
+            stderr = (await stderr_task).decode(errors="replace")
+        finally:
+            if not stderr_task.done():
+                stderr_task.cancel()
+                await asyncio.gather(stderr_task, return_exceptions=True)
+        return tuple(events), stderr, tuple(emitted)
 
     async def cancel(self, agent_run_id: AgentRunId) -> None:
         """Terminate the run if it is still going. Safe to call otherwise."""
@@ -317,6 +423,16 @@ def _tail(text: str, lines: int = 5) -> str:
     """The last few lines of stderr -- enough to diagnose, short enough to read."""
     kept = [line for line in text.strip().splitlines() if line.strip()]
     return "\n".join(kept[-lines:]) if kept else "(no stderr)"
+
+
+async def _emit_unseen(
+    turn: AgentTurn, emitted: tuple[Message, ...], on_message: MessageCallback
+) -> None:
+    """Emit a fallback answer that only appeared in Claude's result record."""
+    if turn.transcript[: len(emitted)] != emitted:
+        raise ClaudeExecutionError("Claude's streamed transcript changed while assembling the turn")
+    for message in turn.transcript[len(emitted) :]:
+        await on_message(message)
 
 
 __all__ = [

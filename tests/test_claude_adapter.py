@@ -9,6 +9,8 @@ import asyncio
 
 import pytest
 
+import engine.adapters.agent_runner.claude_code as claude_module
+
 from engine.adapters.agent_runner.claude_code import (
     ClaudeCodeAgentRunner,
     ClaudeExecutionError,
@@ -18,7 +20,7 @@ from engine.adapters.agent_runner.claude_code import (
     turn_from_events,
 )
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolSpec, WorkspaceId
-from engine.ports import AgentRunner, FinishReason
+from engine.ports import AgentRunner, FinishReason, StreamingAgentRunner
 
 #: Captured from `claude -p --output-format stream-json --verbose --allowedTools
 #: Glob Read "List the directory names under packages/adapters, then reply
@@ -50,6 +52,7 @@ PROFILE = AgentProfile(
 
 def test_runner_satisfies_the_port() -> None:
     assert isinstance(ClaudeCodeAgentRunner(), AgentRunner)
+    assert isinstance(ClaudeCodeAgentRunner(), StreamingAgentRunner)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -188,6 +191,76 @@ def test_a_workspace_it_cannot_resolve_is_refused() -> None:
 
 
 # --- invocation -------------------------------------------------------------
+
+
+class _FakeWriter:
+    def __init__(self) -> None:
+        self.written = b""
+
+    def write(self, data: bytes) -> None:
+        self.written += data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeReader:
+    def __init__(self, text: str = "") -> None:
+        self._lines = [line.encode() for line in text.splitlines(keepends=True)]
+
+    async def readline(self) -> bytes:
+        return self._lines.pop(0) if self._lines else b""
+
+    async def read(self) -> bytes:
+        return b""
+
+
+class _FakeProcess:
+    def __init__(self, stdout: str) -> None:
+        self.stdin = _FakeWriter()
+        self.stdout = _FakeReader(stdout)
+        self.stderr = _FakeReader()
+        self.returncode: int | None = None
+        self.waited = False
+
+    async def wait(self) -> int:
+        self.waited = True
+        self.returncode = 0
+        return 0
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+
+def test_messages_stream_before_the_process_finishes(monkeypatch) -> None:
+    process = _FakeProcess(REAL_TRANSCRIPT)
+
+    async def create_process(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(claude_module.shutil, "which", lambda binary: binary)
+    monkeypatch.setattr(claude_module.asyncio, "create_subprocess_exec", create_process)
+    seen: list[tuple[Message, bool]] = []
+
+    async def capture(message: Message) -> None:
+        seen.append((message, process.waited))
+
+    turn = asyncio.run(
+        ClaudeCodeAgentRunner().run_turn_stream(
+            AgentRunId("ar-1"), PROFILE, (Message.user("inspect"),), capture
+        )
+    )
+
+    assert [message for message, _ in seen] == list(turn.transcript)
+    assert all(not waited for _, waited in seen)
+    assert process.waited
+    assert b"inspect" in process.stdin.written
 
 
 def test_instructions_go_to_the_system_prompt_not_the_conversation() -> None:

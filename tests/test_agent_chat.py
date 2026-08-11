@@ -21,7 +21,7 @@ from engine.domain import (
     ToolCall,
     ToolSpec,
 )
-from engine.ports import AgentTurn, StateStore
+from engine.ports import AgentTurn, StateStore, StreamingAgentRunner
 from engine.runtime import (
     DEFAULT_RUNNER,
     AgentSession,
@@ -191,6 +191,71 @@ def test_what_the_agent_did_is_stored_alongside_what_it_said() -> None:
     ]
     assert history[1].tool_calls == (call,)
     assert history[2].tool_call_id == "c1"
+
+
+def test_a_streaming_runner_reports_each_message_before_the_turn_returns() -> None:
+    store = InMemoryStateStore()
+    call = ToolCall(call_id="c1", name="command_execution", arguments='{"command": "ls"}')
+    transcript = (
+        Message.assistant("I’ll inspect it."),
+        Message.assistant(tool_calls=(call,)),
+        Message.tool_result("c1", "README.md"),
+        Message.assistant("one file"),
+    )
+    seen: list[tuple[Message, bool]] = []
+
+    class StreamingRunner:
+        finished = False
+
+        async def run_turn(self, agent_run_id, profile, messages, tools=(), workspace_id=None):
+            raise AssertionError("the streaming method should be selected")
+
+        async def run_turn_stream(
+            self, agent_run_id, profile, messages, on_message, tools=(), workspace_id=None
+        ):
+            for message in transcript:
+                await on_message(message)
+            self.finished = True
+            return AgentTurn(transcript[-1], steps=transcript[:-1])
+
+        async def cancel(self, agent_run_id) -> None:
+            pass
+
+    runner = StreamingRunner()
+    assert isinstance(runner, StreamingAgentRunner)
+    session = _session(runner, store)
+    instance = asyncio.run(session.start(CODER))
+
+    async def capture(message: Message) -> None:
+        seen.append((message, runner.finished))
+
+    turn = asyncio.run(session.say(instance.instance_id, "look", on_message=capture))
+
+    assert [message for message, _ in seen] == list(transcript)
+    assert all(not finished for _, finished in seen)
+    assert turn.transcript == transcript
+    stored = asyncio.run(session.history(instance.instance_id))[1:]
+    assert [
+        (message.role, message.content, message.tool_calls, message.tool_call_id)
+        for message in stored
+    ] == [
+        (message.role, message.content, message.tool_calls, message.tool_call_id)
+        for message in transcript
+    ]
+
+
+def test_a_non_streaming_runner_remains_compatible_with_a_streaming_caller() -> None:
+    store = InMemoryStateStore()
+    session = _session(ScriptedRunner(["done"]), store)
+    instance = asyncio.run(session.start(CODER))
+    seen: list[Message] = []
+
+    async def capture(message: Message) -> None:
+        seen.append(message)
+
+    asyncio.run(session.say(instance.instance_id, "go", on_message=capture))
+
+    assert seen == [Message.assistant("done")]
 
 
 def test_recorded_steps_go_back_to_the_agent_next_turn() -> None:

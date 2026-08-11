@@ -81,7 +81,7 @@ from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
-from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage
+from engine.ports.agent_runner import AgentTurn, FinishReason, MessageCallback, TokenUsage
 from engine.runtime.transcript import flatten
 
 #: Sandbox policies the CLI accepts. Chat defaults to the read-only one: an
@@ -99,7 +99,7 @@ IGNORED_ITEM_TYPES = frozenset({"reasoning"})
 OUTPUT_FIELDS = ("aggregated_output", "output", "result", "error")
 
 #: Fields that describe the item rather than its arguments.
-NON_ARGUMENT_FIELDS = frozenset({"id", "type", "status", *OUTPUT_FIELDS})
+NON_ARGUMENT_FIELDS = frozenset({"id", "type", "status", "exit_code", *OUTPUT_FIELDS})
 
 
 class CodexUnavailableError(RuntimeError):
@@ -161,6 +161,22 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
         if isinstance(event, dict):
             events.append(event)
     return tuple(events)
+
+
+def _messages_of_event(
+    event: dict[str, Any], index: int, thread_id: str
+) -> tuple[Message, ...]:
+    """The complete transcript messages made visible by one Codex event."""
+    if event.get("type") != "item.completed":
+        return ()
+    item = event.get("item") or {}
+    kind = item.get("type")
+    if kind in IGNORED_ITEM_TYPES:
+        return ()
+    if kind == "agent_message":
+        return (Message.assistant(str(item["text"])),) if item.get("text") else ()
+    call_id = f"{thread_id}:{item.get('id') or f'item-{index}'}"
+    return action_messages(item, call_id)
 
 
 def action_messages(item: dict[str, Any], call_id: str) -> tuple[Message, Message]:
@@ -316,6 +332,32 @@ class CodexAgentRunner:
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
     ) -> AgentTurn:
+        return await self._run_turn(
+            agent_run_id, profile, messages, tools, workspace_id, on_message=None
+        )
+
+    async def run_turn_stream(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_message: MessageCallback,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._run_turn(
+            agent_run_id, profile, messages, tools, workspace_id, on_message
+        )
+
+    async def _run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec],
+        workspace_id: WorkspaceId | None,
+        on_message: MessageCallback | None,
+    ) -> AgentTurn:
         if tools:
             raise CodexToolsUnsupportedError([tool.name for tool in tools])
         if workspace_id is not None:
@@ -338,8 +380,9 @@ class CodexAgentRunner:
         )
         self._running[agent_run_id] = process
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(prompt.encode()), timeout=self._timeout_seconds
+            events, stderr, emitted = await asyncio.wait_for(
+                self._read_events(process, prompt, on_message),
+                timeout=self._timeout_seconds,
             )
         except asyncio.TimeoutError as timeout:
             process.kill()
@@ -347,14 +390,77 @@ class CodexAgentRunner:
             raise CodexExecutionError(
                 f"Codex did not finish within {self._timeout_seconds:.0f}s"
             ) from timeout
+        except Exception:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
         finally:
             self._running.pop(agent_run_id, None)
 
         if process.returncode != 0:
             raise CodexExecutionError(
-                f"codex exited {process.returncode}: {_tail(stderr.decode(errors='replace'))}"
+                f"codex exited {process.returncode}: {_tail(stderr)}"
             )
-        return turn_from_events(parse_events(stdout.decode(errors="replace")))
+        turn = turn_from_events(events)
+        if on_message is not None:
+            await _emit_unseen(turn, emitted, on_message)
+        return turn
+
+    async def _read_events(
+        self,
+        process: asyncio.subprocess.Process,
+        prompt: str,
+        on_message: MessageCallback | None,
+    ) -> tuple[tuple[dict[str, Any], ...], str, tuple[Message, ...]]:
+        """Feed stdin once, then consume stdout JSONL without buffering the turn."""
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        process.stdin.write(prompt.encode())
+        await process.stdin.drain()
+        process.stdin.close()
+
+        stderr_task = asyncio.create_task(process.stderr.read())
+        events: list[dict[str, Any]] = []
+        emitted: list[Message] = []
+        thread_id = "codex"
+        started_items: set[str] = set()
+        try:
+            while line := await process.stdout.readline():
+                parsed = parse_events(line.decode(errors="replace"))
+                if not parsed:
+                    continue
+                event = parsed[0]
+                events.append(event)
+                if event.get("type") == "thread.started" and event.get("thread_id"):
+                    thread_id = str(event["thread_id"])
+                item = event.get("item") or {}
+                item_id = str(item.get("id", ""))
+                if (
+                    event.get("type") == "item.started"
+                    and item_id
+                    and item.get("type") not in {*IGNORED_ITEM_TYPES, "agent_message"}
+                ):
+                    call_id = f"{thread_id}:{item_id}"
+                    visible = action_messages(item, call_id)[:1]
+                    started_items.add(item_id)
+                else:
+                    visible = _messages_of_event(event, len(events) - 1, thread_id)
+                    if event.get("type") == "item.completed" and item_id in started_items:
+                        visible = visible[1:]
+                for message in visible:
+                    emitted.append(message)
+                    if on_message is not None:
+                        await on_message(message)
+            await process.wait()
+            stderr = (await stderr_task).decode(errors="replace")
+        finally:
+            if not stderr_task.done():
+                stderr_task.cancel()
+                await asyncio.gather(stderr_task, return_exceptions=True)
+        return tuple(events), stderr, tuple(emitted)
 
     async def cancel(self, agent_run_id: AgentRunId) -> None:
         """Terminate the run if it is still going. Safe to call otherwise."""
@@ -372,6 +478,16 @@ def _tail(text: str, lines: int = 5) -> str:
     """
     kept = [line for line in text.strip().splitlines() if line.strip()]
     return "\n".join(kept[-lines:]) if kept else "(no stderr)"
+
+
+async def _emit_unseen(
+    turn: AgentTurn, emitted: tuple[Message, ...], on_message: MessageCallback
+) -> None:
+    """Emit a synthesized final message not represented by a live item."""
+    if turn.transcript[: len(emitted)] != emitted:
+        raise CodexExecutionError("Codex's streamed transcript changed while assembling the turn")
+    for message in turn.transcript[len(emitted) :]:
+        await on_message(message)
 
 
 __all__ = [

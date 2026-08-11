@@ -158,6 +158,11 @@ Switching mid-conversation is allowed and is the point: we hold the transcript,
 so whichever runner answers next is handed everything the other one said and
 did.
 
+An adapter may also satisfy the additive `StreamingAgentRunner` protocol. Its
+`run_turn_stream` method reports each complete transcript message through an
+async callback while still returning the authoritative `AgentTurn`; runners
+that only implement `run_turn` remain valid.
+
 ## Layout
 
 ```text
@@ -246,9 +251,11 @@ agent you are talking to cannot edit the tree as a side effect of answering.
 
 The transcript records what the agent *did*, not just what it concluded — the
 commands it ran and their output are stored beside its messages, and the chat
-page draws them as collapsible blocks. That is what lets a stateless runner stay
-coherent: asked a follow-up, the agent reads the earlier command's output back
-out of our transcript instead of re-running it.
+page draws intermediary narration and tool activity as each JSONL event arrives.
+Tool output fills into the matching live action block, and the complete turn is
+stored afterward. That is what lets a stateless runner stay coherent: asked a
+follow-up, the agent reads the earlier command's output back out of our
+transcript instead of re-running it.
 
 It is also what makes the **Runner** dropdown more than a preference. Because the
 conversation is ours rather than a provider's, either runner can pick up a
