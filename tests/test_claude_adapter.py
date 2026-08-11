@@ -233,6 +233,24 @@ def test_stream_json_needs_verbose() -> None:
 # --- how long a turn may take -----------------------------------------------
 
 
+def test_completed_messages_stream_in_transcript_order(tmp_path) -> None:
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(REAL_TRANSCRIPT)
+    binary = tmp_path / "claude"
+    binary.write_text(f"#!/bin/sh\ncat >/dev/null\ncat {transcript}\n")
+    binary.chmod(0o755)
+    runner = ClaudeCodeAgentRunner(binary_path=str(binary))
+    observed: list[Message] = []
+
+    turn = asyncio.run(
+        runner.run_turn_streamed(
+            AgentRunId("ar-1"), PROFILE, (Message.user("go"),), observed.append
+        )
+    )
+
+    assert observed == list(turn.transcript)
+
+
 def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
     """Same reasoning as the Codex runner's: a long turn is a large task, and
     `cancel` is how one ends early."""

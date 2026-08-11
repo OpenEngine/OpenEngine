@@ -163,6 +163,53 @@ def test_a_turn_stores_both_sides() -> None:
     ]
 
 
+def test_a_non_streaming_runner_still_reports_the_completed_transcript() -> None:
+    store = InMemoryStateStore()
+    session = _session(ScriptedRunner(["4"]), store)
+    instance = asyncio.run(session.start(CODER))
+    observed: list[Message] = []
+
+    turn = asyncio.run(
+        session.say(instance.instance_id, "what is 2+2", on_message=observed.append)
+    )
+
+    assert observed == list(turn.transcript)
+
+
+def test_a_streaming_runner_reports_steps_before_the_final_answer() -> None:
+    store = InMemoryStateStore()
+    call = ToolCall(call_id="c1", name="Read", arguments='{"path": "README.md"}')
+    steps = (
+        Message.assistant("I will look."),
+        Message.assistant(tool_calls=(call,)),
+        Message.tool_result("c1", "engine"),
+    )
+
+    class StreamingRunner(ScriptedRunner):
+        async def run_turn(self, *args, **kwargs):
+            raise AssertionError("the streaming method should be used")
+
+        async def run_turn_streamed(
+            self, agent_run_id, profile, messages, on_message, tools=(), workspace_id=None
+        ):
+            turn = AgentTurn(Message.assistant("Done."), steps=steps)
+            for message in turn.transcript:
+                on_message(message)
+            return turn
+
+    session = _session(StreamingRunner(), store)
+    instance = asyncio.run(session.start(CODER))
+    observed: list[Message] = []
+
+    turn = asyncio.run(session.say(instance.instance_id, "inspect", on_message=observed.append))
+
+    assert observed == list(turn.transcript)
+    stored = asyncio.run(session.history(instance.instance_id))[-4:]
+    assert [(message.role, message.content) for message in stored] == [
+        (message.role, message.content) for message in turn.transcript
+    ]
+
+
 def test_what_the_agent_did_is_stored_alongside_what_it_said() -> None:
     """An agent that read a file before answering leaves the read in the
     transcript. Without it, nobody can later tell why the answer is what it is."""

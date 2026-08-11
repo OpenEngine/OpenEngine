@@ -350,6 +350,21 @@ def _fake_codex(tmp_path, body: str) -> str:
     return str(binary)
 
 
+def test_completed_messages_stream_in_transcript_order(tmp_path) -> None:
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(REAL_TOOL_TRANSCRIPT)
+    runner = CodexAgentRunner(binary_path=_fake_codex(tmp_path, f"cat {transcript}"))
+    observed: list[Message] = []
+
+    turn = asyncio.run(
+        runner.run_turn_streamed(
+            AgentRunId("ar-1"), PROFILE, (Message.user("go"),), observed.append
+        )
+    )
+
+    assert observed == list(turn.transcript)
+
+
 def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
     """A wall clock is the wrong thing to cut an agent off with: a long turn is
     usually a large task rather than a stuck one, and killing it throws away
