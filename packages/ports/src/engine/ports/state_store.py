@@ -63,6 +63,12 @@ class StateStore(Protocol):
         """Every instance, or every instance of one role. Newest first."""
         ...
 
+    async def set_instance_title(
+        self, instance_id: AgentInstanceId, title: str
+    ) -> None:
+        """Persist the human-readable title for an instance's conversation."""
+        ...
+
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         """The instance's history, or None if the instance is unknown.
 

@@ -36,7 +36,7 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
 
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     database = tmp_path / "conversations.sqlite3"
-    runner = ConcurrentRunner(("persisted answer",))
+    runner = ConcurrentRunner(("Persisted title", "persisted answer"))
 
     first_capabilities = build_capabilities(Settings(sqlite_path=str(database)))
     first_app = create_app(
@@ -51,6 +51,10 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
             thread_id = created.json()["id"]
+            await client.post(
+                f"/api/threads/{thread_id}/title",
+                json={"text": "remember this", "runner": "test"},
+            )
             await client.post(
                 f"/api/threads/{thread_id}/runs", json={"text": "remember this"}
             )
@@ -80,7 +84,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     assert threads.json()["threads"] == [
         {
             "id": thread_id,
-            "title": "New chat",
+            "title": "Persisted title",
             "archived": False,
             "agentId": "coder",
             "runner": "test",

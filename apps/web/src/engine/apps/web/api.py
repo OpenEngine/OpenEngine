@@ -2,7 +2,8 @@
 
 The engine owns conversations; assistant-ui owns their presentation.  This
 module translates between those two vocabularies and keeps the small amount of
-thread metadata that is UI-specific (title, archive status, selected runner).
+thread metadata that is UI-specific (archive status and selected runner). Titles
+belong to the durable agent instance so they survive a server restart.
 
 Runs are streamed as newline-delimited JSON.  Their tasks are owned by the
 service rather than by one response, so a refreshed browser can reconnect.
@@ -339,8 +340,15 @@ class ThreadService:
             )
         title = _clean_title(turn.message.content)
         if title:
+            await self.session.set_title(instance_id, title)
             thread.title = title
         return thread.title
+
+    async def set_title(self, instance_id: AgentInstanceId, title: str) -> None:
+        """Update the displayed title only after its durable write succeeds."""
+        thread = await self._require(instance_id)
+        await self.session.set_title(instance_id, title)
+        thread.title = title
 
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
         thread = await self.get(instance_id)
@@ -361,6 +369,7 @@ class ThreadService:
                     instance.instance_id,
                     instance.agent_id,
                     self.session.default_runner,
+                    title=instance.title or "New chat",
                     workspace_root=await self.session.workspace_root(instance.instance_id),
                     workspace_id=instance.workspace_id,
                 )
@@ -426,7 +435,7 @@ def create_app(
         if "title" in body:
             title = str(body["title"]).strip()
             if title:
-                thread.title = title[:80]
+                await service.set_title(thread.instance_id, title[:80])
         if "runner" in body:
             runner = str(body["runner"])
             if runner not in session.runners:
