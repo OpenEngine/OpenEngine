@@ -150,6 +150,10 @@ function HistoryProvider({ children }: PropsWithChildren) {
       syncingRef.current = true;
       try {
         await aui.threads.reloadMainThread();
+        // A run can also change server-owned thread metadata (most notably the
+        // generated title). Refresh the list record as part of the same
+        // reconciliation so every window sees more than the message update.
+        await aui.threads.reload();
         seenVersionRef.current = Math.max(
           seenVersionRef.current ?? pending,
           pending,
