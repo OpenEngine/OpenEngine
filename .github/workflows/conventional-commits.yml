@@ -13,6 +13,9 @@ on:
     # `edited` re-runs the checks when the PR title (or body) changes.
     types: [opened, edited, synchronize, reopened]
 
+# Default for the workflow; `pr-title` narrows it below. A `permissions:` block
+# sets every scope it does not name to `none`, so each job gets only what it
+# actually reads.
 permissions:
   contents: read
 
@@ -25,6 +28,11 @@ jobs:
   pr-title:
     name: Validate PR title
     runs-on: ubuntu-latest
+    # The action reads the title through the PR API rather than the event
+    # payload, so it needs this scope; without it the API 403s as
+    # "Resource not accessible by integration". No checkout, so no contents.
+    permissions:
+      pull-requests: read
     steps:
       - name: Lint PR title against the conventional-commit spec
         uses: amannn/action-semantic-pull-request@v5
