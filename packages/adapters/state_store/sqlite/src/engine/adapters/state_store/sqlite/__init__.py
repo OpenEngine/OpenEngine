@@ -87,13 +87,17 @@ class SQLiteStateStore:
         raise NotImplementedError("SQLite event persistence is not implemented")
 
     async def create_instance(
-        self, agent_id: AgentId, task_id: TaskId | None = None
+        self,
+        agent_id: AgentId,
+        task_id: TaskId | None = None,
+        workspace_id: WorkspaceId | None = None,
     ) -> AgentInstance:
         instance = AgentInstance(
             instance_id=AgentInstanceId(f"agi-{uuid4().hex[:12]}"),
             agent_id=agent_id,
             conversation_id=ConversationId(f"conv-{uuid4().hex[:12]}"),
             task_id=task_id,
+            workspace_id=workspace_id,
         )
         with self._lock, self._connection:
             self._connection.execute(

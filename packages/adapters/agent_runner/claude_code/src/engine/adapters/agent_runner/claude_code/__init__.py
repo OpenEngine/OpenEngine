@@ -45,6 +45,7 @@ from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage, TurnObserver
+from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.transcript import flatten
 
 #: Claude Code's own tools that only read. The default, because an agent you are
@@ -266,12 +267,14 @@ class ClaudeCodeAgentRunner:
         allowed_tools: Sequence[str] = READ_ONLY_TOOLS,
         working_directory: str = ".",
         model: str = "",
+        workspace_provider: WorkspaceProvider | None = None,
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
         self._allowed_tools = tuple(allowed_tools)
         self._working_directory = working_directory
         self._model = model
+        self._workspace_provider = workspace_provider
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
     def command_line(self, profile: AgentProfile) -> list[str]:
@@ -319,7 +322,7 @@ class ClaudeCodeAgentRunner:
         """Run Claude Code, forwarding each completed JSONL block immediately."""
         if tools:
             raise ClaudeToolsUnsupportedError([tool.name for tool in tools])
-        if workspace_id is not None:
+        if workspace_id is not None and self._workspace_provider is None:
             raise NotImplementedError(
                 "resolving a WorkspaceId to a path needs the workspace provider; "
                 "until then this runner works in its configured directory"
@@ -330,12 +333,17 @@ class ClaudeCodeAgentRunner:
                 "or point the runner at the binary"
             )
 
+        working_directory = self._working_directory
+        if workspace_id is not None:
+            assert self._workspace_provider is not None
+            working_directory = await self._workspace_provider.root_path(workspace_id)
+
         process = await asyncio.create_subprocess_exec(
             *self.command_line(profile),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=self._working_directory,
+            cwd=working_directory,
         )
         self._running[agent_run_id] = process
         try:

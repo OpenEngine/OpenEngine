@@ -45,7 +45,11 @@ function remoteMetadata(thread: ApiThread) {
     remoteId: thread.id,
     status: thread.archived ? ("archived" as const) : ("regular" as const),
     title: thread.title,
-    custom: { agentId: thread.agentId, runner: thread.runner },
+    custom: {
+      agentId: thread.agentId,
+      runner: thread.runner,
+      workspaceRoot: thread.workspaceRoot,
+    },
   };
 }
 

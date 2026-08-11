@@ -278,6 +278,9 @@ It needs the [Codex CLI](https://developers.openai.com/codex/cli) or
 reports it plainly if the one you picked is missing. Both run read-only by
 default — Codex sandboxed, Claude Code restricted to `Read`/`Glob`/`Grep` — so an
 agent you are talking to cannot edit the tree as a side effect of answering.
+Each new conversation gets its own branch-backed Git worktree under
+`/tmp/engine-workspaces`, and the chat shows the `cd` command for opening that
+checkout. The worktree is reused for every later turn in the conversation.
 
 The engine transcript records what the agent *did*, not just what it concluded — the
 commands it ran and their output are stored beside its messages, and the chat

@@ -11,7 +11,7 @@ from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
 from engine.apps.web.composition import Settings, build_capabilities
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolCall
-from engine.ports import AgentTurn
+from engine.ports import AgentTurn, Workspace
 from engine.runtime import AgentSession, Capabilities
 
 CODER = AgentId("coder")
@@ -98,6 +98,7 @@ class ConcurrentRunner:
     def __init__(self, replies: Sequence[str] = ("ok",)) -> None:
         self.replies = list(replies)
         self.seen: list[tuple[Message, ...]] = []
+        self.workspace_ids: list[str | None] = []
         self.active = 0
         self.most_active = 0
 
@@ -110,6 +111,7 @@ class ConcurrentRunner:
         workspace_id=None,
     ) -> AgentTurn:
         self.seen.append(tuple(messages))
+        self.workspace_ids.append(workspace_id)
         self.active += 1
         self.most_active = max(self.most_active, self.active)
         await asyncio.sleep(0.02)
@@ -135,6 +137,65 @@ def _session(runner: ConcurrentRunner) -> AgentSession:
         profiles=PROFILES,
         runners={"test": runner},
     )
+
+
+class ConversationWorkspaces:
+    def __init__(self) -> None:
+        self.count = 0
+
+    async def provision(self, repository: str, base_ref: str) -> Workspace:
+        self.count += 1
+        workspace_id = f"ws-{self.count}"
+        return Workspace(
+            workspace_id=workspace_id,
+            root_path=f"/worktrees/{workspace_id}",
+            repository=repository,
+            base_ref=base_ref,
+        )
+
+    async def root_path(self, workspace_id: str) -> str:
+        return f"/worktrees/{workspace_id}"
+
+    async def dispose(self, workspace_id: str) -> None:
+        pass
+
+
+def test_each_new_chat_reports_its_own_worktree() -> None:
+    runner = ConcurrentRunner()
+    workspaces = ConversationWorkspaces()
+    unused = object()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=unused,
+            source_control=unused,
+            agent_runner=runner,
+            communications=unused,
+            workspace_provider=workspaces,
+            state_store=InMemoryStateStore(),
+        ),
+        profiles=PROFILES,
+        runners={"test": runner},
+        workspace_repository="/repository",
+    )
+    app = create_app(session, {"test": runner})
+
+    async def scenario() -> tuple[dict[str, object], dict[str, object]]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            body = {"agentId": "coder", "runner": "test"}
+            first = await client.post("/api/threads", json=body)
+            second = await client.post("/api/threads", json=body)
+            await client.post(
+                f"/api/threads/{first.json()['id']}/runs", json={"text": "inspect"}
+            )
+            return first.json(), second.json()
+
+    first, second = asyncio.run(scenario())
+
+    assert first["workspaceRoot"] == "/worktrees/ws-1"
+    assert second["workspaceRoot"] == "/worktrees/ws-2"
+    assert first["workspaceRoot"] != second["workspaceRoot"]
+    assert runner.workspace_ids == ["ws-1"]
 
 
 def test_different_chats_can_run_at_the_same_time() -> None:

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role
+from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role, WorkspaceId
 from engine.ports import AgentRunner
 from engine.runtime import AgentSession
 from starlette.applications import Starlette
@@ -37,6 +37,8 @@ class ChatThread:
     runner: str
     title: str = "New chat"
     archived: bool = False
+    workspace_root: str | None = None
+    workspace_id: WorkspaceId | None = None
 
 
 class ActiveRun:
@@ -140,7 +142,13 @@ class ThreadService:
         if runner not in self.session.runners:
             raise ValueError(f"unknown runner {runner!r}")
         instance = await self.session.start(agent_id)
-        thread = ChatThread(instance.instance_id, agent_id, runner)
+        thread = ChatThread(
+            instance.instance_id,
+            agent_id,
+            runner,
+            workspace_root=await self.session.workspace_root(instance.instance_id),
+            workspace_id=instance.workspace_id,
+        )
         self._threads[instance.instance_id] = thread
         self._locks[instance.instance_id] = asyncio.Lock()
         return thread
@@ -246,6 +254,7 @@ class ThreadService:
                 AgentRunId(f"ar-{uuid4().hex[:12]}"),
                 self.session.profiles[thread.agent_id],
                 (*title_context, Message.user(_TITLE_PROMPT)),
+                workspace_id=thread.workspace_id,
             )
         title = _clean_title(turn.message.content)
         if title:
@@ -271,6 +280,8 @@ class ThreadService:
                     instance.instance_id,
                     instance.agent_id,
                     self.session.default_runner,
+                    workspace_root=await self.session.workspace_root(instance.instance_id),
+                    workspace_id=instance.workspace_id,
                 )
                 self._locks[instance.instance_id] = asyncio.Lock()
             self._restored = True
@@ -458,13 +469,16 @@ def create_app(
 
 
 def _thread_json(thread: ChatThread) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "id": str(thread.instance_id),
         "title": thread.title,
         "archived": thread.archived,
         "agentId": str(thread.agent_id),
         "runner": thread.runner,
     }
+    if thread.workspace_root is not None:
+        result["workspaceRoot"] = thread.workspace_root
+    return result
 
 
 def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:

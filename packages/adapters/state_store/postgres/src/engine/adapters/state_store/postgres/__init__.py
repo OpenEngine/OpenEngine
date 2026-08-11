@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
-from engine.domain.ids import AgentId, AgentInstanceId, RunId, TaskId
+from engine.domain.ids import AgentId, AgentInstanceId, RunId, TaskId, WorkspaceId
 from engine.domain.state import RunState
 
 
@@ -36,7 +36,10 @@ class PostgresStateStore:
         raise NotImplementedError("History reads land with the state-store ticket")
 
     async def create_instance(
-        self, agent_id: AgentId, task_id: TaskId | None = None
+        self,
+        agent_id: AgentId,
+        task_id: TaskId | None = None,
+        workspace_id: WorkspaceId | None = None,
     ) -> AgentInstance:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 

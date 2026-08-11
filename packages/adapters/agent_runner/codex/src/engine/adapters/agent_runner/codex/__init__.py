@@ -82,6 +82,7 @@ from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage, TurnObserver
+from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.transcript import flatten
 
 #: Sandbox policies the CLI accepts. Chat defaults to the read-only one: an
@@ -312,6 +313,7 @@ class CodexAgentRunner:
         sandbox: str = "read-only",
         working_directory: str = ".",
         model: str = "",
+        workspace_provider: WorkspaceProvider | None = None,
     ) -> None:
         if sandbox not in SANDBOX_MODES:
             raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
@@ -320,10 +322,13 @@ class CodexAgentRunner:
         self._sandbox = sandbox
         self._working_directory = working_directory
         self._model = model
+        self._workspace_provider = workspace_provider
         #: Live processes, so `cancel` has something to reach for.
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
-    def command_line(self, profile: AgentProfile) -> list[str]:
+    def command_line(
+        self, profile: AgentProfile, working_directory: str | None = None
+    ) -> list[str]:
         """The argv this runner would use. Public so the wiring is inspectable
         without running anything."""
         argv = [
@@ -334,7 +339,7 @@ class CodexAgentRunner:
             "--sandbox",
             self._sandbox,
             "-C",
-            self._working_directory,
+            working_directory or self._working_directory,
         ]
         model = profile.model or self._model
         if model:
@@ -370,7 +375,7 @@ class CodexAgentRunner:
         """Run Codex, forwarding each completed JSONL item immediately."""
         if tools:
             raise CodexToolsUnsupportedError([tool.name for tool in tools])
-        if workspace_id is not None:
+        if workspace_id is not None and self._workspace_provider is None:
             raise NotImplementedError(
                 "resolving a WorkspaceId to a path needs the workspace provider; "
                 "until then this runner works in its configured directory"
@@ -381,9 +386,14 @@ class CodexAgentRunner:
                 "or point the runner at the binary"
             )
 
+        working_directory = self._working_directory
+        if workspace_id is not None:
+            assert self._workspace_provider is not None
+            working_directory = await self._workspace_provider.root_path(workspace_id)
+
         prompt = render_prompt(profile, messages)
         process = await asyncio.create_subprocess_exec(
-            *self.command_line(profile),
+            *self.command_line(profile, working_directory),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

@@ -78,6 +78,8 @@ class AgentSession:
         profiles: Mapping[AgentId, AgentProfile] = BUILT_IN,
         tools: Mapping[str, ToolSpec] = NO_TOOLS,
         runners: Mapping[str, AgentRunner] | None = None,
+        workspace_repository: str | None = None,
+        workspace_base_ref: str = "HEAD",
     ) -> None:
         """`runners` lets one process offer a choice of agent runner.
 
@@ -93,6 +95,8 @@ class AgentSession:
         self._capabilities = capabilities
         self._profiles = profiles
         self._tools = tools
+        self._workspace_repository = workspace_repository
+        self._workspace_base_ref = workspace_base_ref
         self._runners: Mapping[str, AgentRunner] = (
             dict(runners) if runners else {DEFAULT_RUNNER: capabilities.agent_runner}
         )
@@ -114,7 +118,19 @@ class AgentSession:
         """Begin a conversation with an agent. Fails before touching the store
         if the profile is unknown."""
         profile_for(agent_id, self._profiles)
-        return await self._capabilities.state_store.create_instance(agent_id, task_id)
+        if self._workspace_repository is None:
+            return await self._capabilities.state_store.create_instance(agent_id, task_id)
+
+        workspace = await self._capabilities.workspace_provider.provision(
+            self._workspace_repository, self._workspace_base_ref
+        )
+        try:
+            return await self._capabilities.state_store.create_instance(
+                agent_id, task_id, workspace.workspace_id
+            )
+        except Exception:
+            await self._capabilities.workspace_provider.dispose(workspace.workspace_id)
+            raise
 
     async def instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         return await self._capabilities.state_store.list_instances(agent_id)
@@ -124,6 +140,15 @@ class AgentSession:
         if conversation is None:
             raise UnknownInstanceError(instance_id)
         return conversation.messages
+
+    async def workspace_root(self, instance_id: AgentInstanceId) -> str | None:
+        """Return this conversation's checkout directory, when it has one."""
+        instance = await self._capabilities.state_store.load_instance(instance_id)
+        if instance is None:
+            raise UnknownInstanceError(instance_id)
+        if instance.workspace_id is None:
+            return None
+        return await self._capabilities.workspace_provider.root_path(instance.workspace_id)
 
     async def say(
         self,

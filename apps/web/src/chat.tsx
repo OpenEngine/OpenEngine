@@ -8,6 +8,9 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
+import { useEffect, useState } from "react";
+
+import { api, type ApiThread } from "./api";
 
 function TextParts() {
   return (
@@ -84,6 +87,35 @@ function Composer() {
   );
 }
 
+function WorkspaceTagline() {
+  const custom = useAuiState((state) => state.threadListItem.custom) as
+    | { workspaceRoot?: string }
+    | undefined;
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const [fetchedRoot, setFetchedRoot] = useState<string>();
+
+  useEffect(() => {
+    setFetchedRoot(undefined);
+    if (custom?.workspaceRoot || !remoteId) return;
+    let current = true;
+    void api<ApiThread>(`/api/threads/${remoteId}`).then((thread) => {
+      if (current) setFetchedRoot(thread.workspaceRoot);
+    });
+    return () => {
+      current = false;
+    };
+  }, [custom?.workspaceRoot, remoteId]);
+
+  const workspaceRoot = custom?.workspaceRoot ?? fetchedRoot;
+  if (!workspaceRoot) return null;
+
+  return (
+    <p className="workspace-tagline">
+      Checkout worktree <code>cd {workspaceRoot}</code>
+    </p>
+  );
+}
+
 export function ChatThread() {
   return (
     <ThreadPrimitive.Root className="thread">
@@ -91,7 +123,8 @@ export function ChatThread() {
         <div className="welcome">
           <span className="eyebrow">ENGINE / CHAT</span>
           <h1>Start a conversation.</h1>
-          <p>Each chat has its own agent history and can keep running while you open another.</p>
+          <p>Each chat has its own agent history and Git worktree.</p>
+          <WorkspaceTagline />
         </div>
         <ThreadPrimitive.Messages>
           {({ message }) =>
@@ -103,7 +136,7 @@ export function ChatThread() {
             Jump to latest
           </ThreadPrimitive.ScrollToBottom>
           <Composer />
-          <p className="composer-note">Runs are read-only. Chats live until this server stops.</p>
+          <p className="composer-note">Runs are read-only in this chat's isolated worktree.</p>
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -112,7 +145,7 @@ export function ChatThread() {
 
 function ThreadItemMeta() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
-    | { agentId?: string; runner?: string }
+    | { agentId?: string; runner?: string; workspaceRoot?: string }
     | undefined;
   const isRunning = useAuiState((state) => state.threadListItem.isRunning);
   return (
