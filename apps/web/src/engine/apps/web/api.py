@@ -222,15 +222,30 @@ class ThreadService:
         """The latest run, including a just-finished run needed by a racing resume."""
         return self._active_runs.get(instance_id)
 
-    async def generate_title(self, instance_id: AgentInstanceId) -> str:
+    async def generate_title(
+        self,
+        instance_id: AgentInstanceId,
+        opening_text: str | None = None,
+        runner: str | None = None,
+    ) -> str:
         """Ask the thread's agent for a title without changing its transcript."""
         thread = await self._require(instance_id)
+        if thread.title != "New chat":
+            return thread.title
+        selected_runner = runner or thread.runner
+        if selected_runner not in self.session.runners:
+            raise ValueError(f"unknown runner {selected_runner!r}")
         async with self._locks[instance_id]:
+            if thread.title != "New chat":
+                return thread.title
             history = await self.session.history(instance_id)
-            turn = await self._runners[thread.runner].run_turn(
+            title_context = (
+                (*history, Message.user(opening_text)) if opening_text else history
+            )
+            turn = await self._runners[selected_runner].run_turn(
                 AgentRunId(f"ar-{uuid4().hex[:12]}"),
                 self.session.profiles[thread.agent_id],
-                (*history, Message.user(_TITLE_PROMPT)),
+                (*title_context, Message.user(_TITLE_PROMPT)),
             )
         title = _clean_title(turn.message.content)
         if title:
@@ -362,7 +377,13 @@ def create_app(
         instance_id = _thread_id(request)
         if await service.get(instance_id) is None:
             return _error("thread not found", 404)
-        title = await service.generate_title(instance_id)
+        body = await _json_body(request)
+        opening_text = str(body["text"]).strip() if body.get("text") else None
+        runner = str(body["runner"]) if body.get("runner") else None
+        try:
+            title = await service.generate_title(instance_id, opening_text, runner)
+        except ValueError as error:
+            return _error(str(error), 400)
         return JSONResponse({"title": title})
 
     async def run_thread(request: Request) -> Response:

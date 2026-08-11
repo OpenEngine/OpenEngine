@@ -141,6 +141,14 @@ export function EngineRuntimeProvider({
         const text = lastUser ? messageText(lastUser) : "";
         if (!text) throw new Error("Cannot send an empty message.");
 
+        // assistant-ui normally generates this after runEnd; doing it here
+        // makes the title the first model turn for a new conversation.
+        await api(`/api/threads/${threadId}/title`, {
+          method: "POST",
+          body: JSON.stringify({ text, runner: defaultsRef.current.runner }),
+          signal: abortSignal,
+        });
+
         const response = await fetch(`/api/threads/${threadId}/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

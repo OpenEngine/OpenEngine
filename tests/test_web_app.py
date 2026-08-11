@@ -213,8 +213,8 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
     ]
 
 
-def test_agent_names_chat_without_changing_conversation() -> None:
-    runner = ConcurrentRunner(("The answer.", '"SQLite Conversation Persistence"'))
+def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
+    runner = ConcurrentRunner(('"SQLite Conversation Persistence"', "The answer."))
     app = create_app(_session(runner), {"test": runner})
 
     async def scenario():
@@ -225,24 +225,42 @@ def test_agent_names_chat_without_changing_conversation() -> None:
                 json={"agentId": "coder", "runner": "test"},
             )
             thread_id = created.json()["id"]
+            title = await client.post(
+                f"/api/threads/{thread_id}/title",
+                json={
+                    "text": "Why are chats missing after restart?",
+                    "runner": "test",
+                },
+            )
             await client.post(
                 f"/api/threads/{thread_id}/runs",
                 json={"text": "Why are chats missing after restart?"},
             )
-            title = await client.post(f"/api/threads/{thread_id}/title", json={})
+            repeated_title = await client.post(
+                f"/api/threads/{thread_id}/title", json={}
+            )
             messages = await client.get(f"/api/threads/{thread_id}/messages")
-            return title, messages
+            return title, repeated_title, messages
 
-    title, messages = asyncio.run(scenario())
+    title, repeated_title, messages = asyncio.run(scenario())
 
     assert title.json() == {"title": "SQLite Conversation Persistence"}
-    assert runner.seen[-1][-1] == Message.user(
-        "Name this chat based on the conversation above. Reply with only a concise "
-        "title of at most eight words, with no quotes or ending punctuation."
+    assert repeated_title.json() == title.json()
+    assert runner.seen[0] == (
+        Message.user("Why are chats missing after restart?"),
+        Message.user(
+            "Name this chat based on the conversation above. Reply with only a concise "
+            "title of at most eight words, with no quotes or ending punctuation."
+        ),
     )
-    assert [message["role"] for message in messages.json()["messages"]] == [
-        "user",
-        "assistant",
+    assert runner.seen[1] == (Message.user("Why are chats missing after restart?"),)
+    assert len(runner.seen) == 2
+    assert [
+        (message["role"], message["content"][0]["text"])
+        for message in messages.json()["messages"]
+    ] == [
+        ("user", "Why are chats missing after restart?"),
+        ("assistant", "The answer."),
     ]
 
 
