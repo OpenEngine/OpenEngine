@@ -1,115 +1,199 @@
-"""The Streamlit script runs.
+"""The assistant-ui server surface and its multi-chat coordination."""
 
-Streamlit scripts fail at render time, not import time, so nothing else in this
-suite would notice `app.py` raising -- a bad `st.` call, a page function with the
-wrong signature, a composition that blows up on construction. `AppTest` executes
-the script the way the server does and re-raises what it caught.
+import asyncio
+from collections.abc import Sequence
 
-No chat message is sent here: submitting one would shell out to the real Codex
-CLI. What the turn itself does is covered in `test_agent_chat.py` against a
-scripted runner.
-"""
+import httpx
 
-import pytest
+from engine.adapters.state_store.memory import InMemoryStateStore
+from engine.apps.web.api import ThreadService, create_app
+from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolCall
+from engine.ports import AgentTurn
+from engine.runtime import AgentSession, Capabilities
 
-pytest.importorskip("streamlit", reason="the web app is an optional workspace member")
-
-from pathlib import Path  # noqa: E402
-
-from streamlit.testing.v1 import AppTest  # noqa: E402
-
-APP = Path(__file__).resolve().parent.parent / "apps/web/src/engine/apps/web/app.py"
-
-#: Generous: the script composes adapters and starts a conversation, and CI
-#: machines are slow. It never calls a model.
-TIMEOUT_SECONDS = 60
+CODER = AgentId("coder")
+PROFILES = {
+    CODER: AgentProfile(
+        agent_id=CODER,
+        instructions="Be terse.",
+        description="Reads code.",
+    )
+}
 
 
-def _run(page: str | None = None) -> AppTest:
-    app = AppTest.from_file(str(APP), default_timeout=TIMEOUT_SECONDS).run()
-    if page is not None:
-        app.sidebar.radio[0].set_value(page).run()
-    return app
+class ConcurrentRunner:
+    """A controllably slow runner that records how much work overlaps."""
+
+    def __init__(self, replies: Sequence[str] = ("ok",)) -> None:
+        self.replies = list(replies)
+        self.seen: list[tuple[Message, ...]] = []
+        self.active = 0
+        self.most_active = 0
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.seen.append(tuple(messages))
+        self.active += 1
+        self.most_active = max(self.most_active, self.active)
+        await asyncio.sleep(0.02)
+        self.active -= 1
+        reply = self.replies.pop(0) if self.replies else "ok"
+        return AgentTurn(Message.assistant(reply))
+
+    async def cancel(self, agent_run_id: AgentRunId) -> None:
+        pass
 
 
-def test_the_script_renders() -> None:
-    app = _run()
-    assert not app.exception
+def _session(runner: ConcurrentRunner) -> AgentSession:
+    unused = object()
+    return AgentSession(
+        Capabilities(
+            workflow_runtime=unused,
+            source_control=unused,
+            agent_runner=runner,
+            communications=unused,
+            workspace_provider=unused,
+            state_store=InMemoryStateStore(),
+        ),
+        profiles=PROFILES,
+        runners={"test": runner},
+    )
 
 
-def test_chat_is_the_landing_page_and_starts_a_conversation() -> None:
-    app = _run()
+def test_different_chats_can_run_at_the_same_time() -> None:
+    runner = ConcurrentRunner(("one", "two"))
+    service = ThreadService(_session(runner))
 
-    assert app.title[0].value == "Chat"
-    assert app.chat_input, "there is nowhere to type"
-    assert app.session_state["instances"], "no agent instance was started"
+    async def scenario() -> None:
+        first = await service.create(CODER, "test")
+        second = await service.create(CODER, "test")
+        await asyncio.gather(
+            service.say(first.instance_id, "first", None, asyncio.Queue()),
+            service.say(second.instance_id, "second", None, asyncio.Queue()),
+        )
 
+    asyncio.run(scenario())
 
-def test_every_agent_can_be_chosen() -> None:
-    """`options` comes back formatted, so compare the ids the labels start with."""
-    app = _run()
-    labels = list(app.selectbox[0].options)
-    assert {label.split(" — ")[0] for label in labels} == {"coder", "foreman"}
-
-    app.selectbox[0].set_value("foreman").run()
-
-    assert not app.exception
-    assert "foreman" in app.session_state["instances"]
+    assert runner.most_active == 2
 
 
-def test_a_runner_can_be_chosen() -> None:
-    app = _run()
+def test_one_chat_serializes_its_own_turns() -> None:
+    runner = ConcurrentRunner(("one", "two"))
+    service = ThreadService(_session(runner))
 
-    assert list(app.selectbox[1].options) == ["codex", "claude"]
-    assert app.selectbox[1].value == "codex", "the first wired runner is the default"
+    async def scenario() -> tuple[Message, ...]:
+        thread = await service.create(CODER, "test")
+        await asyncio.gather(
+            service.say(thread.instance_id, "first", None, asyncio.Queue()),
+            service.say(thread.instance_id, "second", None, asyncio.Queue()),
+        )
+        return await service.history(thread.instance_id)
 
-    app.selectbox[1].set_value("claude").run()
+    history = asyncio.run(scenario())
 
-    assert not app.exception
-
-
-@pytest.mark.parametrize("page", ["Runs", "Request a run", "Inbox", "Wiring"])
-def test_the_other_pages_render(page: str) -> None:
-    app = _run(page)
-
-    assert not app.exception
-    assert app.title[0].value == page
-
-
-def test_the_wiring_page_reports_what_was_composed() -> None:
-    app = _run("Wiring")
-
-    wired = app.dataframe[0].value
-    assert dict(zip(wired["capability"], wired["implementation"])) == {
-        "workflow_runtime": "TemporalWorkflowRuntime",
-        "source_control": "GitHubSourceControl",
-        "agent_runner": "CodexAgentRunner",
-        "communications": "BuzzCommunications",
-        "workspace_provider": "GitWorktreeWorkspaceProvider",
-        "state_store": "InMemoryStateStore",
-    }
+    assert runner.most_active == 1
+    assert [(message.role, message.content) for message in history] == [
+        (Role.USER, "first"),
+        (Role.ASSISTANT, "one"),
+        (Role.USER, "second"),
+        (Role.ASSISTANT, "two"),
+    ]
 
 
-def test_the_wiring_page_lists_the_runners_on_offer() -> None:
-    """One port, one implementation -- plus the choice the chat page exposes,
-    which is the composition root's to name."""
-    app = _run("Wiring")
+def test_http_api_creates_lists_and_streams_threads() -> None:
+    runner = ConcurrentRunner(("hello",))
+    app = create_app(_session(runner), {"test": runner})
 
-    runners = app.dataframe[1].value
-    assert dict(zip(runners["name"], runners["implementation"])) == {
-        "codex": "CodexAgentRunner",
-        "claude": "ClaudeCodeAgentRunner",
-    }
-    assert list(runners["default"]) == [True, False]
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            config = await client.get("/api/config")
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test"},
+            )
+            thread_id = created.json()["id"]
+            streamed = await client.post(
+                f"/api/threads/{thread_id}/runs",
+                json={"text": "hi", "runner": "test"},
+            )
+            messages = await client.get(f"/api/threads/{thread_id}/messages")
+        return config, created, streamed, messages
+
+    config, created, streamed, messages = asyncio.run(scenario())
+
+    assert config.status_code == 200
+    assert config.json()["defaultRunner"] == "test"
+    assert created.status_code == 201
+    assert streamed.status_code == 200
+    assert '"type":"done"' in streamed.text
+    assert [
+        (message["role"], message["content"][0]["text"])
+        for message in messages.json()["messages"]
+    ] == [
+        ("user", "hi"),
+        ("assistant", "hello"),
+    ]
 
 
-def test_demo_data_fills_the_run_pages() -> None:
-    """The toggle exists so the layout is reviewable before runs are recorded."""
-    app = _run("Runs")
-    assert app.info, "an unwired page should say so"
+def test_missing_frontend_has_an_actionable_response() -> None:
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
 
-    app.sidebar.toggle[0].set_value(True).run()
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/")
 
-    assert not app.exception
-    assert app.warning, "demo rows must be labelled as invented"
-    assert len(app.dataframe[0].value) == 4
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 503
+    assert "npm --prefix apps/web run build" in response.text
+
+
+def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
+    call = ToolCall(call_id="call-1", name="Read", arguments='{"path":"README.md"}')
+
+    class ToolRunner(ConcurrentRunner):
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            return AgentTurn(
+                Message.assistant("Found it."),
+                steps=(
+                    Message.assistant(tool_calls=(call,)),
+                    Message.tool_result(call.call_id, "engine"),
+                ),
+            )
+
+    runner = ToolRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test"},
+            )
+            thread_id = created.json()["id"]
+            await client.post(f"/api/threads/{thread_id}/runs", json={"text": "inspect"})
+            return (await client.get(f"/api/threads/{thread_id}/messages")).json()
+
+    content = asyncio.run(scenario())["messages"][1]["content"]
+
+    assert content == [
+        {
+            "type": "tool-call",
+            "toolCallId": "call-1",
+            "toolName": "Read",
+            "args": {"path": "README.md"},
+            "argsText": '{"path":"README.md"}',
+            "result": "engine",
+        },
+        {"type": "text", "text": "Found it."},
+    ]

@@ -9,3 +9,5 @@ build/
 .ruff_cache/
 .mypy_cache/
 .DS_Store
+node_modules/
+*.tsbuildinfo

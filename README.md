@@ -151,15 +151,15 @@ optional context, not a mode.
 
 The caller in practice is `engine.runtime.AgentSession`: it loads the
 conversation, resolves the profile's grants to tools, runs the turn, and stores
-both messages. Every chat surface goes through it, so the Streamlit page and the
-control server cannot drift into two different notions of what a conversation
-is. The profiles themselves are values in `engine.runtime.profiles` — adding an
+both messages. Every chat surface goes through it, so the web API and future
+ingress cannot drift into two different notions of what a conversation is. The
+profiles themselves are values in `engine.runtime.profiles` — adding an
 agent is adding an entry there, and nothing about it is special-cased anywhere
 else. A profile never names its runner: `Capabilities.agent_runner` holds the
 one a port is entitled to, and that is what anything non-interactive uses.
 
 A process may additionally offer a *choice* of runner — `AgentSession` takes a
-name-to-runner mapping, and the chat page turns it into a dropdown. The names
+name-to-runner mapping, and the assistant-ui client turns it into a dropdown. The names
 mean nothing below `apps/`, exactly like tool grants; binding "codex" and
 "claude" to implementations happens in one function in the composition root.
 Switching mid-conversation is allowed and is the point: we hold the transcript,
@@ -213,10 +213,12 @@ separate rather than shared because the processes are expected to diverge.
 
 ## Getting started
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
+Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
 ```bash
-uv sync            # install all 15 workspace packages, editable
+uv sync            # install all 16 workspace packages, editable
+npm --prefix apps/web install
+npm --prefix apps/web run build
 uv run pytest      # run the suite, including the boundary checks
 ```
 
@@ -231,14 +233,17 @@ uv run engine-web --check
 ### Chatting with an agent
 
 ```bash
-uv run engine-web            # http://localhost:8501
+uv run engine-web            # http://localhost:8000
 ```
 
-The **Chat** page is the one part of the system that works end to end. Pick an
-agent and a runner, type, and the reply comes from a real model:
+The assistant-ui client is the one part of the system that works end to end.
+Pick an agent and a runner, open as many conversations as you need, and the
+replies come from real models. A running conversation stays active when you
+switch to another, so Codex and Claude turns can overlap across chats:
 
 ```text
-you        ->  Streamlit page
+you        ->  assistant-ui thread
+               engine web API             stream and coordinate concurrent chats
                engine.runtime.AgentSession    load history, record the run
                engine.ports.AgentRunner       one turn
                engine.adapters.agent_runner.codex        codex exec --json
@@ -252,7 +257,7 @@ reports it plainly if the one you picked is missing. Both run read-only by
 default — Codex sandboxed, Claude Code restricted to `Read`/`Glob`/`Grep` — so an
 agent you are talking to cannot edit the tree as a side effect of answering.
 
-The transcript records what the agent *did*, not just what it concluded — the
+The engine transcript records what the agent *did*, not just what it concluded — the
 commands it ran and their output are stored beside its messages, and the chat
 page draws them as collapsible blocks. That is what lets a stateless runner stay
 coherent: asked a follow-up, the agent reads the earlier command's output back
@@ -362,10 +367,12 @@ methods that make conversations ours.
 **Chat works end to end.** Two of the six capabilities are real: two agent
 runners drive the Codex and Claude Code CLIs and parse their event streams, and
 the in-memory state store holds instances and conversations.
-`engine.runtime.AgentSession` joins them, `apps/web` draws them, and two agents
-ship — `foreman` and `coder`, both just values in `engine.runtime.profiles`. A
-conversation records the commands an agent ran and their output, and either
-runner can continue one the other started.
+`engine.runtime.AgentSession` joins them, the assistant-ui client in `apps/web`
+draws them, and two agents ship — `foreman` and `coder`, both just values in
+`engine.runtime.profiles`. A conversation records the commands an agent ran and
+their output, and either runner can continue one the other started. Different
+conversations may run concurrently; turns within one conversation are
+serialized so they cannot race against stale history.
 
 Not yet implemented, by design — the remaining adapter methods raise
 `NotImplementedError` naming the ticket that fills them in:

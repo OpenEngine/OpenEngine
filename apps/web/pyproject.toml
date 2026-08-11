@@ -1,13 +1,12 @@
 [project]
 name = "engine-web"
 version = "0.0.0"
-description = "Web control interface: a Streamlit view of the engine, and a chat with its agents."
+description = "Web control interface: an assistant-ui client for chatting with engine agents."
 requires-python = ">=3.11"
 # Composition root: the only layer allowed to depend on concrete adapters.
-# Streamlit is a UI dependency and stays here -- nothing below apps/ knows the
-# interface exists, let alone which framework draws it.
+# The ASGI server is the Python half of the assistant-ui application. The React
+# dependencies live in this directory's package.json.
 dependencies = [
-    "engine-core",
     "engine-runtime",
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second. This app takes the in-memory state store
@@ -22,7 +21,8 @@ dependencies = [
     "engine-adapter-state-store-memory",
     "engine-adapter-workflow-runtime-temporal",
     "engine-adapter-workspace-provider-git-worktree",
-    "streamlit>=1.40",
+    "starlette>=0.52",
+    "uvicorn>=0.35",
 ]
 
 [project.scripts]
@@ -36,7 +36,6 @@ build-backend = "hatchling.build"
 packages = ["src/engine"]
 
 [tool.uv.sources]
-engine-core = { workspace = true }
 engine-runtime = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }
 engine-adapter-agent-runner-claude-code = { workspace = true }
