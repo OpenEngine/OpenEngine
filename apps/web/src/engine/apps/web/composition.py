@@ -7,8 +7,8 @@ three deployables that should be free to move independently.
 
 Two of the six capabilities here are real. `agent_runner` shells out to a coding
 CLI and `state_store` keeps conversations in a dict, which between them are
-exactly what a chat needs. The other four are still placeholders whose methods
-raise, which is why the pages that would use them say so on screen.
+exactly what a chat needs. The other four remain wired for the composition
+report but are not exposed by the chat API.
 
 `Capabilities` holds one runner because a port has one implementation, and that
 is the one anything non-interactive uses. The interface additionally offers a
@@ -31,7 +31,6 @@ from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
-from engine.apps.web.readmodel import EmptyReadModel, ReadModel
 from engine.ports import AgentRunner
 from engine.runtime import AgentSession, Capabilities
 
@@ -40,15 +39,15 @@ from engine.runtime import AgentSession, Capabilities
 class Settings:
     """Everything the interface needs from the environment.
 
-    `host` and `port` are handed to Streamlit's own server by `__main__`; the
-    rest are adapter arguments. Loading them from the environment lands with the
-    deployment ticket, along with the other two roots.
+    `host` and `port` are handed to Uvicorn by `__main__`; the rest are adapter
+    arguments. Loading them from the environment lands with the deployment
+    ticket, along with the other two roots.
 
-    Frozen and hashable so Streamlit can cache the wiring on it.
+    Frozen so one immutable settings value can be shared by the server wiring.
     """
 
     host: str = "localhost"
-    port: int = 8501
+    port: int = 8000
     codex_binary: str = "codex"
     codex_sandbox: str = "read-only"
     """Chat should not be able to edit the tree as a side effect of answering."""
@@ -128,18 +127,9 @@ def build_session(capabilities: Capabilities, runners: Mapping[str, AgentRunner]
     return AgentSession(capabilities, runners=runners)
 
 
-def build_read_model(settings: Settings) -> ReadModel:
-    """Where the run pages get their data. Unwired: there are no runs yet.
-
-    The one line that changes when runs start being recorded.
-    """
-    return EmptyReadModel()
-
-
 __all__ = [
     "Settings",
     "build_capabilities",
-    "build_read_model",
     "build_runners",
     "build_session",
 ]

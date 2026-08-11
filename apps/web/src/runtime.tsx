@@ -1,0 +1,200 @@
+import {
+  AssistantRuntimeProvider,
+  RuntimeAdapterProvider,
+  fromThreadMessageLike,
+  useAui,
+  useLocalRuntime,
+  useRemoteThreadListRuntime,
+  type ChatModelAdapter,
+  type RemoteThreadListAdapter,
+  type ThreadHistoryAdapter,
+  type ThreadAssistantMessagePart,
+  type ThreadMessage,
+} from "@assistant-ui/react";
+import { createAssistantStream } from "assistant-stream";
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useRef,
+  type PropsWithChildren,
+} from "react";
+
+import { api, messageText, type ApiMessage, type ApiThread } from "./api";
+
+type NewChatDefaults = {
+  agentId: string;
+  runner: string;
+};
+
+type ThreadInitializer = {
+  current: (() => Promise<{ remoteId: string }>) | null;
+};
+
+const DefaultsContext = createContext<NewChatDefaults | null>(null);
+
+function ThreadInitializationBridge({ initializer }: { initializer: ThreadInitializer }) {
+  const aui = useAui();
+  initializer.current = () => aui.threadListItem.initialize();
+  return null;
+}
+
+function remoteMetadata(thread: ApiThread) {
+  return {
+    remoteId: thread.id,
+    status: thread.archived ? ("archived" as const) : ("regular" as const),
+    title: thread.title,
+    custom: { agentId: thread.agentId, runner: thread.runner },
+  };
+}
+
+function HistoryProvider({ children }: PropsWithChildren) {
+  const aui = useAui();
+  const history = useMemo<ThreadHistoryAdapter>(
+    () => ({
+      async load() {
+        const { remoteId } = aui.threadListItem.getState();
+        if (!remoteId) return { messages: [] };
+        const rows = await api<{ messages: ApiMessage[] }>(
+          `/api/threads/${remoteId}/messages`,
+        );
+        let parentId: string | null = null;
+        return {
+          messages: rows.messages.map((row) => {
+            const message = fromThreadMessageLike(
+              { id: row.id, role: row.role, content: row.content },
+              row.id,
+              { type: "complete", reason: "stop" },
+            );
+            const item = { parentId, message };
+            parentId = row.id;
+            return item;
+          }),
+        };
+      },
+      // AgentSession.say persists both sides of a turn atomically. The history
+      // adapter is load-only so assistant-ui does not duplicate those writes.
+      async append() {},
+    }),
+    [aui],
+  );
+  return <RuntimeAdapterProvider adapters={{ history }}>{children}</RuntimeAdapterProvider>;
+}
+
+export function EngineRuntimeProvider({
+  defaults,
+  children,
+}: PropsWithChildren<{ defaults: NewChatDefaults }>) {
+  const defaultsRef = useRef(defaults);
+  const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
+  defaultsRef.current = defaults;
+
+  const modelAdapter = useMemo<ChatModelAdapter>(
+    () => ({
+      async *run({ messages, abortSignal, unstable_threadId }) {
+        const threadId =
+          unstable_threadId ?? (await threadInitializerRef.current?.())?.remoteId;
+        if (!threadId) throw new Error("The chat could not be initialized.");
+        const lastUser = [...messages].reverse().find((message) => message.role === "user");
+        const text = lastUser ? messageText(lastUser) : "";
+        if (!text) throw new Error("Cannot send an empty message.");
+
+        const response = await fetch(`/api/threads/${threadId}/runs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, runner: defaultsRef.current.runner }),
+          signal: abortSignal,
+        });
+        if (!response.ok || !response.body) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error ?? `${response.status} ${response.statusText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line) continue;
+            const event = JSON.parse(line) as
+              | { type: "content" | "done"; content: ThreadAssistantMessagePart[] }
+              | { type: "error"; error: string };
+            if (event.type === "error") throw new Error(event.error);
+            yield { content: event.content };
+          }
+          if (done) break;
+        }
+      },
+    }),
+    [],
+  );
+
+  const threadAdapter = useMemo<RemoteThreadListAdapter>(
+    () => ({
+      async list() {
+        const result = await api<{ threads: ApiThread[] }>("/api/threads");
+        return { threads: result.threads.map(remoteMetadata) };
+      },
+      async initialize() {
+        const thread = await api<ApiThread>("/api/threads", {
+          method: "POST",
+          body: JSON.stringify(defaultsRef.current),
+        });
+        return { remoteId: thread.id };
+      },
+      async rename(remoteId, title) {
+        await api(`/api/threads/${remoteId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title }),
+        });
+      },
+      async archive(remoteId) {
+        await api(`/api/threads/${remoteId}/archive`, { method: "POST" });
+      },
+      async unarchive(remoteId) {
+        await api(`/api/threads/${remoteId}/unarchive`, { method: "POST" });
+      },
+      async delete(remoteId) {
+        await api(`/api/threads/${remoteId}`, { method: "DELETE" });
+      },
+      async fetch(remoteId) {
+        return remoteMetadata(await api<ApiThread>(`/api/threads/${remoteId}`));
+      },
+      async generateTitle(remoteId, messages: readonly ThreadMessage[]) {
+        return createAssistantStream(async (controller) => {
+          const result = await api<{ title: string }>(`/api/threads/${remoteId}/title`, {
+            method: "POST",
+            body: JSON.stringify({ messages }),
+          });
+          controller.appendText(result.title);
+        });
+      },
+      unstable_Provider: HistoryProvider,
+    }),
+    [],
+  );
+
+  const runtime = useRemoteThreadListRuntime({
+    runtimeHook: () => useLocalRuntime(modelAdapter),
+    adapter: threadAdapter,
+  });
+
+  return (
+    <DefaultsContext.Provider value={defaults}>
+      <AssistantRuntimeProvider runtime={runtime}>
+        <ThreadInitializationBridge initializer={threadInitializerRef} />
+        {children}
+      </AssistantRuntimeProvider>
+    </DefaultsContext.Provider>
+  );
+}
+
+export function useNewChatDefaults() {
+  const defaults = useContext(DefaultsContext);
+  if (!defaults) throw new Error("useNewChatDefaults must be inside EngineRuntimeProvider");
+  return defaults;
+}
