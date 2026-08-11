@@ -6,7 +6,7 @@ the worker's is: these processes will diverge, and sharing now would couple
 three deployables that should be free to move independently.
 
 Two of the six capabilities here are real. `agent_runner` shells out to a coding
-CLI and `state_store` keeps conversations in a dict, which between them are
+CLI and `state_store` persists conversations in SQLite, which between them are
 exactly what a chat needs. The other four remain wired for the composition
 report but are not exposed by the chat API.
 
@@ -15,9 +15,8 @@ is the one anything non-interactive uses. The interface additionally offers a
 *choice* of runner, which is `build_runners` -- a name-to-implementation mapping
 of exactly the kind a composition root exists to own.
 
-The state store is the in-memory one rather than Postgres, and that is a choice
-with a cost worth stating: conversations die with the process. Swapping it is a
-one-line edit here, which is the point of the seam.
+The state store is SQLite rather than Postgres: conversations survive a process
+restart without requiring an external database service.
 """
 
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ from engine.adapters.agent_runner.claude_code import READ_ONLY_TOOLS, ClaudeCode
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
-from engine.adapters.state_store.memory import InMemoryStateStore
+from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 from engine.ports import AgentRunner
@@ -67,6 +66,7 @@ class Settings:
     buzz_base_url: str = ""
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
+    sqlite_path: str = "conversations.sqlite3"
 
 
 def build_capabilities(settings: Settings) -> Capabilities:
@@ -83,7 +83,7 @@ def build_capabilities(settings: Settings) -> Capabilities:
         ),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
         workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
-        state_store=InMemoryStateStore(),
+        state_store=SQLiteStateStore(settings.sqlite_path),
     )
 
 
@@ -117,8 +117,8 @@ def build_session(capabilities: Capabilities, runners: Mapping[str, AgentRunner]
     """Conversations, over the capabilities this process composed.
 
     Takes the capability set rather than settings so the interface and the chat
-    share one store -- two `build_capabilities` calls would give the Wiring page
-    a different dict from the one the conversation is in.
+    share one store -- two `build_capabilities` calls would open independent
+    connections rather than sharing the session's store object.
 
     A conversation may be continued by any of `runners`, including one that did
     not start it: we hold the transcript, so whichever answers next is handed

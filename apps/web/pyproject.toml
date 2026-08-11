@@ -9,16 +9,15 @@ requires-python = ">=3.11"
 dependencies = [
     "engine-runtime",
     # One adapter per capability, named <capability>-<vendor>: what is needed
-    # first, who provides it second. This app takes the in-memory state store
-    # rather than Postgres: chat needs a store that works today more than it
-    # needs one that survives a restart.
+    # first, who provides it second. SQLite gives chat durable conversations
+    # without requiring an external database service.
     # Two vendors under one capability: the chat page offers a choice between
     # them, and the composition root is the only thing that knows their names.
     "engine-adapter-agent-runner-codex",
     "engine-adapter-agent-runner-claude-code",
     "engine-adapter-communications-buzz",
     "engine-adapter-source-control-github",
-    "engine-adapter-state-store-memory",
+    "engine-adapter-state-store-sqlite",
     "engine-adapter-workflow-runtime-temporal",
     "engine-adapter-workspace-provider-git-worktree",
     "starlette>=0.52",
@@ -41,6 +40,6 @@ engine-adapter-agent-runner-codex = { workspace = true }
 engine-adapter-agent-runner-claude-code = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
 engine-adapter-source-control-github = { workspace = true }
-engine-adapter-state-store-memory = { workspace = true }
+engine-adapter-state-store-sqlite = { workspace = true }
 engine-adapter-workflow-runtime-temporal = { workspace = true }
 engine-adapter-workspace-provider-git-worktree = { workspace = true }

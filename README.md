@@ -248,7 +248,7 @@ you        ->  assistant-ui thread
                engine.ports.AgentRunner       one turn
                engine.adapters.agent_runner.codex        codex exec --json
                  …or.claude_code                         claude -p            <- the model
-               engine.adapters.state_store.memory   store the whole turn
+               engine.adapters.state_store.sqlite   store the whole turn
 ```
 
 It needs the [Codex CLI](https://developers.openai.com/codex/cli) or
@@ -271,7 +271,8 @@ had used, having executed nothing itself.
 
 Three limits worth knowing before you read anything into a conversation:
 
-- **Conversations die with the process.** The store is the in-memory one.
+- **Conversations are local to this checkout.** SQLite stores them in
+  `conversations.sqlite3` in the process working directory.
 - **The agent has no engine tools.** Both CLIs bring their own (they read files,
   run commands) and neither can be handed ours, so the foreman can discuss
   dispatching work but not dispatch it. See `CodexToolsUnsupportedError` and
@@ -366,7 +367,7 @@ methods that make conversations ours.
 
 **Chat works end to end.** Two of the six capabilities are real: two agent
 runners drive the Codex and Claude Code CLIs and parse their event streams, and
-the in-memory state store holds instances and conversations.
+the SQLite state store holds instances and conversations across restarts.
 `engine.runtime.AgentSession` joins them, the assistant-ui client in `apps/web`
 draws them, and two agents ship — `foreman` and `coder`, both just values in
 `engine.runtime.profiles`. A conversation records the commands an agent ran and
@@ -384,7 +385,6 @@ Not yet implemented, by design — the remaining adapter methods raise
 - No engine tools, so no profile grants any: the foreman can discuss dispatching
   work but cannot dispatch it, and `AgentSession` refuses to run a profile whose
   grants resolve to nothing rather than quietly dropping them.
-- No durable conversations — `apps/web` composes the in-memory store.
 - No workspace-aware agent runs: the Codex adapter refuses a `WorkspaceId` it
   has no provider to resolve.
 

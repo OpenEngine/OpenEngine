@@ -6,7 +6,9 @@ from collections.abc import Sequence
 import httpx
 
 from engine.adapters.state_store.memory import InMemoryStateStore
+from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
+from engine.apps.web.composition import Settings, build_capabilities
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolCall
 from engine.ports import AgentTurn
 from engine.runtime import AgentSession, Capabilities
@@ -19,6 +21,74 @@ PROFILES = {
         description="Reads code.",
     )
 }
+
+
+def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
+    database = tmp_path / "conversations.sqlite3"
+
+    capabilities = build_capabilities(Settings(sqlite_path=str(database)))
+
+    assert isinstance(capabilities.state_store, SQLiteStateStore)
+    assert database.exists()
+    capabilities.state_store.close()
+
+
+def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
+    database = tmp_path / "conversations.sqlite3"
+    runner = ConcurrentRunner(("persisted answer",))
+
+    first_capabilities = build_capabilities(Settings(sqlite_path=str(database)))
+    first_app = create_app(
+        AgentSession(first_capabilities, profiles=PROFILES, runners={"test": runner}),
+        {"test": runner},
+    )
+
+    async def first_process() -> str:
+        transport = httpx.ASGITransport(app=first_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "remember this"}
+            )
+            return thread_id
+
+    thread_id = asyncio.run(first_process())
+    first_capabilities.state_store.close()
+
+    second_capabilities = build_capabilities(Settings(sqlite_path=str(database)))
+    second_app = create_app(
+        AgentSession(second_capabilities, profiles=PROFILES, runners={"test": runner}),
+        {"test": runner},
+    )
+
+    async def second_process():
+        transport = httpx.ASGITransport(app=second_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            threads = await client.get("/api/threads")
+            messages = await client.get(f"/api/threads/{thread_id}/messages")
+            return threads, messages
+
+    try:
+        threads, messages = asyncio.run(second_process())
+    finally:
+        second_capabilities.state_store.close()
+
+    assert threads.json()["threads"] == [
+        {
+            "id": thread_id,
+            "title": "New chat",
+            "archived": False,
+            "agentId": "coder",
+            "runner": "test",
+        }
+    ]
+    assert [
+        (message["role"], message["content"][0]["text"])
+        for message in messages.json()["messages"]
+    ] == [("user", "remember this"), ("assistant", "persisted answer")]
 
 
 class ConcurrentRunner:
