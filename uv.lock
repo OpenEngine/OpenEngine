@@ -21,6 +21,7 @@ members = [
     "engine-adapter-source-control-github",
     "engine-adapter-state-store-memory",
     "engine-adapter-state-store-postgres",
+    "engine-adapter-state-store-sqlite",
     "engine-adapter-workflow-runtime-temporal",
     "engine-adapter-workspace-provider-git-worktree",
     "engine-control-server",
@@ -251,6 +252,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
+
+[[package]]
+name = "engine-adapter-state-store-sqlite"
+version = "0.0.0"
+source = { editable = "packages/adapters/state_store/sqlite" }
+dependencies = [
+    { name = "engine-ports" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "engine-ports", editable = "packages/ports" }]
 
 [[package]]
 name = "engine-adapter-workflow-runtime-temporal"
