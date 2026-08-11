@@ -135,6 +135,13 @@ class AgentSession:
     async def instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         return await self._capabilities.state_store.list_instances(agent_id)
 
+    async def set_title(self, instance_id: AgentInstanceId, title: str) -> None:
+        """Persist a conversation title without changing its transcript."""
+        instance = await self._capabilities.state_store.load_instance(instance_id)
+        if instance is None:
+            raise UnknownInstanceError(instance_id)
+        await self._capabilities.state_store.set_instance_title(instance_id, title)
+
     async def history(self, instance_id: AgentInstanceId) -> tuple[Message, ...]:
         conversation = await self._capabilities.state_store.load_conversation(instance_id)
         if conversation is None:

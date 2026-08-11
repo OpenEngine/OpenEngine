@@ -1,6 +1,8 @@
 """SQLite conversation persistence."""
 
 import asyncio
+from dataclasses import replace
+import sqlite3
 
 import pytest
 
@@ -23,6 +25,7 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     path = tmp_path / "conversations.sqlite3"
     first = SQLiteStateStore(path)
     instance = asyncio.run(first.create_instance(CODER))
+    asyncio.run(first.set_instance_title(instance.instance_id, "Durable title"))
     call = ToolCall(call_id="call-1", name="read", arguments='{"path":"README.md"}')
     asyncio.run(
         first.append_messages(
@@ -43,7 +46,7 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     finally:
         second.close()
 
-    assert loaded == instance
+    assert loaded == replace(instance, title="Durable title")
     assert conversation is not None
     assert [(message.role, message.content) for message in conversation.messages] == [
         (Role.USER, "what is here?"),
@@ -53,6 +56,41 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     assert conversation.messages[1].tool_calls == (call,)
     assert conversation.messages[2].tool_call_id == "call-1"
     assert len({message.message_id for message in conversation.messages}) == 3
+
+
+def test_existing_database_is_migrated_for_titles(tmp_path) -> None:
+    path = tmp_path / "conversations.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE agent_instances (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL UNIQUE,
+            agent_id TEXT NOT NULL,
+            conversation_id TEXT NOT NULL UNIQUE,
+            task_id TEXT,
+            workspace_id TEXT
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO agent_instances "
+        "(instance_id, agent_id, conversation_id) VALUES (?, ?, ?)",
+        ("agi-old", "coder", "conv-old"),
+    )
+    connection.commit()
+    connection.close()
+
+    store = SQLiteStateStore(path)
+    try:
+        loaded = asyncio.run(store.load_instance("agi-old"))
+        asyncio.run(store.set_instance_title("agi-old", "Migrated title"))
+        renamed = asyncio.run(store.load_instance("agi-old"))
+    finally:
+        store.close()
+
+    assert loaded is not None and loaded.title == ""
+    assert renamed is not None and renamed.title == "Migrated title"
 
 
 def test_instances_are_newest_first_and_filterable() -> None:

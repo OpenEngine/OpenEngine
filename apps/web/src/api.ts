@@ -36,6 +36,8 @@ export type ApiMessage = {
 export type ApiHistory = {
   messages: ApiMessage[];
   unstable_resume: boolean;
+  version: number;
+  runStatus: "idle" | "running" | "failed" | "cancelled";
 };
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

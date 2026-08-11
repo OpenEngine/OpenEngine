@@ -71,9 +71,9 @@ class AgentRunStatus(Enum):
 class AgentInstance:
     """A durable instance of an agent role.
 
-    Holds continuity: identity, conversation, and what the instance is attached
-    to. Interactive coding chats may have a workspace without a task; a coder
-    working ENG-42 has both.
+    Holds continuity: identity, conversation title, and what the instance is
+    attached to. Interactive coding chats may have a workspace without a task;
+    a coder working ENG-42 has both.
     """
 
     instance_id: AgentInstanceId
@@ -81,6 +81,8 @@ class AgentInstance:
     conversation_id: ConversationId
     task_id: TaskId | None = None
     workspace_id: WorkspaceId | None = None
+    title: str = ""
+    """Human-readable conversation title. Empty means it has not been named yet."""
 
 
 @dataclass(frozen=True, slots=True)

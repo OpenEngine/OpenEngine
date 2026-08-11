@@ -87,7 +87,7 @@ function Composer() {
   );
 }
 
-function WorkspaceTagline() {
+function useCurrentWorkspaceRoot() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | { workspaceRoot?: string }
     | undefined;
@@ -106,7 +106,10 @@ function WorkspaceTagline() {
     };
   }, [custom?.workspaceRoot, remoteId]);
 
-  const workspaceRoot = custom?.workspaceRoot ?? fetchedRoot;
+  return custom?.workspaceRoot ?? fetchedRoot;
+}
+
+function WorkspaceTagline({ workspaceRoot }: { workspaceRoot?: string }) {
   if (!workspaceRoot) return null;
 
   return (
@@ -117,6 +120,8 @@ function WorkspaceTagline() {
 }
 
 export function ChatThread() {
+  const workspaceRoot = useCurrentWorkspaceRoot();
+
   return (
     <ThreadPrimitive.Root className="thread">
       <ThreadPrimitive.Viewport className="thread-viewport">
@@ -124,7 +129,7 @@ export function ChatThread() {
           <span className="eyebrow">ENGINE / CHAT</span>
           <h1>Start a conversation.</h1>
           <p>Each chat has its own agent history and Git worktree.</p>
-          <WorkspaceTagline />
+          <WorkspaceTagline workspaceRoot={workspaceRoot} />
         </div>
         <ThreadPrimitive.Messages>
           {({ message }) =>
@@ -136,7 +141,14 @@ export function ChatThread() {
             Jump to latest
           </ThreadPrimitive.ScrollToBottom>
           <Composer />
-          <p className="composer-note">Runs are read-only in this chat's isolated worktree.</p>
+          <div className="thread-footer-meta">
+            <span>Runs are read-only in this chat's isolated worktree.</span>
+            {workspaceRoot && (
+              <span className="footer-workspace" title={workspaceRoot}>
+                Workspace <code>{workspaceRoot}</code>
+              </span>
+            )}
+          </div>
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>

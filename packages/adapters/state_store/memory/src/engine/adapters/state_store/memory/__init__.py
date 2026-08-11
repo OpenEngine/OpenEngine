@@ -14,6 +14,7 @@ Implements `engine.ports.StateStore`.
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 from itertools import count
 from threading import Lock
 from uuid import uuid4
@@ -105,6 +106,15 @@ class InMemoryStateStore:
         if agent_id is not None:
             instances = [i for i in instances if i.agent_id == agent_id]
         return tuple(reversed(instances))  # newest first
+
+    async def set_instance_title(
+        self, instance_id: AgentInstanceId, title: str
+    ) -> None:
+        with self._lock:
+            instance = self._instances.get(instance_id)
+            if instance is None:
+                raise KeyError(f"no agent instance {instance_id!r}")
+            self._instances[instance_id] = replace(instance, title=title)
 
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         with self._lock:

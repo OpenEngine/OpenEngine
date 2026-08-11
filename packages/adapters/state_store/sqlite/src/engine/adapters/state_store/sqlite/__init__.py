@@ -49,7 +49,8 @@ class SQLiteStateStore:
                     agent_id TEXT NOT NULL,
                     conversation_id TEXT NOT NULL UNIQUE,
                     task_id TEXT,
-                    workspace_id TEXT
+                    workspace_id TEXT,
+                    title TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -71,6 +72,17 @@ class SQLiteStateStore:
                 );
                 """
             )
+            columns = {
+                row["name"]
+                for row in self._connection.execute(
+                    "PRAGMA table_info(agent_instances)"
+                ).fetchall()
+            }
+            if "title" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_instances "
+                    "ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+                )
 
     # Run state and event persistence are outside this conversation adapter's
     # scope, but the methods remain present so it has the StateStore shape.
@@ -120,7 +132,7 @@ class SQLiteStateStore:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT instance_id, agent_id, conversation_id, task_id, workspace_id
+                SELECT instance_id, agent_id, conversation_id, task_id, workspace_id, title
                 FROM agent_instances WHERE instance_id = ?
                 """,
                 (instance_id,),
@@ -129,7 +141,7 @@ class SQLiteStateStore:
 
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         query = """
-            SELECT instance_id, agent_id, conversation_id, task_id, workspace_id
+            SELECT instance_id, agent_id, conversation_id, task_id, workspace_id, title
             FROM agent_instances
         """
         parameters: tuple[str, ...] = ()
@@ -140,6 +152,17 @@ class SQLiteStateStore:
         with self._lock:
             rows = self._connection.execute(query, parameters).fetchall()
         return tuple(_instance_from_row(row) for row in rows)
+
+    async def set_instance_title(
+        self, instance_id: AgentInstanceId, title: str
+    ) -> None:
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "UPDATE agent_instances SET title = ? WHERE instance_id = ?",
+                (title, instance_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"no agent instance {instance_id!r}")
 
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         with self._lock:
@@ -258,6 +281,7 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
         workspace_id=(
             WorkspaceId(row["workspace_id"]) if row["workspace_id"] is not None else None
         ),
+        title=row["title"],
     )
 
 
