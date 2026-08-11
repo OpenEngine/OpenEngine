@@ -1,5 +1,8 @@
 # engine
 
+OpenEngine is your SDLC engine.
+Changes -> Pool of Reviewers -> Reranking -> Impact Radius Analysis -> System Diagram -> Safe change 
+
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
