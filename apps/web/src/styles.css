@@ -68,7 +68,9 @@ button { color: inherit; }
 .composer-button { height: 40px; padding: 0 16px; color: #1e261e; background: #d7f36d; border: 0; border-radius: 9px; font-weight: 700; cursor: pointer; }
 .composer-button:disabled { cursor: default; opacity: .4; }
 .composer-cancel { color: #5b6259; background: #eceae3; }
-.composer-note { margin: 7px 4px 0; color: #8c9189; font: 400 9px/1.4 ui-monospace, monospace; text-align: center; text-transform: uppercase; letter-spacing: .06em; }
+.thread-footer-meta { display: flex; justify-content: space-between; gap: 12px; margin: 7px 4px 0; color: #8c9189; font: 400 9px/1.4 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; }
+.footer-workspace { min-width: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.footer-workspace code { color: #626a60; font: inherit; text-transform: none; letter-spacing: 0; }
 .scroll-button { display: block; margin: 0 auto 8px; padding: 6px 10px; color: #5a6258; background: #fff; border: 1px solid #dad7cf; border-radius: 99px; font-size: 11px; cursor: pointer; }
 .loading, .fatal { display: grid; min-height: 100vh; place-items: center; color: #5f675d; font: 500 13px/1.5 ui-monospace, monospace; }
 .fatal { color: #a63d31; }
@@ -86,4 +88,6 @@ button { color: inherit; }
   .chat-header > div { display: none; }
   .welcome { padding-top: 48px; }
   .thread-footer { padding-inline: 12px; }
+  .thread-footer-meta { display: grid; justify-content: center; text-align: center; }
+  .footer-workspace { text-align: center; }
 }
