@@ -1,6 +1,7 @@
 """The assistant-ui server surface and its multi-chat coordination."""
 
 import asyncio
+import json
 from collections.abc import Sequence
 
 import httpx
@@ -299,4 +300,72 @@ def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
             "result": "engine",
         },
         {"type": "text", "text": "Found it."},
+    ]
+
+
+def test_active_run_survives_stream_disconnect_and_replays_progress() -> None:
+    call = ToolCall(call_id="call-1", name="Read", arguments='{"path":"README.md"}')
+
+    class RefreshRunner(ConcurrentRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run_turn_streamed(
+            self, agent_run_id, profile, messages, on_message, tools=(), workspace_id=None
+        ) -> AgentTurn:
+            tool_call = Message.assistant(tool_calls=(call,))
+            tool_result = Message.tool_result(call.call_id, "engine")
+            answer = Message.assistant("Found it.")
+            on_message(tool_call)
+            self.started.set()
+            await self.release.wait()
+            on_message(tool_result)
+            on_message(answer)
+            return AgentTurn(answer, steps=(tool_call, tool_result))
+
+    runner = RefreshRunner()
+    service = ThreadService(_session(runner), {"test": runner})
+
+    async def scenario():
+        thread = await service.create(CODER, "test")
+        run = await service.start_run(thread.instance_id, "inspect", None)
+        await runner.started.wait()
+
+        original_stream = run.stream()
+        first = json.loads((await anext(original_stream)).decode())
+        await original_stream.aclose()  # the browser refreshed
+
+        assert service.active_run(thread.instance_id) is run
+        active = service.active_run(thread.instance_id)
+        assert active is not None
+        resumed_stream = active.stream()
+        replayed = json.loads((await anext(resumed_stream)).decode())
+
+        runner.release.set()
+        events = [replayed]
+        async for event in resumed_stream:
+            events.append(json.loads(event.decode()))
+        return first, events, await service.history(thread.instance_id)
+
+    first, events, history = asyncio.run(scenario())
+
+    assert first["content"] == [
+        {
+            "type": "tool-call",
+            "toolCallId": "call-1",
+            "toolName": "Read",
+            "args": {"path": "README.md"},
+            "argsText": '{"path":"README.md"}',
+        }
+    ]
+    assert events[0] == first
+    assert events[-1]["type"] == "done"
+    assert events[-1]["content"][-1] == {"type": "text", "text": "Found it."}
+    assert [(message.role, message.content) for message in history] == [
+        (Role.USER, "inspect"),
+        (Role.ASSISTANT, ""),
+        (Role.TOOL, "engine"),
+        (Role.ASSISTANT, "Found it."),
     ]

@@ -20,7 +20,7 @@ import {
   type PropsWithChildren,
 } from "react";
 
-import { api, messageText, type ApiMessage, type ApiThread } from "./api";
+import { api, messageText, type ApiHistory, type ApiThread } from "./api";
 
 type NewChatDefaults = {
   agentId: string;
@@ -32,6 +32,7 @@ type ThreadInitializer = {
 };
 
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
+const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
 function ThreadInitializationBridge({ initializer }: { initializer: ThreadInitializer }) {
   const aui = useAui();
@@ -48,6 +49,33 @@ function remoteMetadata(thread: ApiThread) {
   };
 }
 
+async function* readRunResponse(response: Response) {
+  if (response.status === 204) return;
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error ?? `${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line) continue;
+      const event = JSON.parse(line) as
+        | { type: "content" | "done"; content: ThreadAssistantMessagePart[] }
+        | { type: "error"; error: string };
+      if (event.type === "error") throw new Error(event.error);
+      yield { content: event.content };
+    }
+    if (done) break;
+  }
+}
+
 function HistoryProvider({ children }: PropsWithChildren) {
   const aui = useAui();
   const history = useMemo<ThreadHistoryAdapter>(
@@ -55,11 +83,12 @@ function HistoryProvider({ children }: PropsWithChildren) {
       async load() {
         const { remoteId } = aui.threadListItem.getState();
         if (!remoteId) return { messages: [] };
-        const rows = await api<{ messages: ApiMessage[] }>(
+        const rows = await api<ApiHistory>(
           `/api/threads/${remoteId}/messages`,
         );
         let parentId: string | null = null;
         return {
+          unstable_resume: rows.unstable_resume,
           messages: rows.messages.map((row) => {
             const message = fromThreadMessageLike(
               { id: row.id, role: row.role, content: row.content },
@@ -71,6 +100,14 @@ function HistoryProvider({ children }: PropsWithChildren) {
             return item;
           }),
         };
+      },
+      async *resume({ abortSignal }) {
+        const { remoteId } = aui.threadListItem.getState();
+        if (!remoteId) return;
+        const response = await fetch(`/api/threads/${remoteId}/runs/current`, {
+          signal: abortSignal,
+        });
+        yield* readRunResponse(response);
       },
       // AgentSession.say persists both sides of a turn atomically. The history
       // adapter is load-only so assistant-ui does not duplicate those writes.
@@ -87,6 +124,11 @@ export function EngineRuntimeProvider({
 }: PropsWithChildren<{ defaults: NewChatDefaults }>) {
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
+  const initialThreadIdRef = useRef(
+    typeof window === "undefined"
+      ? undefined
+      : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined,
+  );
   defaultsRef.current = defaults;
 
   const modelAdapter = useMemo<ChatModelAdapter>(
@@ -105,29 +147,7 @@ export function EngineRuntimeProvider({
           body: JSON.stringify({ text, runner: defaultsRef.current.runner }),
           signal: abortSignal,
         });
-        if (!response.ok || !response.body) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.error ?? `${response.status} ${response.statusText}`);
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          buffer += decoder.decode(value, { stream: !done });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line) continue;
-            const event = JSON.parse(line) as
-              | { type: "content" | "done"; content: ThreadAssistantMessagePart[] }
-              | { type: "error"; error: string };
-            if (event.type === "error") throw new Error(event.error);
-            yield { content: event.content };
-          }
-          if (done) break;
-        }
+        yield* readRunResponse(response);
       },
     }),
     [],
@@ -181,6 +201,11 @@ export function EngineRuntimeProvider({
   const runtime = useRemoteThreadListRuntime({
     runtimeHook: () => useLocalRuntime(modelAdapter),
     adapter: threadAdapter,
+    initialThreadId: initialThreadIdRef.current,
+    onThreadIdChange(threadId) {
+      if (threadId) window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
+      else window.localStorage.removeItem(ACTIVE_THREAD_KEY);
+    },
   });
 
   return (

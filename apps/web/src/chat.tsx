@@ -5,6 +5,7 @@ import {
   ThreadListItemPrimitive,
   ThreadListPrimitive,
   ThreadPrimitive,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 
@@ -57,6 +58,8 @@ function AssistantMessage() {
 }
 
 function Composer() {
+  const aui = useAui();
+
   return (
     <ComposerPrimitive.Root className="composer">
       <ComposerPrimitive.Input
@@ -65,7 +68,15 @@ function Composer() {
         aria-label="Message the agent"
         rows={1}
       />
-      <ComposerPrimitive.Cancel className="composer-button composer-cancel">
+      <ComposerPrimitive.Cancel
+        className="composer-button composer-cancel"
+        onClick={() => {
+          const { remoteId } = aui.threadListItem.getState();
+          if (remoteId) {
+            void fetch(`/api/threads/${remoteId}/runs/current`, { method: "DELETE" });
+          }
+        }}
+      >
         Stop
       </ComposerPrimitive.Cancel>
       <ComposerPrimitive.Send className="composer-button">Send</ComposerPrimitive.Send>

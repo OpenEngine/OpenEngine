@@ -4,8 +4,8 @@ The engine owns conversations; assistant-ui owns their presentation.  This
 module translates between those two vocabularies and keeps the small amount of
 thread metadata that is UI-specific (title, archive status, selected runner).
 
-Runs are streamed as newline-delimited JSON.  Each request remains attached to
-its own ``AgentSession.say`` task, so several threads can be running at once.
+Runs are streamed as newline-delimited JSON.  Their tasks are owned by the
+service rather than by one response, so a refreshed browser can reconnect.
 A lock per thread prevents two turns from reading the same stale transcript.
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -39,6 +39,80 @@ class ChatThread:
     archived: bool = False
 
 
+class ActiveRun:
+    """One agent turn whose lifetime is independent of an HTTP connection.
+
+    Subscribers receive complete content snapshots, so a browser that refreshes
+    can reconnect without needing to know which individual events it missed.
+    """
+
+    def __init__(self) -> None:
+        self.content: list[dict[str, object]] = []
+        self.error: str | None = None
+        self.done = False
+        self._revision = 0
+        self._changed = asyncio.Condition()
+        self._task: asyncio.Task[None] | None = None
+
+    def start(self, say: Awaitable[str]) -> None:
+        self._task = asyncio.create_task(self._run(say))
+
+    async def cancel(self) -> None:
+        if self._task is None or self._task.done():
+            return
+        self._task.cancel()
+        await asyncio.gather(self._task, return_exceptions=True)
+
+    async def stream(self) -> AsyncIterator[bytes]:
+        revision = 0
+        while True:
+            async with self._changed:
+                await self._changed.wait_for(
+                    lambda: self._revision > revision or self.done
+                )
+                revision = self._revision
+                content = [dict(part) for part in self.content]
+                error = self.error
+                done = self.done
+
+            if error is not None:
+                yield _json_line({"type": "error", "error": error})
+                return
+            if done:
+                yield _json_line({"type": "done", "content": content})
+                return
+            yield _json_line({"type": "content", "content": content})
+
+    async def _run(self, say: Awaitable[str]) -> None:
+        try:
+            answer = await say
+            if answer and not any(
+                part.get("type") == "text" and part.get("text") == answer
+                for part in self.content
+            ):
+                self.content.append({"type": "text", "text": answer})
+            await self._finish()
+        except Exception as error:
+            self.error = f"{type(error).__name__}: {error}"
+            await self._finish()
+        except asyncio.CancelledError:
+            await self._finish()
+            raise
+
+    async def observe(self, message: Message) -> None:
+        if not _merge_message(self.content, message):
+            return
+        async with self._changed:
+            self._revision += 1
+            self._changed.notify_all()
+
+    async def _finish(self) -> None:
+        async with self._changed:
+            self.done = True
+            self._revision += 1
+            self._changed.notify_all()
+
+
 class ThreadService:
     """Coordinates assistant-ui threads over an ``AgentSession``."""
 
@@ -49,6 +123,7 @@ class ThreadService:
         self._runners = runners
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
+        self._active_runs: dict[AgentInstanceId, ActiveRun] = {}
         self._restored = False
         self._restore_lock = asyncio.Lock()
 
@@ -100,6 +175,52 @@ class ThreadService:
                 on_message=observed.put_nowait,
             )
         return turn.message.content
+
+    async def start_run(
+        self, instance_id: AgentInstanceId, text: str, runner: str | None
+    ) -> ActiveRun:
+        await self._require(instance_id)
+        initial_message_count = len(await self.session.history(instance_id))
+        current = self.active_run(instance_id)
+        if current is not None:
+            raise RuntimeError("this chat already has a run in progress")
+
+        observed: asyncio.Queue[Message] = asyncio.Queue()
+        run = ActiveRun()
+        self._active_runs[instance_id] = run
+
+        async def execute() -> str:
+            task = asyncio.create_task(self.say(instance_id, text, runner, observed))
+            try:
+                while not task.done() or not observed.empty():
+                    try:
+                        message = await asyncio.wait_for(observed.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+                    await run.observe(message)
+                return await task
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        run.start(execute())
+        # Ensure a refresh can load the submitted question before this POST
+        # starts returning streamed response bytes.
+        while (
+            len(await self.session.history(instance_id)) <= initial_message_count
+            and not run.done
+        ):
+            await asyncio.sleep(0)
+        return run
+
+    def active_run(self, instance_id: AgentInstanceId) -> ActiveRun | None:
+        run = self._active_runs.get(instance_id)
+        return run if run is not None and not run.done else None
+
+    def latest_run(self, instance_id: AgentInstanceId) -> ActiveRun | None:
+        """The latest run, including a just-finished run needed by a racing resume."""
+        return self._active_runs.get(instance_id)
 
     async def generate_title(self, instance_id: AgentInstanceId) -> str:
         """Ask the thread's agent for a title without changing its transcript."""
@@ -219,11 +340,23 @@ def create_app(
         return Response(status_code=204)
 
     async def messages(request: Request) -> JSONResponse:
+        instance_id = _thread_id(request)
         try:
-            history = await service.history(_thread_id(request))
+            history = await service.history(instance_id)
         except KeyError:
             return _error("thread not found", 404)
-        return JSONResponse({"messages": _messages_json(history)})
+        active = service.active_run(instance_id)
+        return JSONResponse(
+            {
+                "messages": _messages_json(history),
+                # A complete assistant transcript can become durable just
+                # before ActiveRun flips to done. In that window replaying it
+                # would duplicate the assistant message in the client.
+                "unstable_resume": active is not None
+                and bool(history)
+                and history[-1].role is Role.USER,
+            }
+        )
 
     async def title_thread(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
@@ -243,36 +376,31 @@ def create_app(
             return _error(str(error), 400)
         runner = str(body["runner"]) if body.get("runner") else None
 
-        async def stream() -> AsyncIterator[bytes]:
-            observed: asyncio.Queue[Message] = asyncio.Queue()
-            task = asyncio.create_task(service.say(instance_id, text, runner, observed))
-            content: list[dict[str, object]] = []
-            try:
-                while not task.done() or not observed.empty():
-                    try:
-                        message = await asyncio.wait_for(observed.get(), timeout=0.1)
-                    except asyncio.TimeoutError:
-                        continue
-                    if _merge_message(content, message):
-                        yield _json_line({"type": "content", "content": content})
+        try:
+            run = await service.start_run(instance_id, text, runner)
+        except RuntimeError as error:
+            return _error(str(error), 409)
+        return StreamingResponse(run.stream(), media_type="application/x-ndjson")
 
-                answer = await task
-                if answer and not any(
-                    part.get("type") == "text" and part.get("text") == answer
-                    for part in content
-                ):
-                    content.append({"type": "text", "text": answer})
-                yield _json_line({"type": "done", "content": content})
-            except asyncio.CancelledError:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                raise
-            except Exception as error:  # the stream reports model/CLI failures
-                yield _json_line(
-                    {"type": "error", "error": f"{type(error).__name__}: {error}"}
-                )
+    async def resume_run(request: Request) -> Response:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+        # Keep a completed snapshot available for the small race where history
+        # observed an active run immediately before it finished.
+        run = service.latest_run(instance_id)
+        if run is None:
+            return Response(status_code=204)
+        return StreamingResponse(run.stream(), media_type="application/x-ndjson")
 
-        return StreamingResponse(stream(), media_type="application/x-ndjson")
+    async def cancel_run(request: Request) -> Response:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+        run = service.active_run(instance_id)
+        if run is not None:
+            await run.cancel()
+        return Response(status_code=204)
 
     routes = [
         Route("/api/config", config),
@@ -296,6 +424,8 @@ def create_app(
         Route("/api/threads/{thread_id}/messages", messages),
         Route("/api/threads/{thread_id}/title", title_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}/runs", run_thread, methods=["POST"]),
+        Route("/api/threads/{thread_id}/runs/current", resume_run),
+        Route("/api/threads/{thread_id}/runs/current", cancel_run, methods=["DELETE"]),
     ]
     if static_directory is not None and (static_directory / "index.html").is_file():
         routes.append(Mount("/", StaticFiles(directory=static_directory, html=True)))
