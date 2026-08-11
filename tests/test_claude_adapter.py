@@ -228,3 +228,30 @@ def test_stream_json_needs_verbose() -> None:
     argv = ClaudeCodeAgentRunner().command_line(PROFILE)
 
     assert argv[:5] == ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+
+
+# --- how long a turn may take -----------------------------------------------
+
+
+def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
+    """Same reasoning as the Codex runner's: a long turn is a large task, and
+    `cancel` is how one ends early."""
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(REAL_TRANSCRIPT)
+    binary = tmp_path / "claude"
+    binary.write_text(f"#!/bin/sh\ncat >/dev/null\ncat {transcript}\n")
+    binary.chmod(0o755)
+    deadlines: list[float | None] = []
+    real_wait_for = asyncio.wait_for
+
+    async def recording_wait_for(awaitable, timeout):
+        deadlines.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", recording_wait_for)
+    runner = ClaudeCodeAgentRunner(binary_path=str(binary))
+
+    turn = asyncio.run(runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("hi"),)))
+
+    assert deadlines == [None]
+    assert turn.message.content == "- agent_runner\n- communications"
