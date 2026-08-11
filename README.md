@@ -86,7 +86,7 @@ inherit, no import required at runtime.
 | Agent Runner | `AgentRunner` | Codex, Claude Code | `adapters/agent_runner/codex`, `adapters/agent_runner/claude_code` |
 | Communications | `Communications` | Buzz | `adapters/communications/buzz` |
 | Workspace Provider | `WorkspaceProvider` | local git worktrees | `adapters/workspace_provider/git_worktree` |
-| State Store | `StateStore` | Postgres, in-memory | `adapters/state_store/postgres`, `adapters/state_store/memory` |
+| State Store | `StateStore` | Postgres, SQLite, in-memory | `adapters/state_store/postgres`, `adapters/state_store/sqlite`, `adapters/state_store/memory` |
 
 Ports are named for *what* is needed, never *who* provides it — `publish` and
 `request_review`, not `open_pr`. Every command in `engine.domain.commands` is
@@ -180,6 +180,7 @@ packages/
       git_worktree/          engine.adapters.workspace_provider.git_worktree
     state_store/
       postgres/              engine.adapters.state_store.postgres
+      sqlite/                engine.adapters.state_store.sqlite
       memory/                engine.adapters.state_store.memory
 
 apps/
