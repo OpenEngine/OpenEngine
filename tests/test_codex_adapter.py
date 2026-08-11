@@ -334,3 +334,48 @@ def test_chat_cannot_edit_the_tree_by_default() -> None:
 def test_a_nonsense_sandbox_is_caught_at_construction() -> None:
     with pytest.raises(ValueError):
         CodexAgentRunner(sandbox="yolo")
+
+
+# --- how long a turn may take -----------------------------------------------
+#
+# The only tests here that spawn anything. A fake `codex` is enough: what is
+# under test is the deadline, not the CLI.
+
+
+def _fake_codex(tmp_path, body: str) -> str:
+    """An executable standing in for the CLI. `body` is shell."""
+    binary = tmp_path / "codex"
+    binary.write_text(f"#!/bin/sh\ncat >/dev/null\n{body}\n")
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
+    """A wall clock is the wrong thing to cut an agent off with: a long turn is
+    usually a large task rather than a stuck one, and killing it throws away
+    every tool call it had already made. `cancel` ends a run early instead,
+    because that is a decision with someone behind it."""
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(REAL_TRANSCRIPT)
+    deadlines: list[float | None] = []
+    real_wait_for = asyncio.wait_for
+
+    async def recording_wait_for(awaitable, timeout):
+        deadlines.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", recording_wait_for)
+    runner = CodexAgentRunner(binary_path=_fake_codex(tmp_path, f"cat {transcript}"))
+
+    turn = asyncio.run(runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("ping"),)))
+
+    assert deadlines == [None]
+    assert turn.message.content == "pong"
+
+
+def test_a_deployment_that_wants_a_ceiling_can_still_set_one(tmp_path) -> None:
+    """The knob stays, and still kills the process it gave up on."""
+    runner = CodexAgentRunner(binary_path=_fake_codex(tmp_path, "sleep 30"), timeout_seconds=0.2)
+
+    with pytest.raises(CodexExecutionError, match="did not finish"):
+        asyncio.run(runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("ping"),)))

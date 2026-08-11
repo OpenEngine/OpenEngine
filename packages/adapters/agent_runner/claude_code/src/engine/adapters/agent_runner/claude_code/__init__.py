@@ -222,12 +222,16 @@ class ClaudeCodeAgentRunner:
     """Runs an agent turn by shelling out to the Claude Code CLI.
 
     Implements `engine.ports.AgentRunner`.
+
+    `timeout_seconds=None` -- the default -- lets a turn take as long as it
+    takes, for the reasons the Codex runner's docstring gives: a long run is
+    usually a large task, and `cancel` is the way one ends early.
     """
 
     def __init__(
         self,
         binary_path: str = "claude",
-        timeout_seconds: float = 600.0,
+        timeout_seconds: float | None = None,
         allowed_tools: Sequence[str] = READ_ONLY_TOOLS,
         working_directory: str = ".",
         model: str = "",
@@ -295,6 +299,11 @@ class ClaudeCodeAgentRunner:
             raise ClaudeExecutionError(
                 f"Claude Code did not finish within {self._timeout_seconds:.0f}s"
             ) from timeout
+        except asyncio.CancelledError:
+            # The caller gave up -- do not leave the CLI running behind them.
+            process.kill()
+            await process.wait()
+            raise
         finally:
             self._running.pop(agent_run_id, None)
 

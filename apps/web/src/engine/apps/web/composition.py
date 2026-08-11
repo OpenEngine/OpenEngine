@@ -53,13 +53,15 @@ class Settings:
     codex_sandbox: str = "read-only"
     """Chat should not be able to edit the tree as a side effect of answering."""
     codex_working_directory: str = "."
-    codex_timeout_seconds: float = 600.0
+    codex_timeout_seconds: float | None = None
+    """No ceiling: a turn runs until it is done or someone cancels it."""
     codex_model: str = ""
     claude_binary: str = "claude"
     claude_allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS
     """Claude Code's equivalent of Codex's read-only sandbox."""
     claude_working_directory: str = "."
-    claude_timeout_seconds: float = 600.0
+    claude_timeout_seconds: float | None = None
+    """Same as `codex_timeout_seconds`."""
     claude_model: str = ""
     temporal_host: str = "localhost:7233"
     github_token: str = ""

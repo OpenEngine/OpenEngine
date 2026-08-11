@@ -270,12 +270,19 @@ class CodexAgentRunner:
     """Runs an agent turn by shelling out to the Codex CLI.
 
     Implements `engine.ports.AgentRunner`.
+
+    `timeout_seconds=None` -- the default -- lets a turn take as long as it
+    takes. A wall clock is the wrong thing to cut an agent off with: a long run
+    is usually a large task, not a hung one, and killing it throws away every
+    tool call it had already made. `cancel` is how a run ends early, because
+    that is a decision with someone behind it. A deployment that wants a ceiling
+    anyway can still pass one.
     """
 
     def __init__(
         self,
         binary_path: str = "codex",
-        timeout_seconds: float = 600.0,
+        timeout_seconds: float | None = None,
         sandbox: str = "read-only",
         working_directory: str = ".",
         model: str = "",
@@ -347,6 +354,11 @@ class CodexAgentRunner:
             raise CodexExecutionError(
                 f"Codex did not finish within {self._timeout_seconds:.0f}s"
             ) from timeout
+        except asyncio.CancelledError:
+            # The caller gave up -- do not leave the CLI running behind them.
+            process.kill()
+            await process.wait()
+            raise
         finally:
             self._running.pop(agent_run_id, None)
 
