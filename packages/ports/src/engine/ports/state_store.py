@@ -69,6 +69,12 @@ class StateStore(Protocol):
         """Persist the human-readable title for an instance's conversation."""
         ...
 
+    async def set_instance_archived(
+        self, instance_id: AgentInstanceId, archived: bool
+    ) -> None:
+        """Persist whether an instance's conversation is archived."""
+        ...
+
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         """The instance's history, or None if the instance is unknown.
 

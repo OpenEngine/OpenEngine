@@ -249,8 +249,8 @@ def test_the_command_carries_the_profile_so_dispatch_needs_no_registry() -> None
 
 @pytest.mark.parametrize(
     "method",
-    ["create_instance", "load_instance", "list_instances", "load_conversation",
-     "append_messages", "record_agent_run"],
+    ["create_instance", "load_instance", "list_instances", "set_instance_archived",
+     "load_conversation", "append_messages", "record_agent_run"],
 )
 def test_state_store_owns_the_conversation(method: str) -> None:
     """Not the model provider: history has to outlive a vendor's session."""

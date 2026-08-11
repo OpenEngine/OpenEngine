@@ -58,6 +58,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
             await client.post(
                 f"/api/threads/{thread_id}/runs", json={"text": "remember this"}
             )
+            await client.post(f"/api/threads/{thread_id}/archive")
             return thread_id
 
     thread_id = asyncio.run(first_process())
@@ -85,7 +86,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
         {
             "id": thread_id,
             "title": "Persisted title",
-            "archived": False,
+            "archived": True,
             "agentId": "coder",
             "runner": "test",
         }

@@ -49,6 +49,16 @@ class PostgresStateStore:
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 
+    async def set_instance_title(
+        self, instance_id: AgentInstanceId, title: str
+    ) -> None:
+        raise NotImplementedError("Agent instances land with the state-store ticket")
+
+    async def set_instance_archived(
+        self, instance_id: AgentInstanceId, archived: bool
+    ) -> None:
+        raise NotImplementedError("Agent instances land with the state-store ticket")
+
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         raise NotImplementedError("Conversation reads land with the state-store ticket")
 

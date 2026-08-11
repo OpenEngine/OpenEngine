@@ -142,6 +142,15 @@ class AgentSession:
             raise UnknownInstanceError(instance_id)
         await self._capabilities.state_store.set_instance_title(instance_id, title)
 
+    async def set_archived(
+        self, instance_id: AgentInstanceId, archived: bool
+    ) -> None:
+        """Persist a conversation's archival state."""
+        instance = await self._capabilities.state_store.load_instance(instance_id)
+        if instance is None:
+            raise UnknownInstanceError(instance_id)
+        await self._capabilities.state_store.set_instance_archived(instance_id, archived)
+
     async def history(self, instance_id: AgentInstanceId) -> tuple[Message, ...]:
         conversation = await self._capabilities.state_store.load_conversation(instance_id)
         if conversation is None:

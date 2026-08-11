@@ -116,6 +116,15 @@ class InMemoryStateStore:
                 raise KeyError(f"no agent instance {instance_id!r}")
             self._instances[instance_id] = replace(instance, title=title)
 
+    async def set_instance_archived(
+        self, instance_id: AgentInstanceId, archived: bool
+    ) -> None:
+        with self._lock:
+            instance = self._instances.get(instance_id)
+            if instance is None:
+                raise KeyError(f"no agent instance {instance_id!r}")
+            self._instances[instance_id] = replace(instance, archived=archived)
+
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         with self._lock:
             return self._conversations.get(instance_id)

@@ -50,7 +50,8 @@ class SQLiteStateStore:
                     conversation_id TEXT NOT NULL UNIQUE,
                     task_id TEXT,
                     workspace_id TEXT,
-                    title TEXT NOT NULL DEFAULT ''
+                    title TEXT NOT NULL DEFAULT '',
+                    archived INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -82,6 +83,11 @@ class SQLiteStateStore:
                 self._connection.execute(
                     "ALTER TABLE agent_instances "
                     "ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+                )
+            if "archived" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_instances "
+                    "ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
                 )
 
     # Run state and event persistence are outside this conversation adapter's
@@ -132,7 +138,8 @@ class SQLiteStateStore:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT instance_id, agent_id, conversation_id, task_id, workspace_id, title
+                SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
+                       title, archived
                 FROM agent_instances WHERE instance_id = ?
                 """,
                 (instance_id,),
@@ -141,7 +148,8 @@ class SQLiteStateStore:
 
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         query = """
-            SELECT instance_id, agent_id, conversation_id, task_id, workspace_id, title
+            SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
+                   title, archived
             FROM agent_instances
         """
         parameters: tuple[str, ...] = ()
@@ -160,6 +168,17 @@ class SQLiteStateStore:
             cursor = self._connection.execute(
                 "UPDATE agent_instances SET title = ? WHERE instance_id = ?",
                 (title, instance_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"no agent instance {instance_id!r}")
+
+    async def set_instance_archived(
+        self, instance_id: AgentInstanceId, archived: bool
+    ) -> None:
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "UPDATE agent_instances SET archived = ? WHERE instance_id = ?",
+                (archived, instance_id),
             )
             if cursor.rowcount == 0:
                 raise KeyError(f"no agent instance {instance_id!r}")
@@ -282,6 +301,7 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
             WorkspaceId(row["workspace_id"]) if row["workspace_id"] is not None else None
         ),
         title=row["title"],
+        archived=bool(row["archived"]),
     )
 
 

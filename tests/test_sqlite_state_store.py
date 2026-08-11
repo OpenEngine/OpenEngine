@@ -26,6 +26,7 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     first = SQLiteStateStore(path)
     instance = asyncio.run(first.create_instance(CODER))
     asyncio.run(first.set_instance_title(instance.instance_id, "Durable title"))
+    asyncio.run(first.set_instance_archived(instance.instance_id, True))
     call = ToolCall(call_id="call-1", name="read", arguments='{"path":"README.md"}')
     asyncio.run(
         first.append_messages(
@@ -46,7 +47,7 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     finally:
         second.close()
 
-    assert loaded == replace(instance, title="Durable title")
+    assert loaded == replace(instance, title="Durable title", archived=True)
     assert conversation is not None
     assert [(message.role, message.content) for message in conversation.messages] == [
         (Role.USER, "what is here?"),
@@ -58,7 +59,7 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     assert len({message.message_id for message in conversation.messages}) == 3
 
 
-def test_existing_database_is_migrated_for_titles(tmp_path) -> None:
+def test_existing_database_is_migrated_for_instance_metadata(tmp_path) -> None:
     path = tmp_path / "conversations.sqlite3"
     connection = sqlite3.connect(path)
     connection.execute(
@@ -90,6 +91,7 @@ def test_existing_database_is_migrated_for_titles(tmp_path) -> None:
         store.close()
 
     assert loaded is not None and loaded.title == ""
+    assert loaded is not None and loaded.archived is False
     assert renamed is not None and renamed.title == "Migrated title"
 
 

@@ -1,9 +1,9 @@
 """HTTP surface for the assistant-ui client.
 
 The engine owns conversations; assistant-ui owns their presentation.  This
-module translates between those two vocabularies and keeps the small amount of
-thread metadata that is UI-specific (archive status and selected runner). Titles
-belong to the durable agent instance so they survive a server restart.
+module translates between those two vocabularies and keeps selected runner as
+UI-specific metadata. Titles and archive status belong to the durable agent
+instance so they survive a server restart.
 
 Runs are streamed as newline-delimited JSON.  Their tasks are owned by the
 service rather than by one response, so a refreshed browser can reconnect.
@@ -350,6 +350,14 @@ class ThreadService:
         await self.session.set_title(instance_id, title)
         thread.title = title
 
+    async def set_archived(
+        self, instance_id: AgentInstanceId, archived: bool
+    ) -> None:
+        """Update archival state only after its durable write succeeds."""
+        thread = await self._require(instance_id)
+        await self.session.set_archived(instance_id, archived)
+        thread.archived = archived
+
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
         thread = await self.get(instance_id)
         if thread is None:
@@ -370,6 +378,7 @@ class ThreadService:
                     instance.agent_id,
                     self.session.default_runner,
                     title=instance.title or "New chat",
+                    archived=instance.archived,
                     workspace_root=await self.session.workspace_root(instance.instance_id),
                     workspace_id=instance.workspace_id,
                 )
@@ -443,12 +452,20 @@ def create_app(
             thread.runner = runner
         return JSONResponse(_thread_json(thread))
 
-    async def archive_thread(request: Request) -> JSONResponse:
+    async def set_thread_archived(
+        request: Request, archived: bool
+    ) -> JSONResponse:
         thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
-        thread.archived = request.scope["route"].name == "archive"
+        await service.set_archived(thread.instance_id, archived)
         return JSONResponse(_thread_json(thread))
+
+    async def archive_thread(request: Request) -> JSONResponse:
+        return await set_thread_archived(request, True)
+
+    async def unarchive_thread(request: Request) -> JSONResponse:
+        return await set_thread_archived(request, False)
 
     async def delete_thread(request: Request) -> Response:
         instance_id = _thread_id(request)
@@ -546,7 +563,7 @@ def create_app(
         ),
         Route(
             "/api/threads/{thread_id}/unarchive",
-            archive_thread,
+            unarchive_thread,
             methods=["POST"],
             name="unarchive",
         ),

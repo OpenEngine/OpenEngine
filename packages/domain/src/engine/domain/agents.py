@@ -83,6 +83,8 @@ class AgentInstance:
     workspace_id: WorkspaceId | None = None
     title: str = ""
     """Human-readable conversation title. Empty means it has not been named yet."""
+    archived: bool = False
+    """Whether this conversation is hidden from the active thread list."""
 
 
 @dataclass(frozen=True, slots=True)
