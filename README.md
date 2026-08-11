@@ -1,5 +1,13 @@
 # engine
 
+# Pros
+1. Not coupled to any provider (Anthropic, Codex, etc.)
+2. Work from your phone on any project
+3. Define workflows that achieve your review standards
+4. Stringent security reviews and checklists
+5. Augments your workflow, doesn't replace it 
+
+
 An agent engine: it takes a request ("fix the flaky auth test"), provisions a
 workspace, runs a coding agent in it, and publishes the result for review —
 durably, across process restarts.
