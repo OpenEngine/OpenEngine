@@ -16,8 +16,9 @@ import json
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
-from engine.domain import AgentId, AgentInstanceId, Message, Role
+from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role
 from engine.ports import AgentRunner
 from engine.runtime import AgentSession
 from starlette.applications import Starlette
@@ -41,8 +42,11 @@ class ChatThread:
 class ThreadService:
     """Coordinates assistant-ui threads over an ``AgentSession``."""
 
-    def __init__(self, session: AgentSession) -> None:
+    def __init__(
+        self, session: AgentSession, runners: Mapping[str, AgentRunner]
+    ) -> None:
         self.session = session
+        self._runners = runners
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
         self._restored = False
@@ -97,6 +101,21 @@ class ThreadService:
             )
         return turn.message.content
 
+    async def generate_title(self, instance_id: AgentInstanceId) -> str:
+        """Ask the thread's agent for a title without changing its transcript."""
+        thread = await self._require(instance_id)
+        async with self._locks[instance_id]:
+            history = await self.session.history(instance_id)
+            turn = await self._runners[thread.runner].run_turn(
+                AgentRunId(f"ar-{uuid4().hex[:12]}"),
+                self.session.profiles[thread.agent_id],
+                (*history, Message.user(_TITLE_PROMPT)),
+            )
+        title = _clean_title(turn.message.content)
+        if title:
+            thread.title = title
+        return thread.title
+
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
         thread = await self.get(instance_id)
         if thread is None:
@@ -127,7 +146,7 @@ def create_app(
     static_directory: Path | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
-    service = ThreadService(session)
+    service = ThreadService(session, runners)
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -207,14 +226,11 @@ def create_app(
         return JSONResponse({"messages": _messages_json(history)})
 
     async def title_thread(request: Request) -> JSONResponse:
-        thread = await service.get(_thread_id(request))
-        if thread is None:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
             return _error("thread not found", 404)
-        body = await _json_body(request)
-        title = _title_from_messages(body.get("messages", ()))
-        if title:
-            thread.title = title
-        return JSONResponse({"title": thread.title})
+        title = await service.generate_title(instance_id)
+        return JSONResponse({"title": title})
 
     async def run_thread(request: Request) -> Response:
         instance_id = _thread_id(request)
@@ -371,27 +387,15 @@ def _merge_message(content: list[dict[str, object]], message: Message) -> bool:
     return changed
 
 
-def _title_from_messages(messages: object) -> str:
-    if not isinstance(messages, list):
-        return ""
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") != "user":
-            continue
-        content = message.get("content", ())
-        if isinstance(content, str):
-            text = content
-        elif isinstance(content, list):
-            text = " ".join(
-                str(part.get("text", ""))
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
-        else:
-            text = ""
-        compact = " ".join(text.split())
-        if compact:
-            return compact[:48] + ("…" if len(compact) > 48 else "")
-    return ""
+_TITLE_PROMPT = (
+    "Name this chat based on the conversation above. Reply with only a concise "
+    "title of at most eight words, with no quotes or ending punctuation."
+)
+
+
+def _clean_title(value: str) -> str:
+    first_line = value.strip().splitlines()[0] if value.strip() else ""
+    return first_line.strip(" \t\"'`).:;!?")[:80]
 
 
 async def _json_body(request: Request) -> dict[str, object]:
