@@ -448,3 +448,98 @@ def test_active_run_survives_stream_disconnect_and_replays_progress() -> None:
         (Role.TOOL, "engine"),
         (Role.ASSISTANT, "Found it."),
     ]
+
+
+def test_two_observers_receive_the_same_run_state_transitions() -> None:
+    class WindowRunner(ConcurrentRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            self.started.set()
+            await self.release.wait()
+            return AgentTurn(Message.assistant("shared answer"))
+
+    runner = WindowRunner()
+    service = ThreadService(_session(runner), {"test": runner})
+
+    async def scenario():
+        thread = await service.create(CODER, "test")
+        first_window = service.events(thread.instance_id)
+        second_window = service.events(thread.instance_id)
+        initial = await asyncio.gather(anext(first_window), anext(second_window))
+
+        run = await service.start_run(thread.instance_id, "shared question", None)
+        await runner.started.wait()
+        running = await asyncio.gather(anext(first_window), anext(second_window))
+
+        runner.release.set()
+        async for _event in run.stream():
+            pass
+        completed = await asyncio.gather(anext(first_window), anext(second_window))
+
+        await first_window.aclose()
+        await second_window.aclose()
+        return initial, running, completed
+
+    initial, running, completed = asyncio.run(scenario())
+
+    assert [snapshot.version for snapshot in initial] == [0, 0]
+    assert [snapshot.version for snapshot in running] == [1, 1]
+    assert all(snapshot.run_status == "running" for snapshot in running)
+    assert all(snapshot.resumable for snapshot in running)
+    assert all(snapshot.history[-1].role is Role.USER for snapshot in running)
+    assert completed[0].version == completed[1].version
+    assert completed[0].version > running[0].version
+    assert all(snapshot.run_status == "idle" for snapshot in completed)
+    assert all(not snapshot.resumable for snapshot in completed)
+    assert all(snapshot.history[-1].content == "shared answer" for snapshot in completed)
+
+
+def test_snapshot_retries_when_a_run_finishes_during_history_read() -> None:
+    class RacingRunner(ConcurrentRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = asyncio.Event()
+
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            await self.release.wait()
+            return AgentTurn(Message.assistant("finished during the read"))
+
+    runner = RacingRunner()
+    service = ThreadService(_session(runner), {"test": runner})
+
+    async def scenario():
+        thread = await service.create(CODER, "test")
+        run = await service.start_run(thread.instance_id, "race", None)
+        original_history = service.session.history
+        stale_history_read = asyncio.Event()
+        return_stale_history = asyncio.Event()
+        blocked = False
+
+        async def racing_history(instance_id):
+            nonlocal blocked
+            history = await original_history(instance_id)
+            if not blocked and history[-1].role is Role.USER:
+                blocked = True
+                stale_history_read.set()
+                await return_stale_history.wait()
+            return history
+
+        service.session.history = racing_history
+        snapshot_task = asyncio.create_task(service.snapshot(thread.instance_id))
+        await stale_history_read.wait()
+
+        runner.release.set()
+        while not run.done:
+            await asyncio.sleep(0)
+        return_stale_history.set()
+        return await snapshot_task
+
+    snapshot = asyncio.run(scenario())
+
+    assert snapshot.run_status == "idle"
+    assert not snapshot.resumable
+    assert snapshot.history[-1].content == "finished during the read"

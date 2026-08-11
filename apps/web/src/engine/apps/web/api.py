@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -41,6 +41,16 @@ class ChatThread:
     workspace_id: WorkspaceId | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ThreadSnapshot:
+    """One consistent view of durable history and its current run."""
+
+    history: tuple[Message, ...]
+    version: int
+    run_status: str
+    resumable: bool
+
+
 class ActiveRun:
     """One agent turn whose lifetime is independent of an HTTP connection.
 
@@ -48,13 +58,15 @@ class ActiveRun:
     can reconnect without needing to know which individual events it missed.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_change: Callable[[], Awaitable[None]]) -> None:
         self.content: list[dict[str, object]] = []
         self.error: str | None = None
         self.done = False
+        self.cancelled = False
         self._revision = 0
         self._changed = asyncio.Condition()
         self._task: asyncio.Task[None] | None = None
+        self._on_change = on_change
 
     def start(self, say: Awaitable[str]) -> None:
         self._task = asyncio.create_task(self._run(say))
@@ -98,6 +110,7 @@ class ActiveRun:
             self.error = f"{type(error).__name__}: {error}"
             await self._finish()
         except asyncio.CancelledError:
+            self.cancelled = True
             await self._finish()
             raise
 
@@ -107,12 +120,14 @@ class ActiveRun:
         async with self._changed:
             self._revision += 1
             self._changed.notify_all()
+        await self._on_change()
 
     async def _finish(self) -> None:
         async with self._changed:
             self.done = True
             self._revision += 1
             self._changed.notify_all()
+        await self._on_change()
 
 
 class ThreadService:
@@ -126,6 +141,8 @@ class ThreadService:
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
         self._active_runs: dict[AgentInstanceId, ActiveRun] = {}
+        self._versions: dict[AgentInstanceId, int] = {}
+        self._changes: dict[AgentInstanceId, asyncio.Condition] = {}
         self._restored = False
         self._restore_lock = asyncio.Lock()
 
@@ -151,16 +168,77 @@ class ThreadService:
         )
         self._threads[instance.instance_id] = thread
         self._locks[instance.instance_id] = asyncio.Lock()
+        self._versions[instance.instance_id] = 0
+        self._changes[instance.instance_id] = asyncio.Condition()
         return thread
 
     async def delete(self, instance_id: AgentInstanceId) -> None:
         await self._restore()
+        run = self._active_runs.pop(instance_id, None)
+        if run is not None:
+            await run.cancel()
         self._threads.pop(instance_id, None)
         self._locks.pop(instance_id, None)
+        self._versions.pop(instance_id, None)
+        self._changes.pop(instance_id, None)
 
     async def history(self, instance_id: AgentInstanceId) -> tuple[Message, ...]:
         await self._require(instance_id)
         return await self.session.history(instance_id)
+
+    async def snapshot(self, instance_id: AgentInstanceId) -> ThreadSnapshot:
+        """Read history and run state at one server revision.
+
+        History lives in the state store while live-run state lives here. A
+        revision retry prevents a run transition between those two reads from
+        producing the user-only/no-resume snapshot that made reconnects flaky.
+        """
+        await self._require(instance_id)
+        while True:
+            version = self._versions[instance_id]
+            history = await self.session.history(instance_id)
+            run = self.latest_run(instance_id)
+            if version == self._versions[instance_id]:
+                if run is None:
+                    run_status = "idle"
+                elif not run.done:
+                    run_status = "running"
+                elif run.error is not None:
+                    run_status = "failed"
+                elif run.cancelled:
+                    run_status = "cancelled"
+                else:
+                    run_status = "idle"
+                resumable = (
+                    bool(history)
+                    and history[-1].role is Role.USER
+                    and run is not None
+                    and not run.cancelled
+                )
+                return ThreadSnapshot(history, version, run_status, resumable)
+
+    async def events(
+        self, instance_id: AgentInstanceId
+    ) -> AsyncIterator[ThreadSnapshot]:
+        """Yield a fresh snapshot whenever this thread changes."""
+        await self._require(instance_id)
+        version = -1
+        while True:
+            snapshot = await self.snapshot(instance_id)
+            if snapshot.version != version:
+                version = snapshot.version
+                yield snapshot
+            changed = self._changes[instance_id]
+            async with changed:
+                await changed.wait_for(
+                    lambda: self._versions.get(instance_id, -1) != version
+                )
+
+    async def _touch(self, instance_id: AgentInstanceId) -> None:
+        changed = self._changes[instance_id]
+        async with changed:
+            self._versions[instance_id] += 1
+            changed.notify_all()
 
     async def say(
         self,
@@ -194,7 +272,7 @@ class ThreadService:
             raise RuntimeError("this chat already has a run in progress")
 
         observed: asyncio.Queue[Message] = asyncio.Queue()
-        run = ActiveRun()
+        run = ActiveRun(lambda: self._touch(instance_id))
         self._active_runs[instance_id] = run
 
         async def execute() -> str:
@@ -220,6 +298,9 @@ class ThreadService:
             and not run.done
         ):
             await asyncio.sleep(0)
+        # Publishing the run only after the question is durable means every
+        # observer can load it and immediately resume the same execution.
+        await self._touch(instance_id)
         return run
 
     def active_run(self, instance_id: AgentInstanceId) -> ActiveRun | None:
@@ -284,6 +365,8 @@ class ThreadService:
                     workspace_id=instance.workspace_id,
                 )
                 self._locks[instance.instance_id] = asyncio.Lock()
+                self._versions[instance.instance_id] = 0
+                self._changes[instance.instance_id] = asyncio.Condition()
             self._restored = True
 
 
@@ -368,20 +451,25 @@ def create_app(
     async def messages(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
         try:
-            history = await service.history(instance_id)
+            snapshot = await service.snapshot(instance_id)
         except KeyError:
             return _error("thread not found", 404)
-        active = service.active_run(instance_id)
-        return JSONResponse(
-            {
-                "messages": _messages_json(history),
-                # A complete assistant transcript can become durable just
-                # before ActiveRun flips to done. In that window replaying it
-                # would duplicate the assistant message in the client.
-                "unstable_resume": active is not None
-                and bool(history)
-                and history[-1].role is Role.USER,
-            }
+        return JSONResponse(_snapshot_json(snapshot))
+
+    async def thread_events(request: Request) -> Response:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+
+        async def stream() -> AsyncIterator[bytes]:
+            async for snapshot in service.events(instance_id):
+                data = json.dumps(_snapshot_json(snapshot)).encode()
+                yield b"data: " + data + b"\n\n"
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     async def title_thread(request: Request) -> JSONResponse:
@@ -454,6 +542,7 @@ def create_app(
             name="unarchive",
         ),
         Route("/api/threads/{thread_id}/messages", messages),
+        Route("/api/threads/{thread_id}/events", thread_events),
         Route("/api/threads/{thread_id}/title", title_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}/runs", run_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}/runs/current", resume_run),
@@ -479,6 +568,15 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
     if thread.workspace_root is not None:
         result["workspaceRoot"] = thread.workspace_root
     return result
+
+
+def _snapshot_json(snapshot: ThreadSnapshot) -> dict[str, object]:
+    return {
+        "messages": _messages_json(snapshot.history),
+        "unstable_resume": snapshot.resumable,
+        "version": snapshot.version,
+        "runStatus": snapshot.run_status,
+    }
 
 
 def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:

@@ -14,6 +14,7 @@ import {
 import { createAssistantStream } from "assistant-stream";
 import {
   createContext,
+  useEffect,
   useContext,
   useMemo,
   useRef,
@@ -82,6 +83,9 @@ async function* readRunResponse(response: Response) {
 
 function HistoryProvider({ children }: PropsWithChildren) {
   const aui = useAui();
+  const seenVersionRef = useRef<number | null>(null);
+  const pendingVersionRef = useRef<number | null>(null);
+  const syncingRef = useRef(false);
   const history = useMemo<ThreadHistoryAdapter>(
     () => ({
       async load() {
@@ -89,6 +93,10 @@ function HistoryProvider({ children }: PropsWithChildren) {
         if (!remoteId) return { messages: [] };
         const rows = await api<ApiHistory>(
           `/api/threads/${remoteId}/messages`,
+        );
+        seenVersionRef.current = Math.max(
+          seenVersionRef.current ?? rows.version,
+          rows.version,
         );
         let parentId: string | null = null;
         return {
@@ -119,6 +127,76 @@ function HistoryProvider({ children }: PropsWithChildren) {
     }),
     [aui],
   );
+
+  useEffect(() => {
+    const { remoteId } = aui.threadListItem.getState();
+    if (!remoteId) return;
+
+    let disposed = false;
+    const reconcile = async () => {
+      const pending = pendingVersionRef.current;
+      const seen = seenVersionRef.current;
+      if (
+        disposed ||
+        syncingRef.current ||
+        pending === null ||
+        seen === null ||
+        pending <= seen ||
+        aui.thread.getState().isRunning
+      ) {
+        return;
+      }
+
+      syncingRef.current = true;
+      try {
+        await aui.threads.reloadMainThread();
+        seenVersionRef.current = Math.max(
+          seenVersionRef.current ?? pending,
+          pending,
+        );
+      } catch (error) {
+        console.error("Failed to synchronize chat state", error);
+      } finally {
+        syncingRef.current = false;
+        if (
+          !disposed &&
+          (pendingVersionRef.current ?? -1) > (seenVersionRef.current ?? -1)
+        ) {
+          void reconcile();
+        }
+      }
+    };
+
+    const events = new EventSource(`/api/threads/${remoteId}/events`);
+    events.onmessage = (event) => {
+      const snapshot = JSON.parse(event.data) as ApiHistory;
+      pendingVersionRef.current = Math.max(
+        pendingVersionRef.current ?? snapshot.version,
+        snapshot.version,
+      );
+      void reconcile();
+    };
+    events.onerror = () => {
+      // EventSource reconnects automatically; the next snapshot contains the
+      // current version, so no individual notification can be lost.
+    };
+    let wasRunning = aui.thread.getState().isRunning;
+    const unsubscribe = aui.subscribe(() => {
+      const isRunning = aui.thread.getState().isRunning;
+      if (wasRunning && !isRunning) void reconcile();
+      wasRunning = isRunning;
+      // This also closes the startup race where the first server event arrives
+      // before the initial history load establishes seenVersionRef.
+      void reconcile();
+    });
+
+    return () => {
+      disposed = true;
+      events.close();
+      unsubscribe();
+    };
+  }, [aui]);
+
   return <RuntimeAdapterProvider adapters={{ history }}>{children}</RuntimeAdapterProvider>;
 }
 
