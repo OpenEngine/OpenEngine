@@ -17,9 +17,7 @@ uv run pytest      # run the suite, including the boundary checks
 All three entrypoints run today and report their wiring:
 
 ```bash
-uv run engine-control-server
-uv run engine-worker
-uv run engine-web --check
+uv run engine-web
 ```
 
 
