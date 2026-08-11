@@ -1,5 +1,25 @@
 # engine
 
+## Getting started
+
+Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
+
+```bash
+uv sync            # install all 16 workspace packages, editable
+npm --prefix apps/web install
+npm --prefix apps/web run build
+uv run pytest      # run the suite, including the boundary checks
+```
+
+All three entrypoints run today and report their wiring:
+
+```bash
+uv run engine-control-server
+uv run engine-worker
+uv run engine-web --check
+```
+
+
 # Pros
 1. Not coupled to any provider (Anthropic, Codex, etc.)
 2. Work from your phone on any project
@@ -210,25 +230,6 @@ The capability directories under `adapters/` are namespace only: they hold no
 `apps/` is the composition root, and the only layer permitted to name a
 concrete adapter. Each app owns its own `composition.py`; the two are kept
 separate rather than shared because the processes are expected to diverge.
-
-## Getting started
-
-Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
-
-```bash
-uv sync            # install all 16 workspace packages, editable
-npm --prefix apps/web install
-npm --prefix apps/web run build
-uv run pytest      # run the suite, including the boundary checks
-```
-
-All three entrypoints run today and report their wiring:
-
-```bash
-uv run engine-control-server
-uv run engine-worker
-uv run engine-web --check
-```
 
 ### Chatting with an agent
 
