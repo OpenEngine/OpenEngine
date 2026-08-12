@@ -12,3 +12,4 @@ build/
 node_modules/
 *.tsbuildinfo
 /conversations.sqlite3
+.claude/settings.local.json
