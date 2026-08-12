@@ -290,7 +290,7 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
           aria-label="Archive chat"
           title="Archive chat"
         >
-          Archive
+          ×
         </ThreadListItemPrimitive.Archive>
       )}
     </ThreadListItemPrimitive.Root>
