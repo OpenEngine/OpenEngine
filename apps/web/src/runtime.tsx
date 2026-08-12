@@ -14,9 +14,11 @@ import {
 import { createAssistantStream } from "assistant-stream";
 import {
   createContext,
+  useEffect,
   useContext,
   useMemo,
   useRef,
+  useState,
   type PropsWithChildren,
 } from "react";
 
@@ -33,6 +35,38 @@ type ThreadInitializer = {
 
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
+
+function useInitialThreadId() {
+  const storedThreadId = useRef(
+    typeof window === "undefined"
+      ? undefined
+      : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined,
+  ).current;
+  const [result, setResult] = useState<{ loading: boolean; threadId?: string }>(() => ({
+    loading: storedThreadId !== undefined,
+  }));
+
+  useEffect(() => {
+    if (!storedThreadId) return;
+    let cancelled = false;
+    api<ApiThread>(`/api/threads/${storedThreadId}`)
+      .then((thread) => {
+        if (cancelled) return;
+        if (thread.archived) window.localStorage.removeItem(ACTIVE_THREAD_KEY);
+        setResult({ loading: false, threadId: thread.archived ? undefined : thread.id });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        window.localStorage.removeItem(ACTIVE_THREAD_KEY);
+        setResult({ loading: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [storedThreadId]);
+
+  return result;
+}
 
 function ThreadInitializationBridge({
   initializer,
@@ -135,14 +169,28 @@ export function EngineRuntimeProvider({
   defaults,
   children,
 }: PropsWithChildren<{ defaults: NewChatDefaults }>) {
+  const initialThread = useInitialThreadId();
+  if (initialThread.loading)
+    return <main className="loading">Restoring chats…</main>;
+
+  return (
+    <EngineRuntime
+      defaults={defaults}
+      initialThreadId={initialThread.threadId}
+    >
+      {children}
+    </EngineRuntime>
+  );
+}
+
+function EngineRuntime({
+  defaults,
+  initialThreadId,
+  children,
+}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
-  const initialThreadIdRef = useRef(
-    typeof window === "undefined"
-      ? undefined
-      : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined,
-  );
   defaultsRef.current = defaults;
 
   const modelAdapter = useMemo<ChatModelAdapter>(
@@ -224,7 +272,7 @@ export function EngineRuntimeProvider({
   const runtime = useRemoteThreadListRuntime({
     runtimeHook: () => useLocalRuntime(modelAdapter),
     adapter: threadAdapter,
-    initialThreadId: initialThreadIdRef.current,
+    initialThreadId,
     onThreadIdChange(threadId) {
       if (threadId) window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
       else window.localStorage.removeItem(ACTIVE_THREAD_KEY);
