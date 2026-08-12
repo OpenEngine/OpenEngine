@@ -14,6 +14,7 @@ Implements `engine.ports.StateStore`.
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 from itertools import count
 from threading import Lock
 from uuid import uuid4
@@ -98,6 +99,17 @@ class InMemoryStateStore:
     async def load_instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
         with self._lock:
             return self._instances.get(instance_id)
+
+    async def attach_workspace(
+        self, instance_id: AgentInstanceId, workspace_id: WorkspaceId | None
+    ) -> AgentInstance:
+        with self._lock:
+            instance = self._instances.get(instance_id)
+            if instance is None:
+                raise KeyError(f"no agent instance {instance_id!r}")
+            updated = replace(instance, workspace_id=workspace_id)
+            self._instances[instance_id] = updated
+        return updated
 
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         with self._lock:

@@ -10,7 +10,7 @@ import {
 } from "@assistant-ui/react";
 import { useEffect, useState } from "react";
 
-import { api, type ApiThread } from "./api";
+import { api, attachWorkspace, detachWorkspace, type ApiThread } from "./api";
 
 function TextParts() {
   return (
@@ -87,32 +87,87 @@ function Composer() {
   );
 }
 
+type WorkspaceCustom = {
+  workspaceRoot?: string;
+  workspaceRef?: string;
+  workspaceAttached?: boolean;
+};
+
+/** This chat's worktree: where it is, how to read its work, and a way to
+ *  hand the directory back or ask for it again. */
 function WorkspaceTagline() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
-    | { workspaceRoot?: string }
+    | WorkspaceCustom
     | undefined;
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const [fetchedRoot, setFetchedRoot] = useState<string>();
+  const [fetched, setFetched] = useState<ApiThread>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
 
   useEffect(() => {
-    setFetchedRoot(undefined);
-    if (custom?.workspaceRoot || !remoteId) return;
+    setFetched(undefined);
+    setError(undefined);
+    if (!remoteId) return;
     let current = true;
-    void api<ApiThread>(`/api/threads/${remoteId}`).then((thread) => {
-      if (current) setFetchedRoot(thread.workspaceRoot);
-    });
+    void api<ApiThread>(`/api/threads/${remoteId}`)
+      .then((thread) => {
+        if (current) setFetched(thread);
+      })
+      .catch(() => {});
     return () => {
       current = false;
     };
-  }, [custom?.workspaceRoot, remoteId]);
+  }, [remoteId]);
 
-  const workspaceRoot = custom?.workspaceRoot ?? fetchedRoot;
-  if (!workspaceRoot) return null;
+  if (!remoteId) return null;
+
+  const workspace: WorkspaceCustom = fetched ?? custom ?? {};
+  const attached = workspace.workspaceAttached ?? Boolean(workspace.workspaceRoot);
+
+  async function toggle() {
+    if (!remoteId) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      setFetched(await (attached ? detachWorkspace : attachWorkspace)(remoteId));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <p className="workspace-tagline">
-      Checkout worktree <code>cd {workspaceRoot}</code>
-    </p>
+    <div className="workspace-tagline">
+      <p>
+        {attached ? (
+          <>
+            Working in <code>cd {workspace.workspaceRoot}</code>
+          </>
+        ) : workspace.workspaceRef ? (
+          <>
+            Detached — the work is on <code>git checkout {workspace.workspaceRef}</code>
+          </>
+        ) : (
+          <>No worktree. Attach one to give this chat somewhere to work.</>
+        )}
+      </p>
+      <button
+        type="button"
+        className="workspace-button"
+        onClick={() => void toggle()}
+        disabled={busy}
+      >
+        {busy
+          ? "Working…"
+          : attached
+            ? "Detach"
+            : workspace.workspaceRef
+              ? "Reattach"
+              : "Attach"}
+      </button>
+      {error && <p className="workspace-error">{error}</p>}
+    </div>
   );
 }
 
@@ -124,7 +179,6 @@ export function ChatThread() {
           <span className="eyebrow">ENGINE / CHAT</span>
           <h1>Start a conversation.</h1>
           <p>Each chat has its own agent history and Git worktree.</p>
-          <WorkspaceTagline />
         </div>
         <ThreadPrimitive.Messages>
           {({ message }) =>
@@ -136,6 +190,10 @@ export function ChatThread() {
             Jump to latest
           </ThreadPrimitive.ScrollToBottom>
           <Composer />
+          {/* Under the composer rather than in the welcome header: a detached
+              chat refuses to run, so the way to fix that cannot be somewhere
+              you have to scroll a long conversation to reach. */}
+          <WorkspaceTagline />
           <p className="composer-note">Runs are read-only in this chat's isolated worktree.</p>
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>

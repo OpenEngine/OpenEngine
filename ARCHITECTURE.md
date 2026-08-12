@@ -254,6 +254,15 @@ repository
 
 Two agents should not concurrently modify the same writable workspace.
 
+A workspace's work outlives its checkout. The directory is expendable -- removed, swept out of /tmp, lost to a reboot -- while what was done in it is not, so the two are separable:
+
+Workspace ws_42
+     │
+     ├── work     = branch engine/ws_42        durable, always checkoutable
+     └── checkout = worktree on that branch    attach / detach at will
+
+Detaching removes the checkout and keeps the branch, snapshotting uncommitted work onto it first; attaching checks the branch out again under the same workspace id, so nothing holding that id has to be told. Disposing is the one that ends both.
+
 Reviewers should operate against immutable/read-only views of a specific commit:
 
 coding workspace

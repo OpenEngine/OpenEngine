@@ -11,7 +11,7 @@ from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
 from engine.apps.web.composition import Settings, build_capabilities
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolCall
-from engine.ports import AgentTurn, Workspace
+from engine.ports import AgentTurn, Workspace, WorkspaceState
 from engine.runtime import AgentSession, Capabilities
 
 CODER = AgentId("coder")
@@ -84,6 +84,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
             "archived": False,
             "agentId": "coder",
             "runner": "test",
+            "workspaceAttached": False,
         }
     ]
     assert [
@@ -140,43 +141,93 @@ def _session(runner: ConcurrentRunner) -> AgentSession:
 
 
 class ConversationWorkspaces:
+    """A provider whose checkouts come and go, as real ones do."""
+
     def __init__(self) -> None:
         self.count = 0
+        self.detached: set[str] = set()
 
     async def provision(self, repository: str, base_ref: str) -> Workspace:
         self.count += 1
-        workspace_id = f"ws-{self.count}"
+        return self._workspace(f"ws-{self.count}", repository, base_ref)
+
+    async def root_path(self, workspace_id: str) -> str:
+        if workspace_id in self.detached:
+            raise KeyError(f"no workspace {workspace_id!r}")
+        return f"/worktrees/{workspace_id}"
+
+    async def state(self, workspace_id: str) -> WorkspaceState:
+        return WorkspaceState(
+            workspace_id=workspace_id,
+            ref=f"engine/{workspace_id}",
+            root_path=(
+                None if workspace_id in self.detached else f"/worktrees/{workspace_id}"
+            ),
+        )
+
+    async def attach(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+        self.detached.discard(workspace_id)
+        return self._workspace(workspace_id, repository, base_ref)
+
+    async def detach(self, workspace_id: str) -> None:
+        self.detached.add(workspace_id)
+
+    async def dispose(self, workspace_id: str) -> None:
+        self.detached.add(workspace_id)
+
+    def _workspace(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
         return Workspace(
             workspace_id=workspace_id,
             root_path=f"/worktrees/{workspace_id}",
             repository=repository,
             base_ref=base_ref,
+            ref=f"engine/{workspace_id}",
         )
 
+
+class VanishingWorkspaces(ConversationWorkspaces):
+    """A provider that has never heard of a workspace the store still names."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.forgotten: set[str] = set()
+
     async def root_path(self, workspace_id: str) -> str:
-        return f"/worktrees/{workspace_id}"
+        if workspace_id in self.forgotten:
+            raise KeyError(f"no workspace {workspace_id!r}")
+        return await super().root_path(workspace_id)
 
-    async def dispose(self, workspace_id: str) -> None:
-        pass
+    async def state(self, workspace_id: str) -> WorkspaceState:
+        if workspace_id in self.forgotten:
+            raise KeyError(f"no workspace {workspace_id!r}")
+        return await super().state(workspace_id)
 
 
-def test_each_new_chat_reports_its_own_worktree() -> None:
-    runner = ConcurrentRunner()
-    workspaces = ConversationWorkspaces()
+def _workspace_session(
+    runner: ConcurrentRunner,
+    workspaces: ConversationWorkspaces,
+    store: InMemoryStateStore | None = None,
+) -> AgentSession:
     unused = object()
-    session = AgentSession(
+    return AgentSession(
         Capabilities(
             workflow_runtime=unused,
             source_control=unused,
             agent_runner=runner,
             communications=unused,
             workspace_provider=workspaces,
-            state_store=InMemoryStateStore(),
+            state_store=store if store is not None else InMemoryStateStore(),
         ),
         profiles=PROFILES,
         runners={"test": runner},
         workspace_repository="/repository",
     )
+
+
+def test_each_new_chat_reports_its_own_worktree() -> None:
+    runner = ConcurrentRunner()
+    workspaces = ConversationWorkspaces()
+    session = _workspace_session(runner, workspaces)
     app = create_app(session, {"test": runner})
 
     async def scenario() -> tuple[dict[str, object], dict[str, object]]:
@@ -196,6 +247,156 @@ def test_each_new_chat_reports_its_own_worktree() -> None:
     assert second["workspaceRoot"] == "/worktrees/ws-2"
     assert first["workspaceRoot"] != second["workspaceRoot"]
     assert runner.workspace_ids == ["ws-1"]
+
+
+def test_a_removed_worktree_does_not_take_the_other_chats_with_it() -> None:
+    """One vanished checkout used to brick every endpoint, new chats included."""
+    runner = ConcurrentRunner()
+    workspaces = VanishingWorkspaces()
+    store = InMemoryStateStore()
+    first_app = create_app(
+        _workspace_session(runner, workspaces, store), {"test": runner}
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=first_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            abandoned = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+        workspaces.forgotten.add("ws-1")
+
+        # A restart: the registry is rebuilt from the store, whose instances
+        # still name a workspace that is no longer on disk.
+        restarted = create_app(
+            _workspace_session(runner, workspaces, store), {"test": runner}
+        )
+        transport = httpx.ASGITransport(app=restarted)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            listed = await client.get("/api/threads")
+            survivor = await client.get(f"/api/threads/{abandoned.json()['id']}")
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            fresh = await client.get(f"/api/threads/{created.json()['id']}")
+        return listed, survivor, created, fresh
+
+    listed, survivor, created, fresh = asyncio.run(scenario())
+
+    assert listed.status_code == 200
+    assert survivor.status_code == 200
+    assert "workspaceRoot" not in survivor.json()
+    assert survivor.json()["workspaceAttached"] is False
+    assert created.status_code == 201
+    assert fresh.status_code == 200
+    assert fresh.json()["workspaceRoot"] == "/worktrees/ws-2"
+
+
+def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back() -> None:
+    runner = ConcurrentRunner()
+    workspaces = ConversationWorkspaces()
+    app = create_app(_workspace_session(runner, workspaces), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            detached = await client.delete(f"/api/threads/{thread_id}/workspace")
+            listed_detached = await client.get(f"/api/threads/{thread_id}")
+            reattached = await client.post(f"/api/threads/{thread_id}/workspace")
+        return created.json(), detached.json(), listed_detached.json(), reattached.json()
+
+    created, detached, listed, reattached = asyncio.run(scenario())
+
+    assert created["workspaceAttached"] is True
+    assert detached["workspaceAttached"] is False
+    assert "workspaceRoot" not in detached
+    # The work stays addressable while there is nowhere to run it.
+    assert detached["workspaceRef"] == "engine/ws-1"
+    assert listed["workspaceAttached"] is False
+    # Reattaching is the same workspace, not a replacement for it.
+    assert reattached["workspaceAttached"] is True
+    assert reattached["workspaceRoot"] == created["workspaceRoot"]
+    assert reattached["workspaceRef"] == "engine/ws-1"
+    assert workspaces.count == 1
+
+
+def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path() -> None:
+    runner = ConcurrentRunner()
+    workspaces = ConversationWorkspaces()
+    app = create_app(_workspace_session(runner, workspaces), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            await client.delete(f"/api/threads/{thread_id}/workspace")
+            refused = await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "carry on"}
+            )
+            await client.post(f"/api/threads/{thread_id}/workspace")
+            accepted = await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "carry on"}
+            )
+        return refused, accepted
+
+    refused, accepted = asyncio.run(scenario())
+
+    assert refused.status_code == 409
+    assert "reattach" in refused.json()["error"]
+    assert accepted.status_code == 200
+    assert runner.workspace_ids == ["ws-1"]
+
+
+def test_a_chat_that_never_had_a_workspace_can_be_given_one() -> None:
+    """Conversations from before worktrees existed, and any other stragglers."""
+    runner = ConcurrentRunner()
+    workspaces = ConversationWorkspaces()
+    store = InMemoryStateStore()
+    session = _workspace_session(runner, workspaces, store)
+    app = create_app(session, {"test": runner})
+
+    async def scenario():
+        instance = await store.create_instance(CODER)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            before = await client.get(f"/api/threads/{instance.instance_id}")
+            attached = await client.post(f"/api/threads/{instance.instance_id}/workspace")
+        # The pairing is durable, not just something the page is holding.
+        stored = await store.load_instance(instance.instance_id)
+        return before.json(), attached.json(), stored
+
+    before, attached, stored = asyncio.run(scenario())
+
+    assert before["workspaceAttached"] is False
+    assert "workspaceRef" not in before
+    assert attached["workspaceAttached"] is True
+    assert attached["workspaceRoot"] == "/worktrees/ws-1"
+    assert stored.workspace_id == "ws-1"
+
+
+def test_a_process_without_a_workspace_repository_says_so() -> None:
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            return await client.post(f"/api/threads/{created.json()['id']}/workspace")
+
+    refused = asyncio.run(scenario())
+
+    assert refused.status_code == 409
+    assert "workspace repository" in refused.json()["error"]
 
 
 def test_different_chats_can_run_at_the_same_time() -> None:
@@ -448,3 +649,28 @@ def test_active_run_survives_stream_disconnect_and_replays_progress() -> None:
         (Role.TOOL, "engine"),
         (Role.ASSISTANT, "Found it."),
     ]
+
+
+def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path) -> None:
+    """A cached entry point asks for the assets of a build that is gone."""
+    runner = ConcurrentRunner()
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text('<script src="/assets/index-abc123.js"></script>')
+    (dist / "assets" / "index-abc123.js").write_text("console.log('engine')")
+    app = create_app(_session(runner), {"test": runner}, dist)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                await client.get("/"),
+                await client.get("/assets/index-abc123.js"),
+            )
+
+    page, asset = asyncio.run(scenario())
+
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-cache"
+    assert asset.status_code == 200
+    assert "immutable" in asset.headers["cache-control"]

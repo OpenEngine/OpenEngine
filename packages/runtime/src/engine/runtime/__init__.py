@@ -13,6 +13,7 @@ from engine.runtime.session import (
     UnknownInstanceError,
     UnknownRunnerError,
     UnknownToolGrantError,
+    WorkspacesUnavailableError,
 )
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "UnknownInstanceError",
     "UnknownRunnerError",
     "UnknownToolGrantError",
+    "WorkspacesUnavailableError",
     "profile_for",
 ]

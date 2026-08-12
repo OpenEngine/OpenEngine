@@ -13,19 +13,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role, WorkspaceId
-from engine.ports import AgentRunner
+from engine.ports import AgentRunner, WorkspaceState
 from engine.runtime import AgentSession
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+from starlette.types import Scope
 
 
 @dataclass(slots=True)
@@ -39,6 +41,8 @@ class ChatThread:
     archived: bool = False
     workspace_root: str | None = None
     workspace_id: WorkspaceId | None = None
+    workspace_ref: str | None = None
+    """What to check out to read this chat's work, checkout or no checkout."""
 
 
 class ActiveRun:
@@ -115,6 +119,32 @@ class ActiveRun:
             self._changed.notify_all()
 
 
+class BuiltClient(StaticFiles):
+    """The Vite build, cached the way its filenames say it should be.
+
+    Asset names carry a content hash, so those files are safe to keep forever
+    and are never the reason a browser is out of date. The page that *names*
+    them is the opposite: served without instructions, browsers cache it
+    heuristically and go on asking for the hashed files of a build that no
+    longer exists, which arrives as a blank page and a pair of 404s. So the
+    entry point is revalidated every time and the hashed assets are not.
+    """
+
+    def file_response(
+        self,
+        full_path: os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        immutable = Path(full_path).parent.name == "assets"
+        response.headers["cache-control"] = (
+            "public, max-age=31536000, immutable" if immutable else "no-cache"
+        )
+        return response
+
+
 class ThreadService:
     """Coordinates assistant-ui threads over an ``AgentSession``."""
 
@@ -142,15 +172,36 @@ class ThreadService:
         if runner not in self.session.runners:
             raise ValueError(f"unknown runner {runner!r}")
         instance = await self.session.start(agent_id)
-        thread = ChatThread(
-            instance.instance_id,
-            agent_id,
-            runner,
-            workspace_root=await self.session.workspace_root(instance.instance_id),
-            workspace_id=instance.workspace_id,
-        )
+        thread = ChatThread(instance.instance_id, agent_id, runner)
+        await self._sync_workspace(thread)
         self._threads[instance.instance_id] = thread
         self._locks[instance.instance_id] = asyncio.Lock()
+        return thread
+
+    async def attach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
+        """Give this chat a checkout again -- or a first one."""
+        thread = await self._require_idle(instance_id)
+        async with self._locks[instance_id]:
+            state = await self.session.attach_workspace(instance_id)
+        return _with_workspace(thread, state)
+
+    async def detach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
+        """Release this chat's checkout, keeping its work on the branch."""
+        thread = await self._require_idle(instance_id)
+        async with self._locks[instance_id]:
+            state = await self.session.detach_workspace(instance_id)
+        return _with_workspace(thread, state)
+
+    async def _require_idle(self, instance_id: AgentInstanceId) -> ChatThread:
+        """A workspace is not the agent's to lose in the middle of using it.
+
+        The turn lock alone would serialize this correctly but leave the
+        request hanging for as long as the agent runs, which reads as a broken
+        button rather than a busy one.
+        """
+        thread = await self._require(instance_id)
+        if self.active_run(instance_id) is not None:
+            raise RuntimeError("this chat has a run in progress")
         return thread
 
     async def delete(self, instance_id: AgentInstanceId) -> None:
@@ -188,6 +239,7 @@ class ThreadService:
         self, instance_id: AgentInstanceId, text: str, runner: str | None
     ) -> ActiveRun:
         await self._require(instance_id)
+        await self._require_somewhere_to_run(instance_id)
         initial_message_count = len(await self.session.history(instance_id))
         current = self.active_run(instance_id)
         if current is not None:
@@ -254,7 +306,10 @@ class ThreadService:
                 AgentRunId(f"ar-{uuid4().hex[:12]}"),
                 self.session.profiles[thread.agent_id],
                 (*title_context, Message.user(_TITLE_PROMPT)),
-                workspace_id=thread.workspace_id,
+                # Naming a chat reads the transcript, not the tree, so a
+                # detached one is named where the process runs rather than
+                # failing on a directory it does not need.
+                workspace_id=thread.workspace_id if thread.workspace_root else None,
             )
         title = _clean_title(turn.message.content)
         if title:
@@ -267,6 +322,37 @@ class ThreadService:
             raise KeyError(f"no chat thread {instance_id!r}")
         return thread
 
+    async def _require_somewhere_to_run(self, instance_id: AgentInstanceId) -> None:
+        """Refuse a turn a detached chat cannot run, in words the UI can act on.
+
+        The runner would fail on the missing directory anyway, several layers
+        down and phrased as a lookup error. A chat that never had a workspace
+        is left alone: it runs where the process was told to.
+        """
+        try:
+            workspace = await self.session.workspace(instance_id)
+            detached = workspace is not None and not workspace.attached
+        except KeyError:
+            detached = True
+        if detached:
+            raise RuntimeError(
+                "this chat's worktree is detached; reattach it to run the agent"
+            )
+
+    async def _sync_workspace(self, thread: ChatThread) -> ChatThread:
+        """Record what the provider currently says about this chat's workspace.
+
+        Conversations outlive their checkouts -- `git worktree remove`, a swept
+        /tmp, a reboot -- so a chat is listed with whatever is left of its
+        workspace rather than failing the request. A provider that disowns the
+        id entirely is treated the same way: the chat is simply one without a
+        workspace, and attaching offers it a new one.
+        """
+        try:
+            return _with_workspace(thread, await self.session.workspace(thread.instance_id))
+        except KeyError:
+            return _with_workspace(thread, None)
+
     async def _restore(self) -> None:
         """Populate the UI registry from the durable conversation store once."""
         if self._restored:
@@ -276,13 +362,12 @@ class ThreadService:
                 return
             instances = await self.session.instances()
             for instance in reversed(instances):
-                self._threads[instance.instance_id] = ChatThread(
+                thread = ChatThread(
                     instance.instance_id,
                     instance.agent_id,
                     self.session.default_runner,
-                    workspace_root=await self.session.workspace_root(instance.instance_id),
-                    workspace_id=instance.workspace_id,
                 )
+                self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
             self._restored = True
 
@@ -397,6 +482,28 @@ def create_app(
             return _error(str(error), 400)
         return JSONResponse({"title": title})
 
+    async def attach_workspace(request: Request) -> JSONResponse:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+        try:
+            thread = await service.attach_workspace(instance_id)
+        except RuntimeError as error:
+            # A repository that cannot produce a checkout -- unwired, or git
+            # refusing -- is the server's problem to explain, not a 404.
+            return _error(str(error), 409)
+        return JSONResponse(_thread_json(thread))
+
+    async def detach_workspace(request: Request) -> JSONResponse:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+        try:
+            thread = await service.detach_workspace(instance_id)
+        except RuntimeError as error:
+            return _error(str(error), 409)
+        return JSONResponse(_thread_json(thread))
+
     async def run_thread(request: Request) -> Response:
         instance_id = _thread_id(request)
         if await service.get(instance_id) is None:
@@ -454,18 +561,36 @@ def create_app(
             name="unarchive",
         ),
         Route("/api/threads/{thread_id}/messages", messages),
+        Route(
+            "/api/threads/{thread_id}/workspace",
+            attach_workspace,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/threads/{thread_id}/workspace",
+            detach_workspace,
+            methods=["DELETE"],
+        ),
         Route("/api/threads/{thread_id}/title", title_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}/runs", run_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}/runs/current", resume_run),
         Route("/api/threads/{thread_id}/runs/current", cancel_run, methods=["DELETE"]),
     ]
     if static_directory is not None and (static_directory / "index.html").is_file():
-        routes.append(Mount("/", StaticFiles(directory=static_directory, html=True)))
+        routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
     else:
         routes.append(Route("/", _missing_frontend))
     app = Starlette(routes=routes)
     app.state.thread_service = service
     return app
+
+
+def _with_workspace(thread: ChatThread, state: WorkspaceState | None) -> ChatThread:
+    """Fold a provider's answer into the thread the UI is shown."""
+    thread.workspace_id = state.workspace_id if state is not None else None
+    thread.workspace_ref = state.ref if state is not None else None
+    thread.workspace_root = state.root_path if state is not None else None
+    return thread
 
 
 def _thread_json(thread: ChatThread) -> dict[str, object]:
@@ -475,9 +600,14 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
         "archived": thread.archived,
         "agentId": str(thread.agent_id),
         "runner": thread.runner,
+        # Present but detached is a state of its own: the work is still there,
+        # on the ref, and attaching brings a checkout back to it.
+        "workspaceAttached": thread.workspace_root is not None,
     }
     if thread.workspace_root is not None:
         result["workspaceRoot"] = thread.workspace_root
+    if thread.workspace_ref is not None:
+        result["workspaceRef"] = thread.workspace_ref
     return result
 
 

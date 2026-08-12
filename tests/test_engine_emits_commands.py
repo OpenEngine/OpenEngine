@@ -16,7 +16,7 @@ from engine.domain import (
     RunState,
     TaskId,
 )
-from engine.ports import Workspace, WorkspaceProvider
+from engine.ports import Workspace, WorkspaceProvider, WorkspaceState
 from engine.runtime import Capabilities, Dispatcher, UnhandledCommandError
 
 RUN = RunId("run-1")
@@ -72,6 +72,25 @@ class FakeWorkspaceProvider:
 
     async def root_path(self, workspace_id: str) -> str:
         return f"/tmp/{workspace_id}"
+
+    async def state(self, workspace_id: str) -> WorkspaceState:
+        return WorkspaceState(
+            workspace_id=workspace_id,
+            ref=f"engine/{workspace_id}",
+            root_path=f"/tmp/{workspace_id}",
+        )
+
+    async def attach(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+        return Workspace(
+            workspace_id=workspace_id,
+            root_path=f"/tmp/{workspace_id}",
+            repository=repository,
+            base_ref=base_ref,
+            ref=f"engine/{workspace_id}",
+        )
+
+    async def detach(self, workspace_id: str) -> None:
+        pass
 
     async def dispose(self, workspace_id: str) -> None:
         pass

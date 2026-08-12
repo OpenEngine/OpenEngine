@@ -24,8 +24,20 @@ export type ApiThread = {
   archived: boolean;
   agentId: string;
   runner: string;
+  /** The checkout, when this chat currently has one. */
   workspaceRoot?: string;
+  /** What to check out to read this chat's work, attached or not. */
+  workspaceRef?: string;
+  workspaceAttached: boolean;
 };
+
+export function attachWorkspace(threadId: string): Promise<ApiThread> {
+  return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "POST" });
+}
+
+export function detachWorkspace(threadId: string): Promise<ApiThread> {
+  return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "DELETE" });
+}
 
 export type ApiMessage = {
   id: string;

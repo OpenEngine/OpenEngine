@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -10,6 +11,9 @@ from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeError,
     GitWorktreeWorkspaceProvider,
 )
+
+
+_IDENTITY = ("-c", "user.name=Engine Tests", "-c", "user.email=engine@example.test")
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -26,16 +30,7 @@ def _repository(path: Path) -> None:
     _git(path, "init", "-b", "main")
     (path / "README.md").write_text("engine\n")
     _git(path, "add", "README.md")
-    _git(
-        path,
-        "-c",
-        "user.name=Engine Tests",
-        "-c",
-        "user.email=engine@example.test",
-        "commit",
-        "-m",
-        "initial",
-    )
+    _git(path, *_IDENTITY, "commit", "-m", "initial")
 
 
 def test_each_workspace_is_a_distinct_worktree(tmp_path: Path) -> None:
@@ -55,7 +50,7 @@ def test_each_workspace_is_a_distinct_worktree(tmp_path: Path) -> None:
     assert asyncio.run(provider.root_path(first.workspace_id)) == first.root_path
 
 
-def test_dispose_is_idempotent(tmp_path: Path) -> None:
+def test_dispose_takes_the_work_with_it(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     _repository(repository)
     provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
@@ -65,6 +60,116 @@ def test_dispose_is_idempotent(tmp_path: Path) -> None:
     asyncio.run(provider.dispose(workspace.workspace_id))
 
     assert not Path(workspace.root_path).exists()
+    assert workspace.ref not in _git(repository, "branch", "--list", workspace.ref)
+
+
+def test_detaching_keeps_the_branch_and_reattaching_restores_the_work(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+    Path(workspace.root_path, "agent.md").write_text("what the agent did\n")
+
+    asyncio.run(provider.detach(workspace.workspace_id))
+    detached = asyncio.run(provider.state(workspace.workspace_id))
+    reattached = asyncio.run(
+        provider.attach(workspace.workspace_id, str(repository), "HEAD")
+    )
+
+    assert not detached.attached
+    assert detached.root_path is None
+    # Uncommitted work is the normal state of an agent's worktree; detaching
+    # snapshots it onto the branch rather than throwing it away.
+    assert detached.ref == workspace.ref
+    assert "agent.md" in _git(repository, "show", "--name-only", detached.ref)
+    assert reattached.workspace_id == workspace.workspace_id
+    assert reattached.root_path == workspace.root_path
+    assert Path(reattached.root_path, "agent.md").read_text() == "what the agent did\n"
+    assert _git(Path(reattached.root_path), "branch", "--show-current") == workspace.ref
+
+
+def test_detach_is_idempotent_and_leaves_committed_work_alone(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+    root_path = Path(workspace.root_path)
+    (root_path / "agent.md").write_text("committed by the agent\n")
+    _git(root_path, "add", "agent.md")
+    _git(root_path, *_IDENTITY, "commit", "-m", "the agent's own commit")
+    committed = _git(root_path, "rev-parse", "HEAD")
+
+    asyncio.run(provider.detach(workspace.workspace_id))
+    asyncio.run(provider.detach(workspace.workspace_id))
+
+    assert not root_path.exists()
+    assert _git(repository, "rev-parse", workspace.ref) == committed
+
+
+def test_work_is_snapshotted_even_where_git_has_no_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A machine that has never run `git config user.email` still detaches."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "absent-global"))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(tmp_path / "absent-system"))
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+    Path(workspace.root_path, "agent.md").write_text("what the agent did\n")
+
+    asyncio.run(provider.detach(workspace.workspace_id))
+
+    assert "agent.md" in _git(repository, "show", "--name-only", workspace.ref)
+
+
+def test_attach_replaces_a_checkout_deleted_behind_gits_back(tmp_path: Path) -> None:
+    """A swept /tmp leaves an administrative entry that would refuse a new one."""
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+    shutil.rmtree(workspace.root_path)
+
+    reattached = asyncio.run(
+        provider.attach(workspace.workspace_id, str(repository), "HEAD")
+    )
+
+    assert reattached.root_path == workspace.root_path
+    assert Path(reattached.root_path, "README.md").read_text() == "engine\n"
+
+
+def test_attach_checks_out_afresh_when_even_the_branch_is_gone(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+    asyncio.run(provider.dispose(workspace.workspace_id))
+
+    reattached = asyncio.run(
+        provider.attach(workspace.workspace_id, str(repository), "HEAD")
+    )
+
+    assert reattached.workspace_id == workspace.workspace_id
+    assert Path(reattached.root_path, "README.md").read_text() == "engine\n"
+
+
+def test_attach_is_idempotent(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+    Path(workspace.root_path, "scratch.txt").write_text("mid-turn\n")
+
+    reattached = asyncio.run(
+        provider.attach(workspace.workspace_id, str(repository), "HEAD")
+    )
+
+    assert reattached.root_path == workspace.root_path
+    # An attached workspace is left exactly as it stands, work in progress and all.
+    assert Path(workspace.root_path, "scratch.txt").read_text() == "mid-turn\n"
 
 
 def test_a_non_repository_is_reported_as_a_workspace_error(tmp_path: Path) -> None:

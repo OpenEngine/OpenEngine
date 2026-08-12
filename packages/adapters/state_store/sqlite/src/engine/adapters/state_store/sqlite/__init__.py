@@ -127,6 +127,20 @@ class SQLiteStateStore:
             ).fetchone()
         return _instance_from_row(row) if row is not None else None
 
+    async def attach_workspace(
+        self, instance_id: AgentInstanceId, workspace_id: WorkspaceId | None
+    ) -> AgentInstance:
+        with self._lock, self._connection:
+            updated = self._connection.execute(
+                "UPDATE agent_instances SET workspace_id = ? WHERE instance_id = ?",
+                (workspace_id, instance_id),
+            ).rowcount
+            if not updated:
+                raise KeyError(f"no agent instance {instance_id!r}")
+        instance = await self.load_instance(instance_id)
+        assert instance is not None  # just updated, under the same lock
+        return instance
+
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         query = """
             SELECT instance_id, agent_id, conversation_id, task_id, workspace_id
