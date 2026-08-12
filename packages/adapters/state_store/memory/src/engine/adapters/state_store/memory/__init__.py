@@ -78,6 +78,7 @@ class InMemoryStateStore:
         agent_id: AgentId,
         task_id: TaskId | None = None,
         workspace_id: WorkspaceId | None = None,
+        runner: str = "",
     ) -> AgentInstance:
         instance = AgentInstance(
             instance_id=AgentInstanceId(f"agi-{uuid4().hex[:12]}"),
@@ -85,6 +86,7 @@ class InMemoryStateStore:
             conversation_id=ConversationId(f"conv-{uuid4().hex[:12]}"),
             task_id=task_id,
             workspace_id=workspace_id,
+            runner=runner,
         )
         with self._lock:
             self._instances[instance.instance_id] = instance
@@ -95,6 +97,23 @@ class InMemoryStateStore:
                 instance_id=instance.instance_id,
             )
         return instance
+
+    async def update_instance_metadata(
+        self,
+        instance_id: AgentInstanceId,
+        title: str,
+        archived: bool,
+        runner: str,
+    ) -> AgentInstance:
+        with self._lock:
+            instance = self._instances.get(instance_id)
+            if instance is None:
+                raise KeyError(f"no agent instance {instance_id!r}")
+            updated = replace(
+                instance, title=title, archived=archived, runner=runner
+            )
+            self._instances[instance_id] = updated
+        return updated
 
     async def load_instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
         with self._lock:

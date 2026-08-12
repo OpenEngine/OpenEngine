@@ -40,8 +40,20 @@ class PostgresStateStore:
         agent_id: AgentId,
         task_id: TaskId | None = None,
         workspace_id: WorkspaceId | None = None,
+        runner: str = "",
     ) -> AgentInstance:
         raise NotImplementedError("Agent instances land with the state-store ticket")
+
+    async def update_instance_metadata(
+        self,
+        instance_id: AgentInstanceId,
+        title: str,
+        archived: bool,
+        runner: str,
+    ) -> AgentInstance:
+        raise NotImplementedError(
+            "Agent instance metadata lands with the state-store ticket"
+        )
 
     async def load_instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
         raise NotImplementedError("Agent instances land with the state-store ticket")
