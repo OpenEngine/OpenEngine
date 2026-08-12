@@ -12,6 +12,15 @@ import { useEffect, useState } from "react";
 
 import { api, attachWorkspace, detachWorkspace, type ApiThread } from "./api";
 
+function toolResultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  try {
+    return JSON.stringify(result, null, 2) ?? String(result);
+  } catch {
+    return String(result);
+  }
+}
+
 function TextParts() {
   return (
     <MessagePrimitive.Parts>
@@ -22,7 +31,9 @@ function TextParts() {
           <details className="tool-call">
             <summary>{part.status.type === "running" ? "running" : "ran"} {part.toolName}</summary>
             <pre>{part.argsText || JSON.stringify(part.args, null, 2)}</pre>
-            {part.result !== undefined && <pre className="tool-result">{String(part.result)}</pre>}
+            {part.result !== undefined && (
+              <pre className="tool-result">{toolResultText(part.result)}</pre>
+            )}
           </details>
         ) : null
       }
