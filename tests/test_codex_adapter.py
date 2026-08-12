@@ -11,6 +11,7 @@ the shape you assumed rather than the one the CLI emits.
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -363,6 +364,27 @@ def test_completed_messages_stream_in_transcript_order(tmp_path) -> None:
     )
 
     assert observed == list(turn.transcript)
+
+
+def test_a_jsonl_event_may_exceed_the_stream_reader_line_limit(tmp_path) -> None:
+    """Tool output lives inside one JSONL event and can easily exceed 64 KiB."""
+    output = "x" * (70 * 1024)
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        '{"type":"item.completed","item":{"id":"item_0",'
+        '"type":"command_execution","aggregated_output":'
+        + json.dumps(output)
+        + '}}\n'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n'
+    )
+    runner = CodexAgentRunner(binary_path=_fake_codex(tmp_path, f"cat {transcript}"))
+
+    turn = asyncio.run(
+        runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("go"),))
+    )
+
+    assert turn.steps[1].content == output
+    assert turn.message.content == "done"
 
 
 def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
