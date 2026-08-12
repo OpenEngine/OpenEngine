@@ -1,0 +1,73 @@
+name: pages
+
+# Publishes site/ to GitHub Pages, which serves it at https://openengine.sh.
+# The custom domain lives in Settings -> Pages; site/CNAME records it in the
+# repository as well, so the domain is visible from a checkout.
+#
+# Changing the WAITLIST_ENDPOINT variable does not push a commit, so a deploy
+# that picks up a new one is a manual `workflow_dispatch` run.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one in flight: the site that is
+# live should always be the last commit that finished, not a half-uploaded one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build and deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inject the waitlist endpoint
+        # Kept out of the repository so the form provider can be changed, or a
+        # spammed endpoint rotated, without a commit. Set it as a repository
+        # variable named WAITLIST_ENDPOINT (Settings -> Secrets and variables ->
+        # Actions -> Variables). Left unset, the page tells visitors to email
+        # instead of posting submissions nowhere.
+        env:
+          WAITLIST_ENDPOINT: ${{ vars.WAITLIST_ENDPOINT }}
+        run: |
+          if [ -z "${WAITLIST_ENDPOINT}" ]; then
+            echo "::warning::WAITLIST_ENDPOINT is not set; the form will fall back to a mailto prompt"
+            exit 0
+          fi
+          # Python rather than sed: the value is a URL full of slashes, and a
+          # literal replace cannot be broken by whatever punctuation it holds.
+          python3 - <<'PY'
+          import html, os, pathlib
+
+          page = pathlib.Path("site/index.html")
+          endpoint = html.escape(os.environ["WAITLIST_ENDPOINT"].strip(), quote=True)
+          text = page.read_text(encoding="utf-8")
+          if "__WAITLIST_ENDPOINT__" not in text:
+              raise SystemExit("placeholder __WAITLIST_ENDPOINT__ is missing from site/index.html")
+          page.write_text(text.replace("__WAITLIST_ENDPOINT__", endpoint), encoding="utf-8")
+          print("waitlist endpoint injected")
+          PY
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
