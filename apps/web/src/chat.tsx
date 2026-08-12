@@ -12,6 +12,15 @@ import { useEffect, useState } from "react";
 
 import { api, attachWorkspace, detachWorkspace, type ApiThread } from "./api";
 
+function toolResultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  try {
+    return JSON.stringify(result, null, 2) ?? String(result);
+  } catch {
+    return String(result);
+  }
+}
+
 function TextParts() {
   return (
     <MessagePrimitive.Parts>
@@ -22,7 +31,9 @@ function TextParts() {
           <details className="tool-call">
             <summary>{part.status.type === "running" ? "running" : "ran"} {part.toolName}</summary>
             <pre>{part.argsText || JSON.stringify(part.args, null, 2)}</pre>
-            {part.result !== undefined && <pre className="tool-result">{String(part.result)}</pre>}
+            {part.result !== undefined && (
+              <pre className="tool-result">{toolResultText(part.result)}</pre>
+            )}
           </details>
         ) : null
       }
@@ -36,6 +47,23 @@ function UserMessage() {
       <TextParts />
     </MessagePrimitive.Root>
   );
+}
+
+/** What a failed run has to say for itself.
+ *
+ *  assistant-ui does not keep the thrown Error: `toAssistantError` normalizes
+ *  it to a plain `{code, message}`, so an `instanceof Error` test never matches
+ *  and stringifying the object prints "[object Object]" over the one sentence
+ *  the reader needed. Read the message wherever it ended up.
+ */
+function errorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const { message } = error as { message: unknown };
+    if (typeof message === "string") return message;
+  }
+  return "The agent run failed.";
 }
 
 function AssistantMessage() {
@@ -52,7 +80,7 @@ function AssistantMessage() {
         <TextParts />
         <MessagePrimitive.Error>
           <p className="message-error">
-            {error instanceof Error ? error.message : String(error ?? "The agent run failed.")}
+            <Ticked text={errorText(error)} />
           </p>
         </MessagePrimitive.Error>
       </div>
