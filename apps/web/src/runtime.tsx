@@ -34,9 +34,16 @@ type ThreadInitializer = {
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
-function ThreadInitializationBridge({ initializer }: { initializer: ThreadInitializer }) {
+function ThreadInitializationBridge({
+  initializer,
+  reloadThreads,
+}: {
+  initializer: ThreadInitializer;
+  reloadThreads: { current: (() => Promise<void>) | null };
+}) {
   const aui = useAui();
   initializer.current = () => aui.threadListItem.initialize();
+  reloadThreads.current = () => aui.threads.reload();
   return null;
 }
 
@@ -130,6 +137,7 @@ export function EngineRuntimeProvider({
 }: PropsWithChildren<{ defaults: NewChatDefaults }>) {
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
+  const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
   const initialThreadIdRef = useRef(
     typeof window === "undefined"
       ? undefined
@@ -154,6 +162,7 @@ export function EngineRuntimeProvider({
           body: JSON.stringify({ text, runner: defaultsRef.current.runner }),
           signal: abortSignal,
         });
+        await reloadThreadsRef.current?.();
 
         const response = await fetch(`/api/threads/${threadId}/runs`, {
           method: "POST",
@@ -225,7 +234,10 @@ export function EngineRuntimeProvider({
   return (
     <DefaultsContext.Provider value={defaults}>
       <AssistantRuntimeProvider runtime={runtime}>
-        <ThreadInitializationBridge initializer={threadInitializerRef} />
+        <ThreadInitializationBridge
+          initializer={threadInitializerRef}
+          reloadThreads={reloadThreadsRef}
+        />
         {children}
       </AssistantRuntimeProvider>
     </DefaultsContext.Provider>
