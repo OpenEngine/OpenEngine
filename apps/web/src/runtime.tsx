@@ -49,6 +49,8 @@ function remoteMetadata(thread: ApiThread) {
       agentId: thread.agentId,
       runner: thread.runner,
       workspaceRoot: thread.workspaceRoot,
+      workspaceRef: thread.workspaceRef,
+      workspaceAttached: thread.workspaceAttached,
     },
   };
 }

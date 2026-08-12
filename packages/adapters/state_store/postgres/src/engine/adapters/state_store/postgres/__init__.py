@@ -46,6 +46,11 @@ class PostgresStateStore:
     async def load_instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 
+    async def attach_workspace(
+        self, instance_id: AgentInstanceId, workspace_id: WorkspaceId | None
+    ) -> AgentInstance:
+        raise NotImplementedError("Agent instances land with the state-store ticket")
+
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 

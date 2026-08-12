@@ -59,6 +59,17 @@ class StateStore(Protocol):
     async def load_instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
         ...
 
+    async def attach_workspace(
+        self, instance_id: AgentInstanceId, workspace_id: WorkspaceId | None
+    ) -> AgentInstance:
+        """Point an instance at a workspace, or at none.
+
+        A conversation may be given one it was never created with, and keeps it
+        across restarts. Returns the updated instance; raises `KeyError` if it
+        is unknown.
+        """
+        ...
+
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         """Every instance, or every instance of one role. Newest first."""
         ...

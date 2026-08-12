@@ -20,7 +20,7 @@ from engine.ports.communications import Communications
 from engine.ports.source_control import SourceControl
 from engine.ports.state_store import StateStore
 from engine.ports.workflow_runtime import WorkflowRuntime
-from engine.ports.workspace_provider import Workspace, WorkspaceProvider
+from engine.ports.workspace_provider import Workspace, WorkspaceProvider, WorkspaceState
 
 __all__ = [
     "AgentRunner",
@@ -35,4 +35,5 @@ __all__ = [
     "Workspace",
     "WorkflowRuntime",
     "WorkspaceProvider",
+    "WorkspaceState",
 ]

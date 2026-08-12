@@ -25,6 +25,7 @@ from engine.ports.agent_runner import (
     StreamingAgentRunner,
     TurnObserver,
 )
+from engine.ports.workspace_provider import WorkspaceState
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.profiles import BUILT_IN, profile_for
 
@@ -51,6 +52,17 @@ class UnknownRunnerError(KeyError):
     def __init__(self, name: str, known: Sequence[str]) -> None:
         super().__init__(f"no runner {name!r}; wired: {sorted(known)}")
         self.name = name
+
+
+class WorkspacesUnavailableError(RuntimeError):
+    """This process was not told which repository to check workspaces out of.
+
+    Wiring a workspace repository is the composition root's decision, so a
+    conversation cannot talk itself into one.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("this session was composed without a workspace repository")
 
 
 class UnknownToolGrantError(RuntimeError):
@@ -149,6 +161,74 @@ class AgentSession:
         if instance.workspace_id is None:
             return None
         return await self._capabilities.workspace_provider.root_path(instance.workspace_id)
+
+    async def workspace(self, instance_id: AgentInstanceId) -> WorkspaceState | None:
+        """This conversation's workspace, attached or not.
+
+        None means the conversation has never been given one -- distinct from
+        having one whose checkout is currently gone, which is a `WorkspaceState`
+        with no `root_path` and is what `attach_workspace` puts back.
+        """
+        instance = await self._require_instance(instance_id)
+        if instance.workspace_id is None:
+            return None
+        return await self._capabilities.workspace_provider.state(instance.workspace_id)
+
+    async def attach_workspace(self, instance_id: AgentInstanceId) -> WorkspaceState:
+        """Give this conversation a checkout to work in, and keep the pairing.
+
+        Works from any starting point: a conversation that never had a
+        workspace is given one, and one whose checkout was detached or deleted
+        gets it back, carrying in whatever work its previous checkout left
+        behind.
+        """
+        instance = await self._require_instance(instance_id)
+        if self._workspace_repository is None:
+            raise WorkspacesUnavailableError()
+        provider = self._capabilities.workspace_provider
+
+        if instance.workspace_id is None:
+            workspace = await provider.provision(
+                self._workspace_repository, self._workspace_base_ref
+            )
+            try:
+                await self._capabilities.state_store.attach_workspace(
+                    instance_id, workspace.workspace_id
+                )
+            except Exception:
+                await provider.dispose(workspace.workspace_id)
+                raise
+        else:
+            workspace = await provider.attach(
+                instance.workspace_id,
+                self._workspace_repository,
+                self._workspace_base_ref,
+            )
+        return WorkspaceState(
+            workspace_id=workspace.workspace_id,
+            ref=workspace.ref,
+            root_path=workspace.root_path,
+        )
+
+    async def detach_workspace(self, instance_id: AgentInstanceId) -> WorkspaceState | None:
+        """Release the checkout, keeping the work and the pairing.
+
+        The conversation keeps its workspace id, so the state this returns is
+        the same workspace with nowhere to run -- `attach_workspace` restores
+        it. Detaching a conversation that has no workspace does nothing.
+        """
+        instance = await self._require_instance(instance_id)
+        if instance.workspace_id is None:
+            return None
+        provider = self._capabilities.workspace_provider
+        await provider.detach(instance.workspace_id)
+        return await provider.state(instance.workspace_id)
+
+    async def _require_instance(self, instance_id: AgentInstanceId) -> AgentInstance:
+        instance = await self._capabilities.state_store.load_instance(instance_id)
+        if instance is None:
+            raise UnknownInstanceError(instance_id)
+        return instance
 
     async def say(
         self,
@@ -263,4 +343,5 @@ __all__ = [
     "UnknownInstanceError",
     "UnknownRunnerError",
     "UnknownToolGrantError",
+    "WorkspacesUnavailableError",
 ]
