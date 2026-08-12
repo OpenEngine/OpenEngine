@@ -278,7 +278,7 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
       )}
       {archived ? (
         <ThreadListItemPrimitive.Unarchive
-          className="thread-action"
+          className="thread-action restore-action"
           aria-label="Restore chat"
           title="Restore chat"
         >
@@ -286,7 +286,7 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
         </ThreadListItemPrimitive.Unarchive>
       ) : (
         <ThreadListItemPrimitive.Archive
-          className="thread-action"
+          className="thread-action danger"
           aria-label="Archive chat"
           title="Archive chat"
         >

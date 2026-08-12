@@ -26,9 +26,11 @@ button { color: inherit; }
 .thread-copy > :first-child { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .thread-meta { display: flex; align-items: center; gap: 5px; overflow: hidden; color: #8f9d8d; font: 400 10px/1.4 ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .running-dot { flex: 0 0 auto; width: 6px; height: 6px; background: #d7f36d; border-radius: 50%; box-shadow: 0 0 0 3px #d7f36d20; animation: pulse 1.2s ease-in-out infinite; }
-.thread-action { height: 28px; padding: 0 6px; color: #8f9d8d; background: transparent; border: 0; border-radius: 6px; cursor: pointer; font-size: 11px; opacity: 0; }
+.thread-action { width: 25px; height: 28px; padding: 0; color: #8f9d8d; background: transparent; border: 0; border-radius: 6px; cursor: pointer; opacity: 0; }
+.thread-action.restore-action { width: auto; padding: 0 6px; font-size: 11px; }
 .thread-item:hover .thread-action, .thread-action:focus-visible { opacity: 1; }
 .thread-action:hover { color: #fff; background: #414b3e; }
+.thread-action.danger:hover { color: #ffb5a9; }
 .archived-list { margin-top: 14px; color: #8f9d8d; }
 .archived-list > summary { margin: 0 10px 6px; font: 500 10px/1.5 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
 .archived-list .thread-item { opacity: .72; }
