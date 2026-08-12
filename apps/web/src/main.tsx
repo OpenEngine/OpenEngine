@@ -22,8 +22,9 @@ function App() {
       .catch((reason: Error) => setError(reason.message));
   }, []);
 
-  if (error) return <main className="fatal">Could not connect to engine: {error}</main>;
-  if (!config || !agentId || !runner) return <main className="loading">Starting engine…</main>;
+  if (error) return <main className="fatal">Could not connect to openengine: {error}</main>;
+  if (!config || !agentId || !runner)
+    return <main className="loading">Starting openengine…</main>;
 
   return (
     <EngineRuntimeProvider defaults={{ agentId, runner }}>
