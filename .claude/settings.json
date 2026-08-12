@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(.venv/bin/python -m pytest tests/:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(mkdir:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)"
+    ],
+    "additionalDirectories": [
+      "/tmp/engine-workspaces/",
+      "/private/tmp/engine-workspaces/"
+    ]
+  }
+}
