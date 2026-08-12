@@ -93,6 +93,18 @@ type WorkspaceCustom = {
   workspaceAttached?: boolean;
 };
 
+/** Server messages mark the command you are meant to run in backticks; show
+ *  that span as the code it is, so it can be read and copied as one thing. */
+function Ticked({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/`([^`]+)`/).map((part, index) =>
+        index % 2 ? <code key={index}>{part}</code> : part,
+      )}
+    </>
+  );
+}
+
 /** This chat's worktree: where it is, how to read its work, and a way to
  *  hand the directory back or ask for it again. */
 function WorkspaceTagline() {
@@ -166,7 +178,11 @@ function WorkspaceTagline() {
               ? "Reattach"
               : "Attach"}
       </button>
-      {error && <p className="workspace-error">{error}</p>}
+      {error && (
+        <p className="workspace-error">
+          <Ticked text={error} />
+        </p>
+      )}
     </div>
   );
 }

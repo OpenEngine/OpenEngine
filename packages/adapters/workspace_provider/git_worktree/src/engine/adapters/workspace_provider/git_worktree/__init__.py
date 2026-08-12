@@ -105,6 +105,9 @@ class GitWorktreeWorkspaceProvider:
         # leaves an administrative entry that would refuse the checkout below.
         await _git(repository_root, "worktree", "prune")
         if await _branch_exists(repository_root, branch):
+            holder = await _checkout_holding(repository_root, branch)
+            if holder is not None:
+                raise BranchInUseError(branch, holder)
             await _git(repository_root, "worktree", "add", str(root_path), branch)
         else:
             await _git(
@@ -135,8 +138,39 @@ class GitWorktreeError(RuntimeError):
     """Git could not create or manage a workspace."""
 
 
+class BranchInUseError(GitWorktreeError):
+    """Somewhere else already has this workspace's branch checked out.
+
+    Git allows one checkout per branch, and the other one is usually a person
+    reading what the agent did -- which is what keeping the work on a branch is
+    for. So this says where the branch went and how to give it back, rather
+    than forcing a second checkout of it.
+    """
+
+    def __init__(self, ref: str, checkout: str) -> None:
+        super().__init__(
+            f"{ref} is already checked out at {checkout}\n"
+            f"hint: switch that checkout to another branch first via "
+            f"`git -C {checkout} switch -`"
+        )
+        self.ref = ref
+        self.checkout = checkout
+
+
 def _branch_for(workspace_id: WorkspaceId) -> str:
     return f"engine/{workspace_id}"
+
+
+async def _checkout_holding(repository_root: str, branch: str) -> str | None:
+    """Which worktree, if any, is sitting on this branch."""
+    listing = await _git(repository_root, "worktree", "list", "--porcelain")
+    path: str | None = None
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            path = line.removeprefix("worktree ").strip()
+        elif line.strip() == f"branch refs/heads/{branch}":
+            return path
+    return None
 
 
 async def _repository_root(repository: str) -> str:
@@ -221,4 +255,4 @@ async def _git(repository: str, *arguments: str) -> str:
     return stdout.decode(errors="replace").strip()
 
 
-__all__ = ["GitWorktreeError", "GitWorktreeWorkspaceProvider"]
+__all__ = ["BranchInUseError", "GitWorktreeError", "GitWorktreeWorkspaceProvider"]

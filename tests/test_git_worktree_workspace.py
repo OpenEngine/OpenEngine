@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from engine.adapters.workspace_provider.git_worktree import (
+    BranchInUseError,
     GitWorktreeError,
     GitWorktreeWorkspaceProvider,
 )
@@ -123,6 +124,46 @@ def test_work_is_snapshotted_even_where_git_has_no_identity(
     asyncio.run(provider.detach(workspace.workspace_id))
 
     assert "agent.md" in _git(repository, "show", "--name-only", workspace.ref)
+
+
+def test_reattaching_a_branch_someone_is_reading_says_where_it_went(
+    tmp_path: Path,
+) -> None:
+    """Reviewing the work is the point of the branch, so say how to hand it back."""
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+    asyncio.run(provider.detach(workspace.workspace_id))
+    _git(repository, "switch", workspace.ref)
+
+    with pytest.raises(BranchInUseError) as refusal:
+        asyncio.run(provider.attach(workspace.workspace_id, str(repository), "HEAD"))
+
+    assert refusal.value.ref == workspace.ref
+    assert refusal.value.checkout == str(repository)
+    assert str(refusal.value).splitlines()[1] == (
+        f"hint: switch that checkout to another branch first via "
+        f"`git -C {repository} switch -`"
+    )
+    # Refused, not half-done: the checkout it could not make is not left behind.
+    assert not Path(workspace.root_path).exists()
+
+
+def test_the_branch_a_workspace_is_already_on_is_not_in_use_by_someone_else(
+    tmp_path: Path,
+) -> None:
+    """The workspace's own checkout must not read as a stranger holding it."""
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+
+    reattached = asyncio.run(
+        provider.attach(workspace.workspace_id, str(repository), "HEAD")
+    )
+
+    assert reattached.root_path == workspace.root_path
 
 
 def test_attach_replaces_a_checkout_deleted_behind_gits_back(tmp_path: Path) -> None:
