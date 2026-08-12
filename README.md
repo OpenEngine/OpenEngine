@@ -376,6 +376,23 @@ uv lock --check
 UV_PYTHON=3.11 uv sync --locked && UV_PYTHON=3.11 uv run pytest
 ```
 
+## Landing page
+
+`site/` is the public page at <https://openengine.sh> — one hand-written
+`index.html`, no build step and no dependencies, so it cannot rot separately
+from the thing it describes. `.github/workflows/pages.yml` publishes it to
+GitHub Pages on every push to `main` that touches `site/`, and on demand.
+
+The waitlist form posts JSON `{"email": ...}` to whatever endpoint the
+`WAITLIST_ENDPOINT` repository variable names (Formspree, Buttondown, a Worker —
+the page does not care). The endpoint is injected at deploy time rather than
+committed, so the provider can change without a commit and a spammed endpoint
+can be rotated. With the variable unset the form degrades to asking visitors to
+email instead of posting submissions nowhere, and the deploy logs a warning.
+
+Open `site/index.html` in a browser to work on it; the form takes the same
+fallback path locally, because the placeholder is only substituted on deploy.
+
 ## Status
 
 Ticket 1 — scaffolding — is complete. In place:
