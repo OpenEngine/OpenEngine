@@ -192,7 +192,7 @@ export function ChatThread() {
     <ThreadPrimitive.Root className="thread">
       <ThreadPrimitive.Viewport className="thread-viewport">
         <div className="welcome">
-          <span className="eyebrow">ENGINE / CHAT</span>
+          <span className="eyebrow">OPENENGINE / CHAT</span>
           <h1>Start a conversation.</h1>
           <p>Each chat has its own agent history and Git worktree.</p>
         </div>
@@ -269,7 +269,7 @@ export function ChatSidebar() {
     <aside className="sidebar">
       <div className="brand">
         <span className="brand-mark">e</span>
-        <span>engine</span>
+        <span>openengine</span>
       </div>
       <ThreadListPrimitive.Root className="thread-list">
         <ThreadListPrimitive.New className="new-thread">+ New chat</ThreadListPrimitive.New>
@@ -285,7 +285,7 @@ export function ChatSidebar() {
         </details>
       </ThreadListPrimitive.Root>
       <div className="sidebar-foot">
-        <span className="status-dot" /> Local engine
+        <span className="status-dot" /> Local openengine
       </div>
     </aside>
   );
