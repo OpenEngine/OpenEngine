@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenEngine — your SDLC, automated</title>
+    <meta
+      name="description"
+      content="OpenEngine turns a change into a safe change: a pool of reviewers, reranking, impact radius analysis, and a system diagram — on any model provider."
+    />
+    <link rel="canonical" href="https://openengine.sh/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://openengine.sh/" />
+    <meta property="og:title" content="OpenEngine — your SDLC, automated" />
+    <meta
+      property="og:description"
+      content="Changes → pool of reviewers → reranking → impact radius → system diagram → a safe change."
+    />
+    <meta name="twitter:card" content="summary" />
+
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d7f36d'/%3E%3Ctext x='16' y='23' font-family='ui-monospace,monospace' font-size='19' text-anchor='middle' fill='%231e261e'%3Ee%3C/text%3E%3C/svg%3E"
+    />
+
+    <style>
+      :root {
+        --ink: #1d211d;
+        --paper: #f4f1ea;
+        --forest: #20271f;
+        --lime: #d7f36d;
+        --muted: #6d746b;
+        --rule: #dedbd2;
+        color: var(--ink);
+        background: var(--paper);
+        font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 320px; line-height: 1.6; }
+      input, button { font: inherit; }
+      a { color: inherit; }
+
+      .wrap { width: min(720px, calc(100% - 48px)); margin: 0 auto; }
+
+      header { padding: 40px 0 0; }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.02em; }
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        color: #1e261e;
+        background: var(--lime);
+        border-radius: 8px;
+        font-family: ui-monospace, monospace;
+        font-weight: 500;
+      }
+
+      .hero { padding: 72px 0 8px; }
+      h1 {
+        margin: 0 0 18px;
+        font-size: clamp(38px, 7vw, 68px);
+        line-height: 0.98;
+        letter-spacing: -0.055em;
+      }
+      .lede { max-width: 34em; margin: 0; color: var(--muted); font-size: 17px; }
+
+      .pipeline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin: 34px 0 0;
+        padding: 0;
+        list-style: none;
+        color: #40492f;
+        font: 500 12px/1 ui-monospace, monospace;
+      }
+      .pipeline li { padding: 7px 11px; background: #e8ecc9; border: 1px solid #cfd8a8; border-radius: 99px; }
+      .pipeline li:last-child { color: #1e261e; background: var(--lime); }
+      .pipeline span { color: #9aa397; }
+
+      h2 {
+        margin: 0 0 16px;
+        color: #667064;
+        font: 500 10px/1 ui-monospace, monospace;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      section { padding: 56px 0; border-top: 1px solid var(--rule); }
+      section:first-of-type { border-top: 0; }
+
+      .points { display: grid; gap: 18px; margin: 0; padding: 0; list-style: none; }
+      .points strong { display: block; font-size: 15px; }
+      .points p { max-width: 46em; margin: 3px 0 0; color: var(--muted); font-size: 14px; }
+
+      .signup { padding: 32px; background: var(--forest); border-radius: 18px; color: #edf0e7; }
+      .signup h2 { color: #9caf8d; }
+      .signup p { max-width: 40em; margin: 0 0 22px; color: #b6bfb2; font-size: 14px; }
+      form { display: flex; flex-wrap: wrap; gap: 10px; }
+      label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+      input[type="email"] {
+        flex: 1 1 260px;
+        min-width: 0;
+        padding: 13px 15px;
+        color: #edf0e7;
+        background: #2a3328;
+        border: 1px solid #3d4839;
+        border-radius: 10px;
+        font-size: 15px;
+      }
+      input[type="email"]::placeholder { color: #8f9d8d; }
+      input[type="email"]:focus-visible { outline: 2px solid var(--lime); outline-offset: 1px; }
+      button {
+        padding: 13px 22px;
+        color: #172016;
+        background: var(--lime);
+        border: 0;
+        border-radius: 10px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:hover:enabled { background: #e1fa83; }
+      button:disabled { cursor: default; opacity: 0.55; }
+      .hp { position: absolute; left: -9999px; }
+      .status { min-height: 22px; margin: 14px 0 0; font-size: 14px; }
+      .status[data-state="ok"] { color: var(--lime); }
+      .status[data-state="error"] { color: #ffb5a9; }
+
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 18px;
+        padding: 28px 0 48px;
+        border-top: 1px solid var(--rule);
+        color: #8a9087;
+        font: 400 12px/1.5 ui-monospace, monospace;
+      }
+      footer a:hover { color: var(--ink); }
+    </style>
+  </head>
+
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="brand"><span class="brand-mark" aria-hidden="true">e</span> OpenEngine</div>
+      </header>
+
+      <main>
+        <div class="hero">
+          <h1>Your SDLC, automated.</h1>
+          <p class="lede">
+            OpenEngine takes a change and does the work around it that you never have time for —
+            reviews it from every angle, works out what it can break, and shows you the system it
+            lands in. What comes out the other side is a change you can ship.
+          </p>
+          <ul class="pipeline">
+            <li>Change</li>
+            <li aria-hidden="true"><span>→</span></li>
+            <li>Pool of reviewers</li>
+            <li aria-hidden="true"><span>→</span></li>
+            <li>Reranking</li>
+            <li aria-hidden="true"><span>→</span></li>
+            <li>Impact radius</li>
+            <li aria-hidden="true"><span>→</span></li>
+            <li>System diagram</li>
+            <li aria-hidden="true"><span>→</span></li>
+            <li>Safe change</li>
+          </ul>
+        </div>
+
+        <section>
+          <h2>Why</h2>
+          <ul class="points">
+            <li>
+              <strong>Not coupled to any provider.</strong>
+              <p>Claude Code, Codex, whatever comes next. The conversation is ours, not a vendor's, so any runner can pick up where another left off.</p>
+            </li>
+            <li>
+              <strong>Workflows that encode your review standards.</strong>
+              <p>Stringent security reviews and checklists, defined once and applied to every change.</p>
+            </li>
+            <li>
+              <strong>Work from your phone, on any project.</strong>
+              <p>Runs are durable and survive restarts, so you can start one anywhere and read the result later.</p>
+            </li>
+            <li>
+              <strong>It augments your workflow; it doesn't replace it.</strong>
+              <p>You stay the one who decides what ships.</p>
+            </li>
+          </ul>
+        </section>
+
+        <section>
+          <div class="signup">
+            <h2>Interested?</h2>
+            <p>Leave your email and we'll get in touch when there's something to try.</p>
+            <form id="waitlist" data-endpoint="__WAITLIST_ENDPOINT__">
+              <label for="email">Email address</label>
+              <input
+                id="email"
+                type="email"
+                name="email"
+                required
+                autocomplete="email"
+                placeholder="you@company.com"
+              />
+              <!-- Honeypot: bots fill everything, people never see it. -->
+              <input class="hp" type="text" name="_gotcha" tabindex="-1" autocomplete="off" aria-hidden="true" />
+              <button type="submit">Join the waitlist</button>
+            </form>
+            <p class="status" id="status" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <a href="https://github.com/spiralsoft-ai/openengine">github.com/spiralsoft-ai/openengine</a>
+        <span>Early. Built in the open.</span>
+      </footer>
+    </div>
+
+    <script>
+      (function () {
+        var form = document.getElementById("waitlist");
+        var status = document.getElementById("status");
+        var button = form.querySelector("button");
+        var endpoint = form.dataset.endpoint;
+        // The deploy substitutes the real endpoint; an unsubstituted placeholder
+        // means none is configured, so fall back to plain email rather than
+        // posting into the void.
+        var configured = endpoint && endpoint.indexOf("__") !== 0;
+        // Only ever shown when the form cannot be used: no endpoint configured,
+        // or the POST failed. Must be a mailbox that actually receives.
+        var fallback = "hello@openengine.sh";
+
+        function say(message, state) {
+          status.textContent = message;
+          status.dataset.state = state;
+        }
+
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          var email = form.email.value.trim();
+          if (!email) return;
+
+          if (!configured) {
+            say("Waitlist isn't wired up yet — email " + fallback + " and we'll add you.", "error");
+            return;
+          }
+
+          button.disabled = true;
+          say("Signing you up…", "");
+
+          fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ email: email, _gotcha: form._gotcha.value }),
+          })
+            .then(function (response) {
+              if (!response.ok) throw new Error(String(response.status));
+              form.reset();
+              say("You're on the list. We'll be in touch.", "ok");
+            })
+            .catch(function () {
+              say("That didn't go through — try again, or email " + fallback + ".", "error");
+            })
+            .finally(function () {
+              button.disabled = false;
+            });
+        });
+      })();
+    </script>
+  </body>
+</html>
