@@ -197,9 +197,11 @@ export function EngineRuntimeProvider({
       },
       async archive(remoteId) {
         await api(`/api/threads/${remoteId}/archive`, { method: "POST" });
+        await reloadThreadsRef.current?.();
       },
       async unarchive(remoteId) {
         await api(`/api/threads/${remoteId}/unarchive`, { method: "POST" });
+        await reloadThreadsRef.current?.();
       },
       async delete(remoteId) {
         await api(`/api/threads/${remoteId}`, { method: "DELETE" });
