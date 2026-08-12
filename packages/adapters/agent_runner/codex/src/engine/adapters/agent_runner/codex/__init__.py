@@ -452,27 +452,38 @@ class CodexAgentRunner:
         observed: list[Message] = []
         thread_id = "codex"
         started_actions: set[str] = set()
+
+        def consume_line(line: bytes) -> None:
+            nonlocal thread_id
+            for event in parse_events(line.decode(errors="replace")):
+                event_index = len(events)
+                events.append(event)
+                if event.get("type") == "thread.started" and event.get("thread_id"):
+                    thread_id = str(event["thread_id"])
+                streamed = messages_from_event(event, thread_id, event_index)
+                item = event.get("item") or {}
+                item_id = str(item.get("id", ""))
+                if event.get("type") == "item.started" and streamed and item_id:
+                    started_actions.add(item_id)
+                elif (
+                    event.get("type") == "item.completed"
+                    and item_id in started_actions
+                    and len(streamed) == 2
+                ):
+                    streamed = streamed[1:]
+                for message in streamed:
+                    observed.append(message)
+                    on_message(message)
+
         try:
-            while line := await process.stdout.readline():
-                for event in parse_events(line.decode(errors="replace")):
-                    event_index = len(events)
-                    events.append(event)
-                    if event.get("type") == "thread.started" and event.get("thread_id"):
-                        thread_id = str(event["thread_id"])
-                    streamed = messages_from_event(event, thread_id, event_index)
-                    item = event.get("item") or {}
-                    item_id = str(item.get("id", ""))
-                    if event.get("type") == "item.started" and streamed and item_id:
-                        started_actions.add(item_id)
-                    elif (
-                        event.get("type") == "item.completed"
-                        and item_id in started_actions
-                        and len(streamed) == 2
-                    ):
-                        streamed = streamed[1:]
-                    for message in streamed:
-                        observed.append(message)
-                        on_message(message)
+            buffer = bytearray()
+            while chunk := await process.stdout.read(64 * 1024):
+                buffer.extend(chunk)
+                while (separator := buffer.find(b"\n")) >= 0:
+                    consume_line(bytes(buffer[:separator]))
+                    del buffer[: separator + 1]
+            if buffer:
+                consume_line(bytes(buffer))
             await process.wait()
             stderr = (await stderr_task).decode(errors="replace")
         finally:
