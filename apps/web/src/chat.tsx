@@ -49,6 +49,23 @@ function UserMessage() {
   );
 }
 
+/** What a failed run has to say for itself.
+ *
+ *  assistant-ui does not keep the thrown Error: `toAssistantError` normalizes
+ *  it to a plain `{code, message}`, so an `instanceof Error` test never matches
+ *  and stringifying the object prints "[object Object]" over the one sentence
+ *  the reader needed. Read the message wherever it ended up.
+ */
+function errorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const { message } = error as { message: unknown };
+    if (typeof message === "string") return message;
+  }
+  return "The agent run failed.";
+}
+
 function AssistantMessage() {
   const error = useAuiState((state) => {
     const status = state.message.status;
@@ -63,7 +80,7 @@ function AssistantMessage() {
         <TextParts />
         <MessagePrimitive.Error>
           <p className="message-error">
-            {error instanceof Error ? error.message : String(error ?? "The agent run failed.")}
+            <Ticked text={errorText(error)} />
           </p>
         </MessagePrimitive.Error>
       </div>

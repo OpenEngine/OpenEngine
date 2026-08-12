@@ -60,7 +60,8 @@ button { color: inherit; }
 .message-assistant { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 13px; }
 .assistant-mark { margin-top: 1px; }
 .assistant-content { min-width: 0; }
-.message-error { margin-top: 10px !important; color: #a63d31; }
+.message-error { margin-top: 10px !important; color: #a63d31; white-space: pre-line; }
+.message-error code { padding: 2px 5px; color: #34402f; background: #e6e4dc; border-radius: 5px; user-select: all; }
 .tool-call { margin: 12px 0; color: #566052; background: #ebe9e1; border: 1px solid #d8d5cb; border-radius: 9px; font: 400 11px/1.5 ui-monospace, monospace; }
 .tool-call summary { padding: 9px 11px; cursor: pointer; font-weight: 600; }
 .tool-call pre { max-height: 220px; margin: 0; padding: 10px 11px; overflow: auto; border-top: 1px solid #d8d5cb; white-space: pre-wrap; }
