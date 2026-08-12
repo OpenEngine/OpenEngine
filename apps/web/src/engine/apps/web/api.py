@@ -171,7 +171,7 @@ class ThreadService:
         await self._restore()
         if runner not in self.session.runners:
             raise ValueError(f"unknown runner {runner!r}")
-        instance = await self.session.start(agent_id)
+        instance = await self.session.start(agent_id, runner=runner)
         thread = ChatThread(instance.instance_id, agent_id, runner)
         await self._sync_workspace(thread)
         self._threads[instance.instance_id] = thread
@@ -225,6 +225,7 @@ class ThreadService:
         if selected_runner not in self.session.runners:
             raise ValueError(f"unknown runner {selected_runner!r}")
         thread.runner = selected_runner
+        await self._persist_metadata(thread)
 
         async with self._locks[instance_id]:
             turn = await self.session.say(
@@ -314,7 +315,33 @@ class ThreadService:
         title = _clean_title(turn.message.content)
         if title:
             thread.title = title
+            await self._persist_metadata(thread)
         return thread.title
+
+    async def update_metadata(
+        self,
+        instance_id: AgentInstanceId,
+        *,
+        title: str | None = None,
+        runner: str | None = None,
+        archived: bool | None = None,
+    ) -> ChatThread:
+        thread = await self._require(instance_id)
+        if runner is not None and runner not in self.session.runners:
+            raise ValueError(f"unknown runner {runner!r}")
+        if title is not None:
+            thread.title = title
+        if runner is not None:
+            thread.runner = runner
+        if archived is not None:
+            thread.archived = archived
+        await self._persist_metadata(thread)
+        return thread
+
+    async def _persist_metadata(self, thread: ChatThread) -> None:
+        await self.session.update_instance_metadata(
+            thread.instance_id, thread.title, thread.archived, thread.runner
+        )
 
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
         thread = await self.get(instance_id)
@@ -365,7 +392,13 @@ class ThreadService:
                 thread = ChatThread(
                     instance.instance_id,
                     instance.agent_id,
-                    self.session.default_runner,
+                    (
+                        instance.runner
+                        if instance.runner in self.session.runners
+                        else self.session.default_runner
+                    ),
+                    title=instance.title,
+                    archived=instance.archived,
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
@@ -421,26 +454,35 @@ def create_app(
         return JSONResponse(_thread_json(thread))
 
     async def update_thread(request: Request) -> JSONResponse:
-        thread = await service.get(_thread_id(request))
+        instance_id = _thread_id(request)
+        thread = await service.get(instance_id)
         if thread is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
+        title = None
         if "title" in body:
             title = str(body["title"]).strip()
             if title:
-                thread.title = title[:80]
-        if "runner" in body:
-            runner = str(body["runner"])
-            if runner not in session.runners:
-                return _error(f"unknown runner {runner!r}", 400)
-            thread.runner = runner
+                title = title[:80]
+            else:
+                title = None
+        runner = str(body["runner"]) if "runner" in body else None
+        try:
+            thread = await service.update_metadata(
+                instance_id, title=title, runner=runner
+            )
+        except ValueError as error:
+            return _error(str(error), 400)
         return JSONResponse(_thread_json(thread))
 
     async def archive_thread(request: Request) -> JSONResponse:
         thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
-        thread.archived = request.scope["route"].name == "archive"
+        thread = await service.update_metadata(
+            thread.instance_id,
+            archived=request.url.path.rsplit("/", 1)[-1] == "archive",
+        )
         return JSONResponse(_thread_json(thread))
 
     async def delete_thread(request: Request) -> Response:

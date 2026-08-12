@@ -49,7 +49,10 @@ class SQLiteStateStore:
                     agent_id TEXT NOT NULL,
                     conversation_id TEXT NOT NULL UNIQUE,
                     task_id TEXT,
-                    workspace_id TEXT
+                    workspace_id TEXT,
+                    title TEXT NOT NULL DEFAULT 'New chat',
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    runner TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -71,6 +74,27 @@ class SQLiteStateStore:
                 );
                 """
             )
+            columns = {
+                row["name"]
+                for row in self._connection.execute(
+                    "PRAGMA table_info(agent_instances)"
+                )
+            }
+            if "title" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_instances "
+                    "ADD COLUMN title TEXT NOT NULL DEFAULT 'New chat'"
+                )
+            if "archived" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_instances "
+                    "ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+                )
+            if "runner" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_instances "
+                    "ADD COLUMN runner TEXT NOT NULL DEFAULT ''"
+                )
 
     # Run state and event persistence are outside this conversation adapter's
     # scope, but the methods remain present so it has the StateStore shape.
@@ -91,6 +115,7 @@ class SQLiteStateStore:
         agent_id: AgentId,
         task_id: TaskId | None = None,
         workspace_id: WorkspaceId | None = None,
+        runner: str = "",
     ) -> AgentInstance:
         instance = AgentInstance(
             instance_id=AgentInstanceId(f"agi-{uuid4().hex[:12]}"),
@@ -98,13 +123,15 @@ class SQLiteStateStore:
             conversation_id=ConversationId(f"conv-{uuid4().hex[:12]}"),
             task_id=task_id,
             workspace_id=workspace_id,
+            runner=runner,
         )
         with self._lock, self._connection:
             self._connection.execute(
                 """
                 INSERT INTO agent_instances (
-                    instance_id, agent_id, conversation_id, task_id, workspace_id
-                ) VALUES (?, ?, ?, ?, ?)
+                    instance_id, agent_id, conversation_id, task_id,
+                    workspace_id, runner
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     instance.instance_id,
@@ -112,15 +139,39 @@ class SQLiteStateStore:
                     instance.conversation_id,
                     instance.task_id,
                     instance.workspace_id,
+                    instance.runner,
                 ),
             )
+        return instance
+
+    async def update_instance_metadata(
+        self,
+        instance_id: AgentInstanceId,
+        title: str,
+        archived: bool,
+        runner: str,
+    ) -> AgentInstance:
+        with self._lock, self._connection:
+            updated = self._connection.execute(
+                """
+                UPDATE agent_instances
+                SET title = ?, archived = ?, runner = ?
+                WHERE instance_id = ?
+                """,
+                (title, archived, runner, instance_id),
+            ).rowcount
+            if not updated:
+                raise KeyError(f"no agent instance {instance_id!r}")
+        instance = await self.load_instance(instance_id)
+        assert instance is not None
         return instance
 
     async def load_instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT instance_id, agent_id, conversation_id, task_id, workspace_id
+                SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
+                       title, archived, runner
                 FROM agent_instances WHERE instance_id = ?
                 """,
                 (instance_id,),
@@ -143,7 +194,8 @@ class SQLiteStateStore:
 
     async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         query = """
-            SELECT instance_id, agent_id, conversation_id, task_id, workspace_id
+            SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
+                   title, archived, runner
             FROM agent_instances
         """
         parameters: tuple[str, ...] = ()
@@ -272,6 +324,9 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
         workspace_id=(
             WorkspaceId(row["workspace_id"]) if row["workspace_id"] is not None else None
         ),
+        title=row["title"],
+        archived=bool(row["archived"]),
+        runner=row["runner"],
     )
 
 

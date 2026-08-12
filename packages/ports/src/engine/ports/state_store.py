@@ -47,6 +47,7 @@ class StateStore(Protocol):
         agent_id: AgentId,
         task_id: TaskId | None = None,
         workspace_id: WorkspaceId | None = None,
+        runner: str = "",
     ) -> AgentInstance:
         """Start a durable instance of an agent role, with an empty conversation.
 
@@ -54,6 +55,16 @@ class StateStore(Protocol):
         exist without each other. A caller-provisioned workspace may be attached
         atomically at creation.
         """
+        ...
+
+    async def update_instance_metadata(
+        self,
+        instance_id: AgentInstanceId,
+        title: str,
+        archived: bool,
+        runner: str,
+    ) -> AgentInstance:
+        """Persist the user-facing state of an interactive instance."""
         ...
 
     async def load_instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:

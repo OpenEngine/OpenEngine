@@ -126,23 +126,38 @@ class AgentSession:
     def default_runner(self) -> str:
         return next(iter(self._runners))
 
-    async def start(self, agent_id: AgentId, task_id: TaskId | None = None) -> AgentInstance:
+    async def start(
+        self, agent_id: AgentId, task_id: TaskId | None = None, runner: str = ""
+    ) -> AgentInstance:
         """Begin a conversation with an agent. Fails before touching the store
         if the profile is unknown."""
         profile_for(agent_id, self._profiles)
         if self._workspace_repository is None:
-            return await self._capabilities.state_store.create_instance(agent_id, task_id)
+            return await self._capabilities.state_store.create_instance(
+                agent_id, task_id, runner=runner
+            )
 
         workspace = await self._capabilities.workspace_provider.provision(
             self._workspace_repository, self._workspace_base_ref
         )
         try:
             return await self._capabilities.state_store.create_instance(
-                agent_id, task_id, workspace.workspace_id
+                agent_id, task_id, workspace.workspace_id, runner
             )
         except Exception:
             await self._capabilities.workspace_provider.dispose(workspace.workspace_id)
             raise
+
+    async def update_instance_metadata(
+        self,
+        instance_id: AgentInstanceId,
+        title: str,
+        archived: bool,
+        runner: str,
+    ) -> AgentInstance:
+        return await self._capabilities.state_store.update_instance_metadata(
+            instance_id, title, archived, runner
+        )
 
     async def instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         return await self._capabilities.state_store.list_instances(agent_id)

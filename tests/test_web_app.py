@@ -36,12 +36,14 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
 
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     database = tmp_path / "conversations.sqlite3"
-    runner = ConcurrentRunner(("persisted answer",))
+    runner = ConcurrentRunner()
+    other_runner = ConcurrentRunner(("persisted answer",))
+    runners = {"test": runner, "other": other_runner}
 
     first_capabilities = build_capabilities(Settings(sqlite_path=str(database)))
     first_app = create_app(
-        AgentSession(first_capabilities, profiles=PROFILES, runners={"test": runner}),
-        {"test": runner},
+        AgentSession(first_capabilities, profiles=PROFILES, runners=runners),
+        runners,
     )
 
     async def first_process() -> str:
@@ -52,8 +54,16 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
             )
             thread_id = created.json()["id"]
             await client.post(
-                f"/api/threads/{thread_id}/runs", json={"text": "remember this"}
+                f"/api/threads/{thread_id}/runs",
+                json={"text": "remember this", "runner": "other"},
             )
+            renamed = await client.patch(
+                f"/api/threads/{thread_id}",
+                json={"title": "Persistent metadata"},
+            )
+            archived = await client.post(f"/api/threads/{thread_id}/archive")
+            assert renamed.status_code == 200
+            assert archived.status_code == 200
             return thread_id
 
     thread_id = asyncio.run(first_process())
@@ -61,8 +71,8 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
 
     second_capabilities = build_capabilities(Settings(sqlite_path=str(database)))
     second_app = create_app(
-        AgentSession(second_capabilities, profiles=PROFILES, runners={"test": runner}),
-        {"test": runner},
+        AgentSession(second_capabilities, profiles=PROFILES, runners=runners),
+        runners,
     )
 
     async def second_process():
@@ -80,10 +90,10 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     assert threads.json()["threads"] == [
         {
             "id": thread_id,
-            "title": "New chat",
-            "archived": False,
+            "title": "Persistent metadata",
+            "archived": True,
             "agentId": "coder",
-            "runner": "test",
+            "runner": "other",
             "workspaceAttached": False,
         }
     ]

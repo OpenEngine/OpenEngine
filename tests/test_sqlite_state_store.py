@@ -1,6 +1,7 @@
 """SQLite conversation persistence."""
 
 import asyncio
+import sqlite3
 
 import pytest
 
@@ -53,6 +54,69 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     assert conversation.messages[1].tool_calls == (call,)
     assert conversation.messages[2].tool_call_id == "call-1"
     assert len({message.message_id for message in conversation.messages}) == 3
+
+
+def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
+    path = tmp_path / "conversations.sqlite3"
+    first = SQLiteStateStore(path)
+    instance = asyncio.run(first.create_instance(CODER, runner="codex"))
+    asyncio.run(
+        first.update_instance_metadata(
+            instance.instance_id,
+            title="Durable title",
+            archived=True,
+            runner="claude",
+        )
+    )
+    first.close()
+
+    second = SQLiteStateStore(path)
+    try:
+        loaded = asyncio.run(second.load_instance(instance.instance_id))
+    finally:
+        second.close()
+
+    assert loaded is not None
+    assert loaded.title == "Durable title"
+    assert loaded.archived is True
+    assert loaded.runner == "claude"
+
+
+def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
+    path = tmp_path / "conversations.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE agent_instances (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL UNIQUE,
+            agent_id TEXT NOT NULL,
+            conversation_id TEXT NOT NULL UNIQUE,
+            task_id TEXT,
+            workspace_id TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO agent_instances (
+            instance_id, agent_id, conversation_id, task_id, workspace_id
+        ) VALUES ('agi-old', 'coder', 'conv-old', NULL, NULL)
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    store = SQLiteStateStore(path)
+    try:
+        loaded = asyncio.run(store.load_instance("agi-old"))
+    finally:
+        store.close()
+
+    assert loaded is not None
+    assert loaded.title == "New chat"
+    assert loaded.archived is False
+    assert loaded.runner == ""
 
 
 def test_instances_are_newest_first_and_filterable() -> None:
