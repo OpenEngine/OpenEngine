@@ -277,17 +277,22 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
         </ThreadListItemPrimitive.Trigger>
       )}
       {archived ? (
-        <ThreadListItemPrimitive.Unarchive className="thread-action" aria-label="Restore chat">
-          ↗
+        <ThreadListItemPrimitive.Unarchive
+          className="thread-action restore-action"
+          aria-label="Restore chat"
+          title="Restore chat"
+        >
+          Restore
         </ThreadListItemPrimitive.Unarchive>
       ) : (
-        <ThreadListItemPrimitive.Archive className="thread-action" aria-label="Archive chat">
-          —
+        <ThreadListItemPrimitive.Archive
+          className="thread-action danger"
+          aria-label="Archive chat"
+          title="Archive chat"
+        >
+          ×
         </ThreadListItemPrimitive.Archive>
       )}
-      <ThreadListItemPrimitive.Delete className="thread-action danger" aria-label="Delete chat">
-        ×
-      </ThreadListItemPrimitive.Delete>
     </ThreadListItemPrimitive.Root>
   );
 }
