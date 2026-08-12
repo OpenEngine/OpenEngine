@@ -8,9 +8,73 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { api, attachWorkspace, detachWorkspace, type ApiThread } from "./api";
+
+function InterestSignup() {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<"idle" | "submitting" | "success" | "error">(
+    "idle",
+  );
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setStatus("submitting");
+    setError("");
+    try {
+      await api<{ subscribed: boolean }>("/api/interest", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setStatus("success");
+      setEmail("");
+    } catch (failure) {
+      setStatus("error");
+      setError(failure instanceof Error ? failure.message : "Could not sign you up.");
+    }
+  }
+
+  return (
+    <div className="interest-signup">
+      <div>
+        <strong>Interested in where openengine is headed?</strong>
+        <span>Join the early-access list for occasional product updates.</span>
+      </div>
+      {status === "success" ? (
+        <p className="interest-success" role="status">
+          You’re on the list. We’ll be in touch.
+        </p>
+      ) : (
+        <form onSubmit={(event) => void submit(event)}>
+          <label className="sr-only" htmlFor="interest-email">
+            Email address
+          </label>
+          <input
+            id="interest-email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@company.com"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            required
+            disabled={status === "submitting"}
+          />
+          <button type="submit" disabled={status === "submitting"}>
+            {status === "submitting" ? "Joining…" : "Keep me posted"}
+          </button>
+        </form>
+      )}
+      {status === "error" && (
+        <p className="interest-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function toolResultText(result: unknown): string {
   if (typeof result === "string") return result;
@@ -223,6 +287,7 @@ export function ChatThread() {
           <span className="eyebrow">OPENENGINE / CHAT</span>
           <h1>Start a conversation.</h1>
           <p>Each chat has its own agent history and Git worktree.</p>
+          <InterestSignup />
         </div>
         <ThreadPrimitive.Messages>
           {({ message }) =>

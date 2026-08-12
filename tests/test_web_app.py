@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import Sequence
 
 import httpx
@@ -32,6 +33,35 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_interest_signup_is_validated_and_deduplicated(tmp_path) -> None:
+    database = tmp_path / "interest.sqlite3"
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner}, interest_database=database)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            invalid = await client.post("/api/interest", json={"email": "not-an-email"})
+            first = await client.post(
+                "/api/interest", json={"email": " Person@Example.com "}
+            )
+            duplicate = await client.post(
+                "/api/interest", json={"email": "person@example.com"}
+            )
+        return invalid, first, duplicate
+
+    invalid, first, duplicate = asyncio.run(scenario())
+
+    assert invalid.status_code == 400
+    assert invalid.json() == {"error": "Enter a valid email address."}
+    assert first.status_code == 201
+    assert duplicate.status_code == 201
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT email FROM interest_signups"
+        ).fetchall() == [("person@example.com",)]
 
 
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:

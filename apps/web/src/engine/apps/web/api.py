@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from uuid import uuid4
 
 from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role, WorkspaceId
@@ -43,6 +45,29 @@ class ChatThread:
     workspace_id: WorkspaceId | None = None
     workspace_ref: str | None = None
     """What to check out to read this chat's work, checkout or no checkout."""
+
+
+class InterestList:
+    """A small durable list of people interested in product updates."""
+
+    def __init__(self, database: str | Path = ":memory:") -> None:
+        self._lock = RLock()
+        self._connection = sqlite3.connect(str(database), check_same_thread=False)
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS interest_signups (
+                    email TEXT PRIMARY KEY COLLATE NOCASE,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+    def subscribe(self, email: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR IGNORE INTO interest_signups (email) VALUES (?)", (email,)
+            )
 
 
 class ActiveRun:
@@ -409,9 +434,11 @@ def create_app(
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
     static_directory: Path | None = None,
+    interest_database: str | Path = ":memory:",
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     service = ThreadService(session, runners)
+    interest_list = InterestList(interest_database)
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -435,6 +462,14 @@ def create_app(
 
     async def list_threads(_request: Request) -> JSONResponse:
         return JSONResponse({"threads": [_thread_json(t) for t in await service.list()]})
+
+    async def subscribe_interest(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        email = str(body.get("email", "")).strip().lower()
+        if not _valid_email(email):
+            return _error("Enter a valid email address.", 400)
+        interest_list.subscribe(email)
+        return JSONResponse({"subscribed": True}, status_code=201)
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
@@ -585,6 +620,7 @@ def create_app(
 
     routes = [
         Route("/api/config", config),
+        Route("/api/interest", subscribe_interest, methods=["POST"]),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}", get_thread),
@@ -748,6 +784,14 @@ def _required_string(body: dict[str, object], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+def _valid_email(value: str) -> bool:
+    """Reject malformed input without pretending to verify deliverability."""
+    if not value or len(value) > 254 or any(character.isspace() for character in value):
+        return False
+    local, separator, domain = value.rpartition("@")
+    return bool(separator and local and "." in domain and not domain.startswith("."))
 
 
 def _thread_id(request: Request) -> AgentInstanceId:

@@ -10,6 +10,7 @@
 body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, textarea, select { font: inherit; }
 button { color: inherit; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 .app-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); height: 100vh; }
 .sidebar { display: flex; flex-direction: column; min-height: 0; padding: 24px 18px; color: #edf0e7; background: #20271f; border-right: 1px solid #30382e; }
@@ -47,6 +48,18 @@ button { color: inherit; }
 .welcome { width: min(760px, calc(100% - 48px)); margin: auto auto 0; padding: 80px 0 44px; }
 .welcome h1 { margin: 12px 0 10px; font-size: clamp(34px, 5vw, 64px); line-height: .98; letter-spacing: -.055em; }
 .welcome p { max-width: 560px; margin: 0; color: #6d746b; font-size: 15px; line-height: 1.6; }
+.interest-signup { display: grid; gap: 14px; max-width: 620px; margin-top: 30px; padding: 18px; background: #e8e6dc; border: 1px solid #d8d5c9; border-radius: 14px; }
+.interest-signup > div { display: grid; gap: 3px; }
+.interest-signup strong { color: #30372f; font-size: 13px; }
+.interest-signup span { color: #70766d; font-size: 12px; line-height: 1.5; }
+.interest-signup form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.interest-signup input { min-width: 0; padding: 10px 12px; color: #252b24; background: #fff; border: 1px solid #cbc8bd; border-radius: 9px; font: inherit; font-size: 13px; outline: 0; }
+.interest-signup input:focus { border-color: #98a36f; box-shadow: 0 0 0 3px #d7f36d40; }
+.interest-signup button { padding: 10px 15px; color: #1e261e; background: #d7f36d; border: 0; border-radius: 9px; font-weight: 700; cursor: pointer; }
+.interest-signup button:hover:enabled { background: #e1fa83; }
+.interest-signup button:disabled, .interest-signup input:disabled { cursor: default; opacity: .55; }
+.interest-signup .interest-success { color: #44502d; font-size: 13px; font-weight: 600; }
+.interest-signup .interest-error { color: #a63d31; font-size: 12px; }
 .workspace-tagline { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; justify-content: center; margin-top: 9px; color: #697063; font: 500 11px/1.5 ui-monospace, monospace; }
 .workspace-tagline p { margin: 0; color: inherit; font: inherit; }
 .workspace-tagline code { padding: 3px 6px; color: #34402f; background: #e6e4dc; border-radius: 5px; user-select: all; }
@@ -91,5 +104,6 @@ button { color: inherit; }
   .chat-header { grid-template-columns: 1fr 1fr; padding: 12px; }
   .chat-header > div { display: none; }
   .welcome { padding-top: 48px; }
+  .interest-signup form { grid-template-columns: 1fr; }
   .thread-footer { padding-inline: 12px; }
 }

@@ -48,7 +48,12 @@ def main() -> int:
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
     session = build_session(capabilities, runners)
-    app = create_app(session, runners, STATIC_DIRECTORY)
+    app = create_app(
+        session,
+        runners,
+        STATIC_DIRECTORY,
+        interest_database=settings.sqlite_path,
+    )
     uvicorn.run(app, host=settings.host, port=settings.port)
     return 0
 

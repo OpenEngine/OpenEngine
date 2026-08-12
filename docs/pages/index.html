@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="OpenEngine coordinates coding agents, reviewers, and durable software delivery workflows."
+    />
+    <title>OpenEngine — your SDLC engine</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <nav aria-label="Primary navigation">
+        <a class="brand" href="./" aria-label="OpenEngine home">
+          <span class="brand-mark" aria-hidden="true">e</span>
+          openengine
+        </a>
+        <a class="github-link" href="https://github.com/spiralsoft-ai/openengine">GitHub</a>
+      </nav>
+
+      <section class="hero">
+        <p class="eyebrow">The control plane for software delivery</p>
+        <h1>Your SDLC engine.</h1>
+        <p class="lede">
+          Coordinate coding agents, reviewers, impact analysis, and durable workflows without
+          locking your team to one model or provider.
+        </p>
+
+        <div class="signup-card">
+          <div>
+            <p class="signup-label">Early access</p>
+            <h2>Interested in where OpenEngine is headed?</h2>
+            <p>Join the list for occasional product updates.</p>
+          </div>
+
+          <form id="interest-signup" novalidate>
+            <div class="form-row">
+              <label class="sr-only" for="signup-email">Email address</label>
+              <input
+                id="signup-email"
+                name="email"
+                type="email"
+                inputmode="email"
+                autocomplete="email"
+                placeholder="you@company.com"
+                maxlength="254"
+                required
+              />
+              <button type="submit">Keep me posted</button>
+            </div>
+
+            <label class="honeypot" aria-hidden="true">
+              Company website
+              <input name="website" type="text" tabindex="-1" autocomplete="off" />
+            </label>
+
+            <p class="form-note">No spam. Unsubscribe from any email.</p>
+            <p id="signup-status" class="form-status" role="status" aria-live="polite"></p>
+          </form>
+        </div>
+      </section>
+
+      <section class="features" aria-label="OpenEngine features">
+        <article>
+          <span>01</span>
+          <h2>Provider-independent</h2>
+          <p>Choose the right coding agent for each task while keeping the transcript yours.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h2>Durable by design</h2>
+          <p>Resume work across restarts with explicit state, commands, and capability boundaries.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h2>Built for review</h2>
+          <p>Make impact analysis, review standards, and human approval part of the workflow.</p>
+        </article>
+      </section>
+    </main>
+
+    <script src="./config.js"></script>
+    <script src="./signup.js"></script>
+  </body>
+</html>

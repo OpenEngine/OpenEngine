@@ -1,0 +1,260 @@
+:root {
+  color: #edf0e7;
+  background: #171d16;
+  font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 75% 10%, #39432a 0, transparent 32rem),
+    #171d16;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.sr-only,
+.honeypot {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+main {
+  width: min(1120px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26px 0;
+}
+
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: #1e261e;
+  background: #d7f36d;
+  border-radius: 8px;
+  font-family: ui-monospace, monospace;
+  font-weight: 500;
+}
+
+.github-link {
+  color: #bdc6b8;
+  font-size: 13px;
+  text-underline-offset: 4px;
+}
+
+.hero {
+  padding: clamp(70px, 11vw, 150px) 0 clamp(72px, 10vw, 128px);
+}
+
+.eyebrow,
+.signup-label,
+.features span {
+  color: #d7f36d;
+  font: 600 11px/1 ui-monospace, monospace;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+h1 {
+  max-width: 850px;
+  margin: 20px 0 18px;
+  font-size: clamp(58px, 11vw, 126px);
+  line-height: 0.88;
+  letter-spacing: -0.075em;
+}
+
+.lede {
+  max-width: 680px;
+  margin: 0;
+  color: #b3bdb0;
+  font-size: clamp(17px, 2.1vw, 22px);
+  line-height: 1.55;
+}
+
+.signup-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  gap: 36px;
+  align-items: center;
+  max-width: 940px;
+  margin-top: 58px;
+  padding: clamp(24px, 4vw, 40px);
+  color: #252b24;
+  background: #f4f1ea;
+  border: 1px solid #ffffff20;
+  border-radius: 22px;
+  box-shadow: 0 24px 80px #00000038;
+}
+
+.signup-card h2 {
+  margin: 11px 0 8px;
+  font-size: clamp(23px, 3vw, 32px);
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+}
+
+.signup-card > div > p:last-child {
+  margin: 0;
+  color: #687067;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.signup-label {
+  margin: 0;
+  color: #68753d;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+input[type="email"] {
+  min-width: 0;
+  padding: 12px 13px;
+  color: #252b24;
+  background: #fff;
+  border: 1px solid #cbc8bd;
+  border-radius: 9px;
+  outline: 0;
+}
+
+input[type="email"]:focus {
+  border-color: #98a36f;
+  box-shadow: 0 0 0 3px #d7f36d55;
+}
+
+button {
+  padding: 12px 16px;
+  color: #1e261e;
+  background: #d7f36d;
+  border: 0;
+  border-radius: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:enabled {
+  background: #e1fa83;
+}
+
+button:disabled,
+input:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.form-note,
+.form-status {
+  margin: 9px 2px 0;
+  color: #777d75;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.form-status {
+  min-height: 16px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.form-status.success {
+  color: #4c5f22;
+}
+
+.form-status.error {
+  color: #a63d31;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid #ffffff18;
+}
+
+.features article {
+  padding: 34px 34px 60px 0;
+}
+
+.features article + article {
+  padding-left: 34px;
+  border-left: 1px solid #ffffff18;
+}
+
+.features h2 {
+  margin: 22px 0 8px;
+  font-size: 17px;
+}
+
+.features p {
+  margin: 0;
+  color: #9da89a;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+@media (max-width: 760px) {
+  .signup-card {
+    grid-template-columns: 1fr;
+  }
+
+  .features {
+    grid-template-columns: 1fr;
+  }
+
+  .features article,
+  .features article + article {
+    padding: 28px 0;
+    border-left: 0;
+    border-bottom: 1px solid #ffffff18;
+  }
+}
+
+@media (max-width: 480px) {
+  main {
+    width: min(100% - 28px, 1120px);
+  }
+
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+}
