@@ -74,7 +74,7 @@ and do not read the growing transcript as the reason.
 import asyncio
 import json
 import shutil
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
 from engine.domain.agents import AgentProfile
@@ -162,6 +162,21 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
         if isinstance(event, dict):
             events.append(event)
     return tuple(events)
+
+
+async def _read_lines(stream: asyncio.StreamReader) -> AsyncIterator[bytes]:
+    """Yield lines without ``StreamReader.readline``'s 64 KiB limit."""
+    pending = bytearray()
+    search_from = 0
+    while chunk := await stream.read(64 * 1024):
+        pending.extend(chunk)
+        while (newline := pending.find(b"\n", search_from)) >= 0:
+            yield bytes(pending[:newline])
+            del pending[: newline + 1]
+            search_from = 0
+        search_from = len(pending)
+    if pending:
+        yield bytes(pending)
 
 
 def action_messages(item: dict[str, Any], call_id: str) -> tuple[Message, Message]:
@@ -452,38 +467,27 @@ class CodexAgentRunner:
         observed: list[Message] = []
         thread_id = "codex"
         started_actions: set[str] = set()
-
-        def consume_line(line: bytes) -> None:
-            nonlocal thread_id
-            for event in parse_events(line.decode(errors="replace")):
-                event_index = len(events)
-                events.append(event)
-                if event.get("type") == "thread.started" and event.get("thread_id"):
-                    thread_id = str(event["thread_id"])
-                streamed = messages_from_event(event, thread_id, event_index)
-                item = event.get("item") or {}
-                item_id = str(item.get("id", ""))
-                if event.get("type") == "item.started" and streamed and item_id:
-                    started_actions.add(item_id)
-                elif (
-                    event.get("type") == "item.completed"
-                    and item_id in started_actions
-                    and len(streamed) == 2
-                ):
-                    streamed = streamed[1:]
-                for message in streamed:
-                    observed.append(message)
-                    on_message(message)
-
         try:
-            buffer = bytearray()
-            while chunk := await process.stdout.read(64 * 1024):
-                buffer.extend(chunk)
-                while (separator := buffer.find(b"\n")) >= 0:
-                    consume_line(bytes(buffer[:separator]))
-                    del buffer[: separator + 1]
-            if buffer:
-                consume_line(bytes(buffer))
+            async for line in _read_lines(process.stdout):
+                for event in parse_events(line.decode(errors="replace")):
+                    event_index = len(events)
+                    events.append(event)
+                    if event.get("type") == "thread.started" and event.get("thread_id"):
+                        thread_id = str(event["thread_id"])
+                    streamed = messages_from_event(event, thread_id, event_index)
+                    item = event.get("item") or {}
+                    item_id = str(item.get("id", ""))
+                    if event.get("type") == "item.started" and streamed and item_id:
+                        started_actions.add(item_id)
+                    elif (
+                        event.get("type") == "item.completed"
+                        and item_id in started_actions
+                        and len(streamed) == 2
+                    ):
+                        streamed = streamed[1:]
+                    for message in streamed:
+                        observed.append(message)
+                        on_message(message)
             await process.wait()
             stderr = (await stderr_task).decode(errors="replace")
         finally:

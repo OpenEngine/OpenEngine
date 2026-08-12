@@ -366,14 +366,15 @@ def test_completed_messages_stream_in_transcript_order(tmp_path) -> None:
     assert observed == list(turn.transcript)
 
 
-def test_a_command_result_may_exceed_asyncios_line_limit(tmp_path) -> None:
-    output = "x" * (128 * 1024)
+def test_a_jsonl_event_may_exceed_the_stream_reader_line_limit(tmp_path) -> None:
+    """Tool output lives inside one JSONL event and can easily exceed 64 KiB."""
+    output = "x" * (70 * 1024)
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text(
-        '{"type":"item.completed","item":{"id":"item_1",'
+        '{"type":"item.completed","item":{"id":"item_0",'
         '"type":"command_execution","aggregated_output":'
         + json.dumps(output)
-        + ',"exit_code":0}}\n'
+        + '}}\n'
         '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n'
     )
     runner = CodexAgentRunner(binary_path=_fake_codex(tmp_path, f"cat {transcript}"))
@@ -382,7 +383,7 @@ def test_a_command_result_may_exceed_asyncios_line_limit(tmp_path) -> None:
         runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("go"),))
     )
 
-    assert turn.steps[1].content.startswith(output)
+    assert turn.steps[1].content == output
     assert turn.message.content == "done"
 
 
