@@ -36,11 +36,11 @@ type ThreadInitializer = {
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
-function useInitialThreadId() {
+function useInitialThreadId(forcedThreadId?: string) {
   const storedThreadId = useRef(
-    typeof window === "undefined"
+    forcedThreadId ?? (typeof window === "undefined"
       ? undefined
-      : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined,
+      : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined),
   ).current;
   const [result, setResult] = useState<{ loading: boolean; threadId?: string }>(() => ({
     loading: storedThreadId !== undefined,
@@ -92,6 +92,8 @@ function remoteMetadata(thread: ApiThread) {
       workspaceRoot: thread.workspaceRoot,
       workspaceRef: thread.workspaceRef,
       workspaceAttached: thread.workspaceAttached,
+      workflowRunId: thread.workflowRunId,
+      workflowStepId: thread.workflowStepId,
     },
   };
 }
@@ -168,8 +170,9 @@ function HistoryProvider({ children }: PropsWithChildren) {
 export function EngineRuntimeProvider({
   defaults,
   children,
-}: PropsWithChildren<{ defaults: NewChatDefaults }>) {
-  const initialThread = useInitialThreadId();
+  initialThreadId,
+}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
+  const initialThread = useInitialThreadId(initialThreadId);
   if (initialThread.loading)
     return <main className="loading">Restoring chats…</main>;
 

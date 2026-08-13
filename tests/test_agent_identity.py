@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 import pytest
 
+from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.domain import (
     AgentId,
     AgentInstance,
@@ -24,6 +25,8 @@ from engine.domain import (
     Role,
     RunId,
     StartAgentRun,
+    StepId,
+    StepSpec,
     ToolCall,
     ToolParameter,
     ToolSpec,
@@ -245,6 +248,46 @@ def test_the_command_carries_the_profile_so_dispatch_needs_no_registry() -> None
 
     assert command.profile.instructions == FOREMAN.instructions
     assert command.workspace_id is None
+
+
+def test_workflow_start_materializes_explicit_step_conversation_correlation() -> None:
+    runner = FakeAgentRunner()
+    store = InMemoryStateStore()
+    missing = object()
+    capabilities = Capabilities(
+        workflow_runtime=missing,
+        source_control=missing,
+        agent_runner=runner,
+        communications=missing,
+        workspace_provider=missing,
+        state_store=store,
+    )
+    command = StartAgentRun(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("implementation-execution"),
+        instance_id=AgentInstanceId("implementation-instance"),
+        profile=FOREMAN,
+        prompt="Implement the task.",
+        step=StepSpec(StepId("implementation"), FOREMAN.agent_id),
+    )
+
+    asyncio.run(Dispatcher(capabilities).dispatch(command))
+
+    instance = asyncio.run(store.load_instance(command.instance_id))
+    conversation = asyncio.run(store.load_conversation(command.instance_id))
+    agent_run = asyncio.run(store.agent_run(command.agent_run_id))
+    assert instance is not None
+    assert instance.workflow_run_id == command.run_id
+    assert instance.workflow_step_id == command.step.step_id
+    assert instance.conversation_id == "implementation-instance:conversation"
+    assert conversation is not None
+    assert [(message.role, message.content) for message in conversation.messages] == [
+        (Role.USER, "Implement the task."),
+        (Role.ASSISTANT, "on it"),
+    ]
+    assert agent_run is not None
+    assert agent_run.instance_id == command.instance_id
+    assert agent_run.status is AgentRunStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize(

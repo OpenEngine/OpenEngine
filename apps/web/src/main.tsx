@@ -4,9 +4,10 @@ import { createRoot } from "react-dom/client";
 import { api, type EngineConfig } from "./api";
 import { ChatSidebar, ChatThread } from "./chat";
 import { EngineRuntimeProvider } from "./runtime";
+import { RunDetailPage, RunsPage } from "./runs";
 import "./styles.css";
 
-function App() {
+function ChatApp({ initialThreadId }: { initialThreadId?: string }) {
   const [config, setConfig] = useState<EngineConfig | null>(null);
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
@@ -27,7 +28,7 @@ function App() {
     return <main className="loading">Starting openengine…</main>;
 
   return (
-    <EngineRuntimeProvider defaults={{ agentId, runner }}>
+    <EngineRuntimeProvider defaults={{ agentId, runner }} initialThreadId={initialThreadId}>
       <div className="app-shell">
         <ChatSidebar />
         <main className="chat-panel">
@@ -62,6 +63,18 @@ function App() {
       </div>
     </EngineRuntimeProvider>
   );
+}
+
+function App() {
+  const path = window.location.pathname.replace(/\/$/, "") || "/";
+  if (path === "/" || path === "/runs") return <RunsPage />;
+  if (path.startsWith("/runs/")) {
+    return <RunDetailPage runId={decodeURIComponent(path.slice("/runs/".length))} />;
+  }
+  if (path.startsWith("/conversations/")) {
+    return <ChatApp initialThreadId={decodeURIComponent(path.slice("/conversations/".length))} />;
+  }
+  return <ChatApp />;
 }
 
 createRoot(document.getElementById("root")!).render(

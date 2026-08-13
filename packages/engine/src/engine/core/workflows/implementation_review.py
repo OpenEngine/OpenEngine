@@ -195,7 +195,11 @@ def decide_implementation_review(
             and _matches_expected_step(state, event)
         ):
             if event.outcome != "success":
-                return replace(state, phase=RunPhase.FAILED), ()
+                return replace(
+                    state,
+                    phase=RunPhase.FAILED,
+                    step_results=(*state.step_results, event),
+                ), ()
 
             expected_run_id = agent_run_id(state.run_id, REVIEW_STEP)
             next_state = replace(
@@ -251,17 +255,17 @@ def decide_implementation_review(
             and event.step_id == state.current_step_id
         ):
             phase = RunPhase.SUCCEEDED if event.approved else RunPhase.FAILED
-            return replace(state, phase=phase), ()
+            return replace(state, phase=phase, human_review=event), ()
 
         case AgentRunCompleted() if (
             state.phase in (RunPhase.IMPLEMENTING, RunPhase.REVIEWING)
             and event.agent_run_id == state.current_agent_run_id
             and not event.succeeded
         ):
-            return replace(state, phase=RunPhase.FAILED), ()
+            return replace(state, phase=RunPhase.FAILED, failure_reason=event.summary), ()
 
         case RunFailed():
-            return replace(state, phase=RunPhase.FAILED), ()
+            return replace(state, phase=RunPhase.FAILED, failure_reason=event.reason), ()
 
         case _:
             return state, ()

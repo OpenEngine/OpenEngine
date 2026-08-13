@@ -29,6 +29,8 @@ from engine.domain.ids import (
     AgentInstanceId,
     AgentRunId,
     ConversationId,
+    RunId,
+    StepId,
     TaskId,
     WorkspaceId,
 )
@@ -84,6 +86,10 @@ class AgentInstance:
     title: str = "New chat"
     archived: bool = False
     runner: str = ""
+    workflow_run_id: RunId | None = None
+    """Owning workflow run, absent for a standalone interactive conversation."""
+    workflow_step_id: StepId | None = None
+    """Owning workflow step, recorded explicitly rather than parsed from an id."""
 
 
 @dataclass(frozen=True, slots=True)

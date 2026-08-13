@@ -28,6 +28,7 @@ from engine.ports.agent_runner import (
     TurnObserver,
 )
 from engine.ports.workspace_provider import WorkspaceState
+from engine.ports.state_store import StateStore
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.profiles import BUILT_IN, profile_for
 
@@ -128,6 +129,11 @@ class AgentSession:
     def default_runner(self) -> str:
         return next(iter(self._runners))
 
+    @property
+    def state_store(self) -> StateStore:
+        """The durable boundary used by read-side services in the same process."""
+        return self._capabilities.state_store
+
     async def start(
         self, agent_id: AgentId, task_id: TaskId | None = None, runner: str = ""
     ) -> AgentInstance:
@@ -163,6 +169,10 @@ class AgentSession:
 
     async def instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         return await self._capabilities.state_store.list_instances(agent_id)
+
+    async def instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
+        """Load one durable instance, including workflow ownership metadata."""
+        return await self._capabilities.state_store.load_instance(instance_id)
 
     async def history(self, instance_id: AgentInstanceId) -> tuple[Message, ...]:
         conversation = await self._capabilities.state_store.load_conversation(instance_id)

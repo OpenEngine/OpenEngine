@@ -5,12 +5,34 @@ import json
 from collections.abc import Sequence
 
 import httpx
+import pytest
 
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
 from engine.apps.web.composition import Settings, build_capabilities
-from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolCall
+from engine.domain import (
+    AgentId,
+    AgentInstanceId,
+    AgentProfile,
+    AgentRunId,
+    ConversationId,
+    HumanReviewCompleted,
+    Message,
+    Role,
+    RunId,
+    RunPhase,
+    RunState,
+    StepCompleted,
+    StepOutput,
+    TaskId,
+    ToolCall,
+)
+from engine.core.workflows.implementation_review import (
+    HUMAN_REVIEW_STEP,
+    IMPLEMENTATION_STEP,
+    REVIEW_STEP,
+)
 from engine.ports import AgentTurn, Workspace, WorkspaceState
 from engine.runtime import AgentSession, Capabilities
 
@@ -148,6 +170,239 @@ def _session(runner: ConcurrentRunner) -> AgentSession:
         profiles=PROFILES,
         runners={"test": runner},
     )
+
+
+def _workflow_state(phase: RunPhase) -> RunState:
+    run_id = RunId(f"run-{phase.value}")
+    implementation = StepCompleted(
+        run_id=run_id,
+        step_id=IMPLEMENTATION_STEP,
+        agent_run_id=AgentRunId("implementation-execution"),
+        outcome="success",
+        summary="Implemented the lock and regression test.",
+        outputs=(StepOutput("changed_files", "worker.py, test_worker.py"),),
+    )
+    review = StepCompleted(
+        run_id=run_id,
+        step_id=REVIEW_STEP,
+        agent_run_id=AgentRunId("review-execution"),
+        outcome="changes_requested",
+        summary="The test should also cover cancellation.",
+        outputs=(StepOutput("findings", "Cancellation coverage missing"),),
+    )
+    values = {
+        RunPhase.IMPLEMENTING: (IMPLEMENTATION_STEP, (), None, ""),
+        RunPhase.REVIEWING: (REVIEW_STEP, (implementation,), None, ""),
+        RunPhase.AWAITING_HUMAN_REVIEW: (
+            HUMAN_REVIEW_STEP,
+            (implementation, review),
+            None,
+            "",
+        ),
+        RunPhase.SUCCEEDED: (
+            HUMAN_REVIEW_STEP,
+            (implementation, review),
+            HumanReviewCompleted(
+                run_id=run_id,
+                step_id=HUMAN_REVIEW_STEP,
+                approved=True,
+                summary="The residual risk is acceptable.",
+            ),
+            "",
+        ),
+        RunPhase.FAILED: (
+            IMPLEMENTATION_STEP,
+            (
+                StepCompleted(
+                    run_id=run_id,
+                    step_id=IMPLEMENTATION_STEP,
+                    agent_run_id=AgentRunId("implementation-execution"),
+                    outcome="failed",
+                    summary="Tests did not pass.",
+                ),
+            ),
+            None,
+            "Tests did not pass.",
+        ),
+    }
+    current_step, results, decision, reason = values[phase]
+    return RunState(
+        run_id=run_id,
+        task_id=TaskId("task-42"),
+        phase=phase,
+        repository="acme/api",
+        prompt="Fix the race and add a regression test.",
+        current_step_id=current_step,
+        current_agent_run_id=(
+            AgentRunId(f"current-{current_step}")
+            if current_step != HUMAN_REVIEW_STEP
+            else None
+        ),
+        step_results=results,
+        human_review=decision,
+        failure_reason=reason,
+    )
+
+
+def _workflow_app(store: InMemoryStateStore, runner: ConcurrentRunner):
+    unused = object()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=unused,
+            source_control=unused,
+            agent_runner=runner,
+            communications=unused,
+            workspace_provider=unused,
+            state_store=store,
+        ),
+        profiles=PROFILES,
+        runners={"test": runner},
+    )
+    return create_app(session, {"test": runner})
+
+
+@pytest.mark.parametrize(
+    ("phase", "terminal_outcome"),
+    [
+        (RunPhase.IMPLEMENTING, None),
+        (RunPhase.REVIEWING, None),
+        (RunPhase.AWAITING_HUMAN_REVIEW, None),
+        (RunPhase.SUCCEEDED, "approved"),
+        (RunPhase.FAILED, "failed"),
+    ],
+)
+def test_run_api_covers_workflow_lifecycle_phases(
+    phase: RunPhase, terminal_outcome: str | None
+) -> None:
+    store = InMemoryStateStore()
+    state = _workflow_state(phase)
+    asyncio.run(store.save(state))
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            listed = await client.get("/api/runs")
+            detail = await client.get(f"/api/runs/{state.run_id}")
+            return listed, detail
+
+    listed, detail = asyncio.run(scenario())
+    body = detail.json()
+
+    assert listed.status_code == 200
+    assert [run["runId"] for run in listed.json()["runs"]] == [state.run_id]
+    assert detail.status_code == 200
+    assert body["taskPrompt"] == "Fix the race and add a regression test."
+    assert body["workflowId"] == "implementation-review-v1"
+    assert body["phase"] == phase.value
+    assert body["currentStepId"] == state.current_step_id
+    assert body["terminalOutcome"] == terminal_outcome
+    assert [step["stepId"] for step in body["steps"]] == [
+        IMPLEMENTATION_STEP,
+        REVIEW_STEP,
+        HUMAN_REVIEW_STEP,
+    ]
+
+    if phase is RunPhase.AWAITING_HUMAN_REVIEW:
+        assert body["pendingHumanReview"] is not None
+        assert "Implemented the lock" in body["pendingHumanReview"]["summary"]
+        assert body["steps"][1]["changesRequested"] is True
+        assert body["humanDecision"] is None
+    if phase is RunPhase.SUCCEEDED:
+        assert body["humanDecision"] == {
+            "stepId": "human-review",
+            "approved": True,
+            "outcome": "approved",
+            "summary": "The residual risk is acceptable.",
+        }
+        assert body["steps"][1]["outcome"] == "changes_requested"
+
+
+def test_workflow_conversation_is_nested_under_its_run_not_standalone() -> None:
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.REVIEWING)
+    asyncio.run(store.save(state))
+    asyncio.run(
+        store.create_instance(
+            AgentId("implementation-agent"),
+            instance_id=AgentInstanceId("implementation-instance"),
+            conversation_id=ConversationId("implementation-conversation"),
+            workflow_run_id=state.run_id,
+            workflow_step_id=IMPLEMENTATION_STEP,
+        )
+    )
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            runs = await client.get(f"/api/runs/{state.run_id}")
+            threads = await client.get("/api/threads")
+            thread = await client.get("/api/threads/implementation-instance")
+            return runs, threads, thread
+
+    runs, threads, thread = asyncio.run(scenario())
+
+    implementation = runs.json()["steps"][0]
+    assert implementation["agentInstanceId"] == "implementation-instance"
+    assert implementation["conversationId"] == "implementation-conversation"
+    assert implementation["conversationUrl"] == "/conversations/implementation-instance"
+    assert threads.json() == {"threads": []}
+    assert thread.json()["workflowRunId"] == state.run_id
+    assert thread.json()["workflowStepId"] == IMPLEMENTATION_STEP
+
+
+def test_run_api_presents_human_rejection_as_the_final_decision() -> None:
+    store = InMemoryStateStore()
+    awaiting = _workflow_state(RunPhase.AWAITING_HUMAN_REVIEW)
+    rejection = HumanReviewCompleted(
+        run_id=awaiting.run_id,
+        step_id=HUMAN_REVIEW_STEP,
+        approved=False,
+        summary="Address the cancellation finding first.",
+    )
+    rejected = RunState(
+        run_id=awaiting.run_id,
+        task_id=awaiting.task_id,
+        workflow_id=awaiting.workflow_id,
+        phase=RunPhase.FAILED,
+        repository=awaiting.repository,
+        prompt=awaiting.prompt,
+        current_step_id=HUMAN_REVIEW_STEP,
+        step_results=awaiting.step_results,
+        human_review=rejection,
+    )
+    asyncio.run(store.save(rejected))
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(f"/api/runs/{rejected.run_id}")
+
+    body = asyncio.run(scenario()).json()
+
+    assert body["terminalOutcome"] == "rejected"
+    assert body["humanDecision"]["outcome"] == "rejected"
+    assert body["humanDecision"]["summary"] == rejection.summary
+    assert body["steps"][1]["outcome"] == "changes_requested"
+
+
+def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<main>workflow application</main>")
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/runs/run-42")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert "workflow application" in response.text
 
 
 class ConversationWorkspaces:

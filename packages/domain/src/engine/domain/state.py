@@ -7,7 +7,7 @@ trivially serialisable -- no handles, no connections, no adapter objects.
 from dataclasses import dataclass, field
 from enum import Enum
 
-from engine.domain.events import StepCompleted
+from engine.domain.events import HumanReviewCompleted, StepCompleted
 from engine.domain.ids import (
     IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     AgentRunId,
@@ -49,6 +49,8 @@ class RunState:
     current_step_id: StepId | None = None
     current_agent_run_id: AgentRunId | None = None
     step_results: tuple[StepCompleted, ...] = field(default=())
+    human_review: HumanReviewCompleted | None = None
+    failure_reason: str = ""
 
     @property
     def agent_runs_remaining(self) -> int:

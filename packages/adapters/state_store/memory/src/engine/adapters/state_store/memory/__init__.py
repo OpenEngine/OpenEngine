@@ -29,6 +29,7 @@ from engine.domain.ids import (
     ConversationId,
     MessageId,
     RunId,
+    StepId,
     TaskId,
     WorkspaceId,
 )
@@ -63,6 +64,10 @@ class InMemoryStateStore:
         with self._lock:
             self._states[state.run_id] = state
 
+    async def list_runs(self) -> Sequence[RunState]:
+        with self._lock:
+            return tuple(reversed(self._states.values()))
+
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         with self._lock:
             self._events.setdefault(run_id, []).extend(events)
@@ -79,16 +84,27 @@ class InMemoryStateStore:
         task_id: TaskId | None = None,
         workspace_id: WorkspaceId | None = None,
         runner: str = "",
+        *,
+        instance_id: AgentInstanceId | None = None,
+        conversation_id: ConversationId | None = None,
+        workflow_run_id: RunId | None = None,
+        workflow_step_id: StepId | None = None,
     ) -> AgentInstance:
         instance = AgentInstance(
-            instance_id=AgentInstanceId(f"agi-{uuid4().hex[:12]}"),
+            instance_id=instance_id or AgentInstanceId(f"agi-{uuid4().hex[:12]}"),
             agent_id=agent_id,
-            conversation_id=ConversationId(f"conv-{uuid4().hex[:12]}"),
+            conversation_id=conversation_id
+            or ConversationId(f"conv-{uuid4().hex[:12]}"),
             task_id=task_id,
             workspace_id=workspace_id,
             runner=runner,
+            workflow_run_id=workflow_run_id,
+            workflow_step_id=workflow_step_id,
         )
         with self._lock:
+            existing = self._instances.get(instance.instance_id)
+            if existing is not None:
+                return existing
             self._instances[instance.instance_id] = instance
             # An instance without its conversation is a state no reader should
             # have to handle, so the two are created together or not at all.
@@ -130,11 +146,18 @@ class InMemoryStateStore:
             self._instances[instance_id] = updated
         return updated
 
-    async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
+    async def list_instances(
+        self,
+        agent_id: AgentId | None = None,
+        *,
+        workflow_run_id: RunId | None = None,
+    ) -> Sequence[AgentInstance]:
         with self._lock:
             instances = list(self._instances.values())
         if agent_id is not None:
             instances = [i for i in instances if i.agent_id == agent_id]
+        if workflow_run_id is not None:
+            instances = [i for i in instances if i.workflow_run_id == workflow_run_id]
         return tuple(reversed(instances))  # newest first
 
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:

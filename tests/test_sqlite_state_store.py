@@ -6,7 +6,25 @@ import sqlite3
 import pytest
 
 from engine.adapters.state_store.sqlite import SQLiteStateStore
-from engine.domain import AgentId, AgentRun, AgentRunId, AgentRunStatus, Message, Role, ToolCall
+from engine.domain import (
+    AgentId,
+    AgentInstanceId,
+    AgentRun,
+    AgentRunId,
+    AgentRunStatus,
+    ConversationId,
+    HumanReviewCompleted,
+    Message,
+    Role,
+    RunId,
+    RunPhase,
+    RunState,
+    StepCompleted,
+    StepId,
+    StepOutput,
+    TaskId,
+    ToolCall,
+)
 from engine.ports import StateStore
 
 CODER = AgentId("coder")
@@ -173,3 +191,60 @@ def test_agent_runs_are_upserted() -> None:
     assert recorded.status is AgentRunStatus.SUCCEEDED
     assert recorded.summary == "done"
     assert recorded.changed_files == ("README.md",)
+
+
+def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
+    path = tmp_path / "runs.sqlite3"
+    run_id = RunId("run-durable")
+    review = HumanReviewCompleted(
+        run_id=run_id,
+        step_id=StepId("human-review"),
+        approved=False,
+        summary="The risk is not acceptable yet.",
+    )
+    result = StepCompleted(
+        run_id=run_id,
+        step_id=StepId("review"),
+        agent_run_id=AgentRunId("review-execution"),
+        outcome="changes_requested",
+        summary="Add a regression test.",
+        outputs=(StepOutput("findings", "Missing coverage"),),
+    )
+    state = RunState(
+        run_id=run_id,
+        task_id=TaskId("task-durable"),
+        phase=RunPhase.FAILED,
+        repository="acme/api",
+        prompt="Fix the race.",
+        current_step_id=StepId("human-review"),
+        step_results=(result,),
+        human_review=review,
+    )
+
+    first = SQLiteStateStore(path)
+    asyncio.run(first.save(state))
+    asyncio.run(
+        first.create_instance(
+            AgentId("review-agent"),
+            instance_id=AgentInstanceId("review-instance"),
+            conversation_id=ConversationId("review-conversation"),
+            workflow_run_id=run_id,
+            workflow_step_id=StepId("review"),
+        )
+    )
+    first.close()
+
+    second = SQLiteStateStore(path)
+    try:
+        loaded = asyncio.run(second.load(run_id))
+        runs = asyncio.run(second.list_runs())
+        instances = asyncio.run(second.list_instances(workflow_run_id=run_id))
+    finally:
+        second.close()
+
+    assert loaded == state
+    assert runs == (state,)
+    assert instances[0].instance_id == "review-instance"
+    assert instances[0].conversation_id == "review-conversation"
+    assert instances[0].workflow_run_id == run_id
+    assert instances[0].workflow_step_id == "review"
