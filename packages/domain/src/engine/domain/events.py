@@ -9,7 +9,8 @@ Placeholder set for Ticket 1; the real vocabulary lands with the engine itself.
 
 from dataclasses import dataclass, field
 
-from engine.domain.ids import AgentRunId, RunId, TaskId, WorkspaceId
+from engine.domain.ids import AgentRunId, RunId, StepId, TaskId, WorkspaceId
+from engine.domain.workflow import StepOutput
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,17 @@ class AgentRunCompleted(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class StepCompleted(Event):
+    """A workflow step finished with an outcome and its declared outputs."""
+
+    step_id: StepId
+    agent_run_id: AgentRunId
+    outcome: str
+    summary: str
+    outputs: tuple[StepOutput, ...] = field(default=())
+
+
+@dataclass(frozen=True, slots=True)
 class ChangesPublished(Event):
     """Source control accepted the attempt's changes."""
 
@@ -66,5 +78,6 @@ __all__ = [
     "Event",
     "RunFailed",
     "RunRequested",
+    "StepCompleted",
     "WorkspaceProvisioned",
 ]

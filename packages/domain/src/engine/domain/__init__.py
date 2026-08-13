@@ -21,6 +21,7 @@ from engine.domain.events import (
     Event,
     RunFailed,
     RunRequested,
+    StepCompleted,
     WorkspaceProvisioned,
 )
 from engine.domain.ids import (
@@ -30,11 +31,13 @@ from engine.domain.ids import (
     ConversationId,
     MessageId,
     RunId,
+    StepId,
     TaskId,
     WorkspaceId,
 )
 from engine.domain.state import RunPhase, RunState
 from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
+from engine.domain.workflow import StepOutput, StepSpec
 
 __all__ = [
     "AgentId",
@@ -64,6 +67,10 @@ __all__ = [
     "RunState",
     "ScheduleTimer",
     "StartAgentRun",
+    "StepCompleted",
+    "StepId",
+    "StepOutput",
+    "StepSpec",
     "TaskId",
     "ToolCall",
     "ToolParameter",
