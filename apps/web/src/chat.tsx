@@ -141,11 +141,27 @@ function Composer() {
         />
         <ComposerPrimitive.Cancel
           className="composer-button composer-cancel"
-          onClick={() => {
+          onClick={(event) => {
             const { remoteId } = aui.threadListItem.getState();
-            if (remoteId) {
+            if (!remoteId) return;
+
+            const queued = aui.composer.getState().queue[0];
+            if (!queued) {
               void fetch(`/api/threads/${remoteId}/runs/current`, { method: "DELETE" });
+              return;
             }
+
+            // Let the server finish cancelling before starting the follow-up.
+            // Preventing the primitive's local cancel lets the queue drain as
+            // soon as the active stream closes.
+            event.preventDefault();
+            void fetch(`/api/threads/${remoteId}/runs/current`, { method: "DELETE" }).then(
+              () => {
+                if (aui.composer.getState().queue.some((item) => item.id === queued.id)) {
+                  aui.composer.queueItem({ id: queued.id }).move({ lane: "steer" });
+                }
+              },
+            );
           }}
         >
           Stop
