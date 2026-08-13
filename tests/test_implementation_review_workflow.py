@@ -9,6 +9,7 @@ from engine.core.decide import WORKFLOW_DECIDERS
 from engine.core.workflows.implementation_review import (
     HUMAN_REVIEW_STEP,
     IMPLEMENTATION_STEP,
+    PULL_REQUEST_URL_OUTPUT,
     REVIEW_STEP,
     WORKFLOW_ID,
 )
@@ -83,7 +84,13 @@ def implementation_result(
         agent_run_id=agent_run_id,
         outcome=outcome,
         summary="Fixed the race with a lock and added a regression test.",
-        outputs=(StepOutput(name="changed_files", value="worker.py,test_worker.py"),),
+        outputs=(
+            StepOutput(name="changed_files", value="worker.py,test_worker.py"),
+            StepOutput(
+                name=PULL_REQUEST_URL_OUTPUT,
+                value="https://github.com/acme/api/pull/42",
+            ),
+        ),
     )
 
 
@@ -144,6 +151,8 @@ def test_provisioning_starts_implementation_with_the_original_prompt() -> None:
     assert command.workspace_id == WORKSPACE_ID
     assert command.step is not None
     assert command.step.step_id == IMPLEMENTATION_STEP
+    assert command.step.required_outputs == (PULL_REQUEST_URL_OUTPUT,)
+    assert "open a pull request" in command.profile.instructions
 
 
 def test_implementation_success_starts_review_with_result_context() -> None:
@@ -160,6 +169,7 @@ def test_implementation_success_starts_review_with_result_context() -> None:
     assert TASK_PROMPT in command.prompt
     assert result.summary in command.prompt
     assert "worker.py,test_worker.py" in command.prompt
+    assert "https://github.com/acme/api/pull/42" in command.prompt
     assert "do not modify" in command.prompt
 
 

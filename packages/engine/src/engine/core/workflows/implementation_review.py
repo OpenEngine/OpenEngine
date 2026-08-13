@@ -39,12 +39,15 @@ WORKFLOW_ID = IMPLEMENTATION_REVIEW_WORKFLOW_ID
 IMPLEMENTATION_STEP = StepId("implementation")
 REVIEW_STEP = StepId("review")
 HUMAN_REVIEW_STEP = StepId("human-review")
+PULL_REQUEST_URL_OUTPUT = "pull_request_url"
 
 IMPLEMENTATION_PROFILE = AgentProfile(
     agent_id=AgentId("implementation-agent"),
     instructions=(
         "Implement the requested change in the provided workspace. Read the code "
-        "before editing, make the smallest complete change, and report the result."
+        "before editing, make the smallest complete change, commit and push it, then "
+        "open a pull request. Report the open pull request URL in the "
+        f"{PULL_REQUEST_URL_OUTPUT!r} output."
     ),
     capabilities=(),
     description="Implements the requested repository change.",
@@ -64,6 +67,7 @@ REVIEW_PROFILE = AgentProfile(
 IMPLEMENTATION_STEP_SPEC = StepSpec(
     step_id=IMPLEMENTATION_STEP,
     agent_id=IMPLEMENTATION_PROFILE.agent_id,
+    required_outputs=(PULL_REQUEST_URL_OUTPUT,),
 )
 REVIEW_STEP_SPEC = StepSpec(
     step_id=REVIEW_STEP,
@@ -276,6 +280,7 @@ __all__ = [
     "IMPLEMENTATION_PROFILE",
     "IMPLEMENTATION_STEP",
     "IMPLEMENTATION_STEP_SPEC",
+    "PULL_REQUEST_URL_OUTPUT",
     "REVIEW_PROFILE",
     "REVIEW_STEP",
     "REVIEW_STEP_SPEC",

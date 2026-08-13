@@ -77,6 +77,15 @@ def step_completed_from_turn(
     if any(not isinstance(value, str) for value in outputs.values()):
         raise InvalidStepResultError("step result output values must be strings")
 
+    missing = tuple(
+        name for name in step.required_outputs if not outputs.get(name, "").strip()
+    )
+    if missing:
+        names = ", ".join(repr(name) for name in missing)
+        raise InvalidStepResultError(
+            f"step result is missing required nonempty outputs: {names}"
+        )
+
     return StepCompleted(
         run_id=run_id,
         step_id=step.step_id,

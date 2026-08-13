@@ -31,10 +31,15 @@ STEP = StepSpec(
 )
 
 
-def parse(content: str, **turn_kwargs: object) -> StepCompleted:
+def parse(
+    content: str,
+    *,
+    step: StepSpec = STEP,
+    **turn_kwargs: object,
+) -> StepCompleted:
     return step_completed_from_turn(
         run_id=RUN_ID,
-        step=STEP,
+        step=step,
         agent_run_id=AGENT_RUN_ID,
         turn=AgentTurn(Message.assistant(content), **turn_kwargs),
     )
@@ -73,16 +78,44 @@ def test_valid_json_produces_step_completed() -> None:
     )
 
 
-def test_omitted_outputs_become_an_empty_tuple() -> None:
-    assert parse('{"outcome": "success", "summary": "Done."}').outputs == ()
+@pytest.mark.parametrize(
+    "outputs",
+    [None, {}, {"revision": ""}, {"revision": "   "}],
+)
+def test_required_outputs_must_be_present_and_nonempty(
+    outputs: dict[str, str] | None,
+) -> None:
+    result: dict[str, object] = {"outcome": "success", "summary": "Done."}
+    if outputs is not None:
+        result["outputs"] = outputs
+
+    with pytest.raises(
+        InvalidStepResultError,
+        match="missing required nonempty outputs: 'revision'",
+    ):
+        parse(json.dumps(result))
+
+
+def test_outputs_remain_optional_when_the_step_has_no_requirements() -> None:
+    optional = StepSpec(step_id=StepId("optional"), agent_id=AgentId("coder"))
+
+    completed = parse(
+        '{"outcome": "success", "summary": "Done."}',
+        step=optional,
+    )
+
+    assert completed.outputs == ()
 
 
 @pytest.mark.parametrize(
     "content",
     [
-        '```json\n{"outcome": "success", "summary": "Done.", "outputs": {}}\n```',
-        '```json {"outcome": "success", "summary": "Done.", "outputs": {}} ```',
-        '```\n{"outcome": "success", "summary": "Done.", "outputs": {}}\n```',
+        '```json\n{"outcome": "success", "summary": "Done.", '
+        '"outputs": {"revision": "abc123"}}\n```',
+        '```json {"outcome": "success", "summary": "Done.", '
+        '"outputs": {"revision": "abc123"}} ```',
+        '```\n{"outcome": "success", "summary": "Done.", '
+        '"outputs": {"revision": "abc123"}}\n```',
     ],
 )
 def test_single_markdown_fence_is_accepted(content: str) -> None:
@@ -90,25 +123,30 @@ def test_single_markdown_fence_is_accepted(content: str) -> None:
 
     assert completed.outcome == "success"
     assert completed.summary == "Done."
-    assert completed.outputs == ()
+    assert completed.outputs == (StepOutput(name="revision", value="abc123"),)
 
 
 def test_outputs_are_normalized_deterministically() -> None:
     completed = parse(
         '{"outcome": "success", "summary": "Done.", '
-        '"outputs": {"zeta": "last", "alpha": "first"}}'
+        '"outputs": {"zeta": "last", "revision": "abc123", '
+        '"alpha": "first"}}'
     )
 
     assert completed.outputs == (
         StepOutput(name="alpha", value="first"),
+        StepOutput(name="revision", value="abc123"),
         StepOutput(name="zeta", value="last"),
     )
 
 
 def test_open_custom_outcomes_are_accepted() -> None:
-    assert parse('{"outcome": "changes_requested", "summary": "Revise it."}').outcome == (
-        "changes_requested"
+    content = (
+        '{"outcome": "changes_requested", "summary": "Revise it.", '
+        '"outputs": {"revision": "abc123"}}'
     )
+
+    assert parse(content).outcome == "changes_requested"
 
 
 @pytest.mark.parametrize(
@@ -165,7 +203,8 @@ def test_non_stop_finish_reasons_are_rejected(finish_reason: FinishReason) -> No
 
 def test_intermediate_turn_steps_are_ignored() -> None:
     completed = parse(
-        '{"outcome": "success", "summary": "Done."}',
+        '{"outcome": "success", "summary": "Done.", '
+        '"outputs": {"revision": "abc123"}}',
         steps=(
             Message.assistant("ordinary narration"),
             Message.assistant('{"not": "the result"}'),

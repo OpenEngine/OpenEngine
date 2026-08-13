@@ -349,7 +349,8 @@ def test_create_workflow_run_executes_implementation_and_stops_at_review() -> No
     store = InMemoryStateStore()
     runner = ConcurrentRunner(
         ('{"outcome":"success","summary":"Added cancellation handling.",'
-         '"outputs":{"changed_files":"worker.py"}}',)
+         '"outputs":{"changed_files":"worker.py",'
+         '"pull_request_url":"https://github.com/acme/api/pull/42"}}',)
     )
     app = _workflow_app(store, runner)
 
@@ -401,7 +402,8 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
     default = ConcurrentRunner()
     claude = ConcurrentRunner(
         ('{"outcome":"success","summary":"Implemented with Claude.",'
-         '"outputs":{"changed_files":"feature.py"}}',)
+         '"outputs":{"changed_files":"feature.py",'
+         '"pull_request_url":"https://github.com/acme/api/pull/43"}}',)
     )
     app = _workflow_app(
         store,
