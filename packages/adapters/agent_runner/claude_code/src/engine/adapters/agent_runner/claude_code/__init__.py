@@ -46,6 +46,7 @@ from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage, TurnObserver
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
 #: Claude Code's own tools that only read. The default, because an agent you are
@@ -395,7 +396,7 @@ class ClaudeCodeAgentRunner:
         events: list[dict[str, Any]] = []
         observed: list[Message] = []
         try:
-            while line := await process.stdout.readline():
+            async for line in read_lines(process.stdout):
                 for event in parse_events(line.decode(errors="replace")):
                     events.append(event)
                     for message in messages_from_event(event):

@@ -6,6 +6,7 @@ you assumed only tests your assumption.
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -249,6 +250,28 @@ def test_completed_messages_stream_in_transcript_order(tmp_path) -> None:
     )
 
     assert observed == list(turn.transcript)
+
+
+def test_a_jsonl_event_may_exceed_the_stream_reader_line_limit(tmp_path) -> None:
+    """One `Read` of a source file is one tool_result on one line, and that runs
+    past `StreamReader.readline`'s 64 KiB well before the file looks large."""
+    output = "x" * (70 * 1024)
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1",'
+        '"type":"tool_result","content":' + json.dumps(output) + "}]}}\n"
+        '{"type":"assistant","message":{"role":"assistant","content":'
+        '[{"type":"text","text":"done"}]}}\n'
+    )
+    binary = tmp_path / "claude"
+    binary.write_text(f"#!/bin/sh\ncat >/dev/null\ncat {transcript}\n")
+    binary.chmod(0o755)
+    runner = ClaudeCodeAgentRunner(binary_path=str(binary))
+
+    turn = asyncio.run(runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("go"),)))
+
+    assert turn.steps[0].content == output
+    assert turn.message.content == "done"
 
 
 def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
