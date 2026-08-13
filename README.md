@@ -129,6 +129,41 @@ either one being the privileged implementation. The capability directory is
 checked against the fields of `engine.runtime.Capabilities`, which is therefore
 the list a seventh capability has to be added to first.
 
+## Workflow execution identity
+
+Workflow-managed work is organized around a workflow run, with agent
+conversations attached to the steps that produced them:
+
+```text
+RunId
+  → StepId
+    → AgentInstanceId
+      → ConversationId
+```
+
+- **`RunId`** identifies one end-to-end execution of a versioned workflow
+  definition. It is the user-facing aggregate for the original task, repository,
+  current phase, step results, outputs, and final human decision. It must not be
+  confused with `WorkflowId`, which selects the reusable workflow definition, or
+  `AgentRunId`, which identifies one execution of an agent instance.
+- **`StepId`** identifies a stage in that workflow, such as implementation,
+  review, or human review. Step IDs are ordered by the workflow definition and
+  are interpreted in the context of their owning run; the same step definition
+  participates in many runs.
+- **`AgentInstanceId`** identifies the durable agent instance assigned to an
+  agent-backed step. The instance records its owning `RunId` and `StepId`
+  explicitly and can execute one or more agent runs while retaining the same
+  identity and history. Human-review steps have no agent instance.
+- **`ConversationId`** identifies the persisted message transcript owned by that
+  agent instance. It supports detailed inspection of the step, while the workflow
+  run remains the primary view of the work. Standalone interactive conversations
+  also have conversation IDs, but no owning workflow run or step.
+
+The State Store persists this correlation directly. Consumers must not infer
+ownership by parsing deterministic identifier strings: the run read model uses
+the stored relationship so it remains stable across refreshes, process restarts,
+and changes to identifier formats.
+
 ## Agent identity
 
 An agent is described by data, not by a class, and the description is separate

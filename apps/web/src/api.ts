@@ -29,6 +29,47 @@ export type ApiThread = {
   /** What to check out to read this chat's work, attached or not. */
   workspaceRef?: string;
   workspaceAttached: boolean;
+  workflowRunId?: string;
+  workflowStepId?: string;
+};
+
+export type ApiRunStep = {
+  stepId: string;
+  name: string;
+  kind: "agent" | "human";
+  status: string;
+  outcome: string | null;
+  summary: string;
+  outputs: { name: string; value: string }[];
+  changesRequested: boolean;
+  agentId: string | null;
+  agentInstanceId: string | null;
+  agentRunId: string | null;
+  conversationId: string | null;
+  conversationUrl: string | null;
+};
+
+export type ApiWorkflowRun = {
+  runId: string;
+  workflowId: string;
+  workflowName: string;
+  workflowVersion: string;
+  taskId: string;
+  taskPrompt: string;
+  repository: string;
+  repositoryContext: { repository: string };
+  phase: string;
+  currentStepId: string | null;
+  terminalOutcome: string | null;
+  failureReason: string;
+  steps: ApiRunStep[];
+  pendingHumanReview: { stepId: string; title: string; summary: string } | null;
+  humanDecision: {
+    stepId: string;
+    approved: boolean;
+    outcome: "approved" | "rejected";
+    summary: string;
+  } | null;
 };
 
 export function attachWorkspace(threadId: string): Promise<ApiThread> {

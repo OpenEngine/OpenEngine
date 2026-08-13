@@ -167,7 +167,22 @@ type WorkspaceCustom = {
   workspaceRoot?: string;
   workspaceRef?: string;
   workspaceAttached?: boolean;
+  workflowRunId?: string;
+  workflowStepId?: string;
 };
+
+function WorkflowBacklink() {
+  const custom = useAuiState((state) => state.threadListItem.custom) as
+    | WorkspaceCustom
+    | undefined;
+  if (!custom?.workflowRunId) return null;
+  return (
+    <a className="workflow-backlink" href={`/runs/${custom.workflowRunId}`}>
+      ← Back to run <code>{custom.workflowRunId}</code>
+      {custom.workflowStepId && <> · {custom.workflowStepId} step</>}
+    </a>
+  );
+}
 
 /** Server messages mark the command you are meant to run in backticks; show
  *  that span as the code it is, so it can be read and copied as one thing. */
@@ -267,6 +282,7 @@ export function ChatThread() {
   return (
     <ThreadPrimitive.Root className="thread">
       <ThreadPrimitive.Viewport className="thread-viewport">
+        <WorkflowBacklink />
         <div className="welcome">
           <span className="eyebrow">OPENENGINE / CHAT</span>
           <h1>Start a conversation.</h1>
@@ -277,19 +293,37 @@ export function ChatThread() {
             message.role === "user" ? <UserMessage /> : <AssistantMessage />
           }
         </ThreadPrimitive.Messages>
-        <ThreadPrimitive.ViewportFooter className="thread-footer">
-          <ThreadPrimitive.ScrollToBottom className="scroll-button">
-            Jump to latest
-          </ThreadPrimitive.ScrollToBottom>
+        <ConversationFooter />
+      </ThreadPrimitive.Viewport>
+    </ThreadPrimitive.Root>
+  );
+}
+
+function ConversationFooter() {
+  const custom = useAuiState((state) => state.threadListItem.custom) as
+    | WorkspaceCustom
+    | undefined;
+  const workflowConversation = Boolean(custom?.workflowRunId);
+  return (
+    <ThreadPrimitive.ViewportFooter className="thread-footer">
+      <ThreadPrimitive.ScrollToBottom className="scroll-button">
+        Jump to latest
+      </ThreadPrimitive.ScrollToBottom>
+      {workflowConversation ? (
+        <p className="workflow-conversation-note">
+          This transcript belongs to a workflow step. Return to the run for status and actions.
+        </p>
+      ) : (
+        <>
           <Composer />
           {/* Under the composer rather than in the welcome header: a detached
               chat refuses to run, so the way to fix that cannot be somewhere
               you have to scroll a long conversation to reach. */}
           <WorkspaceTagline />
           <p className="composer-note">Runs are read-only in this chat's isolated worktree.</p>
-        </ThreadPrimitive.ViewportFooter>
-      </ThreadPrimitive.Viewport>
-    </ThreadPrimitive.Root>
+        </>
+      )}
+    </ThreadPrimitive.ViewportFooter>
   );
 }
 
@@ -352,6 +386,7 @@ export function ChatSidebar() {
         <span className="brand-mark">e</span>
         <span>openengine</span>
       </div>
+      <a className="run-nav-primary chat-run-link" href="/runs">Workflow runs</a>
       <ThreadListPrimitive.Root className="thread-list">
         <ThreadListPrimitive.New className="new-thread">+ New chat</ThreadListPrimitive.New>
         <div className="thread-list-label">Conversations</div>

@@ -11,7 +11,9 @@ their adapters.
 """
 
 from collections.abc import Iterable
+from dataclasses import replace
 
+from engine.domain.agents import AgentRun, AgentRunStatus
 from engine.domain.chat import Message
 from engine.domain.commands import (
     Command,
@@ -19,9 +21,11 @@ from engine.domain.commands import (
     PersistRun,
     ProvisionWorkspace,
     PublishChanges,
+    RequestHumanReview,
     ScheduleTimer,
     StartAgentRun,
 )
+from engine.domain.ids import ConversationId
 from engine.runtime.capabilities import Capabilities
 
 
@@ -51,16 +55,19 @@ class Dispatcher:
             case ProvisionWorkspace():
                 await caps.workspace_provider.provision(command.repository, command.base_ref)
             case StartAgentRun():
-                # One turn, cold: no history loaded and no tools offered.
-                # Threading the stored conversation through here, resolving the
-                # profile's grants to tool specs, and looping until the model
-                # stops asking for tools all land with the agent-session ticket.
-                await caps.agent_runner.run_turn(
-                    command.agent_run_id,
-                    command.profile,
-                    (Message.user(command.prompt),),
-                    workspace_id=command.workspace_id,
-                )
+                if command.step is None:
+                    await caps.agent_runner.run_turn(
+                        command.agent_run_id,
+                        command.profile,
+                        (Message.user(command.prompt),),
+                        workspace_id=command.workspace_id,
+                    )
+                else:
+                    await self._dispatch_workflow_agent(command)
+            case RequestHumanReview():
+                # The state store is the durable request. A future ingress may
+                # additionally notify an external review system.
+                pass
             case PublishChanges():
                 await caps.source_control.publish(command.workspace_id, command.branch)
             case Notify():
@@ -74,6 +81,54 @@ class Dispatcher:
                 )
             case _:
                 raise UnhandledCommandError(command)
+
+    async def _dispatch_workflow_agent(self, command: StartAgentRun) -> None:
+        """Materialize a workflow step's durable identity and transcript."""
+        caps = self._capabilities
+        assert command.step is not None
+        instance = await caps.state_store.create_instance(
+            command.profile.agent_id,
+            workspace_id=command.workspace_id,
+            instance_id=command.instance_id,
+            conversation_id=ConversationId(f"{command.instance_id}:conversation"),
+            workflow_run_id=command.run_id,
+            workflow_step_id=command.step.step_id,
+        )
+        conversation = await caps.state_store.load_conversation(instance.instance_id)
+        prompt = Message.user(command.prompt)
+        if conversation is not None and not conversation.messages:
+            await caps.state_store.append_messages(instance.instance_id, (prompt,))
+
+        agent_run = AgentRun(
+            agent_run_id=command.agent_run_id,
+            instance_id=instance.instance_id,
+            status=AgentRunStatus.RUNNING,
+        )
+        await caps.state_store.record_agent_run(agent_run)
+        try:
+            turn = await caps.agent_runner.run_turn(
+                command.agent_run_id,
+                command.profile,
+                (prompt,),
+                workspace_id=command.workspace_id,
+            )
+        except Exception as error:
+            await caps.state_store.record_agent_run(
+                replace(
+                    agent_run,
+                    status=AgentRunStatus.FAILED,
+                    summary=f"{type(error).__name__}: {error}",
+                )
+            )
+            raise
+        await caps.state_store.append_messages(instance.instance_id, turn.transcript)
+        await caps.state_store.record_agent_run(
+            replace(
+                agent_run,
+                status=AgentRunStatus.SUCCEEDED,
+                summary=turn.message.content,
+            )
+        )
 
 
 __all__ = ["Dispatcher", "UnhandledCommandError"]

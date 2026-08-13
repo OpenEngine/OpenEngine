@@ -7,6 +7,7 @@ adapter. Adapters depend on the runtime, not the other way around.
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher, UnhandledCommandError
 from engine.runtime.profiles import BUILT_IN, CODER, FOREMAN, UnknownAgentError, profile_for
+from engine.runtime.run_read_model import RunReader, WorkflowRunView
 from engine.runtime.session import (
     DEFAULT_RUNNER,
     AgentSession,
@@ -30,12 +31,14 @@ __all__ = [
     "Capabilities",
     "Dispatcher",
     "InvalidStepResultError",
+    "RunReader",
     "UnhandledCommandError",
     "UnknownAgentError",
     "UnknownInstanceError",
     "UnknownRunnerError",
     "UnknownToolGrantError",
     "WorkspacesUnavailableError",
+    "WorkflowRunView",
     "profile_for",
     "step_completed_from_turn",
     "step_result_instructions",

@@ -19,7 +19,15 @@ from typing import Protocol, runtime_checkable
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
-from engine.domain.ids import AgentId, AgentInstanceId, RunId, TaskId, WorkspaceId
+from engine.domain.ids import (
+    AgentId,
+    AgentInstanceId,
+    ConversationId,
+    RunId,
+    StepId,
+    TaskId,
+    WorkspaceId,
+)
 from engine.domain.state import RunState
 
 
@@ -32,6 +40,10 @@ class StateStore(Protocol):
         ...
 
     async def save(self, state: RunState) -> None:
+        ...
+
+    async def list_runs(self) -> Sequence[RunState]:
+        """Return persisted workflow runs, newest first."""
         ...
 
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
@@ -48,6 +60,11 @@ class StateStore(Protocol):
         task_id: TaskId | None = None,
         workspace_id: WorkspaceId | None = None,
         runner: str = "",
+        *,
+        instance_id: AgentInstanceId | None = None,
+        conversation_id: ConversationId | None = None,
+        workflow_run_id: RunId | None = None,
+        workflow_step_id: StepId | None = None,
     ) -> AgentInstance:
         """Start a durable instance of an agent role, with an empty conversation.
 
@@ -81,7 +98,12 @@ class StateStore(Protocol):
         """
         ...
 
-    async def list_instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
+    async def list_instances(
+        self,
+        agent_id: AgentId | None = None,
+        *,
+        workflow_run_id: RunId | None = None,
+    ) -> Sequence[AgentInstance]:
         """Every instance, or every instance of one role. Newest first."""
         ...
 

@@ -19,12 +19,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from engine.domain import AgentId, AgentInstanceId, AgentRunId, Message, Role, WorkspaceId
+from engine.domain import (
+    AgentId,
+    AgentInstanceId,
+    AgentRunId,
+    Message,
+    Role,
+    RunId,
+    StepId,
+    WorkspaceId,
+)
 from engine.ports import AgentRunner, WorkspaceState
-from engine.runtime import AgentSession
+from engine.runtime import AgentSession, RunReader, WorkflowRunView
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
@@ -43,6 +52,8 @@ class ChatThread:
     workspace_id: WorkspaceId | None = None
     workspace_ref: str | None = None
     """What to check out to read this chat's work, checkout or no checkout."""
+    workflow_run_id: RunId | None = None
+    workflow_step_id: StepId | None = None
 
 
 class ActiveRun:
@@ -161,11 +172,39 @@ class ThreadService:
 
     async def list(self) -> tuple[ChatThread, ...]:
         await self._restore()
-        return tuple(reversed(self._threads.values()))
+        return tuple(
+            thread
+            for thread in reversed(self._threads.values())
+            if thread.workflow_run_id is None
+        )
 
     async def get(self, instance_id: AgentInstanceId) -> ChatThread | None:
         await self._restore()
-        return self._threads.get(instance_id)
+        thread = self._threads.get(instance_id)
+        if thread is not None:
+            return thread
+        # Workflow workers may materialize a step after this web process has
+        # restored its initial registry. Resolve direct conversation links from
+        # the durable store instead of requiring a server restart.
+        instance = await self.session.instance(instance_id)
+        if instance is None:
+            return None
+        thread = ChatThread(
+            instance.instance_id,
+            instance.agent_id,
+            (
+                instance.runner
+                if instance.runner in self.session.runners
+                else self.session.default_runner
+            ),
+            title=instance.title,
+            archived=instance.archived,
+            workflow_run_id=instance.workflow_run_id,
+            workflow_step_id=instance.workflow_step_id,
+        )
+        self._threads[instance.instance_id] = await self._sync_workspace(thread)
+        self._locks[instance.instance_id] = asyncio.Lock()
+        return thread
 
     async def create(self, agent_id: AgentId, runner: str) -> ChatThread:
         await self._restore()
@@ -399,6 +438,8 @@ class ThreadService:
                     ),
                     title=instance.title,
                     archived=instance.archived,
+                    workflow_run_id=instance.workflow_run_id,
+                    workflow_step_id=instance.workflow_step_id,
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
@@ -412,6 +453,7 @@ def create_app(
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     service = ThreadService(session, runners)
+    run_reader = RunReader(session.state_store)
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -435,6 +477,17 @@ def create_app(
 
     async def list_threads(_request: Request) -> JSONResponse:
         return JSONResponse({"threads": [_thread_json(t) for t in await service.list()]})
+
+    async def list_runs(_request: Request) -> JSONResponse:
+        return JSONResponse(
+            {"runs": [_run_json(run) for run in await run_reader.list()]}
+        )
+
+    async def get_run(request: Request) -> JSONResponse:
+        run = await run_reader.get(RunId(request.path_params["run_id"]))
+        if run is None:
+            return _error("run not found", 404)
+        return JSONResponse(_run_json(run))
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
@@ -585,6 +638,8 @@ def create_app(
 
     routes = [
         Route("/api/config", config),
+        Route("/api/runs", list_runs),
+        Route("/api/runs/{run_id}", get_run),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}", get_thread),
@@ -619,6 +674,20 @@ def create_app(
         Route("/api/threads/{thread_id}/runs/current", cancel_run, methods=["DELETE"]),
     ]
     if static_directory is not None and (static_directory / "index.html").is_file():
+        async def spa_page(_request: Request) -> Response:
+            return FileResponse(
+                static_directory / "index.html",
+                headers={"cache-control": "no-cache"},
+            )
+
+        routes.extend(
+            [
+                Route("/runs", spa_page),
+                Route("/runs/{run_id}", spa_page),
+                Route("/conversations", spa_page),
+                Route("/conversations/{thread_id}", spa_page),
+            ]
+        )
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
     else:
         routes.append(Route("/", _missing_frontend))
@@ -650,6 +719,74 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
         result["workspaceRoot"] = thread.workspace_root
     if thread.workspace_ref is not None:
         result["workspaceRef"] = thread.workspace_ref
+    if thread.workflow_run_id is not None:
+        result["workflowRunId"] = str(thread.workflow_run_id)
+    if thread.workflow_step_id is not None:
+        result["workflowStepId"] = str(thread.workflow_step_id)
+    return result
+
+
+def _run_json(run: WorkflowRunView) -> dict[str, object]:
+    result: dict[str, object] = {
+        "runId": str(run.run_id),
+        "workflowId": run.workflow_id,
+        "workflowName": run.workflow_name,
+        "workflowVersion": run.workflow_version,
+        "taskId": run.task_id,
+        "taskPrompt": run.task_prompt,
+        "repository": run.repository,
+        "repositoryContext": {"repository": run.repository},
+        "phase": run.phase,
+        "currentStepId": str(run.current_step_id) if run.current_step_id else None,
+        "terminalOutcome": run.terminal_outcome,
+        "failureReason": run.failure_reason,
+        "steps": [
+            {
+                "stepId": str(step.step_id),
+                "name": step.name,
+                "kind": step.kind,
+                "status": step.status,
+                "outcome": step.outcome,
+                "summary": step.summary,
+                "outputs": [
+                    {"name": output.name, "value": output.value}
+                    for output in step.outputs
+                ],
+                "changesRequested": step.changes_requested,
+                "agentId": str(step.agent_id) if step.agent_id else None,
+                "agentInstanceId": (
+                    str(step.agent_instance_id) if step.agent_instance_id else None
+                ),
+                "agentRunId": str(step.agent_run_id) if step.agent_run_id else None,
+                "conversationId": (
+                    str(step.conversation_id) if step.conversation_id else None
+                ),
+                "conversationUrl": (
+                    f"/conversations/{step.agent_instance_id}"
+                    if step.agent_instance_id
+                    else None
+                ),
+            }
+            for step in run.steps
+        ],
+    }
+    if run.pending_human_review is not None:
+        result["pendingHumanReview"] = {
+            "stepId": str(run.pending_human_review.step_id),
+            "title": run.pending_human_review.title,
+            "summary": run.pending_human_review.summary,
+        }
+    else:
+        result["pendingHumanReview"] = None
+    if run.human_decision is not None:
+        result["humanDecision"] = {
+            "stepId": str(run.human_decision.step_id),
+            "approved": run.human_decision.approved,
+            "outcome": run.human_decision.outcome,
+            "summary": run.human_decision.summary,
+        }
+    else:
+        result["humanDecision"] = None
     return result
 
 
