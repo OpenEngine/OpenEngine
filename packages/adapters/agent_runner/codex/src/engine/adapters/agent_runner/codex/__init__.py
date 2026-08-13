@@ -74,7 +74,7 @@ and do not read the growing transcript as the reason.
 import asyncio
 import json
 import shutil
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from engine.domain.agents import AgentProfile
@@ -83,6 +83,7 @@ from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage, TurnObserver
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
 #: Sandbox policies the CLI accepts. Chat defaults to the read-only one: an
@@ -162,21 +163,6 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
         if isinstance(event, dict):
             events.append(event)
     return tuple(events)
-
-
-async def _read_lines(stream: asyncio.StreamReader) -> AsyncIterator[bytes]:
-    """Yield lines without ``StreamReader.readline``'s 64 KiB limit."""
-    pending = bytearray()
-    search_from = 0
-    while chunk := await stream.read(64 * 1024):
-        pending.extend(chunk)
-        while (newline := pending.find(b"\n", search_from)) >= 0:
-            yield bytes(pending[:newline])
-            del pending[: newline + 1]
-            search_from = 0
-        search_from = len(pending)
-    if pending:
-        yield bytes(pending)
 
 
 def action_messages(item: dict[str, Any], call_id: str) -> tuple[Message, Message]:
@@ -468,7 +454,7 @@ class CodexAgentRunner:
         thread_id = "codex"
         started_actions: set[str] = set()
         try:
-            async for line in _read_lines(process.stdout):
+            async for line in read_lines(process.stdout):
                 for event in parse_events(line.decode(errors="replace")):
                     event_index = len(events)
                     events.append(event)
