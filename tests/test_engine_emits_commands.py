@@ -34,7 +34,7 @@ def test_decide_needs_no_infrastructure() -> None:
 
     assert next_state.phase is RunPhase.PREPARING_WORKSPACE
     assert commands == (
-        ProvisionWorkspace(run_id=RUN, repository="acme/api", base_ref="main"),
+        ProvisionWorkspace(run_id=RUN, repository="acme/api", base_ref="origin/main"),
     )
 
 
@@ -122,7 +122,7 @@ def test_runtime_dispatches_the_command_to_the_capability() -> None:
 
     asyncio.run(dispatcher.dispatch_all(commands))
 
-    assert provider.provisioned == [("acme/api", "main")]
+    assert provider.provisioned == [("acme/api", "origin/main")]
 
 
 def test_unmapped_command_fails_loudly() -> None:

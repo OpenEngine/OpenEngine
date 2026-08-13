@@ -34,6 +34,40 @@ def _repository(path: Path) -> None:
     _git(path, *_IDENTITY, "commit", "-m", "initial")
 
 
+def test_origin_main_is_refreshed_without_moving_local_main(tmp_path: Path) -> None:
+    upstream = tmp_path / "upstream"
+    remote = tmp_path / "remote.git"
+    repository = tmp_path / "repository"
+    _repository(upstream)
+    subprocess.run(
+        ["git", "clone", "--bare", str(upstream), str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "clone", str(remote), str(repository)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    local_main = _git(repository, "rev-parse", "main")
+    _git(upstream, "remote", "add", "origin", str(remote))
+    (upstream / "latest.txt").write_text("from remote main\n")
+    _git(upstream, "add", "latest.txt")
+    _git(upstream, *_IDENTITY, "commit", "-m", "remote update")
+    _git(upstream, "push", "origin", "main")
+    remote_main = _git(upstream, "rev-parse", "main")
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+
+    workspace = asyncio.run(provider.provision(str(repository), "origin/main"))
+
+    assert _git(repository, "rev-parse", "main") == local_main
+    assert _git(Path(workspace.root_path), "rev-parse", "HEAD") == remote_main
+    assert Path(workspace.root_path, "latest.txt").read_text() == "from remote main\n"
+    assert not _git(repository, "for-each-ref", "refs/engine/provisioning")
+
+
 def test_each_workspace_is_a_distinct_worktree(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     _repository(repository)

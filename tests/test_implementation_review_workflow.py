@@ -126,7 +126,7 @@ def test_request_provisions_a_workspace_and_stores_the_workflow() -> None:
     assert command == ProvisionWorkspace(
         run_id=RUN_ID,
         repository="acme/api",
-        base_ref="main",
+        base_ref="origin/main",
     )
     assert WORKFLOW_DECIDERS[WORKFLOW_ID]
 
@@ -144,6 +144,7 @@ def test_provisioning_starts_implementation_with_the_original_prompt() -> None:
     assert command.workspace_id == WORKSPACE_ID
     assert command.step is not None
     assert command.step.step_id == IMPLEMENTATION_STEP
+    assert "do not fetch, pull, or merge main" in command.profile.instructions
 
 
 def test_implementation_success_starts_review_with_result_context() -> None:

@@ -44,7 +44,9 @@ IMPLEMENTATION_PROFILE = AgentProfile(
     agent_id=AgentId("implementation-agent"),
     instructions=(
         "Implement the requested change in the provided workspace. Read the code "
-        "before editing, make the smallest complete change, and report the result."
+        "before editing. Engine has already based the workspace on the current remote "
+        "main commit; do not fetch, pull, or merge main before editing. Make the "
+        "smallest complete change and report the result."
     ),
     capabilities=(),
     description="Implements the requested repository change.",
@@ -168,7 +170,7 @@ def decide_implementation_review(
             command = ProvisionWorkspace(
                 run_id=event.run_id,
                 repository=event.repository,
-                base_ref="main",
+                base_ref="origin/main",
             )
             return next_state, (command,)
 

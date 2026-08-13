@@ -35,7 +35,10 @@ class GitWorktreeWorkspaceProvider:
     async def provision(self, repository: str, base_ref: str) -> Workspace:
         workspace_id = WorkspaceId(f"ws-{uuid4().hex[:12]}")
         repository_root = await _repository_root(repository)
-        return await self._checkout(workspace_id, repository_root, base_ref)
+        resolved_base = await _resolve_base(repository_root, base_ref)
+        return await self._checkout(
+            workspace_id, repository_root, base_ref, resolved_base=resolved_base
+        )
 
     async def root_path(self, workspace_id: WorkspaceId) -> str:
         root_path = self._path_for(workspace_id)
@@ -95,7 +98,12 @@ class GitWorktreeWorkspaceProvider:
             await _git(repository_root, "branch", "--delete", "--force", branch)
 
     async def _checkout(
-        self, workspace_id: WorkspaceId, repository_root: str, base_ref: str
+        self,
+        workspace_id: WorkspaceId,
+        repository_root: str,
+        base_ref: str,
+        *,
+        resolved_base: str | None = None,
     ) -> Workspace:
         """Put a worktree at this workspace's path, on this workspace's branch."""
         root_path = self._path_for(workspace_id)
@@ -117,7 +125,7 @@ class GitWorktreeWorkspaceProvider:
                 "-b",
                 branch,
                 str(root_path),
-                base_ref,
+                resolved_base or base_ref,
             )
         return Workspace(
             workspace_id=workspace_id,
@@ -175,6 +183,27 @@ async def _checkout_holding(repository_root: str, branch: str) -> str | None:
 
 async def _repository_root(repository: str) -> str:
     return await _git(repository, "rev-parse", "--show-toplevel")
+
+
+async def _resolve_base(repository_root: str, base_ref: str) -> str:
+    """Resolve the workflow base without moving the developer's local branch."""
+    if base_ref != "origin/main":
+        return base_ref
+
+    temporary_ref = f"refs/engine/provisioning/{uuid4().hex}"
+    try:
+        await _git(
+            repository_root,
+            "fetch",
+            "--no-tags",
+            "origin",
+            f"+refs/heads/main:{temporary_ref}",
+        )
+        return await _git(
+            repository_root, "rev-parse", "--verify", f"{temporary_ref}^{{commit}}"
+        )
+    finally:
+        await _git(repository_root, "update-ref", "-d", temporary_ref)
 
 
 async def _main_worktree(root_path: Path) -> str:
