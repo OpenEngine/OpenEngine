@@ -22,6 +22,8 @@ from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import (
     AgentRunner,
     AgentTurn,
+    ApprovalHandler,
+    InteractiveAgentRunner,
     StreamingAgentRunner,
     TurnObserver,
 )
@@ -251,6 +253,7 @@ class AgentSession:
         text: str,
         runner: str | None = None,
         on_message: TurnObserver | None = None,
+        on_approval: ApprovalHandler | None = None,
     ) -> AgentTurn:
         """Add a message to the conversation and get the agent's reply.
 
@@ -262,6 +265,8 @@ class AgentSession:
         `on_message` is provided, streaming runners call it for narration, tool
         activity, and the final answer as each becomes available. A non-streaming
         runner still calls it, but only after the complete turn returns.
+        `on_approval` is passed to interactive runners so they can pause until
+        the caller has presented a request and returned the user's decision.
         """
         runner_name = runner or self.default_runner
         if runner_name not in self._runners:
@@ -291,7 +296,21 @@ class AgentSession:
 
         try:
             selected_runner = self._runners[runner_name]
-            if on_message is not None and isinstance(selected_runner, StreamingAgentRunner):
+            if on_approval is not None and isinstance(
+                selected_runner, InteractiveAgentRunner
+            ):
+                turn = await selected_runner.run_turn_interactive(
+                    agent_run.agent_run_id,
+                    profile,
+                    (*conversation.messages, question),
+                    on_approval,
+                    on_message=on_message,
+                    tools=tools,
+                    workspace_id=instance.workspace_id,
+                )
+            elif on_message is not None and isinstance(
+                selected_runner, StreamingAgentRunner
+            ):
                 turn = await selected_runner.run_turn_streamed(
                     agent_run.agent_run_id,
                     profile,
