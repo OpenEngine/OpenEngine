@@ -9,7 +9,7 @@ import httpx
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
-from engine.apps.web.composition import Settings, build_capabilities
+from engine.apps.web.composition import Settings, build_capabilities, build_runners
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolCall
 from engine.ports import AgentTurn, Workspace, WorkspaceState
 from engine.runtime import AgentSession, Capabilities
@@ -32,6 +32,17 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_web_offers_bidirectional_runner_variants() -> None:
+    runners = build_runners(Settings())
+
+    assert tuple(runners) == (
+        "codex",
+        "codex-app-server",
+        "claude",
+        "claude-stream-json",
+    )
 
 
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
