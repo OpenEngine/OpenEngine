@@ -2,6 +2,7 @@ import {
   ComposerPrimitive,
   MessagePartPrimitive,
   MessagePrimitive,
+  QueueItemPrimitive,
   ThreadListItemPrimitive,
   ThreadListPrimitive,
   ThreadPrimitive,
@@ -90,28 +91,54 @@ function AssistantMessage() {
 
 function Composer() {
   const aui = useAui();
+  const isRunning = useAuiState((state) => state.thread.isRunning);
 
   return (
-    <ComposerPrimitive.Root className="composer">
-      <ComposerPrimitive.Input
-        className="composer-input"
-        placeholder="Ask the agent about this repository…"
-        aria-label="Message the agent"
-        rows={1}
-      />
-      <ComposerPrimitive.Cancel
-        className="composer-button composer-cancel"
-        onClick={() => {
-          const { remoteId } = aui.threadListItem.getState();
-          if (remoteId) {
-            void fetch(`/api/threads/${remoteId}/runs/current`, { method: "DELETE" });
+    <div className="composer-stack">
+      <div className="message-queue" aria-live="polite">
+        <ComposerPrimitive.Queue>
+          {() => (
+            <div className="queued-message">
+              <span className="queued-label">Queued</span>
+              <QueueItemPrimitive.Text className="queued-text" />
+              <QueueItemPrimitive.Remove
+                className="queued-remove"
+                aria-label="Remove queued message"
+                title="Remove queued message"
+              >
+                ×
+              </QueueItemPrimitive.Remove>
+            </div>
+          )}
+        </ComposerPrimitive.Queue>
+      </div>
+      <ComposerPrimitive.Root className="composer">
+        <ComposerPrimitive.Input
+          className="composer-input"
+          placeholder={
+            isRunning
+              ? "Queue a message for when the agent is done…"
+              : "Ask the agent about this repository…"
           }
-        }}
-      >
-        Stop
-      </ComposerPrimitive.Cancel>
-      <ComposerPrimitive.Send className="composer-button">Send</ComposerPrimitive.Send>
-    </ComposerPrimitive.Root>
+          aria-label="Message the agent"
+          rows={1}
+        />
+        <ComposerPrimitive.Cancel
+          className="composer-button composer-cancel"
+          onClick={() => {
+            const { remoteId } = aui.threadListItem.getState();
+            if (remoteId) {
+              void fetch(`/api/threads/${remoteId}/runs/current`, { method: "DELETE" });
+            }
+          }}
+        >
+          Stop
+        </ComposerPrimitive.Cancel>
+        <ComposerPrimitive.Send className="composer-button">
+          {isRunning ? "Queue" : "Send"}
+        </ComposerPrimitive.Send>
+      </ComposerPrimitive.Root>
+    </div>
   );
 }
 

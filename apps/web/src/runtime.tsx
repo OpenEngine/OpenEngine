@@ -270,7 +270,13 @@ function EngineRuntime({
   );
 
   const runtime = useRemoteThreadListRuntime({
-    runtimeHook: () => useLocalRuntime(modelAdapter),
+    runtimeHook: () =>
+      useLocalRuntime(modelAdapter, {
+        unstable_enableMessageQueue: true,
+        // Stop means stop: discard follow-ups instead of starting one after
+        // the cancelled run settles.
+        unstable_queueClearOnCancel: true,
+      }),
     adapter: threadAdapter,
     initialThreadId,
     onThreadIdChange(threadId) {

@@ -68,6 +68,13 @@ button { color: inherit; }
 .tool-call pre { max-height: 220px; margin: 0; padding: 10px 11px; overflow: auto; border-top: 1px solid #d8d5cb; white-space: pre-wrap; }
 .tool-call .tool-result { color: #343b32; background: #f6f4ee; }
 .thread-footer { position: sticky; bottom: 0; width: 100%; margin-top: auto; padding: 18px max(24px, calc((100% - 760px) / 2)) 20px; background: linear-gradient(transparent, #f4f1ea 18%); }
+.composer-stack { display: grid; gap: 8px; }
+.message-queue:empty { display: none; }
+.queued-message { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 8px 10px; color: #586052; background: #eceae3; border: 1px solid #d4d1c7; border-radius: 9px; font-size: 12px; }
+.queued-label { color: #687067; font: 600 9px/1 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.queued-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued-remove { width: 24px; height: 24px; padding: 0; color: #747a70; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+.queued-remove:hover { color: #a63d31; background: #dedbd2; }
 .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: end; padding: 8px; background: #fff; border: 1px solid #d4d1c7; border-radius: 14px; box-shadow: 0 12px 40px #30362e14; }
 .composer:focus-within { border-color: #98a36f; box-shadow: 0 0 0 3px #d7f36d40, 0 12px 40px #30362e14; }
 .composer-input { max-height: 180px; min-height: 42px; padding: 10px; resize: none; color: #252b24; background: transparent; border: 0; outline: 0; line-height: 1.5; }
