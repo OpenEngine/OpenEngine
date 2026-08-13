@@ -23,8 +23,15 @@ from dataclasses import dataclass
 
 from collections.abc import Mapping
 
-from engine.adapters.agent_runner.claude_code import READ_ONLY_TOOLS, ClaudeCodeAgentRunner
-from engine.adapters.agent_runner.codex import CodexAgentRunner
+from engine.adapters.agent_runner.claude_code import (
+    READ_ONLY_TOOLS,
+    ClaudeCodeAgentRunner,
+    ClaudeCodeStreamJsonAgentRunner,
+)
+from engine.adapters.agent_runner.codex import (
+    CodexAgentRunner,
+    CodexAppServerAgentRunner,
+)
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.sqlite import SQLiteStateStore
@@ -107,7 +114,23 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             model=settings.codex_model,
             workspace_provider=workspace_provider,
         ),
+        "codex-app-server": CodexAppServerAgentRunner(
+            binary_path=settings.codex_binary,
+            timeout_seconds=settings.codex_timeout_seconds,
+            sandbox=settings.codex_sandbox,
+            working_directory=settings.codex_working_directory,
+            model=settings.codex_model,
+            workspace_provider=workspace_provider,
+        ),
         "claude": ClaudeCodeAgentRunner(
+            binary_path=settings.claude_binary,
+            timeout_seconds=settings.claude_timeout_seconds,
+            allowed_tools=settings.claude_allowed_tools,
+            working_directory=settings.claude_working_directory,
+            model=settings.claude_model,
+            workspace_provider=workspace_provider,
+        ),
+        "claude-stream-json": ClaudeCodeStreamJsonAgentRunner(
             binary_path=settings.claude_binary,
             timeout_seconds=settings.claude_timeout_seconds,
             allowed_tools=settings.claude_allowed_tools,

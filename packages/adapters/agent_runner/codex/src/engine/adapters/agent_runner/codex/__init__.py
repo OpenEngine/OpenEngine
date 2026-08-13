@@ -34,6 +34,12 @@ of which this adapter is deliberately loud about rather than papering over:
   through as an adapter-side optimisation needs somewhere on `AgentInstance` to
   keep it, and is worth doing only once conversations outlive a process.
 
+`CodexAppServerAgentRunner` offers the same turn-shaped behavior over the
+bidirectional app-server protocol. It deliberately starts a fresh app-server
+thread for every engine turn and replays the engine transcript, just as the
+exec runner does. That makes the transport independently testable before
+provider thread ids or approvals become persistence concerns.
+
 Stdlib only: `asyncio.create_subprocess_exec` and `json`. No SDK.
 
 TODO(caching): we are effectively uncached, and the fix is not in this file.
@@ -102,6 +108,12 @@ OUTPUT_FIELDS = ("aggregated_output", "output", "result", "error")
 #: Fields that describe the item rather than its arguments.
 NON_ARGUMENT_FIELDS = frozenset({"id", "type", "status", "exit_code", *OUTPUT_FIELDS})
 
+#: App-server request ids. They are fixed because every runner process owns one
+#: connection and one turn.
+INITIALIZE_REQUEST_ID = 0
+THREAD_START_REQUEST_ID = 1
+TURN_START_REQUEST_ID = 2
+
 
 class CodexUnavailableError(RuntimeError):
     """The `codex` binary is not on PATH."""
@@ -161,6 +173,85 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
             continue
         if isinstance(event, dict):
             events.append(event)
+    return tuple(events)
+
+
+def _snake_case(name: str) -> str:
+    """App-server uses camelCase; the exec event vocabulary uses snake_case."""
+    return "".join(
+        f"_{character.lower()}" if character.isupper() else character
+        for character in name
+    )
+
+
+def _app_server_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Translate one app-server thread item to the existing exec item shape.
+
+    Keeping one internal event vocabulary means transcript assembly and the UI
+    behave identically whichever Codex transport a conversation selects.
+    Unknown item fields and types are retained rather than dropped.
+    """
+    translated = {_snake_case(str(key)): value for key, value in item.items()}
+    if translated.get("type"):
+        translated["type"] = _snake_case(str(translated["type"]))
+    if translated.get("type") == "file_change" and translated.get("changes"):
+        translated["output"] = json.dumps(translated["changes"], sort_keys=True)
+    return translated
+
+
+def app_server_events(
+    messages: Iterable[dict[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Translate app-server JSON-RPC messages to the exec event vocabulary.
+
+    This pure boundary is also the protocol fixture seam: generated 0.144.4
+    schema-shaped messages can exercise the adapter without launching Codex.
+    """
+    events: list[dict[str, Any]] = []
+    usage: dict[str, Any] = {}
+    announced_thread = False
+    for message in messages:
+        if message.get("error"):
+            events.append({"type": "error", "error": message["error"]})
+            continue
+
+        method = message.get("method")
+        params = message.get("params") or {}
+        if message.get("id") == THREAD_START_REQUEST_ID:
+            thread = (message.get("result") or {}).get("thread") or {}
+            if thread.get("id") and not announced_thread:
+                events.append({"type": "thread.started", "thread_id": thread["id"]})
+                announced_thread = True
+        elif method == "thread/started":
+            thread = params.get("thread") or {}
+            if thread.get("id") and not announced_thread:
+                events.append({"type": "thread.started", "thread_id": thread["id"]})
+                announced_thread = True
+        elif method in {"item/started", "item/completed"}:
+            events.append(
+                {
+                    "type": method.replace("/", "."),
+                    "item": _app_server_item(params.get("item") or {}),
+                }
+            )
+        elif method == "thread/tokenUsage/updated":
+            usage = ((params.get("tokenUsage") or {}).get("last") or {}).copy()
+        elif method == "turn/completed":
+            turn = params.get("turn") or {}
+            status = turn.get("status")
+            event_type = "turn.completed" if status == "completed" else "turn.failed"
+            events.append(
+                {
+                    "type": event_type,
+                    "usage": {
+                        "input_tokens": usage.get("inputTokens", 0),
+                        "cached_input_tokens": usage.get("cachedInputTokens", 0),
+                        "output_tokens": usage.get("outputTokens", 0),
+                        "reasoning_output_tokens": usage.get("reasoningOutputTokens", 0),
+                    },
+                    "error": turn.get("error"),
+                }
+            )
     return tuple(events)
 
 
@@ -361,6 +452,11 @@ class CodexAgentRunner:
             argv += ["--model", model]
         return argv
 
+    def _render_input(
+        self, profile: AgentProfile, messages: Sequence[Message]
+    ) -> str:
+        return render_prompt(profile, messages)
+
     async def run_turn(
         self,
         agent_run_id: AgentRunId,
@@ -406,7 +502,7 @@ class CodexAgentRunner:
             assert self._workspace_provider is not None
             working_directory = await self._workspace_provider.root_path(workspace_id)
 
-        prompt = render_prompt(profile, messages)
+        prompt = self._render_input(profile, messages)
         process = await asyncio.create_subprocess_exec(
             *self.command_line(profile, working_directory),
             stdin=asyncio.subprocess.PIPE,
@@ -416,7 +512,13 @@ class CodexAgentRunner:
         self._running[agent_run_id] = process
         try:
             events, stderr = await asyncio.wait_for(
-                self._read_stream(process, prompt, on_message),
+                self._read_stream(
+                    process,
+                    prompt,
+                    on_message,
+                    profile=profile,
+                    working_directory=working_directory,
+                ),
                 timeout=self._timeout_seconds,
             )
         except asyncio.TimeoutError as timeout:
@@ -452,8 +554,12 @@ class CodexAgentRunner:
         process: asyncio.subprocess.Process,
         prompt: str,
         on_message: TurnObserver,
+        *,
+        profile: AgentProfile,
+        working_directory: str,
     ) -> tuple[tuple[dict[str, Any], ...], str]:
         """Feed stdin and drain both output pipes without buffering stdout."""
+        del profile, working_directory
         assert process.stdin is not None
         assert process.stdout is not None
         assert process.stderr is not None
@@ -512,6 +618,162 @@ class CodexAgentRunner:
         process.terminate()
 
 
+class CodexAppServerAgentRunner(CodexAgentRunner):
+    """Runs one engine turn over Codex app-server's stdio JSON-RPC protocol.
+
+    The process and its stdin remain live until ``turn/completed``. Approval
+    requests are intentionally not handled yet; ``approvalPolicy=never`` keeps
+    this transport behavior-preserving until the caller-side approval flow is
+    ready.
+    """
+
+    def command_line(
+        self, profile: AgentProfile, working_directory: str | None = None
+    ) -> list[str]:
+        del profile, working_directory
+        return [self._binary_path, "app-server"]
+
+    def _render_input(
+        self, profile: AgentProfile, messages: Sequence[Message]
+    ) -> str:
+        del profile
+        if not messages:
+            raise ValueError("cannot run a turn with no messages")
+        return flatten(messages)
+
+    async def _read_stream(
+        self,
+        process: asyncio.subprocess.Process,
+        prompt: str,
+        on_message: TurnObserver,
+        *,
+        profile: AgentProfile,
+        working_directory: str,
+    ) -> tuple[tuple[dict[str, Any], ...], str]:
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        async def send(message: dict[str, Any]) -> None:
+            encoded = json.dumps(message, separators=(",", ":")).encode()
+            process.stdin.write(encoded + b"\n")
+            await process.stdin.drain()
+
+        await send(
+            {
+                "method": "initialize",
+                "id": INITIALIZE_REQUEST_ID,
+                "params": {
+                    "clientInfo": {
+                        "name": "openengine",
+                        "title": "OpenEngine",
+                        "version": "0.1.0",
+                    }
+                },
+            }
+        )
+        await send({"method": "initialized", "params": {}})
+        thread_params: dict[str, Any] = {
+            "approvalPolicy": "never",
+            "cwd": working_directory,
+            "sandbox": self._sandbox,
+        }
+        if profile.instructions.strip():
+            thread_params["developerInstructions"] = profile.instructions.strip()
+        model = profile.model or self._model
+        if model:
+            thread_params["model"] = model
+        await send(
+            {
+                "method": "thread/start",
+                "id": THREAD_START_REQUEST_ID,
+                "params": thread_params,
+            }
+        )
+
+        stderr_task = asyncio.create_task(process.stderr.read())
+        raw_messages: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        observed: list[Message] = []
+        started_actions: set[str] = set()
+        turn_started = False
+        terminal = False
+        try:
+            async for line in _read_lines(process.stdout):
+                for message in parse_events(line.decode(errors="replace")):
+                    if message.get("error"):
+                        error = message["error"]
+                        raise CodexExecutionError(
+                            f"Codex app-server request failed: {error.get('message', error)}"
+                        )
+                    if message.get("method") and message.get("id") is not None:
+                        raise CodexExecutionError(
+                            "Codex app-server requested client input before approval "
+                            "handling was enabled"
+                        )
+
+                    raw_messages.append(message)
+                    translated = app_server_events(raw_messages)
+                    new_events = translated[len(events) :]
+                    for event in new_events:
+                        event_index = len(events)
+                        events.append(event)
+                        if event.get("type") == "thread.started" and not turn_started:
+                            turn_started = True
+                            await send(
+                                {
+                                    "method": "turn/start",
+                                    "id": TURN_START_REQUEST_ID,
+                                    "params": {
+                                        "threadId": event["thread_id"],
+                                        "input": [{"type": "text", "text": prompt}],
+                                    },
+                                }
+                            )
+
+                        streamed = messages_from_event(
+                            event,
+                            thread_id_of(events) or "codex",
+                            event_index,
+                        )
+                        item = event.get("item") or {}
+                        item_id = str(item.get("id", ""))
+                        if event.get("type") == "item.started" and streamed and item_id:
+                            started_actions.add(item_id)
+                        elif (
+                            event.get("type") == "item.completed"
+                            and item_id in started_actions
+                            and len(streamed) == 2
+                        ):
+                            streamed = streamed[1:]
+                        for observed_message in streamed:
+                            observed.append(observed_message)
+                            on_message(observed_message)
+
+                        if event.get("type") in {"turn.completed", "turn.failed"}:
+                            terminal = True
+                            if not process.stdin.is_closing():
+                                process.stdin.close()
+
+            await process.wait()
+            stderr = (await stderr_task).decode(errors="replace")
+        finally:
+            if not process.stdin.is_closing():
+                process.stdin.close()
+            if not stderr_task.done():
+                stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+
+        if not terminal:
+            raise CodexExecutionError("Codex app-server exited before the turn completed")
+        if process.returncode == 0:
+            transcript = turn_from_events(events).transcript
+            if transcript[: len(observed)] == tuple(observed):
+                for message in transcript[len(observed) :]:
+                    on_message(message)
+        return tuple(events), stderr
+
+
 def _tail(text: str, lines: int = 5) -> str:
     """The last few lines of stderr -- enough to diagnose, short enough to read.
 
@@ -524,10 +786,12 @@ def _tail(text: str, lines: int = 5) -> str:
 
 __all__ = [
     "CodexAgentRunner",
+    "CodexAppServerAgentRunner",
     "CodexExecutionError",
     "CodexToolsUnsupportedError",
     "CodexUnavailableError",
     "action_messages",
+    "app_server_events",
     "messages_from_event",
     "parse_events",
     "render_prompt",

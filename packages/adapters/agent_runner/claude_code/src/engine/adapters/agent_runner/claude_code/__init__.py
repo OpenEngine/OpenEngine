@@ -31,6 +31,11 @@ profile with grants is refused rather than quietly run without them. What it can
 be told is *which* of its own tools to use, via `allowed_tools` -- the read-only
 default is this adapter's equivalent of Codex's read-only sandbox.
 
+`ClaudeCodeStreamJsonAgentRunner` uses Claude's realtime stream-json input
+mode. It sends the same flattened engine transcript as one JSONL user message
+and keeps stdin open until Claude emits its terminal result. That gives a later
+approval implementation a response channel without changing permissions here.
+
 Stdlib only: a subprocess and a JSON parser.
 """
 
@@ -293,6 +298,13 @@ class ClaudeCodeAgentRunner:
             argv += ["--model", model]
         return argv
 
+    def _stdin_payload(self, prompt: str) -> bytes:
+        return prompt.encode()
+
+    @property
+    def _close_stdin_after_prompt(self) -> bool:
+        return True
+
     async def run_turn(
         self,
         agent_run_id: AgentRunId,
@@ -387,9 +399,10 @@ class ClaudeCodeAgentRunner:
         assert process.stdout is not None
         assert process.stderr is not None
 
-        process.stdin.write(prompt.encode())
+        process.stdin.write(self._stdin_payload(prompt))
         await process.stdin.drain()
-        process.stdin.close()
+        if self._close_stdin_after_prompt:
+            process.stdin.close()
 
         stderr_task = asyncio.create_task(process.stderr.read())
         events: list[dict[str, Any]] = []
@@ -401,6 +414,12 @@ class ClaudeCodeAgentRunner:
                     for message in messages_from_event(event):
                         observed.append(message)
                         on_message(message)
+                    if (
+                        event.get("type") == "result"
+                        and not self._close_stdin_after_prompt
+                        and not process.stdin.is_closing()
+                    ):
+                        process.stdin.close()
             await process.wait()
             stderr = (await stderr_task).decode(errors="replace")
         finally:
@@ -423,6 +442,31 @@ class ClaudeCodeAgentRunner:
         process.terminate()
 
 
+class ClaudeCodeStreamJsonAgentRunner(ClaudeCodeAgentRunner):
+    """Claude Code with bidirectional stream-json stdin kept open per turn."""
+
+    def command_line(self, profile: AgentProfile) -> list[str]:
+        return [
+            *super().command_line(profile),
+            "--input-format",
+            "stream-json",
+            "--permission-mode",
+            "dontAsk",
+        ]
+
+    def _stdin_payload(self, prompt: str) -> bytes:
+        message = {
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+            "parent_tool_use_id": None,
+        }
+        return json.dumps(message, separators=(",", ":")).encode() + b"\n"
+
+    @property
+    def _close_stdin_after_prompt(self) -> bool:
+        return False
+
+
 def _tail(text: str, lines: int = 5) -> str:
     """The last few lines of stderr -- enough to diagnose, short enough to read."""
     kept = [line for line in text.strip().splitlines() if line.strip()]
@@ -432,6 +476,7 @@ def _tail(text: str, lines: int = 5) -> str:
 __all__ = [
     "READ_ONLY_TOOLS",
     "ClaudeCodeAgentRunner",
+    "ClaudeCodeStreamJsonAgentRunner",
     "ClaudeExecutionError",
     "ClaudeToolsUnsupportedError",
     "ClaudeUnavailableError",

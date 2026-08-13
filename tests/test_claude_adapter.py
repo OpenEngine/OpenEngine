@@ -6,11 +6,13 @@ you assumed only tests your assumption.
 """
 
 import asyncio
+import json
 
 import pytest
 
 from engine.adapters.agent_runner.claude_code import (
     ClaudeCodeAgentRunner,
+    ClaudeCodeStreamJsonAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
     parse_events,
@@ -50,6 +52,7 @@ PROFILE = AgentProfile(
 
 def test_runner_satisfies_the_port() -> None:
     assert isinstance(ClaudeCodeAgentRunner(), AgentRunner)
+    assert isinstance(ClaudeCodeStreamJsonAgentRunner(), AgentRunner)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -230,6 +233,13 @@ def test_stream_json_needs_verbose() -> None:
     assert argv[:5] == ["claude", "-p", "--output-format", "stream-json", "--verbose"]
 
 
+def test_streaming_input_runner_selects_stream_json_input() -> None:
+    argv = ClaudeCodeStreamJsonAgentRunner().command_line(PROFILE)
+
+    assert argv[argv.index("--input-format") + 1] == "stream-json"
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+
+
 # --- how long a turn may take -----------------------------------------------
 
 
@@ -249,6 +259,40 @@ def test_completed_messages_stream_in_transcript_order(tmp_path) -> None:
     )
 
     assert observed == list(turn.transcript)
+
+
+def test_streaming_input_keeps_stdin_open_until_the_result(tmp_path) -> None:
+    binary = tmp_path / "claude-stream-json"
+    received = tmp_path / "received.json"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "message = json.loads(sys.stdin.readline())\n"
+        f"with open({str(received)!r}, 'w') as stream:\n"
+        "    json.dump(message, stream)\n"
+        f"for line in {REAL_TRANSCRIPT!r}.splitlines():\n"
+        "    print(line, flush=True)\n"
+        "assert sys.stdin.readline() == ''\n"
+    )
+    binary.chmod(0o755)
+    runner = ClaudeCodeStreamJsonAgentRunner(
+        binary_path=str(binary), timeout_seconds=2
+    )
+
+    turn = asyncio.run(
+        runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("go"),))
+    )
+    input_message = json.loads(received.read_text())
+
+    assert turn.message.content == "- agent_runner\n- communications"
+    assert input_message == {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": "# Conversation\n\nUser: go",
+        },
+        "parent_tool_use_id": None,
+    }
 
 
 def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:

@@ -270,7 +270,9 @@ you        ->  assistant-ui thread
                engine.runtime.AgentSession    load history, record the run
                engine.ports.AgentRunner       one turn
                engine.adapters.agent_runner.codex        codex exec --json
-                 …or.claude_code                         claude -p            <- the model
+                 …or codex-app-server                    codex app-server
+                 …or claude                              claude -p
+                 …or claude-stream-json                  claude -p + JSONL stdin <- the model
                engine.adapters.state_store.sqlite   store the whole turn
 ```
 
@@ -279,6 +281,11 @@ It needs the [Codex CLI](https://developers.openai.com/codex/cli) or
 reports it plainly if the one you picked is missing. Both run read-only by
 default — Codex sandboxed, Claude Code restricted to `Read`/`Glob`/`Grep` — so an
 agent you are talking to cannot edit the tree as a side effect of answering.
+The `codex-app-server` and `claude-stream-json` choices exercise the providers'
+bidirectional transports while retaining those same permissions. Approval
+requests are deliberately disabled until the HTTP and frontend decision path
+lands.
+
 Each new conversation gets its own branch-backed Git worktree under
 `/tmp/engine-workspaces`, and the chat shows the `cd` command for opening that
 checkout. The worktree is reused for every later turn in the conversation.
