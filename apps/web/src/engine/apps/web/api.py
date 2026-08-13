@@ -35,7 +35,7 @@ from engine.domain import (
     WorkspaceId,
 )
 from engine.ports import AgentRunner, WorkspaceState
-from engine.runtime import AgentSession, RunReader, WorkflowRunView
+from engine.runtime import AgentSession, RunReader, WorkflowExecutor, WorkflowRunView
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -455,10 +455,17 @@ def create_app(
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
     static_directory: Path | None = None,
+    *,
+    workflow_runners: Mapping[str, AgentRunner] | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     service = ThreadService(session, runners)
     run_reader = RunReader(session.state_store)
+    workflow_executor = WorkflowExecutor(
+        session.capabilities,
+        workflow_runners or runners,
+    )
+    workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -477,6 +484,8 @@ def create_app(
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
+                "workflowRunners": list(workflow_executor.runners),
+                "defaultWorkflowRunner": workflow_executor.default_runner,
             }
         )
 
@@ -489,12 +498,7 @@ def create_app(
         )
 
     async def create_run(request: Request) -> JSONResponse:
-        """Persist a workflow request for the durable runtime to consume.
-
-        Workflow orchestration is intentionally outside the web process. The
-        request starts in ``pending`` so the UI never claims that workspace or
-        agent work began before a workflow runtime actually handles it.
-        """
+        """Persist a workflow request and start its supported local execution."""
         body = await _json_body(request)
         try:
             prompt = _required_string(body, "prompt")
@@ -504,6 +508,9 @@ def create_app(
             return _error(str(error), 400)
         if workflow_id != IMPLEMENTATION_REVIEW_WORKFLOW_ID:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
+        runner_name = str(body.get("runner") or workflow_executor.default_runner)
+        if runner_name not in workflow_executor.runners:
+            return _error(f"unknown workflow runner: {runner_name}", 400)
 
         run_id = RunId(f"run-{uuid4().hex[:12]}")
         task_id = TaskId(f"task-{uuid4().hex[:12]}")
@@ -523,6 +530,11 @@ def create_app(
         )
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
+        task = asyncio.create_task(
+            workflow_executor.advance_to_review(event, runner_name)
+        )
+        workflow_tasks[run_id] = task
+        task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))
         run = await run_reader.get(run_id)
         assert run is not None
         return JSONResponse(_run_json(run), status_code=201)

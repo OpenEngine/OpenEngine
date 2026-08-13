@@ -14,6 +14,7 @@ from engine.adapters.agent_runner.claude_code import (
     ClaudeCodeAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
+    WORKSPACE_WRITE_TOOLS,
     parse_events,
     session_id_of,
     turn_from_events,
@@ -205,6 +206,16 @@ def test_chat_gets_read_only_tools_by_default() -> None:
     assert allowed == ["Read", "Glob", "Grep"]
     assert "Bash" not in allowed and "Edit" not in allowed
     assert "--dangerously-skip-permissions" not in argv
+
+
+def test_workflow_write_tools_allow_edits_without_unrestricted_shell() -> None:
+    argv = ClaudeCodeAgentRunner(
+        allowed_tools=WORKSPACE_WRITE_TOOLS
+    ).command_line(PROFILE)
+    allowed = argv[argv.index("--allowedTools") + 1 :]
+
+    assert allowed == ["Read", "Glob", "Grep", "Edit", "Write"]
+    assert "Bash" not in allowed
 
 
 def test_an_empty_tool_list_omits_the_flag() -> None:

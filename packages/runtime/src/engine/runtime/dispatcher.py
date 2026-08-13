@@ -26,7 +26,9 @@ from engine.domain.commands import (
     StartAgentRun,
 )
 from engine.domain.ids import ConversationId
+from engine.ports import AgentRunner, AgentTurn
 from engine.runtime.capabilities import Capabilities
+from engine.runtime.step_results import step_result_instructions
 
 
 class UnhandledCommandError(RuntimeError):
@@ -63,7 +65,7 @@ class Dispatcher:
                         workspace_id=command.workspace_id,
                     )
                 else:
-                    await self._dispatch_workflow_agent(command)
+                    await self.run_workflow_agent(command)
             case RequestHumanReview():
                 # The state store is the durable request. A future ingress may
                 # additionally notify an external review system.
@@ -82,9 +84,15 @@ class Dispatcher:
             case _:
                 raise UnhandledCommandError(command)
 
-    async def _dispatch_workflow_agent(self, command: StartAgentRun) -> None:
-        """Materialize a workflow step's durable identity and transcript."""
+    async def run_workflow_agent(
+        self,
+        command: StartAgentRun,
+        runner: AgentRunner | None = None,
+        runner_name: str = "",
+    ) -> AgentTurn:
+        """Run one workflow step and return its structured terminal turn."""
         caps = self._capabilities
+        selected_runner = runner or caps.agent_runner
         assert command.step is not None
         instance = await caps.state_store.create_instance(
             command.profile.agent_id,
@@ -93,9 +101,12 @@ class Dispatcher:
             conversation_id=ConversationId(f"{command.instance_id}:conversation"),
             workflow_run_id=command.run_id,
             workflow_step_id=command.step.step_id,
+            runner=runner_name,
         )
         conversation = await caps.state_store.load_conversation(instance.instance_id)
-        prompt = Message.user(command.prompt)
+        prompt = Message.user(
+            f"{command.prompt}\n\n{step_result_instructions(command.step)}"
+        )
         if conversation is not None and not conversation.messages:
             await caps.state_store.append_messages(instance.instance_id, (prompt,))
 
@@ -103,10 +114,11 @@ class Dispatcher:
             agent_run_id=command.agent_run_id,
             instance_id=instance.instance_id,
             status=AgentRunStatus.RUNNING,
+            runner=runner_name,
         )
         await caps.state_store.record_agent_run(agent_run)
         try:
-            turn = await caps.agent_runner.run_turn(
+            turn = await selected_runner.run_turn(
                 command.agent_run_id,
                 command.profile,
                 (prompt,),
@@ -129,6 +141,7 @@ class Dispatcher:
                 summary=turn.message.content,
             )
         )
+        return turn
 
 
 __all__ = ["Dispatcher", "UnhandledCommandError"]

@@ -10,7 +10,11 @@ import pytest
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
-from engine.apps.web.composition import Settings, build_capabilities
+from engine.apps.web.composition import (
+    Settings,
+    build_capabilities,
+    build_workflow_runners,
+)
 from engine.domain import (
     AgentId,
     AgentInstanceId,
@@ -28,6 +32,7 @@ from engine.domain import (
     StepOutput,
     TaskId,
     ToolCall,
+    WorkspaceProvisioned,
 )
 from engine.core.workflows.implementation_review import (
     HUMAN_REVIEW_STEP,
@@ -55,6 +60,18 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:
+    runners = build_workflow_runners(Settings())
+
+    codex_argv = runners["codex"].command_line(PROFILES[CODER])
+    claude_argv = runners["claude"].command_line(PROFILES[CODER])
+    claude_tools = claude_argv[claude_argv.index("--allowedTools") + 1 :]
+
+    assert codex_argv[codex_argv.index("--sandbox") + 1] == "workspace-write"
+    assert claude_tools == ["Read", "Glob", "Grep", "Edit", "Write"]
+    assert "Bash" not in claude_tools
 
 
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
@@ -245,7 +262,12 @@ def _workflow_state(phase: RunPhase) -> RunState:
     )
 
 
-def _workflow_app(store: InMemoryStateStore, runner: ConcurrentRunner):
+def _workflow_app(
+    store: InMemoryStateStore,
+    runner: ConcurrentRunner,
+    workspaces: object | None = None,
+    workflow_runners: dict[str, ConcurrentRunner] | None = None,
+):
     unused = object()
     session = AgentSession(
         Capabilities(
@@ -253,13 +275,17 @@ def _workflow_app(store: InMemoryStateStore, runner: ConcurrentRunner):
             source_control=unused,
             agent_runner=runner,
             communications=unused,
-            workspace_provider=unused,
+            workspace_provider=workspaces or ConversationWorkspaces(),
             state_store=store,
         ),
         profiles=PROFILES,
         runners={"test": runner},
     )
-    return create_app(session, {"test": runner})
+    return create_app(
+        session,
+        {"test": runner},
+        workflow_runners=workflow_runners,
+    )
 
 
 @pytest.mark.parametrize(
@@ -319,9 +345,13 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
-def test_create_workflow_run_persists_the_request_for_runtime_consumption() -> None:
+def test_create_workflow_run_executes_implementation_and_stops_at_review() -> None:
     store = InMemoryStateStore()
-    app = _workflow_app(store, ConcurrentRunner())
+    runner = ConcurrentRunner(
+        ('{"outcome":"success","summary":"Added cancellation handling.",'
+         '"outputs":{"changed_files":"worker.py"}}',)
+    )
+    app = _workflow_app(store, runner)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -335,7 +365,11 @@ def test_create_workflow_run_persists_the_request_for_runtime_consumption() -> N
                 },
             )
             run_id = RunId(created.json()["runId"])
-            reopened = await client.get(f"/api/runs/{run_id}")
+            for _ in range(20):
+                reopened = await client.get(f"/api/runs/{run_id}")
+                if reopened.json()["phase"] == "reviewing":
+                    break
+                await asyncio.sleep(0.01)
             listed = await client.get("/api/runs")
             return created, reopened, listed, await store.history(run_id)
 
@@ -344,14 +378,67 @@ def test_create_workflow_run_persists_the_request_for_runtime_consumption() -> N
     assert created.status_code == 201
     assert created.json()["phase"] == "pending"
     assert created.json()["currentStepId"] is None
-    assert reopened.json() == created.json()
+    assert reopened.json()["phase"] == "reviewing"
+    assert reopened.json()["currentStepId"] == "review"
+    assert reopened.json()["steps"][0]["summary"] == "Added cancellation handling."
+    assert reopened.json()["steps"][0]["conversationUrl"]
+    assert reopened.json()["steps"][1]["status"] == "in_progress"
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]
     ]
-    assert len(history) == 1
+    assert len(history) == 3
     assert isinstance(history[0], RunRequested)
+    assert isinstance(history[1], WorkspaceProvisioned)
+    assert isinstance(history[2], StepCompleted)
     assert history[0].prompt == "Add cancellation handling."
     assert history[0].repository == "acme/api"
+    assert runner.workspace_ids == ["ws-1"]
+    assert "exactly one JSON object" in runner.seen[0][0].content
+
+
+def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
+    store = InMemoryStateStore()
+    default = ConcurrentRunner()
+    claude = ConcurrentRunner(
+        ('{"outcome":"success","summary":"Implemented with Claude.",'
+         '"outputs":{"changed_files":"feature.py"}}',)
+    )
+    app = _workflow_app(
+        store,
+        default,
+        workflow_runners={"codex": default, "claude": claude},
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement the feature.",
+                    "repository": "acme/api",
+                    "runner": "claude",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(20):
+                reopened = await client.get(f"/api/runs/{run_id}")
+                if reopened.json()["phase"] == "reviewing":
+                    break
+                await asyncio.sleep(0.01)
+            instance_id = AgentInstanceId(
+                reopened.json()["steps"][0]["agentInstanceId"]
+            )
+            return reopened, await store.load_instance(instance_id)
+
+    reopened, instance = asyncio.run(scenario())
+
+    assert reopened.json()["steps"][0]["summary"] == "Implemented with Claude."
+    assert default.seen == []
+    assert len(claude.seen) == 1
+    assert instance is not None
+    assert instance.runner == "claude"
 
 
 @pytest.mark.parametrize(
@@ -360,6 +447,12 @@ def test_create_workflow_run_persists_the_request_for_runtime_consumption() -> N
         {"workflowId": "unknown-v1", "prompt": "Task", "repository": "."},
         {"workflowId": "implementation-review-v1", "prompt": "", "repository": "."},
         {"workflowId": "implementation-review-v1", "prompt": "Task"},
+        {
+            "workflowId": "implementation-review-v1",
+            "prompt": "Task",
+            "repository": ".",
+            "runner": "unknown",
+        },
     ],
 )
 def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> None:
@@ -804,6 +897,8 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
 
     assert config.status_code == 200
     assert config.json()["defaultRunner"] == "test"
+    assert config.json()["workflowRunners"] == ["test"]
+    assert config.json()["defaultWorkflowRunner"] == "test"
     assert created.status_code == 201
     assert streamed.status_code == 200
     assert '"type":"done"' in streamed.text

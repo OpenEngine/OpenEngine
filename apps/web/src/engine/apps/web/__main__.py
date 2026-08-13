@@ -15,6 +15,7 @@ from engine.apps.web.composition import (
     build_capabilities,
     build_runners,
     build_session,
+    build_workflow_runners,
 )
 
 #: Vite's production output, served by the same process as the API.
@@ -25,12 +26,20 @@ def report_wiring(settings: Settings) -> None:
     """Print the composed capability graph, as the other two roots do."""
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
+    workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners)
     print(f"openengine web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
     print(f"agents: {', '.join(sorted(session.profiles))}")
     print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
+    print(
+        "workflow runners: "
+        + ", ".join(
+            f"{name} ({type(runner).__name__})"
+            for name, runner in workflow_runners.items()
+        )
+    )
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
@@ -47,8 +56,14 @@ def main() -> int:
 
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
+    workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners)
-    app = create_app(session, runners, STATIC_DIRECTORY)
+    app = create_app(
+        session,
+        runners,
+        STATIC_DIRECTORY,
+        workflow_runners=workflow_runners,
+    )
     uvicorn.run(app, host=settings.host, port=settings.port)
     return 0
 

@@ -23,7 +23,11 @@ from dataclasses import dataclass
 
 from collections.abc import Mapping
 
-from engine.adapters.agent_runner.claude_code import READ_ONLY_TOOLS, ClaudeCodeAgentRunner
+from engine.adapters.agent_runner.claude_code import (
+    READ_ONLY_TOOLS,
+    WORKSPACE_WRITE_TOOLS,
+    ClaudeCodeAgentRunner,
+)
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
@@ -61,6 +65,10 @@ class Settings:
     claude_timeout_seconds: float | None = None
     """Same as `codex_timeout_seconds`."""
     claude_model: str = ""
+    workflow_codex_sandbox: str = "workspace-write"
+    """Workflow implementation may edit only its isolated worktree."""
+    workflow_claude_allowed_tools: tuple[str, ...] = WORKSPACE_WRITE_TOOLS
+    """Claude workflows may read and edit files, but not run unrestricted Bash."""
     temporal_host: str = "localhost:7233"
     github_token: str = ""
     buzz_base_url: str = ""
@@ -118,6 +126,29 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     }
 
 
+def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
+    """Write-enabled runners used only for workflow implementation steps."""
+    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
+    return {
+        "codex": CodexAgentRunner(
+            binary_path=settings.codex_binary,
+            timeout_seconds=settings.codex_timeout_seconds,
+            sandbox=settings.workflow_codex_sandbox,
+            working_directory=settings.codex_working_directory,
+            model=settings.codex_model,
+            workspace_provider=workspace_provider,
+        ),
+        "claude": ClaudeCodeAgentRunner(
+            binary_path=settings.claude_binary,
+            timeout_seconds=settings.claude_timeout_seconds,
+            allowed_tools=settings.workflow_claude_allowed_tools,
+            working_directory=settings.claude_working_directory,
+            model=settings.claude_model,
+            workspace_provider=workspace_provider,
+        ),
+    }
+
+
 def build_session(
     capabilities: Capabilities,
     runners: Mapping[str, AgentRunner],
@@ -144,5 +175,6 @@ __all__ = [
     "Settings",
     "build_capabilities",
     "build_runners",
+    "build_workflow_runners",
     "build_session",
 ]

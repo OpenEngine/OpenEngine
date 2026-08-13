@@ -16,6 +16,8 @@ export type EngineConfig = {
   runners: RunnerOption[];
   defaultAgent: string;
   defaultRunner: string;
+  workflowRunners: string[];
+  defaultWorkflowRunner: string;
 };
 
 export type ApiThread = {

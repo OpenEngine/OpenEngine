@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 
-import { api, type ApiRunStep, type ApiWorkflowRun } from "./api";
+import { api, type ApiRunStep, type ApiWorkflowRun, type EngineConfig } from "./api";
 
 function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
@@ -99,8 +99,19 @@ export function NewWorkflowPage() {
   const { runs } = useRuns();
   const [prompt, setPrompt] = useState("");
   const [repository, setRepository] = useState(".");
+  const [runners, setRunners] = useState<string[]>([]);
+  const [runner, setRunner] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    api<EngineConfig>("/api/config")
+      .then((config) => {
+        setRunners(config.workflowRunners);
+        setRunner(config.defaultWorkflowRunner);
+      })
+      .catch((reason: Error) => setError(reason.message));
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -113,6 +124,7 @@ export function NewWorkflowPage() {
           workflowId: "implementation-review-v1",
           prompt,
           repository,
+          runner,
         }),
       });
       window.location.assign(`/runs/${encodeURIComponent(run.runId)}`);
@@ -143,15 +155,21 @@ export function NewWorkflowPage() {
             <input required value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository or local path" />
           </label>
           <label>
+            <span>Implementation runner</span>
+            <select required value={runner} onChange={(event) => setRunner(event.target.value)}>
+              {runners.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+          <label>
             <span>Task prompt</span>
             <textarea required rows={9} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe what the implementation agent should change and what success looks like." />
           </label>
           {error && <p className="run-error" role="alert">{error}</p>}
           <div className="new-workflow-actions">
             <a href="/runs">Cancel</a>
-            <button disabled={submitting} type="submit">{submitting ? "Creating…" : "Create workflow run"}</button>
+            <button disabled={submitting || !runner} type="submit">{submitting ? "Creating…" : "Create workflow run"}</button>
           </div>
-          <p className="form-note">New runs are durably queued as pending. Execution begins when the workflow runtime consumes the request.</p>
+          <p className="form-note">The implementation starts after the run is created. Reviewer execution is not available yet.</p>
         </form>
       </main>
     </div>
@@ -218,9 +236,27 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [run, setRun] = useState<ApiWorkflowRun>();
   const [error, setError] = useState("");
   useEffect(() => {
-    api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`)
-      .then(setRun)
-      .catch((reason: Error) => setError(reason.message));
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`)
+        .then((value) => {
+          if (cancelled) return;
+          setRun(value);
+          setError("");
+          if (["pending", "preparing_workspace", "implementing"].includes(value.phase)) {
+            timer = window.setTimeout(load, 1000);
+          }
+        })
+        .catch((reason: Error) => {
+          if (!cancelled) setError(reason.message);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [runId]);
 
   return (
