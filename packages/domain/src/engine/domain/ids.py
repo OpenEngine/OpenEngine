@@ -18,6 +18,9 @@ from typing import NewType
 TaskId = NewType("TaskId", str)
 """A unit of work requested of the engine, e.g. "fix the flaky auth test"."""
 
+StepId = NewType("StepId", str)
+"""One step in a workflow."""
+
 RunId = NewType("RunId", str)
 """One end-to-end execution of a `TaskId`."""
 
@@ -46,6 +49,7 @@ __all__ = [
     "ConversationId",
     "MessageId",
     "RunId",
+    "StepId",
     "TaskId",
     "WorkspaceId",
 ]
