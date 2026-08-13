@@ -9,7 +9,7 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import { useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useState } from "react";
 
 import { api, attachWorkspace, detachWorkspace, type ApiThread } from "./api";
 
@@ -92,6 +92,21 @@ function AssistantMessage() {
 function Composer() {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
+  const canSend = useAuiState((state) => state.composer.canSend);
+
+  const queueOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      !isRunning ||
+      !canSend ||
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+    event.preventDefault();
+    aui.composer.send();
+  };
 
   return (
     <div className="composer-stack">
@@ -122,6 +137,7 @@ function Composer() {
           }
           aria-label="Message the agent"
           rows={1}
+          onKeyDown={queueOnEnter}
         />
         <ComposerPrimitive.Cancel
           className="composer-button composer-cancel"
@@ -134,9 +150,14 @@ function Composer() {
         >
           Stop
         </ComposerPrimitive.Cancel>
-        <ComposerPrimitive.Send className="composer-button">
+        <button
+          type="button"
+          className="composer-button"
+          disabled={!canSend}
+          onClick={() => aui.composer.send()}
+        >
           {isRunning ? "Queue" : "Send"}
-        </ComposerPrimitive.Send>
+        </button>
       </ComposerPrimitive.Root>
     </div>
   );
