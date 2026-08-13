@@ -15,6 +15,11 @@ from engine.runtime.session import (
     UnknownToolGrantError,
     WorkspacesUnavailableError,
 )
+from engine.runtime.step_results import (
+    InvalidStepResultError,
+    step_completed_from_turn,
+    step_result_instructions,
+)
 
 __all__ = [
     "BUILT_IN",
@@ -24,6 +29,7 @@ __all__ = [
     "AgentSession",
     "Capabilities",
     "Dispatcher",
+    "InvalidStepResultError",
     "UnhandledCommandError",
     "UnknownAgentError",
     "UnknownInstanceError",
@@ -31,4 +37,6 @@ __all__ = [
     "UnknownToolGrantError",
     "WorkspacesUnavailableError",
     "profile_for",
+    "step_completed_from_turn",
+    "step_result_instructions",
 ]
