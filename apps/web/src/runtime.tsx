@@ -276,9 +276,8 @@ function EngineRuntime({
     runtimeHook: () =>
       useLocalRuntime(modelAdapter, {
         unstable_enableMessageQueue: true,
-        // Stop means stop: discard follow-ups instead of starting one after
-        // the cancelled run settles.
-        unstable_queueClearOnCancel: true,
+        // Preserve queued follow-ups while Stop transitions to the next run.
+        unstable_queueClearOnCancel: false,
       }),
     adapter: threadAdapter,
     initialThreadId,
