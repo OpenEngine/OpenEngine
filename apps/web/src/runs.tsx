@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { api, type ApiRunStep, type ApiWorkflowRun } from "./api";
 
@@ -6,7 +6,15 @@ function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
 }
 
-function RunNavigation({ runs }: { runs: ApiWorkflowRun[] }) {
+function RunNavigation({
+  runs,
+  activeRunId,
+  activeView = "runs",
+}: {
+  runs: ApiWorkflowRun[];
+  activeRunId?: string;
+  activeView?: "runs" | "new";
+}) {
   return (
     <aside className="sidebar run-sidebar">
       <a className="brand" href="/runs">
@@ -14,13 +22,27 @@ function RunNavigation({ runs }: { runs: ApiWorkflowRun[] }) {
         <span>openengine</span>
       </a>
       <nav className="run-nav" aria-label="Work">
-        <a className="run-nav-primary" href="/runs">Workflow runs</a>
+        <a className={`run-nav-link ${activeView === "runs" ? "run-nav-primary" : "run-nav-secondary"}`} href="/runs">
+          Workflow runs
+        </a>
+        <a className={`run-nav-link new-workflow-link ${activeView === "new" ? "run-nav-primary" : "run-nav-secondary"}`} href="/runs/new">
+          + New workflow
+        </a>
         <div className="thread-list-label">Recent runs</div>
         {runs.map((run) => (
-          <a className="run-nav-item" href={`/runs/${run.runId}`} key={run.runId}>
-            <strong>{run.taskPrompt || run.runId}</strong>
-            <span>{phaseLabel(run.phase)} · {run.workflowVersion || run.workflowId}</span>
-          </a>
+          <div className="run-nav-group" key={run.runId}>
+            <a className="run-nav-item" data-active={activeRunId === run.runId || undefined} href={`/runs/${run.runId}`}>
+              <strong>{run.taskPrompt || run.runId}</strong>
+              <span>{phaseLabel(run.phase)} · {run.workflowVersion || run.workflowId}</span>
+            </a>
+            {run.steps.some((step) => step.conversationUrl) && (
+              <div className="run-conversations" aria-label={`Conversations for ${run.taskPrompt}`}>
+                {run.steps.filter((step) => step.conversationUrl).map((step) => (
+                  <a href={step.conversationUrl!} key={step.stepId}>{step.name} conversation</a>
+                ))}
+              </div>
+            )}
+          </div>
         ))}
       </nav>
       <a className="conversation-nav" href="/conversations">Standalone conversations</a>
@@ -73,6 +95,91 @@ export function RunsPage() {
   );
 }
 
+export function NewWorkflowPage() {
+  const { runs } = useRuns();
+  const [prompt, setPrompt] = useState("");
+  const [repository, setRepository] = useState(".");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError("");
+    try {
+      const run = await api<ApiWorkflowRun>("/api/runs", {
+        method: "POST",
+        body: JSON.stringify({
+          workflowId: "implementation-review-v1",
+          prompt,
+          repository,
+        }),
+      });
+      window.location.assign(`/runs/${encodeURIComponent(run.runId)}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not create workflow run");
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="app-shell">
+      <RunNavigation runs={runs} activeView="new" />
+      <main className="new-workflow-panel">
+        <header className="new-workflow-header">
+          <span className="eyebrow">OPENENGINE / NEW WORKFLOW</span>
+          <h1>Start a workflow</h1>
+          <p>Create one run that keeps its stages, agent conversations, outputs, and final human decision together.</p>
+        </header>
+        <form className="new-workflow-form" onSubmit={submit}>
+          <label>
+            <span>Workflow definition</span>
+            <select disabled value="implementation-review-v1">
+              <option value="implementation-review-v1">Implementation review · v1</option>
+            </select>
+          </label>
+          <label>
+            <span>Repository</span>
+            <input required value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository or local path" />
+          </label>
+          <label>
+            <span>Task prompt</span>
+            <textarea required rows={9} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe what the implementation agent should change and what success looks like." />
+          </label>
+          {error && <p className="run-error" role="alert">{error}</p>}
+          <div className="new-workflow-actions">
+            <a href="/runs">Cancel</a>
+            <button disabled={submitting} type="submit">{submitting ? "Creating…" : "Create workflow run"}</button>
+          </div>
+          <p className="form-note">New runs are durably queued as pending. Execution begins when the workflow runtime consumes the request.</p>
+        </form>
+      </main>
+    </div>
+  );
+}
+
+function StageProgress({ run }: { run: ApiWorkflowRun }) {
+  const preparing = run.phase === "pending" || run.phase === "preparing_workspace";
+  const stages = [
+    {
+      id: "workspace",
+      name: run.phase === "pending" ? "Queued" : "Workspace",
+      status: preparing ? "in_progress" : "completed",
+    },
+    ...run.steps.map((step) => ({ id: step.stepId, name: step.name, status: step.status })),
+  ];
+  return (
+    <ol className="stage-progress" aria-label="Current workflow stage">
+      {stages.map((stage) => (
+        <li className={`stage-progress-${stage.status}`} aria-current={stage.status === "in_progress" || stage.status === "action_required" ? "step" : undefined} key={stage.id}>
+          <span aria-hidden="true" className="stage-marker" />
+          <span>{stage.name}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   return (
     <article className={`run-step ${current ? "run-step-current" : ""}`}>
@@ -118,7 +225,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
   return (
     <div className="app-shell">
-      <RunNavigation runs={runs} />
+      <RunNavigation runs={runs} activeRunId={runId} />
       <main className="run-detail-panel">
         {error ? <p className="run-error">Could not load run: {error}</p> : !run ? (
           <p className="loading-inline">Loading workflow run…</p>
@@ -138,6 +245,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 <div><dt>Final outcome</dt><dd>{run.terminalOutcome ?? "In progress"}</dd></div>
               </dl>
             </header>
+            <StageProgress run={run} />
             {run.pendingHumanReview && (
               <section className="pending-action">
                 <span className="eyebrow">ACTION REQUIRED</span>

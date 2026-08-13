@@ -22,6 +22,7 @@ from engine.domain import (
     Role,
     RunId,
     RunPhase,
+    RunRequested,
     RunState,
     StepCompleted,
     StepOutput,
@@ -318,6 +319,64 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
+def test_create_workflow_run_persists_the_request_for_runtime_consumption() -> None:
+    store = InMemoryStateStore()
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Add cancellation handling.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            reopened = await client.get(f"/api/runs/{run_id}")
+            listed = await client.get("/api/runs")
+            return created, reopened, listed, await store.history(run_id)
+
+    created, reopened, listed, history = asyncio.run(scenario())
+
+    assert created.status_code == 201
+    assert created.json()["phase"] == "pending"
+    assert created.json()["currentStepId"] is None
+    assert reopened.json() == created.json()
+    assert [run["runId"] for run in listed.json()["runs"]] == [
+        created.json()["runId"]
+    ]
+    assert len(history) == 1
+    assert isinstance(history[0], RunRequested)
+    assert history[0].prompt == "Add cancellation handling."
+    assert history[0].repository == "acme/api"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"workflowId": "unknown-v1", "prompt": "Task", "repository": "."},
+        {"workflowId": "implementation-review-v1", "prompt": "", "repository": "."},
+        {"workflowId": "implementation-review-v1", "prompt": "Task"},
+    ],
+)
+def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> None:
+    store = InMemoryStateStore()
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post("/api/runs", json=body)
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 400
+    assert asyncio.run(store.list_runs()) == ()
+
+
 def test_workflow_conversation_is_nested_under_its_run_not_standalone() -> None:
     store = InMemoryStateStore()
     state = _workflow_state(RunPhase.REVIEWING)
@@ -398,6 +457,23 @@ def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             return await client.get("/runs/run-42")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert "workflow application" in response.text
+
+
+def test_new_workflow_frontend_route_serves_the_application(tmp_path) -> None:
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<main>workflow application</main>")
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/runs/new")
 
     response = asyncio.run(scenario())
 

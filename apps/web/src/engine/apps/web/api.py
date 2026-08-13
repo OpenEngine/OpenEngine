@@ -23,10 +23,15 @@ from engine.domain import (
     AgentId,
     AgentInstanceId,
     AgentRunId,
+    IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     Message,
     Role,
     RunId,
+    RunRequested,
+    RunState,
     StepId,
+    TaskId,
+    WorkflowId,
     WorkspaceId,
 )
 from engine.ports import AgentRunner, WorkspaceState
@@ -483,6 +488,45 @@ def create_app(
             {"runs": [_run_json(run) for run in await run_reader.list()]}
         )
 
+    async def create_run(request: Request) -> JSONResponse:
+        """Persist a workflow request for the durable runtime to consume.
+
+        Workflow orchestration is intentionally outside the web process. The
+        request starts in ``pending`` so the UI never claims that workspace or
+        agent work began before a workflow runtime actually handles it.
+        """
+        body = await _json_body(request)
+        try:
+            prompt = _required_string(body, "prompt")
+            repository = _required_string(body, "repository")
+            workflow_id = WorkflowId(_required_string(body, "workflowId"))
+        except ValueError as error:
+            return _error(str(error), 400)
+        if workflow_id != IMPLEMENTATION_REVIEW_WORKFLOW_ID:
+            return _error(f"unknown workflow definition: {workflow_id}", 400)
+
+        run_id = RunId(f"run-{uuid4().hex[:12]}")
+        task_id = TaskId(f"task-{uuid4().hex[:12]}")
+        event = RunRequested(
+            run_id=run_id,
+            task_id=task_id,
+            prompt=prompt,
+            repository=repository,
+            workflow_id=workflow_id,
+        )
+        state = RunState(
+            run_id=run_id,
+            task_id=task_id,
+            workflow_id=workflow_id,
+            prompt=prompt,
+            repository=repository,
+        )
+        await session.state_store.save(state)
+        await session.state_store.append_events(run_id, (event,))
+        run = await run_reader.get(run_id)
+        assert run is not None
+        return JSONResponse(_run_json(run), status_code=201)
+
     async def get_run(request: Request) -> JSONResponse:
         run = await run_reader.get(RunId(request.path_params["run_id"]))
         if run is None:
@@ -639,6 +683,7 @@ def create_app(
     routes = [
         Route("/api/config", config),
         Route("/api/runs", list_runs),
+        Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
@@ -683,6 +728,7 @@ def create_app(
         routes.extend(
             [
                 Route("/runs", spa_page),
+                Route("/runs/new", spa_page),
                 Route("/runs/{run_id}", spa_page),
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),
