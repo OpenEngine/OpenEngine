@@ -11,13 +11,13 @@ Executing them, and deciding whether to go round again, belongs to the caller --
 the runner never invokes a tool itself, so what an agent may do stays governed
 by its profile rather than by whichever adapter happens to be running it.
 
-Runners whose providers expose progress may additionally implement
-`StreamingAgentRunner`. The original `run_turn` method remains the fallback, so
-callers do not need to special-case runners that can only return a completed
-turn.
+Runners whose providers expose progress or pause for user approval may
+additionally implement `StreamingAgentRunner` or `InteractiveAgentRunner`. The
+original `run_turn` method remains the fallback, so callers do not need to
+special-case runners with neither capability.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
@@ -39,6 +39,34 @@ class FinishReason(Enum):
     """It hit a token limit mid-answer."""
     CONTENT_FILTER = "content_filter"
     ERROR = "error"
+
+
+class ApprovalKind(Enum):
+    """What the agent is asking the user to allow."""
+
+    COMMAND_EXECUTION = "command_execution"
+    FILE_CHANGE = "file_change"
+
+
+class ApprovalDecision(Enum):
+    """Provider-neutral decisions a user can make about an approval request."""
+
+    ACCEPT = "accept"
+    ACCEPT_FOR_SESSION = "accept_for_session"
+    DECLINE = "decline"
+    CANCEL = "cancel"
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalRequest:
+    """A normalized request emitted while an agent turn is paused."""
+
+    approval_id: str
+    kind: ApprovalKind
+    reason: str | None = None
+    command: str | None = None
+    cwd: str | None = None
+    allowed_decisions: tuple[ApprovalDecision, ...] = tuple(ApprovalDecision)
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +166,9 @@ class AgentRunner(Protocol):
 TurnObserver = Callable[[Message], None]
 """Receives each conversation message as soon as a runner completes it."""
 
+ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalDecision]]
+"""Presents an approval request and waits for the user's decision."""
+
 
 @runtime_checkable
 class StreamingAgentRunner(AgentRunner, Protocol):
@@ -161,10 +192,33 @@ class StreamingAgentRunner(AgentRunner, Protocol):
         ...
 
 
+@runtime_checkable
+class InteractiveAgentRunner(AgentRunner, Protocol):
+    """An agent runner that may pause a turn for user approval."""
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run a turn, awaiting `on_approval` whenever user consent is needed."""
+        ...
+
+
 __all__ = [
     "AgentRunner",
     "AgentTurn",
+    "ApprovalDecision",
+    "ApprovalHandler",
+    "ApprovalKind",
+    "ApprovalRequest",
     "FinishReason",
+    "InteractiveAgentRunner",
     "StreamingAgentRunner",
     "TokenUsage",
     "TurnObserver",

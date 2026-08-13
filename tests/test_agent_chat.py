@@ -21,7 +21,13 @@ from engine.domain import (
     ToolCall,
     ToolSpec,
 )
-from engine.ports import AgentTurn, StateStore
+from engine.ports import (
+    AgentTurn,
+    ApprovalDecision,
+    ApprovalKind,
+    ApprovalRequest,
+    StateStore,
+)
 from engine.runtime import (
     DEFAULT_RUNNER,
     AgentSession,
@@ -224,6 +230,66 @@ def test_a_streaming_runner_reports_steps_before_the_final_answer() -> None:
     assert [(message.role, message.content) for message in stored] == [
         (message.role, message.content) for message in turn.transcript
     ]
+
+
+def test_an_interactive_runner_can_await_an_approval_decision() -> None:
+    store = InMemoryStateStore()
+    request = ApprovalRequest(
+        approval_id="approval-1",
+        kind=ApprovalKind.COMMAND_EXECUTION,
+        reason="This command writes a generated file.",
+        command="make generate",
+        cwd="/workspace",
+    )
+
+    class InteractiveRunner(ScriptedRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.decision: ApprovalDecision | None = None
+
+        async def run_turn(self, *args, **kwargs):
+            raise AssertionError("the interactive method should be used")
+
+        async def run_turn_interactive(
+            self,
+            agent_run_id,
+            profile,
+            messages,
+            on_approval,
+            on_message=None,
+            tools=(),
+            workspace_id=None,
+        ):
+            self.decision = await on_approval(request)
+            turn = AgentTurn(Message.assistant("Generated."))
+            if on_message is not None:
+                on_message(turn.message)
+            return turn
+
+    runner = InteractiveRunner()
+    session = _session(runner, store)
+    instance = asyncio.run(session.start(CODER))
+    presented: list[ApprovalRequest] = []
+    observed: list[Message] = []
+
+    async def approve(pending: ApprovalRequest) -> ApprovalDecision:
+        presented.append(pending)
+        return ApprovalDecision.ACCEPT
+
+    turn = asyncio.run(
+        session.say(
+            instance.instance_id,
+            "generate the client",
+            on_message=observed.append,
+            on_approval=approve,
+        )
+    )
+
+    assert presented == [request]
+    assert runner.decision is ApprovalDecision.ACCEPT
+    assert observed == [turn.message]
+    stored = asyncio.run(session.history(instance.instance_id))[-1]
+    assert (stored.role, stored.content) == (turn.message.role, turn.message.content)
 
 
 def test_what_the_agent_did_is_stored_alongside_what_it_said() -> None:
