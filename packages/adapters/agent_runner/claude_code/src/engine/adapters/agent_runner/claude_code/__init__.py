@@ -54,6 +54,11 @@ from engine.runtime.transcript import flatten
 #: outside this list is denied by the CLI rather than silently allowed.
 READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 
+#: File operations a workflow implementation agent may use inside its isolated
+#: worktree. Shell access is intentionally absent: unlike Codex, Claude Code
+#: does not provide an OS-level workspace-only sandbox for Bash commands.
+WORKSPACE_WRITE_TOOLS = (*READ_ONLY_TOOLS, "Edit", "Write")
+
 #: Content blocks that are not worth recording. Thinking blocks are the model's
 #: working, not the conversation's.
 IGNORED_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
@@ -432,6 +437,7 @@ def _tail(text: str, lines: int = 5) -> str:
 
 __all__ = [
     "READ_ONLY_TOOLS",
+    "WORKSPACE_WRITE_TOOLS",
     "ClaudeCodeAgentRunner",
     "ClaudeExecutionError",
     "ClaudeToolsUnsupportedError",

@@ -1,6 +1,7 @@
 """Workflow result instructions and terminal-turn parsing."""
 
 import json
+import re
 from typing import Any
 
 from engine.domain import AgentRunId, RunId, StepCompleted, StepOutput, StepSpec
@@ -9,6 +10,19 @@ from engine.ports import AgentTurn, FinishReason
 
 class InvalidStepResultError(ValueError):
     """A terminal agent turn does not contain a valid workflow result."""
+
+
+_JSON_FENCE = re.compile(
+    r"```(?:json)?[ \t]*(?:\r?\n)?(?P<content>.*?)(?:\r?\n)?```",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _result_content(content: str) -> str:
+    """Return plain JSON from a bare response or one Markdown JSON fence."""
+    stripped = content.strip()
+    fenced = _JSON_FENCE.fullmatch(stripped)
+    return fenced.group("content").strip() if fenced is not None else stripped
 
 
 def step_result_instructions(step: StepSpec) -> str:
@@ -40,8 +54,8 @@ def step_completed_from_turn(
         )
 
     try:
-        result: Any = json.loads(turn.message.content)
-    except (json.JSONDecodeError, TypeError) as error:
+        result: Any = json.loads(_result_content(turn.message.content))
+    except (json.JSONDecodeError, TypeError, AttributeError) as error:
         raise InvalidStepResultError("step result is not valid JSON") from error
 
     if not isinstance(result, dict):

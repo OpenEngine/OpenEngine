@@ -271,7 +271,11 @@ def test_workflow_start_materializes_explicit_step_conversation_correlation() ->
         step=StepSpec(StepId("implementation"), FOREMAN.agent_id),
     )
 
-    asyncio.run(Dispatcher(capabilities).dispatch(command))
+    asyncio.run(
+        Dispatcher(capabilities).run_workflow_agent(
+            command, runner_name="codex"
+        )
+    )
 
     instance = asyncio.run(store.load_instance(command.instance_id))
     conversation = asyncio.run(store.load_conversation(command.instance_id))
@@ -280,14 +284,17 @@ def test_workflow_start_materializes_explicit_step_conversation_correlation() ->
     assert instance.workflow_run_id == command.run_id
     assert instance.workflow_step_id == command.step.step_id
     assert instance.conversation_id == "implementation-instance:conversation"
+    assert instance.runner == "codex"
     assert conversation is not None
-    assert [(message.role, message.content) for message in conversation.messages] == [
-        (Role.USER, "Implement the task."),
-        (Role.ASSISTANT, "on it"),
-    ]
+    assert conversation.messages[0].role is Role.USER
+    assert conversation.messages[0].content.startswith("Implement the task.")
+    assert "exactly one JSON object" in conversation.messages[0].content
+    assert conversation.messages[1].role is Role.ASSISTANT
+    assert conversation.messages[1].content == "on it"
     assert agent_run is not None
     assert agent_run.instance_id == command.instance_id
     assert agent_run.status is AgentRunStatus.SUCCEEDED
+    assert agent_run.runner == "codex"
 
 
 @pytest.mark.parametrize(

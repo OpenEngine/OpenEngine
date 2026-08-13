@@ -77,6 +77,22 @@ def test_omitted_outputs_become_an_empty_tuple() -> None:
     assert parse('{"outcome": "success", "summary": "Done."}').outputs == ()
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        '```json\n{"outcome": "success", "summary": "Done.", "outputs": {}}\n```',
+        '```json {"outcome": "success", "summary": "Done.", "outputs": {}} ```',
+        '```\n{"outcome": "success", "summary": "Done.", "outputs": {}}\n```',
+    ],
+)
+def test_single_markdown_fence_is_accepted(content: str) -> None:
+    completed = parse(content)
+
+    assert completed.outcome == "success"
+    assert completed.summary == "Done."
+    assert completed.outputs == ()
+
+
 def test_outputs_are_normalized_deterministically() -> None:
     completed = parse(
         '{"outcome": "success", "summary": "Done.", '
@@ -99,8 +115,9 @@ def test_open_custom_outcomes_are_accepted() -> None:
     "content",
     [
         "ordinary prose",
-        '```json\n{"outcome": "success", "summary": "Done."}\n```',
         '{"outcome": "success", "summary": "Done."}\nFinished.',
+        'Result:\n```json\n{"outcome": "success", "summary": "Done."}\n```',
+        '```json\n{"outcome": "success", "summary": "Done."}\n```\nFinished.',
     ],
 )
 def test_non_json_or_json_with_surrounding_commentary_is_rejected(content: str) -> None:

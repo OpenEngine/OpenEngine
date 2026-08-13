@@ -134,6 +134,11 @@ class AgentSession:
         """The durable boundary used by read-side services in the same process."""
         return self._capabilities.state_store
 
+    @property
+    def capabilities(self) -> Capabilities:
+        """The capability set used by application-level runtime coordinators."""
+        return self._capabilities
+
     async def start(
         self, agent_id: AgentId, task_id: TaskId | None = None, runner: str = ""
     ) -> AgentInstance:

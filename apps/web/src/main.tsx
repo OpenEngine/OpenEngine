@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { api, type EngineConfig } from "./api";
 import { ChatSidebar, ChatThread } from "./chat";
 import { EngineRuntimeProvider } from "./runtime";
-import { RunDetailPage, RunsPage } from "./runs";
+import { NewWorkflowPage, RunDetailPage, RunsPage } from "./runs";
 import "./styles.css";
 
 function ChatApp({ initialThreadId }: { initialThreadId?: string }) {
@@ -68,6 +68,7 @@ function ChatApp({ initialThreadId }: { initialThreadId?: string }) {
 function App() {
   const path = window.location.pathname.replace(/\/$/, "") || "/";
   if (path === "/" || path === "/runs") return <RunsPage />;
+  if (path === "/runs/new") return <NewWorkflowPage />;
   if (path.startsWith("/runs/")) {
     return <RunDetailPage runId={decodeURIComponent(path.slice("/runs/".length))} />;
   }

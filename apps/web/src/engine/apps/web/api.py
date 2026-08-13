@@ -23,14 +23,19 @@ from engine.domain import (
     AgentId,
     AgentInstanceId,
     AgentRunId,
+    IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     Message,
     Role,
     RunId,
+    RunRequested,
+    RunState,
     StepId,
+    TaskId,
+    WorkflowId,
     WorkspaceId,
 )
 from engine.ports import AgentRunner, WorkspaceState
-from engine.runtime import AgentSession, RunReader, WorkflowRunView
+from engine.runtime import AgentSession, RunReader, WorkflowExecutor, WorkflowRunView
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -450,10 +455,17 @@ def create_app(
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
     static_directory: Path | None = None,
+    *,
+    workflow_runners: Mapping[str, AgentRunner] | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     service = ThreadService(session, runners)
     run_reader = RunReader(session.state_store)
+    workflow_executor = WorkflowExecutor(
+        session.capabilities,
+        workflow_runners or runners,
+    )
+    workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -472,6 +484,8 @@ def create_app(
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
+                "workflowRunners": list(workflow_executor.runners),
+                "defaultWorkflowRunner": workflow_executor.default_runner,
             }
         )
 
@@ -482,6 +496,48 @@ def create_app(
         return JSONResponse(
             {"runs": [_run_json(run) for run in await run_reader.list()]}
         )
+
+    async def create_run(request: Request) -> JSONResponse:
+        """Persist a workflow request and start its supported local execution."""
+        body = await _json_body(request)
+        try:
+            prompt = _required_string(body, "prompt")
+            repository = _required_string(body, "repository")
+            workflow_id = WorkflowId(_required_string(body, "workflowId"))
+        except ValueError as error:
+            return _error(str(error), 400)
+        if workflow_id != IMPLEMENTATION_REVIEW_WORKFLOW_ID:
+            return _error(f"unknown workflow definition: {workflow_id}", 400)
+        runner_name = str(body.get("runner") or workflow_executor.default_runner)
+        if runner_name not in workflow_executor.runners:
+            return _error(f"unknown workflow runner: {runner_name}", 400)
+
+        run_id = RunId(f"run-{uuid4().hex[:12]}")
+        task_id = TaskId(f"task-{uuid4().hex[:12]}")
+        event = RunRequested(
+            run_id=run_id,
+            task_id=task_id,
+            prompt=prompt,
+            repository=repository,
+            workflow_id=workflow_id,
+        )
+        state = RunState(
+            run_id=run_id,
+            task_id=task_id,
+            workflow_id=workflow_id,
+            prompt=prompt,
+            repository=repository,
+        )
+        await session.state_store.save(state)
+        await session.state_store.append_events(run_id, (event,))
+        task = asyncio.create_task(
+            workflow_executor.advance_to_review(event, runner_name)
+        )
+        workflow_tasks[run_id] = task
+        task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))
+        run = await run_reader.get(run_id)
+        assert run is not None
+        return JSONResponse(_run_json(run), status_code=201)
 
     async def get_run(request: Request) -> JSONResponse:
         run = await run_reader.get(RunId(request.path_params["run_id"]))
@@ -639,6 +695,7 @@ def create_app(
     routes = [
         Route("/api/config", config),
         Route("/api/runs", list_runs),
+        Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
@@ -683,6 +740,7 @@ def create_app(
         routes.extend(
             [
                 Route("/runs", spa_page),
+                Route("/runs/new", spa_page),
                 Route("/runs/{run_id}", spa_page),
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),

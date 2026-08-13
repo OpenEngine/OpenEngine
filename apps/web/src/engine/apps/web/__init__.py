@@ -8,6 +8,13 @@ from engine.apps.web.composition import (
     build_capabilities,
     build_runners,
     build_session,
+    build_workflow_runners,
 )
 
-__all__ = ["Settings", "build_capabilities", "build_runners", "build_session"]
+__all__ = [
+    "Settings",
+    "build_capabilities",
+    "build_runners",
+    "build_session",
+    "build_workflow_runners",
+]

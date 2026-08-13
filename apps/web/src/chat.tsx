@@ -402,7 +402,7 @@ export function ChatSidebar() {
         <span className="brand-mark">e</span>
         <span>openengine</span>
       </div>
-      <a className="run-nav-primary chat-run-link" href="/runs">Workflow runs</a>
+      <a className="run-nav-link run-nav-secondary chat-run-link" href="/runs">Workflow runs</a>
       <ThreadListPrimitive.Root className="thread-list">
         <ThreadListPrimitive.New className="new-thread">+ New chat</ThreadListPrimitive.New>
         <div className="thread-list-label">Conversations</div>

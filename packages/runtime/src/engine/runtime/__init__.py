@@ -21,6 +21,7 @@ from engine.runtime.step_results import (
     step_completed_from_turn,
     step_result_instructions,
 )
+from engine.runtime.workflow_execution import WorkflowExecutionError, WorkflowExecutor
 
 __all__ = [
     "BUILT_IN",
@@ -39,6 +40,8 @@ __all__ = [
     "UnknownToolGrantError",
     "WorkspacesUnavailableError",
     "WorkflowRunView",
+    "WorkflowExecutionError",
+    "WorkflowExecutor",
     "profile_for",
     "step_completed_from_turn",
     "step_result_instructions",
