@@ -13,6 +13,9 @@ import { type KeyboardEvent, useEffect, useState } from "react";
 
 import { api, attachWorkspace, detachWorkspace, type ApiThread } from "./api";
 
+const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
+const NEW_CHAT_DRAFT_ID = "new";
+
 function toolResultText(result: unknown): string {
   if (typeof result === "string") return result;
   try {
@@ -93,6 +96,29 @@ function Composer() {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const canSend = useAuiState((state) => state.composer.canSend);
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const text = useAuiState((state) => state.composer.text);
+  const draftKey = `${COMPOSER_DRAFT_KEY_PREFIX}${remoteId ?? NEW_CHAT_DRAFT_ID}`;
+  const [restoredDraftKey, setRestoredDraftKey] = useState<string>();
+
+  useEffect(() => {
+    const savedDraft = window.localStorage.getItem(draftKey) ?? "";
+    if (aui.composer.getState().text !== savedDraft) {
+      aui.composer.setText(savedDraft);
+    }
+    setRestoredDraftKey(draftKey);
+  }, [aui, draftKey]);
+
+  useEffect(() => {
+    if (restoredDraftKey !== draftKey) return;
+    if (text) window.localStorage.setItem(draftKey, text);
+    else window.localStorage.removeItem(draftKey);
+  }, [draftKey, restoredDraftKey, text]);
+
+  const send = () => {
+    aui.composer.send();
+    window.localStorage.removeItem(draftKey);
+  };
 
   const queueOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (
@@ -105,7 +131,7 @@ function Composer() {
       return;
     }
     event.preventDefault();
-    aui.composer.send();
+    send();
   };
 
   return (
@@ -127,7 +153,10 @@ function Composer() {
           )}
         </ComposerPrimitive.Queue>
       </div>
-      <ComposerPrimitive.Root className="composer">
+      <ComposerPrimitive.Root
+        className="composer"
+        onSubmit={() => window.localStorage.removeItem(draftKey)}
+      >
         <ComposerPrimitive.Input
           className="composer-input"
           placeholder={
@@ -170,7 +199,7 @@ function Composer() {
           type="button"
           className="composer-button"
           disabled={!canSend}
-          onClick={() => aui.composer.send()}
+          onClick={send}
         >
           {isRunning ? "Queue" : "Send"}
         </button>
