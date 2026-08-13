@@ -13,7 +13,8 @@ Placeholder set for Ticket 1; the real vocabulary lands with the engine itself.
 from dataclasses import dataclass
 
 from engine.domain.agents import AgentProfile
-from engine.domain.ids import AgentInstanceId, AgentRunId, RunId, WorkspaceId
+from engine.domain.ids import AgentInstanceId, AgentRunId, RunId, StepId, WorkspaceId
+from engine.domain.workflow import StepSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,16 @@ class StartAgentRun(Command):
     profile: AgentProfile
     prompt: str
     workspace_id: WorkspaceId | None = None
+    step: StepSpec | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RequestHumanReview(Command):
+    """Ask a human to make the final decision for a workflow step."""
+
+    step_id: StepId
+    title: str
+    summary: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +99,7 @@ __all__ = [
     "PersistRun",
     "ProvisionWorkspace",
     "PublishChanges",
+    "RequestHumanReview",
     "ScheduleTimer",
     "StartAgentRun",
 ]

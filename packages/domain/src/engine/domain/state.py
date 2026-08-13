@@ -7,7 +7,16 @@ trivially serialisable -- no handles, no connections, no adapter objects.
 from dataclasses import dataclass, field
 from enum import Enum
 
-from engine.domain.ids import AgentRunId, RunId, TaskId, WorkspaceId
+from engine.domain.events import StepCompleted
+from engine.domain.ids import (
+    IMPLEMENTATION_REVIEW_WORKFLOW_ID,
+    AgentRunId,
+    RunId,
+    StepId,
+    TaskId,
+    WorkflowId,
+    WorkspaceId,
+)
 
 
 class RunPhase(Enum):
@@ -15,6 +24,9 @@ class RunPhase(Enum):
 
     PENDING = "pending"
     PREPARING_WORKSPACE = "preparing_workspace"
+    IMPLEMENTING = "implementing"
+    REVIEWING = "reviewing"
+    AWAITING_HUMAN_REVIEW = "awaiting_human_review"
     RUNNING_AGENT = "running_agent"
     PUBLISHING = "publishing"
     SUCCEEDED = "succeeded"
@@ -27,12 +39,16 @@ class RunState:
 
     run_id: RunId
     task_id: TaskId
+    workflow_id: WorkflowId = IMPLEMENTATION_REVIEW_WORKFLOW_ID
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""
     prompt: str = ""
     workspace_id: WorkspaceId | None = None
     agent_runs: tuple[AgentRunId, ...] = field(default=())
     max_agent_runs: int = 3
+    current_step_id: StepId | None = None
+    current_agent_run_id: AgentRunId | None = None
+    step_results: tuple[StepCompleted, ...] = field(default=())
 
     @property
     def agent_runs_remaining(self) -> int:
