@@ -1,5 +1,6 @@
 ## GitHub authentication and publishing
 
+- Use Conventional Commits for commit messages and pull request titles.
 - Never push branches using the internal `engine/ws-*` naming convention. Before publishing, create a descriptive branch such as `agent/{description}` from the intended base and apply only the commits meant for the pull request.
 - A sandboxed `gh auth status` failure is not sufficient evidence that the host credential expired.
 - Run `gh auth status`, `git push`, and `gh pr create` as separate shell invocations. Do not combine them with `&&`, pipes, semicolons, or other commands.
