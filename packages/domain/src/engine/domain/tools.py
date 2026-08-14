@@ -37,6 +37,13 @@ class ToolParameter:
     """If set, the only accepted values -- rendered as an enum."""
     item_type: ToolParameterType | None = None
     """Element type, when `type` is ARRAY."""
+    properties: tuple["ToolParameter", ...] = field(default=())
+    """Named properties, when `type` is OBJECT."""
+
+    @property
+    def required_properties(self) -> tuple[str, ...]:
+        """Return the required property names of an object parameter."""
+        return tuple(p.name for p in self.properties if p.required)
 
 
 @dataclass(frozen=True, slots=True)
