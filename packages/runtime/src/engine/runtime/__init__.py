@@ -18,8 +18,13 @@ from engine.runtime.session import (
 )
 from engine.runtime.step_results import (
     InvalidStepResultError,
+    complete_step_tool,
+    fail_step_tool,
+    run_failed_from_tool_call,
+    step_completed_from_tool_call,
     step_completed_from_turn,
     step_result_instructions,
+    step_result_from_tool_call,
 )
 from engine.runtime.workflow_execution import WorkflowExecutionError, WorkflowExecutor
 
@@ -42,7 +47,12 @@ __all__ = [
     "WorkflowRunView",
     "WorkflowExecutionError",
     "WorkflowExecutor",
+    "complete_step_tool",
+    "fail_step_tool",
     "profile_for",
+    "run_failed_from_tool_call",
+    "step_completed_from_tool_call",
     "step_completed_from_turn",
     "step_result_instructions",
+    "step_result_from_tool_call",
 ]

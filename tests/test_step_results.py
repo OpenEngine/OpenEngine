@@ -8,17 +8,25 @@ from engine.domain import (
     AgentId,
     AgentRunId,
     Message,
+    RunFailed,
     RunId,
     StepCompleted,
     StepId,
     StepOutput,
     StepSpec,
+    ToolCall,
+    ToolParameterType,
 )
 from engine.ports import AgentTurn, FinishReason
 from engine.runtime import (
     InvalidStepResultError,
+    complete_step_tool,
+    fail_step_tool,
+    run_failed_from_tool_call,
+    step_completed_from_tool_call,
     step_completed_from_turn,
     step_result_instructions,
+    step_result_from_tool_call,
 )
 
 
@@ -174,3 +182,110 @@ def test_intermediate_turn_steps_are_ignored() -> None:
 
     assert completed.outcome == "success"
     assert completed.summary == "Done."
+
+
+def test_complete_step_tool_describes_required_arguments_and_outputs() -> None:
+    tool = complete_step_tool(STEP)
+
+    assert tool.name == "complete_step"
+    assert tool.required_parameters == ("outcome", "summary", "outputs")
+    outcome, _, outputs = tool.parameters
+    assert outcome.choices == ("success",)
+    assert outputs.type is ToolParameterType.OBJECT
+    assert tuple(property.name for property in outputs.properties) == ("revision",)
+    assert outputs.required_properties == ("revision",)
+
+
+def test_fail_step_tool_requires_a_summary() -> None:
+    tool = fail_step_tool(STEP)
+
+    assert tool.name == "fail_step"
+    assert tool.required_parameters == ("summary",)
+
+
+def test_valid_complete_step_call_produces_step_completed() -> None:
+    call = ToolCall(
+        call_id="call-1",
+        name="complete_step",
+        arguments=json.dumps(
+            {
+                "outcome": "success",
+                "summary": "Implemented the change.",
+                "outputs": {"revision": "abc123"},
+            }
+        ),
+    )
+
+    completed = step_completed_from_tool_call(
+        run_id=RUN_ID,
+        step=STEP,
+        agent_run_id=AGENT_RUN_ID,
+        call=call,
+    )
+
+    assert completed == StepCompleted(
+        run_id=RUN_ID,
+        step_id=STEP.step_id,
+        agent_run_id=AGENT_RUN_ID,
+        outcome="success",
+        summary="Implemented the change.",
+        outputs=(StepOutput(name="revision", value="abc123"),),
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"outcome": "success", "summary": "Done.", "outputs": {}},
+        {
+            "outcome": "success",
+            "summary": "Done.",
+            "outputs": {"revision": "abc123", "extra": "value"},
+        },
+        {
+            "outcome": "success",
+            "summary": "Done.",
+            "outputs": {"revision": 123},
+        },
+    ],
+)
+def test_complete_step_call_rejects_malformed_outputs(
+    arguments: dict[str, object],
+) -> None:
+    call = ToolCall("call-1", "complete_step", json.dumps(arguments))
+
+    with pytest.raises(InvalidStepResultError):
+        step_completed_from_tool_call(
+            run_id=RUN_ID,
+            step=STEP,
+            agent_run_id=AGENT_RUN_ID,
+            call=call,
+        )
+
+
+@pytest.mark.parametrize("summary", ["", "   ", None, 123])
+def test_fail_step_call_rejects_an_invalid_summary(summary: object) -> None:
+    call = ToolCall("call-1", "fail_step", json.dumps({"summary": summary}))
+
+    with pytest.raises(InvalidStepResultError):
+        run_failed_from_tool_call(run_id=RUN_ID, call=call)
+
+
+def test_fail_step_call_produces_run_failed() -> None:
+    call = ToolCall(
+        "call-1",
+        "fail_step",
+        json.dumps({"summary": "The dependency is unavailable."}),
+    )
+
+    result = step_result_from_tool_call(
+        run_id=RUN_ID,
+        step=STEP,
+        agent_run_id=AGENT_RUN_ID,
+        call=call,
+    )
+
+    assert result == RunFailed(
+        run_id=RUN_ID,
+        reason="The dependency is unavailable.",
+    )
