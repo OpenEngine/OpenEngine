@@ -138,6 +138,20 @@ class AgentTurn:
         return (*self.steps, self.message)
 
 
+@dataclass(frozen=True, slots=True)
+class McpServerConfig:
+    """A provider-neutral stdio MCP server for one agent execution.
+
+    The runtime creates the command and binds its opaque credentials to the
+    workflow context. Adapters only translate this description into their
+    provider CLI's configuration syntax.
+    """
+
+    name: str
+    command: str
+    args: tuple[str, ...] = field(default=())
+
+
 @runtime_checkable
 class AgentRunner(Protocol):
     """Runs one agent turn to completion."""
@@ -160,6 +174,21 @@ class AgentRunner(Protocol):
 
     async def cancel(self, agent_run_id: AgentRunId) -> None:
         """Best-effort cancellation. Safe to call on an already-finished run."""
+        ...
+
+
+@runtime_checkable
+class McpAgentRunner(AgentRunner, Protocol):
+    """A CLI runner that can attach a runtime-provided stdio MCP server."""
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
         ...
 
 
@@ -219,6 +248,8 @@ __all__ = [
     "ApprovalRequest",
     "FinishReason",
     "InteractiveAgentRunner",
+    "McpAgentRunner",
+    "McpServerConfig",
     "StreamingAgentRunner",
     "TokenUsage",
     "TurnObserver",

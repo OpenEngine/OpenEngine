@@ -33,7 +33,7 @@ from engine.domain import (
     ToolSpec,
     WorkspaceId,
 )
-from engine.ports import AgentRunner, FinishReason
+from engine.ports import AgentRunner, FinishReason, McpAgentRunner, McpServerConfig
 
 #: Captured from `codex exec --json --sandbox read-only "Reply with exactly the
 #: word: pong"` against codex-cli 0.144.4.
@@ -318,6 +318,15 @@ def test_the_command_line_is_inspectable_without_running_anything() -> None:
     assert "--sandbox" in argv and argv[argv.index("--sandbox") + 1] == "read-only"
     assert "-C" in argv and argv[argv.index("-C") + 1] == "/tmp/x"
     assert "--model" not in argv
+
+
+def test_terminal_mcp_configuration_is_passed_to_codex() -> None:
+    server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
+    argv = CodexAgentRunner().command_line(PROFILE, mcp_server=server)
+
+    assert isinstance(CodexAgentRunner(), McpAgentRunner)
+    assert 'mcp_servers.workflow.command="/usr/bin/python3"' in argv
+    assert 'mcp_servers.workflow.args=["-m", "terminal"]' in argv
 
 
 def test_a_profile_may_choose_its_model() -> None:

@@ -13,6 +13,7 @@ from engine.domain import (
     RunRequested,
     RunState,
     StartAgentRun,
+    StepCompleted,
     WorkspaceProvisioned,
 )
 from engine.ports import AgentRunner
@@ -80,18 +81,34 @@ class WorkflowExecutor:
                 ),
             )
             implementation = _only(commands, StartAgentRun)
-            turn = await self._dispatcher.run_workflow_agent(
+            delivered: Event | None = None
+
+            async def deliver_terminal(event: Event) -> None:
+                nonlocal state, delivered
+                state, _commands = await self._transition(state, event)
+                delivered = event
+
+            terminal = await self._dispatcher.run_workflow_agent(
                 implementation,
                 runner=runner,
                 runner_name=selected_name,
+                on_terminal_result=deliver_terminal,
             )
+            if delivered is not None:
+                # The MCP acknowledgement was sent only after this transition
+                # persisted the event. Never infer delivery from CLI transcript.
+                assert terminal == delivered
+                return
             assert implementation.step is not None
-            result = step_completed_from_turn(
-                run_id=state.run_id,
-                step=implementation.step,
-                agent_run_id=implementation.agent_run_id,
-                turn=turn,
-            )
+            if isinstance(terminal, (StepCompleted, RunFailed)):
+                result = terminal
+            else:
+                result = step_completed_from_turn(
+                    run_id=state.run_id,
+                    step=implementation.step,
+                    agent_run_id=implementation.agent_run_id,
+                    turn=terminal,
+                )
             # Applying the result moves the run to REVIEWING. The emitted
             # reviewer command stays pending until reviewer execution lands.
             await self._transition(state, result)

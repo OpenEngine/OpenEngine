@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from engine.domain import AgentRunId, RunId, StepCompleted, StepOutput, StepSpec
+from engine.domain import AgentRunId, RunFailed, RunId, StepCompleted, StepOutput, StepSpec
 from engine.ports import AgentTurn, FinishReason
 
 
@@ -33,7 +33,10 @@ def step_result_instructions(step: StepSpec) -> str:
         "outputs": {name: "abc123" for name in step.required_outputs},
     }
     return (
-        "When the task is complete, your final response must be exactly one JSON object\n"
+        "When the task is complete, call the workflow MCP tool `complete_step` with\n"
+        "the fields below. If the task cannot be completed, call `fail_step` with a\n"
+        "nonempty `reason`. Call exactly one of these terminal tools.\n\n"
+        "If those tools are unavailable, your final response must be exactly one JSON object\n"
         "matching this shape, with no Markdown fence or surrounding prose:\n\n"
         f"{json.dumps(example, indent=2)}\n\n"
         "All output values must be strings."
@@ -58,8 +61,33 @@ def step_completed_from_turn(
     except (json.JSONDecodeError, TypeError, AttributeError) as error:
         raise InvalidStepResultError("step result is not valid JSON") from error
 
-    if not isinstance(result, dict):
+    return step_completed_from_arguments(
+        run_id=run_id,
+        step=step,
+        agent_run_id=agent_run_id,
+        arguments=result,
+    )
+
+
+def step_completed_from_arguments(
+    *,
+    run_id: RunId,
+    step: StepSpec,
+    agent_run_id: AgentRunId,
+    arguments: object,
+    mcp_request_id: str | int | None = None,
+) -> StepCompleted:
+    """Validate terminal tool arguments using the legacy result contract."""
+    if not isinstance(arguments, dict):
         raise InvalidStepResultError("step result must be a JSON object")
+    if mcp_request_id is not None and not set(arguments).issubset(
+        {"outcome", "summary", "outputs"}
+    ):
+        raise InvalidStepResultError(
+            "step result may contain only outcome, summary, and outputs"
+        )
+
+    result: dict[object, object] = arguments
 
     outcome = result.get("outcome")
     if not isinstance(outcome, str) or not outcome:
@@ -86,11 +114,37 @@ def step_completed_from_turn(
         outputs=tuple(
             StepOutput(name=name, value=outputs[name]) for name in sorted(outputs)
         ),
+        mcp_request_id=mcp_request_id,
+    )
+
+
+def run_failed_from_arguments(
+    *,
+    run_id: RunId,
+    agent_run_id: AgentRunId,
+    arguments: object,
+    mcp_request_id: str | int,
+) -> RunFailed:
+    """Validate a bound `fail_step` call and construct its runtime event."""
+    if not isinstance(arguments, dict):
+        raise InvalidStepResultError("failure result must be a JSON object")
+    if set(arguments) != {"reason"}:
+        raise InvalidStepResultError("failure result must contain only reason")
+    reason = arguments.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise InvalidStepResultError("failure reason must be a nonempty string")
+    return RunFailed(
+        run_id=run_id,
+        reason=reason,
+        agent_run_id=agent_run_id,
+        mcp_request_id=mcp_request_id,
     )
 
 
 __all__ = [
     "InvalidStepResultError",
+    "run_failed_from_arguments",
+    "step_completed_from_arguments",
     "step_completed_from_turn",
     "step_result_instructions",
 ]

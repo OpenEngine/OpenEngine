@@ -448,6 +448,7 @@ def _step_to_dict(step: StepCompleted) -> dict[str, object]:
         "outcome": step.outcome,
         "summary": step.summary,
         "outputs": [_output_to_dict(output) for output in step.outputs],
+        "mcp_request_id": step.mcp_request_id,
     }
 
 
@@ -463,6 +464,7 @@ def _step_from_dict(value: dict[str, object]) -> StepCompleted:
             for output in value.get("outputs", [])
             if isinstance(output, dict)
         ),
+        mcp_request_id=value.get("mcp_request_id"),
     )
 
 
@@ -583,7 +585,13 @@ def _event_to_dict(event: Event) -> dict[str, object]:
             "review_url": event.review_url,
         }
     if isinstance(event, RunFailed):
-        return {"type": "RunFailed", "run_id": event.run_id, "reason": event.reason}
+        return {
+            "type": "RunFailed",
+            "run_id": event.run_id,
+            "reason": event.reason,
+            "agent_run_id": event.agent_run_id,
+            "mcp_request_id": event.mcp_request_id,
+        }
     raise TypeError(f"cannot persist event {type(event).__name__}")
 
 
@@ -622,7 +630,14 @@ def _event_from_dict(value: dict[str, object]) -> Event:
         )
     if kind == "RunFailed":
         return RunFailed(
-            run_id=RunId(str(value["run_id"])), reason=str(value["reason"])
+            run_id=RunId(str(value["run_id"])),
+            reason=str(value["reason"]),
+            agent_run_id=(
+                AgentRunId(str(value["agent_run_id"]))
+                if value.get("agent_run_id") is not None
+                else None
+            ),
+            mcp_request_id=value.get("mcp_request_id"),
         )
     raise ValueError(f"unknown persisted event type {kind!r}")
 
