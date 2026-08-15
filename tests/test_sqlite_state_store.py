@@ -209,6 +209,7 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
         outcome="changes_requested",
         summary="Add a regression test.",
         outputs=(StepOutput("findings", "Missing coverage"),),
+        mcp_request_id="request-17",
     )
     state = RunState(
         run_id=run_id,

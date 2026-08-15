@@ -22,9 +22,16 @@ from engine.runtime.step_results import (
     fail_step_tool,
     run_failed_from_tool_call,
     step_completed_from_tool_call,
+    run_failed_from_arguments,
+    step_completed_from_arguments,
     step_completed_from_turn,
     step_result_instructions,
     step_result_from_tool_call,
+)
+from engine.runtime.terminal_mcp import (
+    TerminalMcpBroker,
+    TerminalResultAlreadySubmittedError,
+    TerminalResultRegistry,
 )
 from engine.runtime.workflow_execution import WorkflowExecutionError, WorkflowExecutor
 
@@ -38,6 +45,9 @@ __all__ = [
     "Dispatcher",
     "InvalidStepResultError",
     "RunReader",
+    "TerminalMcpBroker",
+    "TerminalResultAlreadySubmittedError",
+    "TerminalResultRegistry",
     "UnhandledCommandError",
     "UnknownAgentError",
     "UnknownInstanceError",
@@ -52,6 +62,8 @@ __all__ = [
     "profile_for",
     "run_failed_from_tool_call",
     "step_completed_from_tool_call",
+    "run_failed_from_arguments",
+    "step_completed_from_arguments",
     "step_completed_from_turn",
     "step_result_instructions",
     "step_result_from_tool_call",

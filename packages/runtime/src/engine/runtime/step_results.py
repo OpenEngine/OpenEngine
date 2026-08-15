@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import replace
 from typing import Any
 
 from engine.domain import (
@@ -44,7 +45,10 @@ def step_result_instructions(step: StepSpec) -> str:
         "outputs": {name: "abc123" for name in step.required_outputs},
     }
     return (
-        "When the task is complete, your final response must be exactly one JSON object\n"
+        "When the task is complete, call the workflow MCP tool `complete_step` with\n"
+        "the fields below. If the task cannot be completed, call `fail_step` with a\n"
+        "nonempty `reason`. Call exactly one of these terminal tools.\n\n"
+        "If those tools are unavailable, your final response must be exactly one JSON object\n"
         "matching this shape, with no Markdown fence or surrounding prose:\n\n"
         f"{json.dumps(example, indent=2)}\n\n"
         "All output values must be strings."
@@ -263,11 +267,62 @@ def step_completed_from_turn(
     )
 
 
+def step_completed_from_arguments(
+    *,
+    run_id: RunId,
+    step: StepSpec,
+    agent_run_id: AgentRunId,
+    arguments: object,
+    mcp_request_id: str | int,
+) -> StepCompleted:
+    """Validate bound MCP arguments with the canonical terminal-tool parser."""
+    if not isinstance(arguments, dict):
+        raise InvalidStepResultError("step result must be a JSON object")
+    event = step_completed_from_tool_call(
+        run_id=run_id,
+        step=step,
+        agent_run_id=agent_run_id,
+        call=ToolCall(
+            call_id=str(mcp_request_id),
+            name="complete_step",
+            arguments=json.dumps(arguments),
+        ),
+    )
+    return replace(event, mcp_request_id=mcp_request_id)
+
+
+def run_failed_from_arguments(
+    *,
+    run_id: RunId,
+    agent_run_id: AgentRunId,
+    arguments: object,
+    mcp_request_id: str | int,
+) -> RunFailed:
+    """Validate a bound `fail_step` call and construct its runtime event."""
+    if not isinstance(arguments, dict):
+        raise InvalidStepResultError("failure result must be a JSON object")
+    event = run_failed_from_tool_call(
+        run_id=run_id,
+        call=ToolCall(
+            call_id=str(mcp_request_id),
+            name="fail_step",
+            arguments=json.dumps(arguments),
+        ),
+    )
+    return replace(
+        event,
+        agent_run_id=agent_run_id,
+        mcp_request_id=mcp_request_id,
+    )
+
+
 __all__ = [
     "InvalidStepResultError",
     "complete_step_tool",
     "fail_step_tool",
     "run_failed_from_tool_call",
+    "run_failed_from_arguments",
+    "step_completed_from_arguments",
     "step_completed_from_turn",
     "step_completed_from_tool_call",
     "step_result_instructions",

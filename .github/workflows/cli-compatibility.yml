@@ -1,0 +1,73 @@
+name: CLI compatibility
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    name: resolve latest stable CLI versions
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        name: Resolve the latest three releases of each CLI
+        shell: bash
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const { execFileSync } = require("node:child_process");
+          const packages = [
+            ["codex", "@openai/codex"],
+            ["claude", "@anthropic-ai/claude-code"],
+          ];
+          const include = [];
+          for (const [provider, packageName] of packages) {
+            const published = JSON.parse(
+              execFileSync("npm", ["view", packageName, "versions", "--json"], {
+                encoding: "utf8",
+              }),
+            ).filter((version) => !version.includes("-"));
+            for (const version of published.slice(-3)) {
+              include.push({ provider, package: packageName, version });
+            }
+          }
+          process.stdout.write(`matrix=${JSON.stringify({ include })}\n`);
+          NODE
+
+  compatibility:
+    name: ${{ matrix.provider }} ${{ matrix.version }}
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CLI release
+        run: npm install --global --prefix "$RUNNER_TEMP/agent-cli" "${{ matrix.package }}@${{ matrix.version }}"
+
+      - name: Put CLI on PATH
+        run: echo "$RUNNER_TEMP/agent-cli/bin" >> "$GITHUB_PATH"
+
+      - name: Verify installed release
+        run: ${{ matrix.provider }} --version
+
+      - name: Verify Codex accepts the runtime MCP configuration
+        if: matrix.provider == 'codex'
+        run: |
+          codex \
+            -c 'mcp_servers.workflow.command="python3"' \
+            -c 'mcp_servers.workflow.args=["-m", "engine.runtime.terminal_mcp_server"]' \
+            mcp get workflow
+
+      - name: Verify Claude accepts per-run MCP configuration
+        if: matrix.provider == 'claude'
+        run: |
+          claude --help | grep -- '--mcp-config'

@@ -20,7 +20,7 @@ from engine.adapters.agent_runner.claude_code import (
     turn_from_events,
 )
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolSpec, WorkspaceId
-from engine.ports import AgentRunner, FinishReason
+from engine.ports import AgentRunner, FinishReason, McpAgentRunner, McpServerConfig
 
 #: Captured from `claude -p --output-format stream-json --verbose --allowedTools
 #: Glob Read "List the directory names under packages/adapters, then reply
@@ -240,6 +240,25 @@ def test_stream_json_needs_verbose() -> None:
     argv = ClaudeCodeAgentRunner().command_line(PROFILE)
 
     assert argv[:5] == ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+
+
+def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
+    server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
+    argv = ClaudeCodeAgentRunner().command_line(PROFILE, mcp_server=server)
+
+    assert isinstance(ClaudeCodeAgentRunner(), McpAgentRunner)
+    config = json.loads(argv[argv.index("--mcp-config") + 1])
+    assert config == {
+        "mcpServers": {
+            "workflow": {
+                "command": "/usr/bin/python3",
+                "args": ["-m", "terminal"],
+            }
+        }
+    }
+    allowed = argv[argv.index("--allowedTools") + 1 :]
+    assert "mcp__workflow__complete_step" in allowed
+    assert "mcp__workflow__fail_step" in allowed
 
 
 # --- how long a turn may take -----------------------------------------------
