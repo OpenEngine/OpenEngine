@@ -1,5 +1,18 @@
 import type { ThreadMessage } from "@assistant-ui/react";
 
+export const RUN_NOT_STARTED_ERROR_CODE = "run-not-started";
+
+/** Mark a submission failure that happened before the server accepted the turn. */
+export function runNotStartedError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "The agent run could not be started.";
+  return { code: RUN_NOT_STARTED_ERROR_CODE, message };
+}
+
 export type AgentOption = {
   id: string;
   description: string;
