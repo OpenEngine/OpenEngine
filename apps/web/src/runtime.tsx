@@ -106,7 +106,15 @@ function remoteMetadata(thread: ApiThread) {
   };
 }
 
-async function* readRunResponse(response: Response, threadId: string) {
+/** `messageIndex` is where the assistant turn this stream is producing will sit
+ *  in the thread, which is the only moment anybody knows it: an approval
+ *  belongs beside the command it is about, and by the time it is answered the
+ *  turn it interrupted may no longer be the newest one. */
+async function* readRunResponse(
+  response: Response,
+  threadId: string,
+  messageIndex: number,
+) {
   if (response.status === 204) return;
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => ({}));
@@ -130,8 +138,8 @@ async function* readRunResponse(response: Response, threadId: string) {
       if (event.type === "approval") {
         // Snapshots ride the same stream as message content and carry none of
         // it. A reconnecting browser is sent the current one from scratch, so
-        // simply taking the latest is what restores a pause after a refresh.
-        publishApproval(threadId, event.approval);
+        // publishing whatever arrives is what restores a pause after a refresh.
+        publishApproval(threadId, event.approval, messageIndex);
         continue;
       }
       if (event.type === "error") throw new Error(event.error);
@@ -169,10 +177,13 @@ function HistoryProvider({ children }: PropsWithChildren) {
       async *resume({ abortSignal }) {
         const { remoteId } = aui.threadListItem.getState();
         if (!remoteId) return;
+        // A resumed run is one whose user message is stored and whose reply is
+        // not, so the turn being rejoined lands after everything loaded.
+        const messageIndex = aui.thread.getState().messages.length;
         const response = await fetch(`/api/threads/${remoteId}/runs/current`, {
           signal: abortSignal,
         });
-        yield* readRunResponse(response, remoteId);
+        yield* readRunResponse(response, remoteId, messageIndex);
       },
       // AgentSession.say persists both sides of a turn atomically. The history
       // adapter is load-only so assistant-ui does not duplicate those writes.
@@ -226,8 +237,6 @@ function EngineRuntime({
             unstable_threadId ?? (await threadInitializerRef.current?.())?.remoteId;
           if (!threadId) throw new Error("The chat could not be initialized.");
           started = threadId;
-          // The previous turn's answered request belongs to the previous turn.
-          publishApproval(threadId, null);
 
           // assistant-ui normally generates this after runEnd; doing it here
           // makes the title the first model turn for a new conversation.
@@ -262,7 +271,9 @@ function EngineRuntime({
           if (error instanceof Error && error.name === "AbortError") throw error;
           throw runNotStartedError(error);
         }
-        yield* readRunResponse(response, started);
+        // `messages` ends with the message that started this turn, so the reply
+        // being streamed is the one after it.
+        yield* readRunResponse(response, started, messages.length);
       },
     }),
     [],

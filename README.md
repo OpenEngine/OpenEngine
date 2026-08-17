@@ -367,14 +367,22 @@ subprocess that died with the server, so anything still `pending` when the
 process comes back is marked `interrupted` and stops being answerable — an
 approval that would resume nothing is not one worth offering.
 
-The chat page shows the request as a card above the composer: what kind of thing
-it is, why the agent wants it, the command or tool, the directory, and the
+The chat page shows the request inside the turn that raised it, after the parts
+of the reply that have arrived so far — so it reads in order: the agent worked,
+it stopped to ask, and here is what happened next. Open, it says what kind of
+thing it is, why the agent wants it, the command or tool, the directory, and the
 arguments as fields rather than as a wall of JSON. The buttons are exactly the
 decisions that request permits — a provider that never offered a session grant
 does not get a button for one — and they disable the moment you choose, because
-a second click is a second decision and the server refuses those. Close the
-browser and come back and the card is still there; stopping the run answers it
-as a cancellation, which is the same path the card's own Cancel takes.
+a second click is a second decision and the server refuses those.
+
+Once it is answered it folds itself down to one line beside the command it was
+about (`Approved · pytest -q`), still in the transcript and still expandable,
+because what the agent asked to do and who said yes is part of the record rather
+than a prompt to keep staring at. Requests stay with their own turn as the
+conversation moves on. Close the browser and come back and a pending one is
+still there waiting; stopping the run answers it as a cancellation, which is the
+same path its own Cancel button takes.
 
 ### Allowing something for the session
 
