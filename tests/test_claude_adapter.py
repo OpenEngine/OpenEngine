@@ -30,6 +30,8 @@ from engine.ports import (
     ApprovalKind,
     FinishReason,
     InteractiveAgentRunner,
+    McpAgentRunner,
+    McpServerConfig,
 )
 
 #: Captured from `claude -p --output-format stream-json --verbose --allowedTools
@@ -383,6 +385,26 @@ def test_interactive_turn_round_trips_a_control_approval(tmp_path) -> None:
     argv = runner.interactive_command_line(PROFILE)
     assert argv[argv.index("--input-format") + 1] == "stream-json"
     assert argv[argv.index("--permission-prompt-tool") + 1] == "stdio"
+
+
+def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
+    server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
+    argv = ClaudeCodeAgentRunner().command_line(PROFILE, mcp_server=server)
+
+    assert isinstance(ClaudeCodeAgentRunner(), McpAgentRunner)
+    config = json.loads(argv[argv.index("--mcp-config") + 1])
+    assert config == {
+        "mcpServers": {
+            "workflow": {
+                "command": "/usr/bin/python3",
+                "args": ["-m", "terminal"],
+            }
+        }
+    }
+    allowed = argv[argv.index("--allowedTools") + 1 :]
+    assert "AskUserQuestion" in allowed
+    assert "mcp__workflow__complete_step" in allowed
+    assert "mcp__workflow__fail_step" in allowed
 
 
 # --- how long a turn may take -----------------------------------------------

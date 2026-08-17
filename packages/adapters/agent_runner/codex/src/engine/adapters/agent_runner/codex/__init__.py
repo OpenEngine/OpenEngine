@@ -26,8 +26,8 @@ of which this adapter is deliberately loud about rather than papering over:
 * **It owns its own tools.** Codex decides when to read a file or run a command
   and does it internally; there is no way to hand it our `ToolSpec`s and get
   tool calls back. So a profile with grants cannot run here -- see
-  `CodexToolsUnsupportedError`. Bridging the two means exposing our tools to
-  Codex over MCP (`codex mcp`), which is a ticket, not a flag.
+  `CodexToolsUnsupportedError`. Workflow runs are the narrow exception: the
+  runtime attaches its run-bound `complete_step` and `fail_step` MCP server.
 
 * **It is stateless here.** Codex can resume its own sessions by `thread_id`,
   but our conversation is the source of truth, so each turn sends the whole
@@ -91,6 +91,7 @@ from engine.ports.agent_runner import (
     ApprovalKind,
     ApprovalRequest,
     FinishReason,
+    McpServerConfig,
     TokenUsage,
     TurnObserver,
 )
@@ -161,7 +162,7 @@ class CodexToolsUnsupportedError(NotImplementedError):
     def __init__(self, tool_names: Sequence[str]) -> None:
         super().__init__(
             f"Codex runs its own tools and cannot be offered {list(tool_names)}; "
-            "exposing engine tools to Codex over MCP lands with the tools ticket"
+            "only the runtime-bound workflow terminal tools are available over MCP"
         )
         self.tool_names = tuple(tool_names)
 
@@ -528,7 +529,10 @@ class _CodexRunner:
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
     def command_line(
-        self, profile: AgentProfile, working_directory: str | None = None
+        self,
+        profile: AgentProfile,
+        working_directory: str | None = None,
+        mcp_server: McpServerConfig | None = None,
     ) -> list[str]:
         """The argv this runner would use. Public so the wiring is inspectable
         without running anything."""
@@ -542,6 +546,14 @@ class _CodexRunner:
             "-C",
             working_directory or self._working_directory,
         ]
+        if mcp_server is not None:
+            prefix = f"mcp_servers.{mcp_server.name}"
+            argv += [
+                "-c",
+                f"{prefix}.command={json.dumps(mcp_server.command)}",
+                "-c",
+                f"{prefix}.args={json.dumps(list(mcp_server.args))}",
+            ]
         model = profile.model or self._model
         if model:
             argv += ["--model", model]
@@ -576,6 +588,7 @@ class _CodexRunner:
         on_message: TurnObserver,
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
+        mcp_server: McpServerConfig | None = None,
     ) -> AgentTurn:
         """Run Codex, forwarding each completed JSONL item immediately."""
         if tools:
@@ -598,7 +611,7 @@ class _CodexRunner:
 
         prompt = render_prompt(profile, messages)
         process = await asyncio.create_subprocess_exec(
-            *self.command_line(profile, working_directory),
+            *self.command_line(profile, working_directory, mcp_server),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -882,6 +895,24 @@ class _CodexRunner:
                     on_message(completed)
         return tuple(events), stderr
 
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run a turn with the runtime's bound terminal tools attached."""
+        return await self.run_turn_streamed(
+            agent_run_id,
+            profile,
+            messages,
+            lambda _message: None,
+            workspace_id=workspace_id,
+            mcp_server=mcp_server,
+        )
+
     async def _read_stream(
         self,
         process: asyncio.subprocess.Process,
@@ -974,9 +1005,12 @@ class CodexAgentRunner:
         )
 
     def command_line(
-        self, profile: AgentProfile, working_directory: str | None = None
+        self,
+        profile: AgentProfile,
+        working_directory: str | None = None,
+        mcp_server: McpServerConfig | None = None,
     ) -> list[str]:
-        return self._delegate.command_line(profile, working_directory)
+        return self._delegate.command_line(profile, working_directory, mcp_server)
 
     async def run_turn(
         self,
@@ -1005,6 +1039,22 @@ class CodexAgentRunner:
             messages,
             on_message,
             tools=tools,
+            workspace_id=workspace_id,
+        )
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn_with_mcp(
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
             workspace_id=workspace_id,
         )
 

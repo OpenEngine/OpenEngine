@@ -288,7 +288,8 @@ def test_workflow_start_materializes_explicit_step_conversation_correlation() ->
     assert conversation is not None
     assert conversation.messages[0].role is Role.USER
     assert conversation.messages[0].content.startswith("Implement the task.")
-    assert "exactly one JSON object" in conversation.messages[0].content
+    assert "`complete_step`" in conversation.messages[0].content
+    assert "JSON" not in conversation.messages[0].content
     assert conversation.messages[1].role is Role.ASSISTANT
     assert conversation.messages[1].content == "on it"
     assert agent_run is not None

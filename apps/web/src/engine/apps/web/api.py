@@ -816,6 +816,7 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
                     str(step.agent_instance_id) if step.agent_instance_id else None
                 ),
                 "agentRunId": str(step.agent_run_id) if step.agent_run_id else None,
+                "mcpRequestId": step.mcp_request_id,
                 "conversationId": (
                     str(step.conversation_id) if step.conversation_id else None
                 ),

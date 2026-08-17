@@ -65,6 +65,8 @@ class StepCompleted(Event):
     outcome: str
     summary: str
     outputs: tuple[StepOutput, ...] = field(default=())
+    mcp_request_id: str | int | None = None
+    """JSON-RPC request that submitted the result, absent for non-MCP producers."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +90,10 @@ class RunFailed(Event):
     """An unrecoverable failure ended the run."""
 
     reason: str
+    agent_run_id: AgentRunId | None = None
+    """The bound agent execution that reported the failure, when applicable."""
+    mcp_request_id: str | int | None = None
+    """JSON-RPC request that submitted the failure, absent for other failures."""
 
 
 __all__ = [

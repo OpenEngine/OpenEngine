@@ -10,7 +10,8 @@ Ticket 1 ships the seam and its wiring; the per-command bodies fill in alongside
 their adapters.
 """
 
-from collections.abc import Iterable
+import asyncio
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 
 from engine.domain.agents import AgentRun, AgentRunStatus
@@ -25,10 +26,20 @@ from engine.domain.commands import (
     ScheduleTimer,
     StartAgentRun,
 )
+from engine.domain.events import RunFailed, StepCompleted
 from engine.domain.ids import ConversationId
-from engine.ports import AgentRunner, AgentTurn
+from engine.ports import AgentRunner, AgentTurn, McpAgentRunner
 from engine.runtime.capabilities import Capabilities
-from engine.runtime.step_results import step_result_instructions
+from engine.runtime.step_results import (
+    INVALID_COMPLETION_ERROR,
+    requests_clarification_or_escalation,
+    step_result_instructions,
+)
+from engine.runtime.terminal_mcp import (
+    TerminalEvent,
+    TerminalMcpBroker,
+    TerminalResultRegistry,
+)
 
 
 class UnhandledCommandError(RuntimeError):
@@ -44,6 +55,7 @@ class Dispatcher:
 
     def __init__(self, capabilities: Capabilities) -> None:
         self._capabilities = capabilities
+        self._terminal_results = TerminalResultRegistry()
 
     async def dispatch_all(self, commands: Iterable[Command]) -> None:
         """Dispatch in order. Sequential by design -- commands from one decision
@@ -89,8 +101,9 @@ class Dispatcher:
         command: StartAgentRun,
         runner: AgentRunner | None = None,
         runner_name: str = "",
-    ) -> AgentTurn:
-        """Run one workflow step and return its structured terminal turn."""
+        on_terminal_result: Callable[[TerminalEvent], Awaitable[None]] | None = None,
+    ) -> AgentTurn | TerminalEvent:
+        """Run a workflow step, preferring a directly delivered MCP result."""
         caps = self._capabilities
         selected_runner = runner or caps.agent_runner
         assert command.step is not None
@@ -118,12 +131,22 @@ class Dispatcher:
         )
         await caps.state_store.record_agent_run(agent_run)
         try:
-            turn = await selected_runner.run_turn(
-                command.agent_run_id,
-                command.profile,
-                (prompt,),
-                workspace_id=command.workspace_id,
-            )
+            if isinstance(selected_runner, McpAgentRunner):
+                result, turn, transcript = await self._run_with_terminal_mcp(
+                    selected_runner,
+                    command,
+                    prompt,
+                    on_terminal_result,
+                )
+            else:
+                result = None
+                turn = await selected_runner.run_turn(
+                    command.agent_run_id,
+                    command.profile,
+                    (prompt,),
+                    workspace_id=command.workspace_id,
+                )
+                transcript = turn.transcript
         except Exception as error:
             await caps.state_store.record_agent_run(
                 replace(
@@ -133,7 +156,20 @@ class Dispatcher:
                 )
             )
             raise
-        await caps.state_store.append_messages(instance.instance_id, turn.transcript)
+        if transcript:
+            await caps.state_store.append_messages(instance.instance_id, transcript)
+        if result is not None:
+            status = (
+                AgentRunStatus.FAILED
+                if isinstance(result, RunFailed)
+                else AgentRunStatus.SUCCEEDED
+            )
+            summary = result.reason if isinstance(result, RunFailed) else result.summary
+            await caps.state_store.record_agent_run(
+                replace(agent_run, status=status, summary=summary)
+            )
+            return result
+        assert turn is not None
         await caps.state_store.record_agent_run(
             replace(
                 agent_run,
@@ -142,6 +178,72 @@ class Dispatcher:
             )
         )
         return turn
+
+    async def _run_with_terminal_mcp(
+        self,
+        runner: McpAgentRunner,
+        command: StartAgentRun,
+        prompt: Message,
+        deliver: Callable[[TerminalEvent], Awaitable[None]] | None,
+    ) -> tuple[TerminalEvent | None, AgentTurn | None, tuple[Message, ...]]:
+        """Run until a terminal result or clarification request is produced."""
+        assert command.step is not None
+        broker = TerminalMcpBroker(
+            run_id=command.run_id,
+            agent_run_id=command.agent_run_id,
+            step=command.step,
+            registry=self._terminal_results,
+            deliver=deliver,
+        )
+        async with broker:
+            messages = (prompt,)
+            transcript: list[Message] = []
+            while True:
+                run_task = asyncio.create_task(
+                    runner.run_turn_with_mcp(
+                        command.agent_run_id,
+                        command.profile,
+                        messages,
+                        broker.config,
+                        workspace_id=command.workspace_id,
+                    )
+                )
+                result_task = asyncio.create_task(broker.result())
+                done, _pending = await asyncio.wait(
+                    (run_task, result_task), return_when=asyncio.FIRST_COMPLETED
+                )
+                if result_task in done:
+                    result = result_task.result()
+                    try:
+                        await runner.cancel(command.agent_run_id)
+                    except Exception:
+                        # Cancellation is best-effort and cannot revoke a
+                        # result already accepted and delivered by the runtime.
+                        pass
+                    turn: AgentTurn | None = None
+                    try:
+                        turn = await asyncio.wait_for(run_task, timeout=1.0)
+                    except asyncio.TimeoutError:
+                        run_task.cancel()
+                        await asyncio.gather(run_task, return_exceptions=True)
+                    except Exception:
+                        # A terminated CLI commonly reports a nonzero exit. The
+                        # already-delivered terminal event remains authoritative.
+                        pass
+                    if turn is not None:
+                        transcript.extend(turn.transcript)
+                    return result, turn, tuple(transcript)
+
+                result_task.cancel()
+                await asyncio.gather(result_task, return_exceptions=True)
+                turn = await run_task
+                transcript.extend(turn.transcript)
+                if requests_clarification_or_escalation(turn):
+                    return None, turn, tuple(transcript)
+
+                correction = Message.user(INVALID_COMPLETION_ERROR)
+                transcript.append(correction)
+                messages = (*messages, *turn.transcript, correction)
 
 
 __all__ = ["Dispatcher", "UnhandledCommandError"]
