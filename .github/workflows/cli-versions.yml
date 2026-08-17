@@ -1,0 +1,121 @@
+name: CLI version manifest
+
+# Watches npm for provider releases and says so. It never edits
+# `.github/cli-versions.json`: which releases we test is a reviewed decision,
+# because the interesting half of it is what would *leave* the matrix. An
+# automation that quietly rewrote the list could drop the oldest supported
+# release without anybody agreeing to stop supporting it.
+#
+# So this opens (or updates) one issue describing the difference between npm's
+# newest three and what is pinned, with the exact JSON to paste. A human makes
+# the change; the compatibility matrix follows the file.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # A day before the compatibility run, so a new release is proposed while
+    # there is still time to pin it before the week's matrix.
+    - cron: "17 9 * * 0"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cli-version-manifest
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: compare the manifest with npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: compare
+        name: What is published, and what we pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE' > "$RUNNER_TEMP/report.md"
+          const { execFileSync } = require("node:child_process");
+          const fs = require("node:fs");
+
+          const manifest = JSON.parse(fs.readFileSync(".github/cli-versions.json", "utf8"));
+          const wanted = manifest.policy.versions;
+          const packages = [
+            ["codex", "@openai/codex"],
+            ["claude", "@anthropic-ai/claude-code"],
+          ];
+
+          const proposed = {};
+          const lines = [];
+          let differs = false;
+          for (const [provider, packageName] of packages) {
+            // Prereleases carry a hyphen and are not what anybody installs by
+            // default, so they are not what we promise to support either.
+            const published = JSON.parse(
+              execFileSync("npm", ["view", packageName, "versions", "--json"], {
+                encoding: "utf8",
+              }),
+            ).filter((version) => !version.includes("-"));
+            const latest = published.slice(-wanted).reverse();
+            const pinned = manifest[provider] ?? [];
+            proposed[provider] = latest;
+            const same =
+              pinned.length === latest.length &&
+              pinned.every((version, index) => version === latest[index]);
+            if (!same) differs = true;
+            lines.push(
+              `- **${provider}** (\`${packageName}\`)\n` +
+                `  - pinned: ${pinned.length ? pinned.join(", ") : "_nothing_"}\n` +
+                `  - newest ${wanted} published: ${latest.join(", ")}\n` +
+                `  - dropped by this change: ${
+                  pinned.filter((v) => !latest.includes(v)).join(", ") || "_none_"
+                }`,
+            );
+          }
+
+          console.log(
+            differs
+              ? "The published releases have moved ahead of the pinned matrix."
+              : "The pinned matrix is the newest three of each CLI. Nothing to do.",
+          );
+          console.log("");
+          console.log(lines.join("\n"));
+          console.log("");
+          console.log("Anything under **dropped** stops being tested the moment this is merged.");
+          console.log("That is the part worth a second look: it is a decision to stop supporting");
+          console.log("a release, not a version bump.");
+          console.log("");
+          console.log("```json");
+          console.log(
+            JSON.stringify(
+              { ...manifest, ...proposed },
+              null,
+              2,
+            ),
+          );
+          console.log("```");
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `differs=${differs}\n`);
+          NODE
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the manifest issue
+        if: steps.compare.outputs.differs == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Pin the current provider CLI releases"
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            # One issue, kept current: a new one every Sunday would be noise
+            # nobody reads by the third week.
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/report.md"
+          else
+            gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/report.md"
+          fi

@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from engine.domain.agents import AgentInstance, AgentRun
-from engine.domain.approvals import ApprovalRecord, ApprovalStatus
+from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
 from engine.domain.ids import (
@@ -154,6 +154,27 @@ class StateStore(Protocol):
 
         Oldest first because these are a log of what was asked: reading them in
         the order the agent asked is what makes a sequence of requests legible.
+        """
+        ...
+
+    async def record_session_grant(self, grant: SessionGrant) -> None:
+        """Upsert one reusable consent, keyed by its id.
+
+        Durable for the reason the approval it came from is: the provider
+        process that was told about it dies at the end of the turn, so a grant
+        held anywhere else would expire before the next request it is meant to
+        answer.
+        """
+        ...
+
+    async def list_session_grants(
+        self, *, instance_id: AgentInstanceId | None = None
+    ) -> Sequence[SessionGrant]:
+        """Persisted grants, oldest first, optionally for one conversation.
+
+        Revoked ones are included: whether a grant still applies is a question
+        about `revoked_at`, and a caller auditing why a past request was allowed
+        needs the ones that have since been withdrawn.
         """
         ...
 

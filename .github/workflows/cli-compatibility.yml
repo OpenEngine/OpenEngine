@@ -1,65 +1,141 @@
 name: CLI compatibility
 
+# The live half of the approval tests: real `codex` and `claude` binaries, real
+# bidirectional protocol, real approve / cancel / allow-for-session decisions,
+# against every release pinned in `.github/cli-versions.json`.
+#
+# Deliberately not a pull-request check. Everything here depends on somebody
+# else's authentication, rate limits, model behaviour, and uptime, so a red run
+# is as likely to mean "OpenAI had a bad ten minutes" as "we broke the approval
+# contract". Blocking every unrelated PR on that trains people to ignore it.
+# What *does* block a PR is the deterministic half -- protocol fixtures,
+# normalization, API, and fake-provider end-to-end tests -- in `tests.yml`.
+#
+# Releasing approval functionality is gated on the most recent run of this
+# workflow being green: see `release-gate.yml`.
+
 on:
-  pull_request:
   workflow_dispatch:
   schedule:
+    # Early Monday, so a week's provider releases are covered before anyone
+    # depends on a green run to ship.
     - cron: "17 9 * * 1"
 
 permissions:
   contents: read
 
+concurrency:
+  group: cli-compatibility
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.9.28"
+  # Every scenario is bounded twice: once on how long a provider may take to
+  # ask for approval, and once on the whole turn. A hung CLI has to fail with
+  # a sentence somebody can act on rather than by burning the job's six hours.
+  ENGINE_COMPAT_PAUSE_TIMEOUT: "180"
+  ENGINE_COMPAT_TURN_TIMEOUT: "300"
+
 jobs:
-  versions:
-    name: resolve latest stable CLI versions
+  manifest:
+    name: read the pinned releases
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
+      - uses: actions/checkout@v4
+
       - id: matrix
-        name: Resolve the latest three releases of each CLI
+        name: Read the pinned releases
         shell: bash
         run: |
-          node <<'NODE' >> "$GITHUB_OUTPUT"
-          const { execFileSync } = require("node:child_process");
-          const packages = [
-            ["codex", "@openai/codex"],
-            ["claude", "@anthropic-ai/claude-code"],
-          ];
-          const include = [];
-          for (const [provider, packageName] of packages) {
-            const published = JSON.parse(
-              execFileSync("npm", ["view", packageName, "versions", "--json"], {
-                encoding: "utf8",
-              }),
-            ).filter((version) => !version.includes("-"));
-            for (const version of published.slice(-3)) {
-              include.push({ provider, package: packageName, version });
-            }
-          }
-          process.stdout.write(`matrix=${JSON.stringify({ include })}\n`);
-          NODE
+          set -euo pipefail
+          matrix=$(jq -c '{include: [
+            (.codex[]   | {provider: "codex",  package: "@openai/codex",            version: .}),
+            (.claude[]  | {provider: "claude", package: "@anthropic-ai/claude-code", version: .})
+          ]}' .github/cli-versions.json)
+          if [ "$matrix" = '{"include":[]}' ]; then
+            echo "::error::.github/cli-versions.json pins no releases at all; there is nothing to test"
+            exit 1
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          jq -r 'def listed: if length == 0 then "none" else join(", ") end;
+                 "pinned: codex \(.codex | listed) · claude \(.claude | listed)"' \
+            .github/cli-versions.json >> "$GITHUB_STEP_SUMMARY"
 
-  compatibility:
-    name: ${{ matrix.provider }} ${{ matrix.version }}
-    needs: versions
+  pinned:
+    name: the matrix is fully pinned
+    # Its own job, and not one the cells depend on: an incomplete manifest
+    # should read as "we are not testing what we said we would" while whatever
+    # *is* pinned still runs and reports. `cli-versions.yml` proposes the
+    # change that fixes it; nothing edits the manifest automatically.
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install CLI release
+      - name: Every provider pins the full set
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted=$(jq -r '.policy.versions' .github/cli-versions.json)
+          incomplete=$(jq -r --argjson wanted "$wanted" \
+            'to_entries[] | select(.key | test("^(codex|claude)$"))
+             | select((.value | length) != $wanted)
+             | "\(.key) pins \(.value | length) of \($wanted)"' \
+            .github/cli-versions.json)
+          if [ -n "$incomplete" ]; then
+            echo "::error::the compatibility matrix is not fully pinned: $incomplete"
+            echo "::error::run the 'CLI version manifest' workflow, then review and merge the manifest change"
+            exit 1
+          fi
+
+  compatibility:
+    name: ${{ matrix.provider }} ${{ matrix.version }}
+    needs: manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      # Cells are independent: one provider's outage must not hide another's
+      # regression, and an old release failing is a fact worth seeing next to a
+      # new one passing.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.manifest.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --locked
+
+      - name: Install the pinned CLI release
         run: npm install --global --prefix "$RUNNER_TEMP/agent-cli" "${{ matrix.package }}@${{ matrix.version }}"
 
-      - name: Put CLI on PATH
+      - name: Put the CLI on PATH
         run: echo "$RUNNER_TEMP/agent-cli/bin" >> "$GITHUB_PATH"
 
-      - name: Verify installed release
-        run: ${{ matrix.provider }} --version
+      - name: Record what is actually installed
+        # What the CLI calls itself, not what we asked npm for: a package that
+        # resolves to something else is exactly the kind of drift this matrix
+        # exists to catch, and the version has to be in the log of a failure.
+        shell: bash
+        run: |
+          set -euo pipefail
+          installed=$(${{ matrix.provider }} --version)
+          echo "::notice::${{ matrix.provider }} requested ${{ matrix.version }}, reports $installed"
+          {
+            echo "### ${{ matrix.provider }} ${{ matrix.version }}"
+            echo ""
+            echo '```'
+            echo "$installed"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Verify Codex accepts the runtime MCP configuration
+      - name: Configure the runtime MCP transport still loads
         if: matrix.provider == 'codex'
         run: |
           codex \
@@ -67,7 +143,35 @@ jobs:
             -c 'mcp_servers.workflow.args=["-m", "engine.runtime.terminal_mcp_server"]' \
             mcp get workflow
 
-      - name: Verify Claude accepts per-run MCP configuration
+      - name: Configure the runtime MCP transport still loads
         if: matrix.provider == 'claude'
-        run: |
-          claude --help | grep -- '--mcp-config'
+        run: claude --help | grep -- '--mcp-config'
+
+      - name: Clean workspace for this cell
+        # Recreated per cell rather than reused: a scenario that asserts a file
+        # was *not* created is meaningless in a directory another cell wrote to.
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/compat" && mkdir -p "$RUNNER_TEMP/compat" "$RUNNER_TEMP/compat-artifacts"
+
+      - name: Approve, cancel, and allow-for-session
+        env:
+          ENGINE_COMPAT_PROVIDER: ${{ matrix.provider }}
+          ENGINE_COMPAT_VERSION: ${{ matrix.version }}
+          ENGINE_COMPAT_WORKSPACE: ${{ runner.temp }}/compat
+          ENGINE_COMPAT_ARTIFACTS: ${{ runner.temp }}/compat-artifacts
+          # Provider credentials. Absent, the scenarios skip rather than fail:
+          # an unauthenticated runner is a configuration fact, not a
+          # compatibility result.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run pytest tests/test_cli_compatibility.py -m compatibility -v
+
+      - name: Upload the redacted protocol transcript
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcript-${{ matrix.provider }}-${{ matrix.version }}
+          path: ${{ runner.temp }}/compat-artifacts
+          if-no-files-found: warn
+          # Diagnostics, not archives: long enough to read after a Monday run.
+          retention-days: 14

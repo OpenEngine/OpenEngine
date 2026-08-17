@@ -25,6 +25,11 @@ from engine.runtime.session import (
     UnknownToolGrantError,
     WorkspacesUnavailableError,
 )
+from engine.runtime.session_grants import (
+    matching_grant,
+    normalized_scope,
+    session_grant_from,
+)
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
     InvalidStepResultError,
@@ -77,7 +82,10 @@ __all__ = [
     "WorkflowExecutor",
     "complete_step_tool",
     "fail_step_tool",
+    "matching_grant",
+    "normalized_scope",
     "profile_for",
+    "session_grant_from",
     "run_failed_from_tool_call",
     "requests_clarification_or_escalation",
     "step_completed_from_tool_call",

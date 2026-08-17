@@ -369,6 +369,9 @@ class ThreadService:
                 instance_id=instance_id,
                 runner=selected_runner,
                 present=run.present_approval,
+                # Where this turn will actually work, so consent it collects is
+                # bounded by the same worktree the agent is standing in.
+                workspace_id=thread.workspace_id,
             )
 
         async def execute() -> str:
@@ -787,7 +790,8 @@ def create_app(
 
     async def title_thread(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
-        if await service.get(instance_id) is None:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
         opening_text = str(body["text"]).strip() if body.get("text") else None
@@ -796,6 +800,18 @@ def create_app(
             title = await service.generate_title(instance_id, opening_text, runner)
         except ValueError as error:
             return _error(str(error), 400)
+        except Exception as failure:
+            # A provider that cannot name the chat has not cost anybody
+            # anything yet, and must not be allowed to. The client asks for a
+            # name *before* sending the message being named, so a failure
+            # answered with a 500 here would take the user's turn with it --
+            # a CLI that is out of quota would stop the chat working rather
+            # than leave it called "New chat".
+            #
+            # The reason travels in the body instead of the status, because
+            # something did go wrong and the placeholder name is not evidence
+            # of which provider failed or why.
+            return JSONResponse({"title": thread.title, "error": str(failure)})
         return JSONResponse({"title": title})
 
     async def attach_workspace(request: Request) -> JSONResponse:
@@ -1060,6 +1076,12 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
             decision.value for decision in approval.allowed_decisions
         ],
         "decision": approval.decision.value if approval.decision else None,
+        # Who decided, so the client can tell an answer the user gave from one
+        # a grant gave on their behalf. A request nobody was shown still has to
+        # read as something that happened, not as something that was skipped.
+        "decisionSource": (
+            approval.decision_source.value if approval.decision_source else None
+        ),
     }
 
 

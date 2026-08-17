@@ -37,6 +37,9 @@ from engine.domain import (
     ApprovalRecord,
     ApprovalStatus,
     Message,
+    SessionGrant,
+    SessionGrantId,
+    WorkspaceId,
 )
 from engine.ports import AgentTurn, ApprovalRequest, FinishReason, StateStore
 from engine.runtime import (
@@ -44,6 +47,7 @@ from engine.runtime import (
     ApprovalBroker,
     ApprovalsUnsupportedError,
     Capabilities,
+    normalized_scope,
 )
 
 CODER = AgentId("coder")
@@ -65,6 +69,9 @@ WRITE_FILE = ApprovalRequest(
     tool_name="Write",
     arguments='{"path":"tests/test_worker.py"}',
     allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+)
+RUN_LINT = replace(
+    RUN_TESTS, approval_id="provider-3", reason="Lint the tree", command="ruff check"
 )
 
 
@@ -207,6 +214,47 @@ async def _ignore(record: ApprovalRecord) -> None:
 
 def _lines(response: httpx.Response) -> list[dict[str, object]]:
     return [json.loads(line) for line in response.text.splitlines() if line]
+
+
+async def _ask(
+    broker: ApprovalBroker,
+    instance_id: AgentInstanceId,
+    request: ApprovalRequest,
+    *,
+    agent_run_id: AgentRunId,
+    runner: str = "test",
+    workspace_id: WorkspaceId | None = None,
+    answer: ApprovalDecision | None = None,
+) -> tuple[ApprovalDecision, list[ApprovalRecord]]:
+    """Put one request to the broker as a turn would, and see what happened.
+
+    Returns the decision the paused turn received and everything the presenter
+    was shown -- which is the whole question for a grant: a request that was
+    presented still pending is one the user was asked about, and one presented
+    already decided is one that was answered for them.
+
+    `answer` stands in for a user, and is only reached if no grant matched.
+    """
+    presented: list[ApprovalRecord] = []
+
+    async def present(record: ApprovalRecord) -> None:
+        presented.append(record)
+        if record.is_pending and answer is not None:
+            await broker.decide(
+                record.approval_id,
+                answer,
+                instance_id=instance_id,
+                agent_run_id=agent_run_id,
+            )
+
+    handler = broker.handler(
+        agent_run_id=agent_run_id,
+        instance_id=instance_id,
+        runner=runner,
+        present=present,
+        workspace_id=workspace_id,
+    )
+    return await handler(request), presented
 
 
 def _approval_url(thread_id: str, approval_id: str) -> str:
@@ -464,6 +512,67 @@ def test_stores_agree_on_what_an_approval_is(store: StateStore) -> None:
     assert elsewhere == ()
 
 
+def test_stores_agree_on_what_a_session_grant_is(store: StateStore) -> None:
+    """A grant that did not survive the process would expire before the turn it
+    exists to answer: the provider it was given to is gone by then."""
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="claude-control")
+        elsewhere = await store.create_instance(CODER)
+        granted = SessionGrant(
+            grant_id=SessionGrantId("grant-1"),
+            instance_id=instance.instance_id,
+            runner="claude-control",
+            approval_kind=ApprovalKind.COMMAND_EXECUTION,
+            normalized_scope="command_execution|/workspace|pytest",
+            created_from_approval_id=ApprovalId("apv-1"),
+            created_at=datetime.now(UTC),
+            workspace_id=WorkspaceId("ws-1"),
+        )
+        other_conversation = replace(
+            granted,
+            grant_id=SessionGrantId("grant-2"),
+            instance_id=elsewhere.instance_id,
+        )
+        await store.record_session_grant(granted)
+        await store.record_session_grant(other_conversation)
+        revoked = replace(granted, revoked_at=datetime.now(UTC))
+        await store.record_session_grant(revoked)
+        return (
+            revoked,
+            await store.list_session_grants(),
+            await store.list_session_grants(instance_id=instance.instance_id),
+        )
+
+    revoked, everything, mine = asyncio.run(scenario())
+
+    # Revoking is an update to one grant, not a new one and not a deletion:
+    # what was in force for a while is how a past request came to be allowed.
+    assert [grant.grant_id for grant in everything] == ["grant-1", "grant-2"]
+    assert [grant.grant_id for grant in mine] == ["grant-1"]
+    assert mine[0] == revoked
+    assert mine[0].is_active is False
+    assert mine[0].workspace_id == WorkspaceId("ws-1")
+    assert mine[0].created_from_approval_id == ApprovalId("apv-1")
+
+
+def test_a_session_grant_needs_a_conversation_to_belong_to(store: StateStore) -> None:
+    """Grants never cross conversations, so one with nowhere to belong is a
+    grant nothing could ever match -- and nothing could ever audit."""
+    orphan = SessionGrant(
+        grant_id=SessionGrantId("grant-1"),
+        instance_id=AgentInstanceId("agi-nope"),
+        runner="test",
+        approval_kind=ApprovalKind.COMMAND_EXECUTION,
+        normalized_scope="command_execution||pytest",
+        created_from_approval_id=ApprovalId("apv-1"),
+        created_at=datetime.now(UTC),
+    )
+
+    with pytest.raises(KeyError):
+        asyncio.run(store.record_session_grant(orphan))
+
+
 def test_an_approval_needs_a_conversation_to_belong_to(store: StateStore) -> None:
     """An approval no reviewer could reach from a conversation is a leak."""
     orphan = ApprovalRecord(
@@ -527,6 +636,7 @@ def test_approving_resumes_the_paused_turn_and_records_the_decision() -> None:
         "arguments": None,
         "allowedDecisions": ["accept", "accept_for_session", "cancel"],
         "decision": None,
+        "decisionSource": None,
     }
     assert events[-1]["type"] == "done"
     assert runner.decisions == [ApprovalDecision.ACCEPT]
@@ -895,6 +1005,412 @@ def test_a_restart_interrupts_the_requests_it_cannot_resume(tmp_path) -> None:
     assert recovered.command == "pytest"
     assert refused.status_code == 409
     assert "interrupted" in refused.json()["error"]
+
+
+# --- session grants ---------------------------------------------------------
+#
+# The session is the conversation, not the CLI subprocess: both providers forget
+# a session grant when their process exits, and ours exits at the end of every
+# turn. So the tests that matter here are the ones that cross a run boundary --
+# a grant that only worked inside one turn would be indistinguishable from the
+# provider's own memory, and would not be worth persisting.
+
+
+def _record(**overrides: object) -> ApprovalRecord:
+    fields: dict[str, object] = {
+        "approval_id": ApprovalId("apv-1"),
+        "agent_run_id": AgentRunId("ar-1"),
+        "instance_id": AgentInstanceId("agi-1"),
+        "runner": "test",
+        "kind": ApprovalKind.COMMAND_EXECUTION,
+        "requested_at": datetime.now(UTC),
+        "allowed_decisions": tuple(ApprovalDecision),
+    }
+    fields.update(overrides)
+    return ApprovalRecord(**fields)  # type: ignore[arg-type]
+
+
+def test_a_command_normalizes_to_itself_and_where_it_would_run() -> None:
+    """Re-rendered whitespace is the same command; another directory is not."""
+    here = normalized_scope(_record(command=" pytest   -q\n", cwd="/workspace/"))
+
+    assert here == "command_execution|/workspace|pytest -q"
+    assert here == normalized_scope(_record(command="pytest -q", cwd="/workspace"))
+    assert here != normalized_scope(_record(command="pytest -q", cwd="/elsewhere"))
+    assert here != normalized_scope(_record(command="pytest -q .", cwd="/workspace"))
+
+
+def test_a_file_change_normalizes_to_the_files_it_touches() -> None:
+    """Claude names the path; Codex maps paths to edits. One file either way.
+
+    Not the edit itself: two writes to one file differ in every byte of their
+    content, so a grant scoped to the content would never match anything and
+    the feature would quietly do nothing.
+    """
+    claude = normalized_scope(
+        _record(
+            kind=ApprovalKind.FILE_CHANGE,
+            cwd="/workspace",
+            tool_name="Write",
+            arguments='{"content": "print(1)\\n", "file_path": "src/app.py"}',
+        )
+    )
+    codex = normalized_scope(
+        _record(
+            kind=ApprovalKind.FILE_CHANGE,
+            cwd="/workspace",
+            tool_name="file_change",
+            arguments='{"changes": {"/workspace/src/app.py": {"kind": "update"}}}',
+        )
+    )
+    rewritten = normalized_scope(
+        _record(
+            kind=ApprovalKind.FILE_CHANGE,
+            cwd="/workspace",
+            tool_name="Write",
+            arguments='{"content": "print(2)\\n", "file_path": "/workspace/src/app.py"}',
+        )
+    )
+
+    assert claude == "file_change|/workspace/src/app.py"
+    assert codex == claude
+    assert rewritten == claude
+    assert claude != normalized_scope(
+        _record(
+            kind=ApprovalKind.FILE_CHANGE,
+            cwd="/workspace",
+            arguments='{"file_path": "src/other.py"}',
+        )
+    )
+
+
+def test_a_tool_use_normalizes_to_the_tool_and_its_arguments() -> None:
+    """Argument order is a serializer's choice, not part of what was asked."""
+    scope = normalized_scope(
+        _record(
+            kind=ApprovalKind.TOOL_USE,
+            tool_name="WebFetch",
+            arguments='{"prompt": "read it", "url": "https://example.test"}',
+        )
+    )
+
+    assert scope == normalized_scope(
+        _record(
+            kind=ApprovalKind.TOOL_USE,
+            tool_name="WebFetch",
+            arguments='{"url": "https://example.test", "prompt": "read it"}',
+        )
+    )
+    assert scope != normalized_scope(
+        _record(
+            kind=ApprovalKind.TOOL_USE,
+            tool_name="WebFetch",
+            arguments='{"url": "https://elsewhere.test", "prompt": "read it"}',
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("what", "record"),
+    [
+        ("a command nobody told us", _record(command=None)),
+        ("a file change with no file in it", _record(kind=ApprovalKind.FILE_CHANGE)),
+        (
+            "a file change whose arguments will not parse",
+            _record(kind=ApprovalKind.FILE_CHANGE, arguments="<not json>"),
+        ),
+        ("a tool with no name", _record(kind=ApprovalKind.TOOL_USE, tool_name=None)),
+    ],
+)
+def test_a_request_we_cannot_reduce_to_one_action_is_never_reusable(
+    what: str, record: ApprovalRecord
+) -> None:
+    """It will be asked every time, which is the safe direction to fail in."""
+    assert normalized_scope(record) is None, what
+
+
+def test_allowing_for_the_session_records_exactly_what_it_covers() -> None:
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(store)
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            workspace_id=WorkspaceId("ws-1"),
+            answer=ApprovalDecision.ACCEPT_FOR_SESSION,
+        )
+        return instance, decision, presented, await store.list_session_grants()
+
+    instance, decision, presented, grants = asyncio.run(scenario())
+    grant = grants[0]
+
+    assert decision is ApprovalDecision.ACCEPT_FOR_SESSION
+    assert len(grants) == 1
+    assert grant.instance_id == instance.instance_id
+    assert grant.runner == "test"
+    assert grant.approval_kind is ApprovalKind.COMMAND_EXECUTION
+    assert grant.normalized_scope == "command_execution|/workspace|pytest"
+    assert grant.workspace_id == WorkspaceId("ws-1")
+    assert grant.created_from_approval_id == presented[0].approval_id
+    assert grant.created_at is not None
+    assert grant.revoked_at is None
+
+
+@pytest.mark.parametrize(
+    "decision", [ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL]
+)
+def test_the_other_two_decisions_grant_nothing(decision: ApprovalDecision) -> None:
+    """Approving once is approving once. Only the session button is durable."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(store)
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            answer=decision,
+        )
+        return await store.list_session_grants()
+
+    assert asyncio.run(scenario()) == ()
+
+
+def test_a_matching_request_in_a_later_run_is_answered_by_the_grant() -> None:
+    """The point of the whole thing: a new subprocess, and no second prompt."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(store)
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        first, asked = await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            workspace_id=WorkspaceId("ws-1"),
+            answer=ApprovalDecision.ACCEPT_FOR_SESSION,
+        )
+        # A later turn of the same conversation: a provider process that has
+        # never heard of the first one, asking the same thing again.
+        second, reused = await _ask(
+            broker,
+            instance.instance_id,
+            replace(RUN_TESTS, approval_id="provider-later"),
+            agent_run_id=AgentRunId("ar-2"),
+            workspace_id=WorkspaceId("ws-1"),
+        )
+        return (
+            first,
+            asked,
+            second,
+            reused,
+            await store.list_approvals(),
+            await store.list_session_grants(),
+        )
+
+    first, asked, second, reused, approvals, grants = asyncio.run(scenario())
+
+    assert first is ApprovalDecision.ACCEPT_FOR_SESSION
+    assert asked[0].is_pending  # a card, answered by a person
+    assert second is ApprovalDecision.ACCEPT_FOR_SESSION
+    # Presented already decided: something to show, nothing to answer.
+    assert [record.status for record in reused] == [ApprovalStatus.DECIDED]
+    assert reused[0].decision_source is ApprovalDecisionSource.SESSION_GRANT
+    # Still a persisted request, and still auditable as one.
+    assert len(approvals) == 2
+    assert approvals[1].agent_run_id == AgentRunId("ar-2")
+    assert approvals[1].status is ApprovalStatus.DECIDED
+    assert approvals[1].decision is ApprovalDecision.ACCEPT_FOR_SESSION
+    assert approvals[1].decision_source is ApprovalDecisionSource.SESSION_GRANT
+    assert approvals[1].decided_at is not None
+    # Reusing consent does not compound it into a second grant.
+    assert len(grants) == 1
+
+
+@pytest.mark.parametrize(
+    # `asked` rather than `request`, which pytest reserves for its own fixture.
+    ("difference", "asked", "runner", "workspace_id"),
+    [
+        ("a different command", RUN_LINT, "test", WorkspaceId("ws-1")),
+        (
+            "the same command somewhere else",
+            replace(RUN_TESTS, cwd="/elsewhere"),
+            "test",
+            WorkspaceId("ws-1"),
+        ),
+        ("a different worktree", RUN_TESTS, "test", WorkspaceId("ws-2")),
+        ("no worktree at all", RUN_TESTS, "test", None),
+        ("a different runner", RUN_TESTS, "other", WorkspaceId("ws-1")),
+        (
+            "a different kind of action",
+            replace(WRITE_FILE, allowed_decisions=tuple(ApprovalDecision)),
+            "test",
+            WorkspaceId("ws-1"),
+        ),
+        (
+            "a request this provider will not reuse consent for",
+            replace(
+                RUN_TESTS,
+                allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+            ),
+            "test",
+            WorkspaceId("ws-1"),
+        ),
+    ],
+)
+def test_a_grant_answers_nothing_it_was_not_given_for(
+    difference: str,
+    asked: ApprovalRequest,
+    runner: str,
+    workspace_id: WorkspaceId | None,
+) -> None:
+    """Every axis is compared for equality, and any one of them asks again."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(store)
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            workspace_id=WorkspaceId("ws-1"),
+            answer=ApprovalDecision.ACCEPT_FOR_SESSION,
+        )
+        _decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            asked,
+            agent_run_id=AgentRunId("ar-2"),
+            runner=runner,
+            workspace_id=workspace_id,
+            answer=ApprovalDecision.CANCEL,
+        )
+        return presented
+
+    presented = asyncio.run(scenario())
+
+    assert presented[0].is_pending, f"{difference} should have been asked about"
+    assert presented[0].decision_source is None
+
+
+def test_a_grant_does_not_reach_another_conversation() -> None:
+    """Cross-conversation reuse is explicitly out of scope, and stays out."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(store)
+
+    async def scenario():
+        granting = await store.create_instance(CODER, runner="test")
+        bystander = await store.create_instance(CODER, runner="test")
+        await _ask(
+            broker,
+            granting.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            answer=ApprovalDecision.ACCEPT_FOR_SESSION,
+        )
+        _decision, presented = await _ask(
+            broker,
+            bystander.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-2"),
+            answer=ApprovalDecision.CANCEL,
+        )
+        return presented
+
+    assert asyncio.run(scenario())[0].is_pending
+
+
+def test_a_revoked_grant_stops_answering() -> None:
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(store)
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            answer=ApprovalDecision.ACCEPT_FOR_SESSION,
+        )
+        granted = (await store.list_session_grants())[0]
+        await store.record_session_grant(replace(granted, revoked_at=datetime.now(UTC)))
+        _decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-2"),
+            answer=ApprovalDecision.CANCEL,
+        )
+        return presented
+
+    assert asyncio.run(scenario())[0].is_pending
+
+
+def test_a_granted_action_does_not_pause_the_next_turn_of_a_chat() -> None:
+    """The same thing again, through the whole stack the browser talks to."""
+    store = InMemoryStateStore()
+    runner = ApprovalRunner()
+    app = _app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            thread_id = await _thread(client)
+            first = asyncio.create_task(
+                client.post(
+                    f"/api/threads/{thread_id}/runs", json={"text": "run the tests"}
+                )
+            )
+            request = await _pending(store)
+            await client.post(
+                _approval_url(thread_id, request.approval_id),
+                json={"decision": "accept_for_session"},
+            )
+            await first
+
+            # A second turn. Nobody answers anything, and it finishes anyway.
+            second = await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "and again"}
+            )
+            history = await client.get(f"/api/threads/{thread_id}/messages")
+            return second, history, await store.list_approvals()
+
+    second, history, approvals = asyncio.run(scenario())
+    events = _lines(second)
+    approval_events = [event for event in events if event["type"] == "approval"]
+
+    assert second.status_code == 200
+    # No card: the only snapshot the client is sent is an answered one.
+    assert [event["approval"]["status"] for event in approval_events] == ["decided"]
+    assert approval_events[0]["approval"]["decision"] == "accept_for_session"
+    assert approval_events[0]["approval"]["decisionSource"] == "session_grant"
+    assert events[-1]["type"] == "done"
+    # The action itself happened both times, which is what was approved.
+    assert runner.executed == ["pytest", "pytest"]
+    assert runner.decisions == [
+        ApprovalDecision.ACCEPT_FOR_SESSION,
+        ApprovalDecision.ACCEPT_FOR_SESSION,
+    ]
+    assert approvals[1].decision_source is ApprovalDecisionSource.SESSION_GRANT
+    assert [
+        (message["role"], message["content"][0]["text"])
+        for message in history.json()["messages"]
+    ] == [
+        ("user", "run the tests"),
+        ("assistant", "All tests passed."),
+        ("user", "and again"),
+        ("assistant", "All tests passed."),
+    ]
 
 
 def test_a_runner_that_cannot_pause_runs_exactly_as_before() -> None:

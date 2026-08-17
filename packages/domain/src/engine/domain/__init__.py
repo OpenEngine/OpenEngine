@@ -11,6 +11,7 @@ from engine.domain.approvals import (
     ApprovalKind,
     ApprovalRecord,
     ApprovalStatus,
+    SessionGrant,
 )
 from engine.domain.chat import Conversation, Message, Role, ToolCall
 from engine.domain.commands import (
@@ -42,6 +43,7 @@ from engine.domain.ids import (
     IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     MessageId,
     RunId,
+    SessionGrantId,
     StepId,
     TaskId,
     WorkflowId,
@@ -87,6 +89,8 @@ __all__ = [
     "RunRequested",
     "RunState",
     "ScheduleTimer",
+    "SessionGrant",
+    "SessionGrantId",
     "StartAgentRun",
     "StepCompleted",
     "StepId",

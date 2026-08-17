@@ -217,6 +217,16 @@ def test_a_failed_turn_is_reported_not_raised() -> None:
     assert turn.message.content == "I hit a wall"
 
 
+def test_a_failure_with_nothing_said_still_says_why() -> None:
+    """The placeholder is all there is to read, so it carries the reason."""
+    turn = turn_from_events(
+        parse_events('{"type":"turn.failed","error":{"message":"stream disconnected"}}')
+    )
+
+    assert turn.finish_reason is FinishReason.ERROR
+    assert "stream disconnected" in turn.message.content
+
+
 def test_no_answer_at_all_is_an_error() -> None:
     with pytest.raises(CodexExecutionError):
         turn_from_events(parse_events('{"type":"turn.completed","usage":{}}'))
@@ -555,6 +565,42 @@ def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
 
     assert deadlines == [None]
     assert turn.message.content == "pong"
+
+
+def test_a_failing_run_reports_what_codex_said_not_what_it_warned_about(tmp_path) -> None:
+    """Codex explains a failure on stdout and keeps warning on stderr regardless.
+
+    Both lines here are verbatim from `codex exec` 0.144.4 against an account
+    that is out of quota. Quoting the tail of stderr sends whoever reads the
+    error after a stale cache file, when what actually happened is that the
+    account cannot run a turn until Thursday.
+    """
+    limit = "You've hit your usage limit. Try again at Aug 20th, 2026 8:46 AM."
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "thread.started", "thread_id": "01a0"})
+        + "\n"
+        + json.dumps({"type": "error", "message": limit})
+        + "\n"
+        + json.dumps({"type": "turn.failed", "error": {"message": limit}})
+        + "\n"
+    )
+    runner = CodexAgentRunner(
+        binary_path=_fake_codex(
+            tmp_path,
+            f"cat {transcript}\n"
+            "echo 'ERROR codex_models_manager::cache: failed to load models cache: "
+            "missing field supports_reasoning_summaries' >&2\n"
+            "exit 1",
+        )
+    )
+
+    with pytest.raises(CodexExecutionError) as failure:
+        asyncio.run(runner.run_turn(AgentRunId("ar-1"), PROFILE, (Message.user("hi"),)))
+
+    assert "exited 1" in str(failure.value)
+    assert "usage limit" in str(failure.value)
+    assert "models cache" not in str(failure.value)
 
 
 def test_a_deployment_that_wants_a_ceiling_can_still_set_one(tmp_path) -> None:

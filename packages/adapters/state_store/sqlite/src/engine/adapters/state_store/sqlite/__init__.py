@@ -15,6 +15,7 @@ from engine.domain.approvals import (
     ApprovalKind,
     ApprovalRecord,
     ApprovalStatus,
+    SessionGrant,
 )
 from engine.domain.chat import Conversation, Message, Role, ToolCall
 from engine.domain.events import (
@@ -35,6 +36,7 @@ from engine.domain.ids import (
     ConversationId,
     MessageId,
     RunId,
+    SessionGrantId,
     StepId,
     TaskId,
     WorkflowId,
@@ -114,6 +116,7 @@ class SQLiteStateStore:
                     command TEXT,
                     cwd TEXT,
                     tool_name TEXT,
+                    workspace_id TEXT,
                     arguments TEXT,
                     allowed_decisions TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -125,6 +128,22 @@ class SQLiteStateStore:
 
                 CREATE INDEX IF NOT EXISTS approvals_by_run
                     ON approvals (agent_run_id);
+
+                CREATE TABLE IF NOT EXISTS session_grants (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    grant_id TEXT NOT NULL UNIQUE,
+                    instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id),
+                    runner TEXT NOT NULL,
+                    approval_kind TEXT NOT NULL,
+                    normalized_scope TEXT NOT NULL,
+                    workspace_id TEXT,
+                    created_from_approval_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    revoked_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS session_grants_by_instance
+                    ON session_grants (instance_id);
                 """
             )
             columns = {
@@ -155,6 +174,17 @@ class SQLiteStateStore:
             if "workflow_step_id" not in columns:
                 self._connection.execute(
                     "ALTER TABLE agent_instances ADD COLUMN workflow_step_id TEXT"
+                )
+            approval_columns = {
+                row["name"]
+                for row in self._connection.execute("PRAGMA table_info(approvals)")
+            }
+            if "workspace_id" not in approval_columns:
+                # A database written before grants existed has approvals that
+                # never recorded where they applied. Null is the honest value
+                # for those: unknown, and therefore matching no grant.
+                self._connection.execute(
+                    "ALTER TABLE approvals ADD COLUMN workspace_id TEXT"
                 )
 
     # --- workflow runs ----------------------------------------------------
@@ -424,9 +454,10 @@ class SQLiteStateStore:
                 """
                 INSERT INTO approvals (
                     approval_id, agent_run_id, instance_id, runner, kind, reason,
-                    command, cwd, tool_name, arguments, allowed_decisions, status,
-                    decision, decision_source, requested_at, decided_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    command, cwd, tool_name, workspace_id, arguments,
+                    allowed_decisions, status, decision, decision_source,
+                    requested_at, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(approval_id) DO UPDATE SET
                     status = excluded.status,
                     decision = excluded.decision,
@@ -443,6 +474,7 @@ class SQLiteStateStore:
                     approval.command,
                     approval.cwd,
                     approval.tool_name,
+                    approval.workspace_id,
                     approval.arguments,
                     json.dumps(
                         [decision.value for decision in approval.allowed_decisions]
@@ -492,6 +524,50 @@ class SQLiteStateStore:
         with self._lock:
             rows = self._connection.execute(query, tuple(parameters)).fetchall()
         return tuple(_approval_from_row(row) for row in rows)
+
+    async def record_session_grant(self, grant: SessionGrant) -> None:
+        with self._lock, self._connection:
+            exists = self._connection.execute(
+                "SELECT 1 FROM agent_instances WHERE instance_id = ?",
+                (grant.instance_id,),
+            ).fetchone()
+            if exists is None:
+                raise KeyError(f"no agent instance {grant.instance_id!r}")
+            # Only revocation is updatable: what was granted, to whom, and over
+            # what is the statement the user made, and it does not get revised.
+            self._connection.execute(
+                """
+                INSERT INTO session_grants (
+                    grant_id, instance_id, runner, approval_kind, normalized_scope,
+                    workspace_id, created_from_approval_id, created_at, revoked_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(grant_id) DO UPDATE SET revoked_at = excluded.revoked_at
+                """,
+                (
+                    grant.grant_id,
+                    grant.instance_id,
+                    grant.runner,
+                    grant.approval_kind.value,
+                    grant.normalized_scope,
+                    grant.workspace_id,
+                    grant.created_from_approval_id,
+                    grant.created_at.isoformat(),
+                    grant.revoked_at.isoformat() if grant.revoked_at else None,
+                ),
+            )
+
+    async def list_session_grants(
+        self, *, instance_id: AgentInstanceId | None = None
+    ) -> Sequence[SessionGrant]:
+        query = f"SELECT {_SESSION_GRANT_COLUMNS} FROM session_grants"
+        parameters: tuple[str, ...] = ()
+        if instance_id is not None:
+            query += " WHERE instance_id = ?"
+            parameters = (instance_id,)
+        query += " ORDER BY sequence"
+        with self._lock:
+            rows = self._connection.execute(query, parameters).fetchall()
+        return tuple(_session_grant_from_row(row) for row in rows)
 
     async def agent_run(self, agent_run_id: AgentRunId) -> AgentRun | None:
         """Read back one execution, matching the in-memory adapter's helper."""
@@ -547,8 +623,13 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
 
 _APPROVAL_COLUMNS = """
     approval_id, agent_run_id, instance_id, runner, kind, reason, command, cwd,
-    tool_name, arguments, allowed_decisions, status, decision, decision_source,
-    requested_at, decided_at
+    tool_name, workspace_id, arguments, allowed_decisions, status, decision,
+    decision_source, requested_at, decided_at
+"""
+
+_SESSION_GRANT_COLUMNS = """
+    grant_id, instance_id, runner, approval_kind, normalized_scope, workspace_id,
+    created_from_approval_id, created_at, revoked_at
 """
 
 
@@ -564,6 +645,9 @@ def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
         command=row["command"],
         cwd=row["cwd"],
         tool_name=row["tool_name"],
+        workspace_id=(
+            WorkspaceId(row["workspace_id"]) if row["workspace_id"] is not None else None
+        ),
         arguments=row["arguments"],
         allowed_decisions=tuple(
             ApprovalDecision(value) for value in json.loads(row["allowed_decisions"])
@@ -580,6 +664,26 @@ def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
         decided_at=(
             datetime.fromisoformat(row["decided_at"])
             if row["decided_at"] is not None
+            else None
+        ),
+    )
+
+
+def _session_grant_from_row(row: sqlite3.Row) -> SessionGrant:
+    return SessionGrant(
+        grant_id=SessionGrantId(row["grant_id"]),
+        instance_id=AgentInstanceId(row["instance_id"]),
+        runner=row["runner"],
+        approval_kind=ApprovalKind(row["approval_kind"]),
+        normalized_scope=row["normalized_scope"],
+        created_from_approval_id=ApprovalId(row["created_from_approval_id"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        workspace_id=(
+            WorkspaceId(row["workspace_id"]) if row["workspace_id"] is not None else None
+        ),
+        revoked_at=(
+            datetime.fromisoformat(row["revoked_at"])
+            if row["revoked_at"] is not None
             else None
         ),
     )

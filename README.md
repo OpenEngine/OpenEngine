@@ -367,8 +367,70 @@ subprocess that died with the server, so anything still `pending` when the
 process comes back is marked `interrupted` and stops being answerable — an
 approval that would resume nothing is not one worth offering.
 
-The approval UI is not built yet, so today this is reachable over the API rather
-than from the chat page.
+The chat page shows the request inside the turn that raised it, after the parts
+of the reply that have arrived so far — so it reads in order: the agent worked,
+it stopped to ask, and here is what happened next. Open, it says what kind of
+thing it is, why the agent wants it, the command or tool, the directory, and the
+arguments as fields rather than as a wall of JSON. The buttons are exactly the
+decisions that request permits — a provider that never offered a session grant
+does not get a button for one — and they disable the moment you choose, because
+a second click is a second decision and the server refuses those.
+
+Once it is answered it folds itself down to one line beside the command it was
+about (`Approved · pytest -q`), still in the transcript and still expandable,
+because what the agent asked to do and who said yes is part of the record rather
+than a prompt to keep staring at. Requests stay with their own turn as the
+conversation moves on. Close the browser and come back and a pending one is
+still there waiting; stopping the run answers it as a cancellation, which is the
+same path its own Cancel button takes.
+
+### Allowing something for the session
+
+"Allow similar actions for this session" has to survive something the provider
+cannot: the CLI subprocess it was told about exits at the end of the turn,
+because we hold the transcript and start a fresh one each time. A grant that
+lived only in the provider would mean "for the next few seconds".
+
+So the decision leaves a `SessionGrant` behind — conversation, runner, kind,
+worktree, and a normalized scope of the one action allowed. When a later turn's
+provider asks the same thing, the request is still persisted and still audited,
+but it is answered from the grant with `decision_source = session_grant` and no
+card is shown. Anything else asks again:
+
+```text
+same conversation ·  same runner ·  same worktree
+same kind of request ·  same normalized command / tool / path
+provider offered a session grant for this request too
+```
+
+Every axis is compared for equality. `pytest -q` reformatted is the same action;
+`pytest -q .` is not. A file change is scoped to the file, never to the content,
+so a grant is not defeated by the next edit and not widened to the next file.
+The scope is the whole of what was allowed, so what a grant explicitly is *not*
+is: Codex's `approval_policy = never`, a sandbox bypass,
+`--dangerously-skip-permissions`, or a blanket yes to unrelated commands. Grants
+do not cross conversations, and are recorded rather than deleted when revoked —
+"who allowed this?" stays answerable for the requests nobody was shown.
+
+### Two tiers of test, because a provider outage is not a regression
+
+Everything deterministic blocks a pull request: protocol fixtures for both
+providers, scope normalization, the HTTP surface, and end-to-end runs against
+fake `codex` and `claude` binaries that speak the real wire protocols, really
+run the command they are allowed to run, and really leave the file behind — or
+not, when it was cancelled.
+
+The live matrix is scheduled instead. `.github/workflows/cli-compatibility.yml`
+installs each release pinned in `.github/cli-versions.json` and runs approve,
+cancel, and allow-for-session against it, asserting on the filesystem rather
+than on protocol events, with the session scenario crossing a turn boundary so
+it tests our persistence rather than the provider's memory. Versions are pinned
+so a red cell names something you can install; a scheduled job compares the pins
+with npm and opens an issue proposing a change, but never makes one — the
+interesting half of that decision is which release would stop being tested.
+Failures upload a redacted transcript: kinds, decisions, statuses and scope
+digests, never prompts or command output. Releasing approval functionality is
+gated on the most recent compatibility run being green and recent.
 
 Three limits worth knowing before you read anything into a conversation:
 

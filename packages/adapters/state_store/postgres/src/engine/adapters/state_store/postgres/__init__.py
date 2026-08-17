@@ -7,7 +7,7 @@ driver, connection pool, schema, or migrations yet.
 from collections.abc import Sequence
 
 from engine.domain.agents import AgentInstance, AgentRun
-from engine.domain.approvals import ApprovalRecord, ApprovalStatus
+from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
 from engine.domain.ids import (
@@ -115,6 +115,14 @@ class PostgresStateStore:
         status: ApprovalStatus | None = None,
     ) -> Sequence[ApprovalRecord]:
         raise NotImplementedError("Approval reads land with the state-store ticket")
+
+    async def record_session_grant(self, grant: SessionGrant) -> None:
+        raise NotImplementedError("Session grants land with the state-store ticket")
+
+    async def list_session_grants(
+        self, *, instance_id: AgentInstanceId | None = None
+    ) -> Sequence[SessionGrant]:
+        raise NotImplementedError("Session grants land with the state-store ticket")
 
 
 __all__ = ["PostgresStateStore"]

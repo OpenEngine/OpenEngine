@@ -142,6 +142,15 @@ APP_SERVER_DECISIONS = {
     ApprovalDecision.CANCEL: "cancel",
 }
 
+#: Approval params that address the request rather than describe the action.
+#: Everything else -- the command's parsed actions, a file change's per-path
+#: edits, whatever a later release adds -- is carried through as the request's
+#: arguments, because what a person is being asked to allow is not something to
+#: drop on the way to them.
+APP_SERVER_APPROVAL_ENVELOPE = frozenset(
+    {"threadId", "turnId", "itemId", "reason", "command", "cwd", "availableDecisions"}
+)
+
 #: Where an item keeps its result, in preference order. Anything without one of
 #: these is recorded as an action with an empty result rather than skipped.
 OUTPUT_FIELDS = ("aggregated_output", "output", "result", "error")
@@ -256,7 +265,11 @@ def approval_request_from_app_server(message: dict[str, Any]) -> ApprovalRequest
 
     command = params.get("command")
     cwd = params.get("cwd")
-    details = params.get("commandActions")
+    details = {
+        key: value
+        for key, value in params.items()
+        if key not in APP_SERVER_APPROVAL_ENVELOPE
+    }
     return ApprovalRequest(
         approval_id=":".join(part for part in (thread_id, turn_id, request_id) if part),
         kind=kind,
@@ -266,7 +279,7 @@ def approval_request_from_app_server(message: dict[str, Any]) -> ApprovalRequest
         tool_name=(
             "command_execution" if kind is ApprovalKind.COMMAND_EXECUTION else "file_change"
         ),
-        arguments=json.dumps(details, sort_keys=True) if details is not None else None,
+        arguments=json.dumps(details, sort_keys=True) if details else None,
         allowed_decisions=allowed,
     )
 
@@ -438,8 +451,15 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> AgentTurn:
 
     if answer_at is None:
         if failed:
+            # A turn that failed before saying anything is all the user gets to
+            # read, so it carries the reason rather than only the fact.
+            reported = failure_message_of(events)
             return AgentTurn(
-                message=Message.assistant("Codex reported a failed turn"),
+                message=Message.assistant(
+                    f"Codex reported a failed turn: {reported}"
+                    if reported
+                    else "Codex reported a failed turn"
+                ),
                 finish_reason=FinishReason.ERROR,
                 usage=usage,
                 steps=tuple(steps),
@@ -452,6 +472,30 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> AgentTurn:
         usage=usage,
         steps=tuple(steps),
     )
+
+
+def failure_message_of(events: Iterable[dict[str, Any]]) -> str | None:
+    """What Codex said went wrong, taken from the stream rather than stderr.
+
+    A failing `codex exec` explains itself on *stdout*, as an `error` or
+    `turn.failed` event, and leaves stderr to whatever it was going to warn
+    about anyway -- a stale models cache, a deprecation. So the tail of stderr
+    is reliably the wrong thing to report: a run that stopped because the
+    account is out of quota says "failed to load models cache" there, and the
+    sentence naming the quota and the date it resets is here.
+    """
+    for event in events:
+        match event.get("type"):
+            case "error":
+                reported = event.get("message")
+            case "turn.failed":
+                error = event.get("error")
+                reported = error.get("message") if isinstance(error, dict) else error
+            case _:
+                continue
+        if reported:
+            return str(reported)
+    return None
 
 
 def thread_id_of(events: Iterable[dict[str, Any]]) -> str | None:
@@ -650,8 +694,12 @@ class _CodexRunner:
             self._running.pop(agent_run_id, None)
 
         if process.returncode != 0:
+            # Codex's own explanation if it gave one, and the tail of stderr
+            # only when it did not: reporting both would bury the sentence
+            # somebody can act on under the warnings it prints regardless.
             raise CodexExecutionError(
-                f"codex exited {process.returncode}: {_tail(stderr)}"
+                f"codex exited {process.returncode}: "
+                f"{failure_message_of(events) or _tail(stderr)}"
             )
         turn = turn_from_events(events)
         return turn
@@ -1126,6 +1174,7 @@ def _tail(text: str, lines: int = 5) -> str:
 
 
 __all__ = [
+    "APP_SERVER_APPROVAL_ENVELOPE",
     "INTERACTIVE_APPROVAL_POLICY",
     "SANDBOX_MODES",
     "CodexAppServerAgentRunner",
@@ -1136,6 +1185,7 @@ __all__ = [
     "action_messages",
     "app_server_sandbox_policy",
     "approval_request_from_app_server",
+    "failure_message_of",
     "messages_from_app_server_event",
     "messages_from_event",
     "parse_events",

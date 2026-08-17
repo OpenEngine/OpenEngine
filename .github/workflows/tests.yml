@@ -102,6 +102,12 @@ jobs:
         run: uv sync --locked
 
       - name: Run tests
+        # The blocking tier, and everything in it is deterministic: protocol
+        # fixtures, normalization, the HTTP surface, and end-to-end approval
+        # runs against fake CLIs that speak the real wire protocols. Live
+        # provider runs are marked `compatibility` and deselected here -- they
+        # are `cli-compatibility.yml`, on a schedule, because an authentication
+        # or rate-limit failure is not a regression in this repository.
         run: uv run pytest
 
       - name: Composition roots start

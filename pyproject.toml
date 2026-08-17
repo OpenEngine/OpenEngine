@@ -12,4 +12,12 @@ dev = ["httpx>=0.28", "pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Live provider runs are deselected by default and opted into with
+# `-m compatibility`, which is what the scheduled CLI compatibility workflow
+# does. They need a real CLI, real credentials, and somebody else's uptime, so
+# having them in the default run would make `pytest` mean "did we break
+# something, or is OpenAI having a bad ten minutes?".
+addopts = "-q -m 'not compatibility'"
+markers = [
+    "compatibility: drives a real provider CLI; scheduled rather than per-PR",
+]

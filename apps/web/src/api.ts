@@ -103,6 +103,49 @@ export function detachWorkspace(threadId: string): Promise<ApiThread> {
   return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "DELETE" });
 }
 
+/** The three answers the product offers. A request may permit fewer: the
+ *  provider decides what it can honour, and `allowedDecisions` says so. */
+export type ApprovalDecision = "accept" | "accept_for_session" | "cancel";
+
+/** One request for consent, exactly as the server persisted it.
+ *
+ *  Whole snapshots rather than diffs, because a browser that reconnects
+ *  mid-pause has nothing to apply a diff to. */
+export type ApiApproval = {
+  id: string;
+  status: "pending" | "decided" | "interrupted";
+  kind: "command_execution" | "file_change" | "tool_use";
+  reason: string | null;
+  command: string | null;
+  cwd: string | null;
+  toolName: string | null;
+  arguments: string | null;
+  allowedDecisions: ApprovalDecision[];
+  decision: ApprovalDecision | null;
+  decisionSource: "user" | "session_grant" | null;
+};
+
+/** Answer the request this conversation's run is paused on.
+ *
+ *  Its own request rather than a reply on the stream that showed it: the
+ *  connection that presented the pause may be long gone. */
+export function decideApproval(
+  threadId: string,
+  approvalId: string,
+  decision: ApprovalDecision,
+): Promise<{ approval: ApiApproval }> {
+  return api<{ approval: ApiApproval }>(
+    `/api/threads/${threadId}/runs/current/approvals/${approvalId}`,
+    { method: "POST", body: JSON.stringify({ decision }) },
+  );
+}
+
+/** Stop the run outright. The server cancels whatever it was waiting on first,
+ *  which is the approval card's Cancel by another route. */
+export function stopRun(threadId: string): Promise<void> {
+  return api<void>(`/api/threads/${threadId}/runs/current`, { method: "DELETE" });
+}
+
 export type ApiMessage = {
   id: string;
   role: "user" | "assistant";
