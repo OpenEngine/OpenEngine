@@ -21,7 +21,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-from engine.domain.ids import AgentInstanceId, AgentRunId, ApprovalId
+from engine.domain.ids import (
+    AgentInstanceId,
+    AgentRunId,
+    ApprovalId,
+    SessionGrantId,
+    WorkspaceId,
+)
 
 
 class ApprovalKind(Enum):
@@ -86,6 +92,13 @@ class ApprovalRecord:
     command: str | None = None
     cwd: str | None = None
     tool_name: str | None = None
+    workspace_id: WorkspaceId | None = None
+    """The checkout this was asked about, when the conversation has one.
+
+    Recorded because consent is bounded by where it applies: "allow this
+    command" said of one worktree is not a statement about another, and a reader
+    of the log cannot otherwise tell which tree a command was let loose in.
+    """
     arguments: str | None = None
     """The tool's arguments as the provider stated them, unparsed.
 
@@ -115,10 +128,48 @@ class ApprovalRecord:
         return not self.is_pending
 
 
+@dataclass(frozen=True, slots=True)
+class SessionGrant:
+    """One "allow this for the session" answer, kept so it can answer again.
+
+    A session is the conversation, not the CLI process that happened to ask.
+    Codex and Claude both remember a session grant, and both forget it when
+    their subprocess exits -- which is every turn, because we hold the
+    transcript and start a fresh one. A grant that only lived in the provider
+    would therefore mean "for the next few seconds", which is not what anybody
+    ticking that box is agreeing to.
+
+    `normalized_scope` is what makes reuse legible rather than magic: it is the
+    one thing that was allowed, in a canonical spelling, and it is compared for
+    equality. Nothing here widens -- a grant for `pytest -q` has nothing to say
+    about `rm -rf .`, and a grant made in one worktree has nothing to say about
+    another.
+    """
+
+    grant_id: SessionGrantId
+    instance_id: AgentInstanceId
+    """The conversation this consent belongs to. Grants never cross one."""
+    runner: str
+    approval_kind: ApprovalKind
+    normalized_scope: str
+    created_from_approval_id: ApprovalId
+    """The request the user was actually looking at when they allowed this."""
+    created_at: datetime
+    workspace_id: WorkspaceId | None = None
+    revoked_at: datetime | None = None
+    """When it stopped applying. Recorded rather than deleted: a decision that
+    was in force for a while is part of how a past run came to be allowed."""
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None
+
+
 __all__ = [
     "ApprovalDecision",
     "ApprovalDecisionSource",
     "ApprovalKind",
     "ApprovalRecord",
     "ApprovalStatus",
+    "SessionGrant",
 ]

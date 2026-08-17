@@ -49,6 +49,13 @@ within a session they own, so their ids collide across runs and mean nothing
 after the process that issued them is gone.
 """
 
+SessionGrantId = NewType("SessionGrantId", str)
+"""One reusable consent, created from an `ApprovalId` and reused after it.
+
+Keyed separately from the approval it came from because it outlives it: the
+request was answered once, and the grant is what answers the next one like it.
+"""
+
 ConversationId = NewType("ConversationId", str)
 """The message history belonging to one agent instance."""
 
@@ -66,6 +73,7 @@ __all__ = [
     "ConversationId",
     "MessageId",
     "RunId",
+    "SessionGrantId",
     "StepId",
     "TaskId",
     "WorkflowId",

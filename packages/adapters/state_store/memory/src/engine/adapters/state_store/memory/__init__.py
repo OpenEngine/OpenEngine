@@ -20,7 +20,7 @@ from threading import Lock
 from uuid import uuid4
 
 from engine.domain.agents import AgentInstance, AgentRun
-from engine.domain.approvals import ApprovalRecord, ApprovalStatus
+from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
 from engine.domain.ids import (
@@ -31,6 +31,7 @@ from engine.domain.ids import (
     ConversationId,
     MessageId,
     RunId,
+    SessionGrantId,
     StepId,
     TaskId,
     WorkspaceId,
@@ -55,6 +56,7 @@ class InMemoryStateStore:
         self._conversations: dict[AgentInstanceId, Conversation] = {}
         self._agent_runs: dict[AgentRunId, AgentRun] = {}
         self._approvals: dict[ApprovalId, ApprovalRecord] = {}
+        self._session_grants: dict[SessionGrantId, SessionGrant] = {}
         self._message_numbers = count(1)
 
     # --- runs ------------------------------------------------------------
@@ -220,6 +222,23 @@ class InMemoryStateStore:
         if status is not None:
             approvals = [a for a in approvals if a.status is status]
         return tuple(approvals)  # oldest first
+
+    async def record_session_grant(self, grant: SessionGrant) -> None:
+        with self._lock:
+            if grant.instance_id not in self._instances:
+                raise KeyError(f"no agent instance {grant.instance_id!r}")
+            # Re-assigning keeps the key's position, so revoking one does not
+            # reorder the record of what was granted when.
+            self._session_grants[grant.grant_id] = grant
+
+    async def list_session_grants(
+        self, *, instance_id: AgentInstanceId | None = None
+    ) -> Sequence[SessionGrant]:
+        with self._lock:
+            grants = list(self._session_grants.values())
+        if instance_id is not None:
+            grants = [grant for grant in grants if grant.instance_id == instance_id]
+        return tuple(grants)  # oldest first
 
     # --- beyond the port --------------------------------------------------
 

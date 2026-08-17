@@ -1344,6 +1344,53 @@ def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
     ]
 
 
+def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn() -> None:
+    """Naming happens before the message it names is sent, so it cannot fail it.
+
+    A CLI that is out of quota, unauthenticated, or simply broken fails the
+    first thing the client asks of it, which is a title. Answered with a 500
+    that would stop the chat working entirely -- for a name.
+    """
+
+    class FailsToName(ConcurrentRunner):
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            if args[2][-1].content.startswith("Name this chat"):
+                raise RuntimeError("codex exited 1: stream error: unauthorized")
+            return await super().run_turn(*args, **kwargs)
+
+    runner = FailsToName(("The answer.",))
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            title = await client.post(
+                f"/api/threads/{thread_id}/title", json={"text": "hello"}
+            )
+            run = await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "hello"}
+            )
+            return title, run, await client.get(f"/api/threads/{thread_id}")
+
+    title, run, thread = asyncio.run(scenario())
+
+    assert title.status_code == 200
+    assert title.json()["title"] == "New chat"
+    # Not silence: the placeholder name says nothing about which provider
+    # failed, and somebody reading the response deserves the reason.
+    assert "unauthorized" in title.json()["error"]
+    # The turn the client was about to send goes through regardless.
+    assert run.status_code == 200
+    assert thread.json()["title"] == "New chat"
+    finished = json.loads([line for line in run.text.splitlines() if line][-1])
+    assert finished["type"] == "done"
+    assert finished["content"][0]["text"] == "The answer."
+
+
 def test_missing_frontend_has_an_actionable_response() -> None:
     runner = ConcurrentRunner()
     app = create_app(_session(runner), {"test": runner})

@@ -12,6 +12,7 @@ from engine.domain import (
     AgentRun,
     AgentRunId,
     AgentRunStatus,
+    ApprovalId,
     ConversationId,
     HumanReviewCompleted,
     Message,
@@ -135,6 +136,73 @@ def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
     assert loaded.title == "New chat"
     assert loaded.archived is False
     assert loaded.runner == ""
+
+
+def test_approvals_written_before_grants_existed_still_load(tmp_path) -> None:
+    """A database from before approvals were bounded by a worktree.
+
+    Null is the honest value for one of those: nobody recorded where it
+    applied, so it matches no grant and is asked about again.
+    """
+    path = tmp_path / "conversations.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE agent_instances (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL UNIQUE,
+            agent_id TEXT NOT NULL,
+            conversation_id TEXT NOT NULL UNIQUE,
+            task_id TEXT,
+            workspace_id TEXT
+        );
+
+        CREATE TABLE approvals (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_id TEXT NOT NULL UNIQUE,
+            agent_run_id TEXT NOT NULL,
+            instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id),
+            runner TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            reason TEXT,
+            command TEXT,
+            cwd TEXT,
+            tool_name TEXT,
+            arguments TEXT,
+            allowed_decisions TEXT NOT NULL,
+            status TEXT NOT NULL,
+            decision TEXT,
+            decision_source TEXT,
+            requested_at TEXT NOT NULL,
+            decided_at TEXT
+        );
+
+        INSERT INTO agent_instances (
+            instance_id, agent_id, conversation_id, task_id, workspace_id
+        ) VALUES ('agi-old', 'coder', 'conv-old', NULL, NULL);
+
+        INSERT INTO approvals (
+            approval_id, agent_run_id, instance_id, runner, kind, command,
+            allowed_decisions, status, requested_at
+        ) VALUES ('apv-old', 'ar-old', 'agi-old', 'codex-app-server',
+                  'command_execution', 'pytest', '["accept","cancel"]',
+                  'pending', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    store = SQLiteStateStore(path)
+    try:
+        loaded = asyncio.run(store.load_approval(ApprovalId("apv-old")))
+        grants = asyncio.run(store.list_session_grants())
+    finally:
+        store.close()
+
+    assert loaded is not None
+    assert loaded.command == "pytest"
+    assert loaded.workspace_id is None
+    assert grants == ()
 
 
 def test_instances_are_newest_first_and_filterable() -> None:

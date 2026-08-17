@@ -21,6 +21,14 @@ that was waiting for it. A future nobody will ever resolve is a turn that hangs
 forever; a `pending` row nobody will ever answer is a prompt the UI shows for a
 process that died last Tuesday. So every way a turn can end -- decided,
 cancelled, crashed, restarted into -- resolves both.
+
+An `accept_for_session` decision leaves a `SessionGrant` behind, and that is
+what makes the next turn's identical request answerable without asking again --
+the provider subprocess that was told about it will not be alive to remember.
+The rule for reusing one is in `engine.runtime.session_grants` and is
+deliberately narrow; what matters here is that a request answered from a grant
+is still a persisted request with a recorded decision, distinguished only by
+`decision_source`.
 """
 
 import asyncio
@@ -34,10 +42,12 @@ from engine.domain.approvals import (
     ApprovalDecisionSource,
     ApprovalRecord,
     ApprovalStatus,
+    SessionGrant,
 )
-from engine.domain.ids import AgentInstanceId, AgentRunId, ApprovalId
+from engine.domain.ids import AgentInstanceId, AgentRunId, ApprovalId, WorkspaceId
 from engine.ports.agent_runner import ApprovalHandler, ApprovalRequest
 from engine.ports.state_store import StateStore
+from engine.runtime.session_grants import matching_grant, session_grant_from
 
 ApprovalPresenter = Callable[[ApprovalRecord], Awaitable[None]]
 """Shows a persisted request to whoever can answer it, and returns.
@@ -112,12 +122,16 @@ class ApprovalBroker:
         instance_id: AgentInstanceId,
         runner: str,
         present: ApprovalPresenter,
+        workspace_id: WorkspaceId | None = None,
     ) -> ApprovalHandler:
         """The callback one interactive turn hands to its runner.
 
         Bound to the run rather than to the conversation because that is what a
         decision has to match: an answer to a question asked by a process that
         has since been replaced is not an answer at all.
+
+        `workspace_id` is where this turn is working, and bounds any consent it
+        collects: a grant is a statement about one worktree.
         """
 
         async def request_approval(request: ApprovalRequest) -> ApprovalDecision:
@@ -132,13 +146,38 @@ class ApprovalBroker:
                 command=request.command,
                 cwd=request.cwd,
                 tool_name=request.tool_name,
+                workspace_id=workspace_id,
                 arguments=request.arguments,
                 allowed_decisions=tuple(request.allowed_decisions),
             )
+
+            # Looked up before the request is written, so no reader can ever
+            # see a pending row for a question that was never going to be put.
+            granted = await self._matching_grant(record)
+            if granted is not None:
+                # Answered by something the user already said. It is still a
+                # request and still recorded as one -- with the decision, and
+                # with `session_grant` as the reason it holds -- because "what
+                # was this agent allowed to do, and on whose say-so" has to
+                # stay answerable for the ones nobody was shown.
+                decided = replace(
+                    record,
+                    status=ApprovalStatus.DECIDED,
+                    decision=ApprovalDecision.ACCEPT_FOR_SESSION,
+                    decision_source=ApprovalDecisionSource.SESSION_GRANT,
+                    decided_at=datetime.now(UTC),
+                )
+                await self._store.record_approval(decided)
+                # Presented so the client can say what was allowed on its
+                # behalf. Nothing waits on it: a resolved request is not a
+                # prompt, and there is no card to answer.
+                await present(decided)
+                return ApprovalDecision.ACCEPT_FOR_SESSION
+
+            await self._store.record_approval(record)
             waiting: asyncio.Future[ApprovalDecision] = (
                 asyncio.get_running_loop().create_future()
             )
-            await self._store.record_approval(record)
             self._waiting[record.approval_id] = waiting
             try:
                 await present(record)
@@ -203,7 +242,19 @@ class ApprovalBroker:
             decision_source=source,
             decided_at=datetime.now(UTC),
         )
+        grant = (
+            session_grant_from(record)
+            if decision is ApprovalDecision.ACCEPT_FOR_SESSION
+            and source is ApprovalDecisionSource.USER
+            else None
+        )
         try:
+            if grant is not None:
+                # Before the decision, so a failure here leaves the request
+                # unanswered and re-answerable rather than half-granted. The
+                # grant is only reachable through a later request, and there
+                # cannot be one until this turn is let go again.
+                await self._store.record_session_grant(grant)
             await self._store.record_approval(decided)
         except Exception:
             # The turn is still paused and the decision never happened, so put
@@ -280,6 +331,19 @@ class ApprovalBroker:
         """Whether a turn in this process is still parked on that request."""
         waiting = self._waiting.get(approval_id)
         return waiting is not None and not waiting.done()
+
+    async def _matching_grant(self, record: ApprovalRecord) -> SessionGrant | None:
+        """The consent this conversation already gave for exactly this action.
+
+        Scoped by the store query to the conversation, and then by
+        `matching_grant` on every other axis. Read fresh each time rather than
+        cached: the grants are what the *conversation* has agreed to, and this
+        process is one of several that may be writing them.
+        """
+        return matching_grant(
+            record,
+            await self._store.list_session_grants(instance_id=record.instance_id),
+        )
 
     async def _interrupt_all(
         self, records: Sequence[ApprovalRecord]

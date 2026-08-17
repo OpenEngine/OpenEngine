@@ -1,0 +1,33 @@
+{
+  "$comment": [
+    "The provider CLI releases the approval contract is tested against.",
+    "",
+    "Pinned rather than resolved from `latest` at run time, because a red",
+    "compatibility run has to name a version somebody can install and reproduce.",
+    "A release enters this matrix through a reviewed change to this file, and",
+    "leaves it the same way -- `.github/workflows/cli-versions.yml` opens an",
+    "issue when npm's newest three differ from what is pinned here, and never",
+    "edits the list itself. Dropping an older version silently is the failure",
+    "mode that matters: it turns 'we stopped testing that' into a diff nobody",
+    "reviewed.",
+    "",
+    "Newest first. `policy.versions` is how many releases of each CLI the",
+    "matrix is meant to cover, and a provider that pins any other number fails",
+    "both the per-PR test in tests/test_cli_compatibility.py and the `pinned`",
+    "job in cli-compatibility.yml -- so a matrix that has quietly shrunk is a",
+    "red X on the commit that shrank it, rather than a smaller test run."
+  ],
+  "policy": {
+    "versions": 3
+  },
+  "codex": [
+    "0.147.0",
+    "0.146.1",
+    "0.146.0"
+  ],
+  "claude": [
+    "2.1.234",
+    "2.1.233",
+    "2.1.232"
+  ]
+}

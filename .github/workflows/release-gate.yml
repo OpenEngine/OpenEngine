@@ -1,0 +1,65 @@
+name: release gate
+
+# Approval functionality is not released on a green unit-test run alone. The
+# deterministic tests prove we hold up our end of the protocol; only the
+# compatibility matrix proves the CLIs still hold up theirs, and it runs on a
+# schedule rather than on the commit being shipped. So the gate asks the one
+# question that cannot be answered from this commit: did the most recent
+# compatibility run pass, and was it recent enough to mean anything?
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: How old the compatibility run may be, in days
+        default: "8"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compatibility-is-green:
+    name: the compatibility matrix is green
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The last compatibility run passed, recently
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A week plus a day: the matrix runs weekly, so anything older means
+          # a run was missed rather than merely not due yet.
+          MAX_AGE_DAYS: ${{ inputs.max_age_days || '8' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(gh run list --workflow "CLI compatibility" \
+            --branch "${{ github.event.repository.default_branch }}" \
+            --status completed --limit 1 \
+            --json conclusion,updatedAt,url,databaseId)
+          if [ "$(jq -r 'length' <<<"$run")" -eq 0 ]; then
+            echo "::error::no completed CLI compatibility run to release against"
+            exit 1
+          fi
+
+          conclusion=$(jq -r '.[0].conclusion' <<<"$run")
+          url=$(jq -r '.[0].url' <<<"$run")
+          updated=$(jq -r '.[0].updatedAt' <<<"$run")
+          age_days=$(( ( $(date -u +%s) - $(date -u -d "$updated" +%s) ) / 86400 ))
+
+          echo "last compatibility run: $conclusion, $age_days day(s) old — $url" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::the last CLI compatibility run concluded '$conclusion': $url"
+            exit 1
+          fi
+          if [ "$age_days" -gt "$MAX_AGE_DAYS" ]; then
+            echo "::error::the last CLI compatibility run is $age_days days old (limit $MAX_AGE_DAYS): $url"
+            echo "::error::run the 'CLI compatibility' workflow against the default branch and try again"
+            exit 1
+          fi

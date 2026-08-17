@@ -14,11 +14,16 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   api,
   attachWorkspace,
+  decideApproval,
   detachWorkspace,
   messageText,
   RUN_NOT_STARTED_ERROR_CODE,
+  stopRun,
+  type ApiApproval,
   type ApiThread,
+  type ApprovalDecision,
 } from "./api";
+import { useApproval } from "./approvals";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
@@ -211,9 +216,15 @@ function Composer() {
             const { remoteId } = aui.threadListItem.getState();
             if (!remoteId) return;
 
+            // Stopping a run that is waiting on an approval goes through the
+            // same cancel the card's own button does: the server records the
+            // request as cancelled and hands that to the provider, so the
+            // action does not run, and only then tears the turn down.
+            const stop = () => stopRun(remoteId).catch(() => {});
+
             const queued = aui.composer.getState().queue[0];
             if (!queued) {
-              void fetch(`/api/threads/${remoteId}/runs/current`, { method: "DELETE" });
+              void stop();
               return;
             }
 
@@ -221,13 +232,11 @@ function Composer() {
             // Preventing the primitive's local cancel lets the queue drain as
             // soon as the active stream closes.
             event.preventDefault();
-            void fetch(`/api/threads/${remoteId}/runs/current`, { method: "DELETE" }).then(
-              () => {
-                if (aui.composer.getState().queue.some((item) => item.id === queued.id)) {
-                  aui.composer.queueItem({ id: queued.id }).move({ lane: "steer" });
-                }
-              },
-            );
+            void stop().then(() => {
+              if (aui.composer.getState().queue.some((item) => item.id === queued.id)) {
+                aui.composer.queueItem({ id: queued.id }).move({ lane: "steer" });
+              }
+            });
           }}
         >
           Stop
@@ -360,6 +369,165 @@ function WorkspaceTagline() {
   );
 }
 
+const DECISION_LABELS: Record<ApprovalDecision, string> = {
+  accept: "Approve",
+  accept_for_session: "Allow similar actions for this session",
+  cancel: "Cancel",
+};
+
+const KIND_LABELS: Record<ApiApproval["kind"], string> = {
+  command_execution: "Wants to run a command",
+  file_change: "Wants to change files",
+  tool_use: "Wants to use a tool",
+};
+
+/** What became of a request that is no longer open, and on whose say-so. */
+function outcomeText(approval: ApiApproval): string {
+  if (approval.status === "interrupted")
+    return "Interrupted — the agent that asked this is gone, so it can no longer be answered.";
+  if (approval.decisionSource === "session_grant")
+    return "Approved automatically: you allowed this exact action for this conversation earlier.";
+  switch (approval.decision) {
+    case "accept":
+      return "Approved.";
+    case "accept_for_session":
+      return "Approved, and allowed again for this conversation without asking.";
+    case "cancel":
+      return "Cancelled — the action did not run.";
+    default:
+      return "This request is no longer open.";
+  }
+}
+
+/** The request's own arguments, shown as fields when they are fields.
+ *
+ *  Structured rather than dumped: the point of the card is that somebody can
+ *  tell what they are agreeing to, and a wall of JSON is read by nobody. What
+ *  will not parse is still shown -- unreadable is better than hidden. */
+function ApprovalArguments({ approval }: { approval: ApiApproval }) {
+  if (!approval.arguments) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(approval.arguments);
+  } catch {
+    return <pre className="approval-arguments">{approval.arguments}</pre>;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return <pre className="approval-arguments">{JSON.stringify(parsed, null, 2)}</pre>;
+
+  const fields = Object.entries(parsed as Record<string, unknown>).filter(
+    ([key, value]) =>
+      value !== null &&
+      value !== undefined &&
+      // The command already has a line of its own above.
+      !(key === "command" && value === approval.command),
+  );
+  if (!fields.length) return null;
+
+  return (
+    <dl className="approval-arguments">
+      {fields.map(([key, value]) => (
+        <div key={key}>
+          <dt>{key}</dt>
+          <dd>{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** What the paused turn is asking, and the answers this request permits.
+ *
+ *  Only those answers: a provider that never offered a session grant cannot
+ *  honour one, so offering the button would be offering something we would
+ *  have to refuse. */
+function ApprovalCard() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const approval = useApproval(remoteId);
+  const [submitted, setSubmitted] = useState<ApprovalDecision>();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    // A new request is a new question; nothing about the last one carries over.
+    setSubmitted(undefined);
+    setError(undefined);
+  }, [approval?.id]);
+
+  if (!remoteId || !approval) return null;
+  const threadId = remoteId;
+  const request = approval;
+  const pending = request.status === "pending";
+
+  async function decide(decision: ApprovalDecision) {
+    setSubmitted(decision);
+    setError(undefined);
+    try {
+      await decideApproval(threadId, request.id, decision);
+    } catch (failure) {
+      // Stale, already answered, or a provider that has since died. The
+      // decision did not land, so the controls come back with the reason.
+      setSubmitted(undefined);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
+  return (
+    <section className="approval-card" aria-live="polite">
+      <header className="approval-head">
+        <span className="approval-kind">{KIND_LABELS[request.kind]}</span>
+        <span className="approval-id">{request.id}</span>
+      </header>
+      {request.reason && <p className="approval-reason">{request.reason}</p>}
+      {request.command && <pre className="approval-command">{request.command}</pre>}
+      {(request.toolName || request.cwd) && (
+        <dl className="approval-facts">
+          {request.toolName && (
+            <div>
+              <dt>Tool</dt>
+              <dd>{request.toolName}</dd>
+            </div>
+          )}
+          {request.cwd && (
+            <div>
+              <dt>Working directory</dt>
+              <dd>
+                <code>{request.cwd}</code>
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
+      <ApprovalArguments approval={request} />
+      {pending ? (
+        <div className="approval-actions">
+          {request.allowedDecisions.map((decision) => (
+            <button
+              key={decision}
+              type="button"
+              className={`approval-button approval-${decision}`}
+              // Disabled the instant one is chosen: a second click is a second
+              // decision, and the server refuses those rather than applying
+              // them to whatever is running by then.
+              disabled={submitted !== undefined}
+              onClick={() => void decide(decision)}
+            >
+              {submitted === decision ? "Sending…" : DECISION_LABELS[decision]}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="approval-outcome">{outcomeText(request)}</p>
+      )}
+      {error && (
+        <p className="approval-error">
+          <Ticked text={error} />
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function ChatThread() {
   return (
     <ThreadPrimitive.Root className="thread">
@@ -397,12 +565,19 @@ function ConversationFooter() {
         </p>
       ) : (
         <>
+          {/* Above the composer: a paused turn is waiting on this and on
+              nothing else, so it should be the thing under your eyes rather
+              than something the message box competes with. */}
+          <ApprovalCard />
           <Composer />
           {/* Under the composer rather than in the welcome header: a detached
               chat refuses to run, so the way to fix that cannot be somewhere
               you have to scroll a long conversation to reach. */}
           <WorkspaceTagline />
-          <p className="composer-note">Runs are read-only in this chat's isolated worktree.</p>
+          <p className="composer-note">
+            The codex and claude runners only read. The approval runners can change this
+            chat's worktree, and stop to ask first.
+          </p>
         </>
       )}
     </ThreadPrimitive.ViewportFooter>
