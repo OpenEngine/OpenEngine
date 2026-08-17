@@ -7,12 +7,15 @@ from collections.abc import Sequence
 import httpx
 import pytest
 
+from engine.adapters.agent_runner.claude_code import ClaudeCodeControlAgentRunner
+from engine.adapters.agent_runner.codex import CodexAppServerAgentRunner
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_runners,
     build_workflow_runners,
 )
 from engine.domain import (
@@ -63,6 +66,19 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_web_offers_the_interactive_provider_runners() -> None:
+    runners = build_runners(Settings())
+
+    assert tuple(runners) == (
+        "codex",
+        "codex-app-server",
+        "claude",
+        "claude-control",
+    )
+    assert isinstance(runners["codex-app-server"], CodexAppServerAgentRunner)
+    assert isinstance(runners["claude-control"], ClaudeCodeControlAgentRunner)
 
 
 def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:
