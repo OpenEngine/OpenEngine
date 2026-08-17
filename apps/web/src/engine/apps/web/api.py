@@ -7,6 +7,10 @@ thread metadata that is UI-specific (title, archive status, selected runner).
 Runs are streamed as newline-delimited JSON.  Their tasks are owned by the
 service rather than by one response, so a refreshed browser can reconnect.
 A lock per thread prevents two turns from reading the same stale transcript.
+
+A run that pauses for approval keeps that pause in the same place: the request
+is a snapshot on the `ActiveRun`, replayed to whoever reconnects, and the
+decision arrives as its own request rather than on the stream that showed it.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,6 +27,10 @@ from engine.domain import (
     AgentId,
     AgentInstanceId,
     AgentRunId,
+    AgentRunStatus,
+    ApprovalDecision,
+    ApprovalId,
+    ApprovalRecord,
     IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     Message,
     Role,
@@ -34,8 +42,22 @@ from engine.domain import (
     WorkflowId,
     WorkspaceId,
 )
-from engine.ports import AgentRunner, WorkspaceState
-from engine.runtime import AgentSession, RunReader, WorkflowExecutor, WorkflowRunView
+from engine.ports import (
+    AgentRunner,
+    ApprovalHandler,
+    InteractiveAgentRunner,
+    WorkspaceState,
+)
+from engine.runtime import (
+    AgentSession,
+    ApprovalBroker,
+    ApprovalDecisionNotAllowedError,
+    ApprovalNotPendingError,
+    RunReader,
+    UnknownApprovalError,
+    WorkflowExecutor,
+    WorkflowRunView,
+)
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -65,11 +87,17 @@ class ActiveRun:
     """One agent turn whose lifetime is independent of an HTTP connection.
 
     Subscribers receive complete content snapshots, so a browser that refreshes
-    can reconnect without needing to know which individual events it missed.
+    can reconnect without needing to know which individual events it missed. An
+    approval is the same idea and for the same reason: the turn is paused on a
+    question, and a subscriber that arrives after it was asked has to be told
+    the question rather than left watching a stream that has gone quiet.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, agent_run_id: AgentRunId) -> None:
+        self.agent_run_id = agent_run_id
         self.content: list[dict[str, object]] = []
+        self.approval: dict[str, object] | None = None
+        """The latest approval snapshot, pending or resolved. None until asked."""
         self.error: str | None = None
         self.done = False
         self._revision = 0
@@ -87,6 +115,7 @@ class ActiveRun:
 
     async def stream(self) -> AsyncIterator[bytes]:
         revision = 0
+        approval: dict[str, object] | None = None
         while True:
             async with self._changed:
                 await self._changed.wait_for(
@@ -94,9 +123,18 @@ class ActiveRun:
                 )
                 revision = self._revision
                 content = [dict(part) for part in self.content]
+                pending = dict(self.approval) if self.approval is not None else None
                 error = self.error
                 done = self.done
 
+            if pending != approval:
+                # Whole snapshots, including the resolved one: a client that
+                # missed the decision would otherwise go on showing a prompt
+                # for a request that has already been answered. Emitted before
+                # the terminal events so the last thing said about a request is
+                # never lost to the run ending in the same breath.
+                approval = pending
+                yield _json_line({"type": "approval", "approval": pending})
             if error is not None:
                 yield _json_line({"type": "error", "error": error})
                 return
@@ -127,6 +165,27 @@ class ActiveRun:
         async with self._changed:
             self._revision += 1
             self._changed.notify_all()
+
+    async def present_approval(self, approval: ApprovalRecord) -> None:
+        """Publish what the turn is waiting on, and wake the subscribers.
+
+        For a pause: nothing else is going to happen on this run until somebody
+        answers, so this is the only thing that will wake anyone.
+        """
+        snapshot = _approval_json(approval)
+        async with self._changed:
+            self.approval = snapshot
+            self._revision += 1
+            self._changed.notify_all()
+
+    def note_approval(self, approval: ApprovalRecord) -> None:
+        """Update the snapshot without waking anyone, for a run that is ending.
+
+        Synchronous on purpose. The wake that matters is the one the run's own
+        ending sends a moment later, and awaiting a lock here would yield the
+        event loop back to the very turn being torn down.
+        """
+        self.approval = _approval_json(approval)
 
     async def _finish(self) -> None:
         async with self._changed:
@@ -168,6 +227,8 @@ class ThreadService:
         self, session: AgentSession, runners: Mapping[str, AgentRunner]
     ) -> None:
         self.session = session
+        self.approvals = ApprovalBroker(session.state_store)
+        """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
@@ -263,6 +324,8 @@ class ThreadService:
         text: str,
         runner: str | None,
         observed: asyncio.Queue[Message],
+        on_approval: ApprovalHandler | None = None,
+        agent_run_id: AgentRunId | None = None,
     ) -> str:
         thread = await self._require(instance_id)
         selected_runner = runner or thread.runner
@@ -277,13 +340,15 @@ class ThreadService:
                 text,
                 runner=selected_runner,
                 on_message=observed.put_nowait,
+                on_approval=on_approval,
+                agent_run_id=agent_run_id,
             )
         return turn.message.content
 
     async def start_run(
         self, instance_id: AgentInstanceId, text: str, runner: str | None
     ) -> ActiveRun:
-        await self._require(instance_id)
+        thread = await self._require(instance_id)
         await self._require_somewhere_to_run(instance_id)
         initial_message_count = len(await self.session.history(instance_id))
         current = self.active_run(instance_id)
@@ -291,11 +356,32 @@ class ThreadService:
             raise RuntimeError("this chat already has a run in progress")
 
         observed: asyncio.Queue[Message] = asyncio.Queue()
-        run = ActiveRun()
+        # Named before it starts, because the approvals it raises are brokered
+        # against this run and a decision has to be able to name it too.
+        agent_run_id = _new_agent_run_id()
+        selected_runner = runner or thread.runner
+        run = ActiveRun(agent_run_id)
         self._active_runs[instance_id] = run
+        on_approval = None
+        if isinstance(self._runners.get(selected_runner), InteractiveAgentRunner):
+            on_approval = self.approvals.handler(
+                agent_run_id=agent_run_id,
+                instance_id=instance_id,
+                runner=selected_runner,
+                present=run.present_approval,
+            )
 
         async def execute() -> str:
-            task = asyncio.create_task(self.say(instance_id, text, runner, observed))
+            task = asyncio.create_task(
+                self.say(
+                    instance_id,
+                    text,
+                    selected_runner,
+                    observed,
+                    on_approval,
+                    agent_run_id,
+                )
+            )
             try:
                 while not task.done() or not observed.empty():
                     try:
@@ -308,6 +394,18 @@ class ThreadService:
                 if not task.done():
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
+                if on_approval is not None:
+                    # However this turn ended, nothing is waiting on its
+                    # requests any more -- a provider that died mid-question
+                    # leaves one here. The last of them is what the run is
+                    # still showing, so it is the one that has to stop saying
+                    # "pending", whoever resolved it.
+                    await self.approvals.interrupt_run(agent_run_id)
+                    asked = await self.session.state_store.list_approvals(
+                        agent_run_id=agent_run_id
+                    )
+                    if asked:
+                        run.note_approval(asked[-1])
 
         run.start(execute())
         # Ensure a refresh can load the submitted question before this POST
@@ -326,6 +424,69 @@ class ThreadService:
     def latest_run(self, instance_id: AgentInstanceId) -> ActiveRun | None:
         """The latest run, including a just-finished run needed by a racing resume."""
         return self._active_runs.get(instance_id)
+
+    async def decide_approval(
+        self, instance_id: AgentInstanceId, approval_id: ApprovalId, decision: str
+    ) -> ApprovalRecord:
+        """Answer what this chat's current run is paused on.
+
+        Scoped to the run rather than the conversation: an id from a turn that
+        has already ended names a provider process nobody can resume, and
+        applying its answer to whatever is running now would approve a command
+        the user never saw.
+        """
+        await self._require(instance_id)
+        run = self.active_run(instance_id)
+        try:
+            chosen = ApprovalDecision(decision)
+        except ValueError:
+            raise ApprovalDecisionNotAllowedError(
+                f"unknown decision {decision!r}"
+            ) from None
+        record = await self.approvals.decide(
+            approval_id,
+            chosen,
+            instance_id=instance_id,
+            agent_run_id=run.agent_run_id if run is not None else None,
+        )
+        if run is not None:
+            await run.present_approval(record)
+        return record
+
+    async def stop_run(self, instance_id: AgentInstanceId) -> None:
+        """Stop this chat's run, whether it is working or waiting on a person.
+
+        What it was waiting on is resolved as a cancellation before the turn is
+        torn down, so the answer to "was that command allowed?" is a recorded
+        no rather than a row that stops mid-sentence. Tearing the turn down
+        then does the rest: cancelling one request would not oblige the agent
+        to stop asking, and stopping means stopping.
+        """
+        run = self.active_run(instance_id)
+        if run is None:
+            return
+        for resolved in await self.approvals.cancel_run(run.agent_run_id):
+            run.note_approval(resolved)
+        await run.cancel()
+        await self._record_cancelled(run.agent_run_id)
+
+    async def _record_cancelled(self, agent_run_id: AgentRunId) -> None:
+        """Record the stopped run as a cancellation, however the turn ended.
+
+        A cancelled approval is a decision the provider can act on, so a
+        well-behaved one answers it by tidying up and returning -- and a turn
+        that returns is a turn the session records as a success. Left there,
+        stopping a paused run would read afterwards as one that finished
+        normally. Whatever the provider made of the last second, the user
+        withdrew this turn.
+        """
+        store = self.session.state_store
+        agent_run = await store.agent_run(agent_run_id)
+        if agent_run is None or agent_run.status is AgentRunStatus.CANCELLED:
+            return
+        await store.record_agent_run(
+            replace(agent_run, status=AgentRunStatus.CANCELLED, summary="cancelled")
+        )
 
     async def generate_title(
         self,
@@ -348,7 +509,7 @@ class ThreadService:
                 (*history, Message.user(opening_text)) if opening_text else history
             )
             turn = await self._runners[selected_runner].run_turn(
-                AgentRunId(f"ar-{uuid4().hex[:12]}"),
+                _new_agent_run_id(),
                 self.session.profiles[thread.agent_id],
                 (*title_context, Message.user(_TITLE_PROMPT)),
                 # Naming a chat reads the transcript, not the tree, so a
@@ -448,6 +609,10 @@ class ThreadService:
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
+            # A CLI subprocess does not survive the server that spawned it, so
+            # a request still marked pending here was asked by a process that
+            # no longer exists and can never be answered.
+            await self.approvals.interrupt_orphans()
             self._restored = True
 
 
@@ -687,10 +852,31 @@ def create_app(
         instance_id = _thread_id(request)
         if await service.get(instance_id) is None:
             return _error("thread not found", 404)
-        run = service.active_run(instance_id)
-        if run is not None:
-            await run.cancel()
+        await service.stop_run(instance_id)
         return Response(status_code=204)
+
+    async def decide_approval(request: Request) -> Response:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+        body = await _json_body(request)
+        try:
+            decision = _required_string(body, "decision")
+        except ValueError as error:
+            return _error(str(error), 400)
+        try:
+            approval = await service.decide_approval(
+                instance_id, ApprovalId(request.path_params["approval_id"]), decision
+            )
+        except UnknownApprovalError as error:
+            return _error(str(error), 404)
+        except ApprovalDecisionNotAllowedError as error:
+            return _error(str(error), 400)
+        except ApprovalNotPendingError as error:
+            # The request outlived whatever was waiting for it. Not the
+            # client's mistake to fix by retrying, so not a 400.
+            return _error(str(error), 409)
+        return JSONResponse({"approval": _approval_json(approval)})
 
     routes = [
         Route("/api/config", config),
@@ -729,6 +915,11 @@ def create_app(
         Route("/api/threads/{thread_id}/runs", run_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}/runs/current", resume_run),
         Route("/api/threads/{thread_id}/runs/current", cancel_run, methods=["DELETE"]),
+        Route(
+            "/api/threads/{thread_id}/runs/current/approvals/{approval_id}",
+            decide_approval,
+            methods=["POST"],
+        ),
     ]
     if static_directory is not None and (static_directory / "index.html").is_file():
         async def spa_page(_request: Request) -> Response:
@@ -849,6 +1040,29 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
     return result
 
 
+def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
+    """One complete request, as the client is shown it.
+
+    Whole rather than incremental, like the content snapshots beside it: a
+    client that reconnected mid-pause has no way to reconstruct a request from
+    the parts of it that were emitted before it arrived.
+    """
+    return {
+        "id": str(approval.approval_id),
+        "status": approval.status.value,
+        "kind": approval.kind.value,
+        "reason": approval.reason,
+        "command": approval.command,
+        "cwd": approval.cwd,
+        "toolName": approval.tool_name,
+        "arguments": approval.arguments,
+        "allowedDecisions": [
+            decision.value for decision in approval.allowed_decisions
+        ],
+        "decision": approval.decision.value if approval.decision else None,
+    }
+
+
 def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:
     """Group the engine's turn transcript into assistant-ui messages."""
     result: list[dict[str, object]] = []
@@ -948,6 +1162,10 @@ def _required_string(body: dict[str, object], name: str) -> str:
 
 def _thread_id(request: Request) -> AgentInstanceId:
     return AgentInstanceId(request.path_params["thread_id"])
+
+
+def _new_agent_run_id() -> AgentRunId:
+    return AgentRunId(f"ar-{uuid4().hex[:12]}")
 
 
 def _json_line(value: dict[str, object]) -> bytes:

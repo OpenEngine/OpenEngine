@@ -7,11 +7,14 @@ driver, connection pool, schema, or migrations yet.
 from collections.abc import Sequence
 
 from engine.domain.agents import AgentInstance, AgentRun
+from engine.domain.approvals import ApprovalRecord, ApprovalStatus
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
+    AgentRunId,
+    ApprovalId,
     ConversationId,
     RunId,
     StepId,
@@ -97,6 +100,21 @@ class PostgresStateStore:
 
     async def record_agent_run(self, agent_run: AgentRun) -> None:
         raise NotImplementedError("Agent run records land with the state-store ticket")
+
+    async def record_approval(self, approval: ApprovalRecord) -> None:
+        raise NotImplementedError("Approval records land with the state-store ticket")
+
+    async def load_approval(self, approval_id: ApprovalId) -> ApprovalRecord | None:
+        raise NotImplementedError("Approval reads land with the state-store ticket")
+
+    async def list_approvals(
+        self,
+        *,
+        instance_id: AgentInstanceId | None = None,
+        agent_run_id: AgentRunId | None = None,
+        status: ApprovalStatus | None = None,
+    ) -> Sequence[ApprovalRecord]:
+        raise NotImplementedError("Approval reads land with the state-store ticket")
 
 
 __all__ = ["PostgresStateStore"]

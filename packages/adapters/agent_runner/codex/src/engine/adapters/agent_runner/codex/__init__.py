@@ -104,6 +104,12 @@ from engine.runtime.transcript import flatten
 #: effect of answering a question.
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
 
+#: What an interactive turn asks app-server for. Codex runs what its sandbox
+#: allows and asks before anything that would escape it -- which is what makes
+#: a writable sandbox safe to pair with: the approvals are the boundary, not
+#: the sandbox alone.
+INTERACTIVE_APPROVAL_POLICY = "on-request"
+
 #: Items that are not actions worth recording. Codex's reasoning items arrive
 #: with their content stripped, and half a thought is worse in a transcript than
 #: no thought at all.
@@ -796,7 +802,7 @@ class _CodexRunner:
                 "threadId": thread_id,
                 "input": [{"type": "text", "text": prompt}],
                 "cwd": working_directory,
-                "approvalPolicy": "on-request",
+                "approvalPolicy": INTERACTIVE_APPROVAL_POLICY,
                 "sandboxPolicy": app_server_sandbox_policy(self._sandbox),
             }
             if model:
@@ -1120,6 +1126,8 @@ def _tail(text: str, lines: int = 5) -> str:
 
 
 __all__ = [
+    "INTERACTIVE_APPROVAL_POLICY",
+    "SANDBOX_MODES",
     "CodexAppServerAgentRunner",
     "CodexAgentRunner",
     "CodexExecutionError",

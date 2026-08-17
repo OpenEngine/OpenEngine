@@ -123,8 +123,12 @@ async function* readRunResponse(response: Response) {
       if (!line) continue;
       const event = JSON.parse(line) as
         | { type: "content" | "done"; content: ThreadAssistantMessagePart[] }
+        | { type: "approval" }
         | { type: "error"; error: string };
       if (event.type === "error") throw new Error(event.error);
+      // Approval snapshots ride the same stream and carry no message content.
+      // Presenting them is the approval UI's job, and it is not built yet.
+      if (event.type === "approval") continue;
       yield { content: event.content };
     }
     if (done) break;

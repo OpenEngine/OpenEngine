@@ -20,12 +20,14 @@ from threading import Lock
 from uuid import uuid4
 
 from engine.domain.agents import AgentInstance, AgentRun
+from engine.domain.approvals import ApprovalRecord, ApprovalStatus
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
     AgentRunId,
+    ApprovalId,
     ConversationId,
     MessageId,
     RunId,
@@ -52,6 +54,7 @@ class InMemoryStateStore:
         self._instances: dict[AgentInstanceId, AgentInstance] = {}
         self._conversations: dict[AgentInstanceId, Conversation] = {}
         self._agent_runs: dict[AgentRunId, AgentRun] = {}
+        self._approvals: dict[ApprovalId, ApprovalRecord] = {}
         self._message_numbers = count(1)
 
     # --- runs ------------------------------------------------------------
@@ -183,6 +186,40 @@ class InMemoryStateStore:
     async def record_agent_run(self, agent_run: AgentRun) -> None:
         with self._lock:
             self._agent_runs[agent_run.agent_run_id] = agent_run
+
+    # --- approvals --------------------------------------------------------
+
+    async def record_approval(self, approval: ApprovalRecord) -> None:
+        with self._lock:
+            if approval.instance_id not in self._instances:
+                # The same integrity check `append_messages` makes: an approval
+                # nobody can reach from a conversation is one no reviewer will
+                # ever find.
+                raise KeyError(f"no agent instance {approval.instance_id!r}")
+            # Re-assigning an existing key keeps its position, so a decision
+            # does not reorder the log of what was asked.
+            self._approvals[approval.approval_id] = approval
+
+    async def load_approval(self, approval_id: ApprovalId) -> ApprovalRecord | None:
+        with self._lock:
+            return self._approvals.get(approval_id)
+
+    async def list_approvals(
+        self,
+        *,
+        instance_id: AgentInstanceId | None = None,
+        agent_run_id: AgentRunId | None = None,
+        status: ApprovalStatus | None = None,
+    ) -> Sequence[ApprovalRecord]:
+        with self._lock:
+            approvals = list(self._approvals.values())
+        if instance_id is not None:
+            approvals = [a for a in approvals if a.instance_id == instance_id]
+        if agent_run_id is not None:
+            approvals = [a for a in approvals if a.agent_run_id == agent_run_id]
+        if status is not None:
+            approvals = [a for a in approvals if a.status is status]
+        return tuple(approvals)  # oldest first
 
     # --- beyond the port --------------------------------------------------
 
