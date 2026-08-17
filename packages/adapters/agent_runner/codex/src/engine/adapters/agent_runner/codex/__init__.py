@@ -1,7 +1,9 @@
 """Agent Runner capability, backed by the Codex CLI.
 
-Runs `codex exec --json`, feeding the prompt on stdin and reading JSONL events
-from stdout. The event vocabulary this parses is small and stable:
+The public ``CodexAgentRunner`` runs `codex exec --json`; the separate
+``CodexAppServerAgentRunner`` adds app-server's stdio JSON-RPC transport so
+approval requests can pause and resume the same turn. The event vocabulary
+this package parses is small and stable:
 
     {"type": "thread.started",  "thread_id": "019f..."}
     {"type": "turn.started"}
@@ -73,15 +75,25 @@ and do not read the growing transcript as the reason.
 
 import asyncio
 import json
+import os
 import shutil
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
 from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
-from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage, TurnObserver
+from engine.ports.agent_runner import (
+    AgentTurn,
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalKind,
+    ApprovalRequest,
+    FinishReason,
+    TokenUsage,
+    TurnObserver,
+)
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
@@ -95,6 +107,33 @@ SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
 #: with their content stripped, and half a thought is worse in a transcript than
 #: no thought at all.
 IGNORED_ITEM_TYPES = frozenset({"reasoning"})
+
+#: App-server uses camelCase names for the same concepts emitted by
+#: ``codex exec --json``. Keep this translation at the transport boundary so
+#: the stored transcript does not depend on which Codex transport ran it.
+APP_SERVER_ITEM_TYPES = {
+    "agentMessage": "agent_message",
+    "commandExecution": "command_execution",
+    "fileChange": "file_change",
+}
+
+APP_SERVER_ITEM_FIELDS = {
+    "aggregatedOutput": "aggregated_output",
+    "exitCode": "exit_code",
+    "commandActions": "command_actions",
+    "durationMs": "duration_ms",
+}
+
+APP_SERVER_APPROVAL_METHODS = {
+    "item/commandExecution/requestApproval": ApprovalKind.COMMAND_EXECUTION,
+    "item/fileChange/requestApproval": ApprovalKind.FILE_CHANGE,
+}
+
+APP_SERVER_DECISIONS = {
+    ApprovalDecision.ACCEPT: "accept",
+    ApprovalDecision.ACCEPT_FOR_SESSION: "acceptForSession",
+    ApprovalDecision.CANCEL: "cancel",
+}
 
 #: Where an item keeps its result, in preference order. Anything without one of
 #: these is recorded as an action with an empty result rather than skipped.
@@ -163,6 +202,132 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
         if isinstance(event, dict):
             events.append(event)
     return tuple(events)
+
+
+def app_server_sandbox_policy(sandbox: str) -> dict[str, Any]:
+    """Translate the stable CLI sandbox names to app-server's v2 schema."""
+    match sandbox:
+        case "read-only":
+            return {"type": "readOnly"}
+        case "workspace-write":
+            return {"type": "workspaceWrite"}
+        case "danger-full-access":
+            return {"type": "dangerFullAccess"}
+        case _:  # Construction validates this; keep the helper safe on its own.
+            raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
+
+
+def approval_request_from_app_server(message: dict[str, Any]) -> ApprovalRequest | None:
+    """Normalize one server-initiated app-server approval request.
+
+    Unknown server requests are deliberately not approvals. The transport
+    rejects them instead of guessing a response shape and accidentally granting
+    a capability introduced by a future Codex release.
+    """
+    method = message.get("method")
+    kind = APP_SERVER_APPROVAL_METHODS.get(str(method))
+    if kind is None or "id" not in message:
+        return None
+
+    params = message.get("params") or {}
+    if not isinstance(params, dict):
+        return None
+    thread_id = str(params.get("threadId", ""))
+    turn_id = str(params.get("turnId", ""))
+    request_id = str(message["id"])
+
+    available = params.get("availableDecisions")
+    if isinstance(available, list):
+        by_wire = {wire: decision for decision, wire in APP_SERVER_DECISIONS.items()}
+        allowed = tuple(
+            by_wire[value]
+            for value in available
+            if isinstance(value, str) and value in by_wire
+        )
+    else:
+        allowed = tuple(APP_SERVER_DECISIONS)
+
+    command = params.get("command")
+    cwd = params.get("cwd")
+    details = params.get("commandActions")
+    return ApprovalRequest(
+        approval_id=":".join(part for part in (thread_id, turn_id, request_id) if part),
+        kind=kind,
+        reason=str(params["reason"]) if params.get("reason") is not None else None,
+        command=str(command) if command is not None else None,
+        cwd=str(cwd) if cwd is not None else None,
+        tool_name=(
+            "command_execution" if kind is ApprovalKind.COMMAND_EXECUTION else "file_change"
+        ),
+        arguments=json.dumps(details, sort_keys=True) if details is not None else None,
+        allowed_decisions=allowed,
+    )
+
+
+def _legacy_app_server_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Convert a v2 app-server item to the existing audit-event vocabulary."""
+    converted: dict[str, Any] = {}
+    for key, value in item.items():
+        converted[APP_SERVER_ITEM_FIELDS.get(key, key)] = value
+    kind = str(item.get("type", "action"))
+    converted["type"] = APP_SERVER_ITEM_TYPES.get(kind, kind)
+    return converted
+
+
+def messages_from_app_server_event(
+    message: dict[str, Any], thread_id: str = "codex", event_index: int = 0
+) -> tuple[Message, ...]:
+    """Conversation messages completed by one app-server notification."""
+    method = message.get("method")
+    if method not in {"item/started", "item/completed"}:
+        return ()
+    params = message.get("params") or {}
+    item = params.get("item") if isinstance(params, dict) else None
+    if not isinstance(item, dict) or item.get("type") == "userMessage":
+        return ()
+    legacy = {
+        "type": "item.started" if method == "item/started" else "item.completed",
+        "item": _legacy_app_server_item(item),
+    }
+    return messages_from_event(legacy, thread_id, event_index)
+
+
+def turn_from_app_server_events(events: Iterable[dict[str, Any]]) -> AgentTurn:
+    """Assemble an ``AgentTurn`` from stable app-server v2 notifications."""
+    legacy: list[dict[str, Any]] = []
+    usage: dict[str, int] = {}
+    terminal_status: str | None = None
+    thread_id = "codex"
+
+    for message in events:
+        method = message.get("method")
+        params = message.get("params") or {}
+        if not isinstance(params, dict):
+            continue
+        if params.get("threadId"):
+            thread_id = str(params["threadId"])
+        if method == "item/completed" and isinstance(params.get("item"), dict):
+            item = params["item"]
+            if item.get("type") == "userMessage":
+                continue
+            legacy.append({"type": "item.completed", "item": _legacy_app_server_item(item)})
+        elif method == "thread/tokenUsage/updated":
+            last = (params.get("tokenUsage") or {}).get("last") or {}
+            usage = {
+                "input_tokens": int(last.get("inputTokens", 0)),
+                "cached_input_tokens": int(last.get("cachedInputTokens", 0)),
+                "output_tokens": int(last.get("outputTokens", 0)),
+            }
+        elif method == "turn/completed":
+            turn = params.get("turn") or {}
+            terminal_status = str(turn.get("status", ""))
+
+    if terminal_status in {"failed", "interrupted"}:
+        legacy.append({"type": "turn.failed"})
+    legacy.append({"type": "turn.completed", "usage": usage})
+    return turn_from_events(
+        ({"type": "thread.started", "thread_id": thread_id}, *legacy)
+    )
 
 
 def action_messages(item: dict[str, Any], call_id: str) -> tuple[Message, Message]:
@@ -294,7 +459,40 @@ def thread_id_of(events: Iterable[dict[str, Any]]) -> str | None:
     return None
 
 
-class CodexAgentRunner:
+async def _write_json(
+    stream: asyncio.StreamWriter, message: dict[str, Any]
+) -> None:
+    stream.write((json.dumps(message, separators=(",", ":")) + "\n").encode())
+    await stream.drain()
+
+
+async def _next_json_message(lines: AsyncIterator[bytes]) -> dict[str, Any]:
+    async for line in lines:
+        parsed = parse_events(line.decode(errors="replace"))
+        if parsed:
+            return parsed[0]
+    raise CodexExecutionError("codex app-server closed its event stream unexpectedly")
+
+
+async def _read_rpc_response(
+    lines: AsyncIterator[bytes], request_id: int
+) -> dict[str, Any]:
+    """Read one startup response; startup emits no turn items to preserve."""
+    while True:
+        message = await _next_json_message(lines)
+        if message.get("id") != request_id:
+            continue
+        if message.get("error"):
+            error = message["error"]
+            detail = error.get("message") if isinstance(error, dict) else error
+            raise CodexExecutionError(f"codex app-server request failed: {detail}")
+        result = message.get("result")
+        if not isinstance(result, dict):
+            raise CodexExecutionError("codex app-server returned a malformed response")
+        return result
+
+
+class _CodexRunner:
     """Runs an agent turn by shelling out to the Codex CLI.
 
     Implements `engine.ports.AgentRunner`.
@@ -311,6 +509,7 @@ class CodexAgentRunner:
         self,
         binary_path: str = "codex",
         timeout_seconds: float | None = None,
+        protocol_timeout_seconds: float = 60.0,
         sandbox: str = "read-only",
         working_directory: str = ".",
         model: str = "",
@@ -320,6 +519,7 @@ class CodexAgentRunner:
             raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
+        self._protocol_timeout_seconds = protocol_timeout_seconds
         self._sandbox = sandbox
         self._working_directory = working_directory
         self._model = model
@@ -346,6 +546,10 @@ class CodexAgentRunner:
         if model:
             argv += ["--model", model]
         return argv
+
+    def app_server_command_line(self) -> list[str]:
+        """The stable stdio app-server transport used for interactive turns."""
+        return [self._binary_path, "app-server"]
 
     async def run_turn(
         self,
@@ -433,6 +637,251 @@ class CodexAgentRunner:
         turn = turn_from_events(events)
         return turn
 
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run a turn over app-server's bidirectional JSON-RPC transport."""
+        if tools:
+            raise CodexToolsUnsupportedError([tool.name for tool in tools])
+        if workspace_id is not None and self._workspace_provider is None:
+            raise NotImplementedError(
+                "resolving a WorkspaceId to a path needs the workspace provider; "
+                "until then this runner works in its configured directory"
+            )
+        if shutil.which(self._binary_path) is None:
+            raise CodexUnavailableError(
+                f"{self._binary_path!r} is not on PATH -- install the Codex CLI, "
+                "or point the runner at the binary"
+            )
+
+        working_directory = self._working_directory
+        if workspace_id is not None:
+            assert self._workspace_provider is not None
+            working_directory = await self._workspace_provider.root_path(workspace_id)
+        working_directory = os.path.abspath(working_directory)
+
+        process = await asyncio.create_subprocess_exec(
+            *self.app_server_command_line(),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_directory,
+        )
+        self._running[agent_run_id] = process
+        try:
+            events, stderr = await asyncio.wait_for(
+                self._read_app_server(
+                    process,
+                    render_prompt(profile, messages),
+                    profile.model or self._model,
+                    working_directory,
+                    on_approval,
+                    on_message or (lambda _message: None),
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError as timeout:
+            process.kill()
+            await process.wait()
+            raise CodexExecutionError(
+                f"Codex did not finish within {self._timeout_seconds:.0f}s"
+            ) from timeout
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
+        except Exception:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
+        finally:
+            self._running.pop(agent_run_id, None)
+
+        if process.returncode != 0:
+            raise CodexExecutionError(
+                f"codex app-server exited {process.returncode}: {_tail(stderr)}"
+            )
+        return turn_from_app_server_events(events)
+
+    async def _read_app_server(
+        self,
+        process: asyncio.subprocess.Process,
+        prompt: str,
+        model: str,
+        working_directory: str,
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver,
+    ) -> tuple[tuple[dict[str, Any], ...], str]:
+        """Drive one app-server thread and turn over newline-delimited JSON-RPC."""
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        stderr_task = asyncio.create_task(process.stderr.read())
+        lines = read_lines(process.stdout).__aiter__()
+        events: list[dict[str, Any]] = []
+        observed: list[Message] = []
+        started_actions: set[str] = set()
+        try:
+            await _write_json(
+                process.stdin,
+                {
+                    "method": "initialize",
+                    "id": 0,
+                    "params": {
+                        "clientInfo": {
+                            "name": "engine",
+                            "title": "Engine",
+                            "version": "0.0.0",
+                        }
+                    },
+                },
+            )
+            try:
+                await asyncio.wait_for(
+                    _read_rpc_response(lines, 0),
+                    timeout=self._protocol_timeout_seconds,
+                )
+            except asyncio.TimeoutError as error:
+                raise CodexExecutionError(
+                    "codex app-server did not complete initialization within "
+                    f"{self._protocol_timeout_seconds:g}s"
+                ) from error
+            await _write_json(process.stdin, {"method": "initialized", "params": {}})
+
+            thread_params: dict[str, Any] = {"cwd": working_directory}
+            if model:
+                thread_params["model"] = model
+            await _write_json(
+                process.stdin,
+                {"method": "thread/start", "id": 1, "params": thread_params},
+            )
+            try:
+                started = await asyncio.wait_for(
+                    _read_rpc_response(lines, 1),
+                    timeout=self._protocol_timeout_seconds,
+                )
+            except asyncio.TimeoutError as error:
+                raise CodexExecutionError(
+                    "codex app-server did not start a thread within "
+                    f"{self._protocol_timeout_seconds:g}s"
+                ) from error
+            thread = started.get("thread") or {}
+            thread_id = str(thread.get("id", ""))
+            if not thread_id:
+                raise CodexExecutionError("codex app-server did not return a thread id")
+
+            turn_params: dict[str, Any] = {
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": prompt}],
+                "cwd": working_directory,
+                "approvalPolicy": "on-request",
+                "sandboxPolicy": app_server_sandbox_policy(self._sandbox),
+            }
+            if model:
+                turn_params["model"] = model
+            await _write_json(
+                process.stdin,
+                {"method": "turn/start", "id": 2, "params": turn_params},
+            )
+
+            turn_response_seen = False
+            while True:
+                message = await _next_json_message(lines)
+                if message.get("id") == 2 and "method" not in message:
+                    if message.get("error"):
+                        error = message["error"]
+                        detail = error.get("message") if isinstance(error, dict) else error
+                        raise CodexExecutionError(
+                            f"codex app-server turn/start failed: {detail}"
+                        )
+                    turn_response_seen = True
+                    continue
+
+                request = approval_request_from_app_server(message)
+                if request is not None:
+                    decision = await on_approval(request)
+                    if decision not in request.allowed_decisions:
+                        raise CodexExecutionError(
+                            f"approval decision {decision.value!r} is not allowed for "
+                            f"{request.approval_id}"
+                        )
+                    await _write_json(
+                        process.stdin,
+                        {
+                            "id": message["id"],
+                            "result": {"decision": APP_SERVER_DECISIONS[decision]},
+                        },
+                    )
+                    continue
+
+                if "id" in message and message.get("method"):
+                    method = str(message["method"])
+                    await _write_json(
+                        process.stdin,
+                        {
+                            "id": message["id"],
+                            "error": {
+                                "code": -32601,
+                                "message": f"unsupported server request {method}",
+                            },
+                        },
+                    )
+                    raise CodexExecutionError(
+                        f"codex app-server requested unsupported interaction {method!r}"
+                    )
+
+                method = message.get("method")
+                if method:
+                    event_index = len(events)
+                    events.append(message)
+                    streamed = messages_from_app_server_event(
+                        message, thread_id, event_index
+                    )
+                    params = message.get("params") or {}
+                    item = params.get("item") if isinstance(params, dict) else None
+                    item_id = str(item.get("id", "")) if isinstance(item, dict) else ""
+                    if method == "item/started" and streamed and item_id:
+                        started_actions.add(item_id)
+                    elif (
+                        method == "item/completed"
+                        and item_id in started_actions
+                        and len(streamed) == 2
+                    ):
+                        streamed = streamed[1:]
+                    for completed in streamed:
+                        observed.append(completed)
+                        on_message(completed)
+                    if method == "turn/completed":
+                        break
+
+            if not turn_response_seen:
+                raise CodexExecutionError(
+                    "codex app-server completed without acknowledging turn/start"
+                )
+            process.stdin.close()
+            await process.wait()
+            stderr = (await stderr_task).decode(errors="replace")
+        finally:
+            if not stderr_task.done():
+                stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+
+        if process.returncode == 0:
+            transcript = turn_from_app_server_events(events).transcript
+            if transcript[: len(observed)] == tuple(observed):
+                for completed in transcript[len(observed) :]:
+                    on_message(completed)
+        return tuple(events), stderr
+
     async def _read_stream(
         self,
         process: asyncio.subprocess.Process,
@@ -498,6 +947,118 @@ class CodexAgentRunner:
         process.terminate()
 
 
+class CodexAgentRunner:
+    """The original ``codex exec --json`` runner.
+
+    Approval-capable app-server execution is intentionally a separate public
+    runner so selecting this adapter never changes its transport or permission
+    behavior.
+    """
+
+    def __init__(
+        self,
+        binary_path: str = "codex",
+        timeout_seconds: float | None = None,
+        sandbox: str = "read-only",
+        working_directory: str = ".",
+        model: str = "",
+        workspace_provider: WorkspaceProvider | None = None,
+    ) -> None:
+        self._delegate = _CodexRunner(
+            binary_path=binary_path,
+            timeout_seconds=timeout_seconds,
+            sandbox=sandbox,
+            working_directory=working_directory,
+            model=model,
+            workspace_provider=workspace_provider,
+        )
+
+    def command_line(
+        self, profile: AgentProfile, working_directory: str | None = None
+    ) -> list[str]:
+        return self._delegate.command_line(profile, working_directory)
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn(
+            agent_run_id, profile, messages, tools=tools, workspace_id=workspace_id
+        )
+
+    async def run_turn_streamed(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_message: TurnObserver,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn_streamed(
+            agent_run_id,
+            profile,
+            messages,
+            on_message,
+            tools=tools,
+            workspace_id=workspace_id,
+        )
+
+    async def cancel(self, agent_run_id: AgentRunId) -> None:
+        await self._delegate.cancel(agent_run_id)
+
+
+class CodexAppServerAgentRunner(CodexAgentRunner):
+    """Approval-capable Codex runner using app-server JSON-RPC."""
+
+    def __init__(
+        self,
+        binary_path: str = "codex",
+        timeout_seconds: float | None = None,
+        protocol_timeout_seconds: float = 60.0,
+        sandbox: str = "read-only",
+        working_directory: str = ".",
+        model: str = "",
+        workspace_provider: WorkspaceProvider | None = None,
+    ) -> None:
+        self._delegate = _CodexRunner(
+            binary_path=binary_path,
+            timeout_seconds=timeout_seconds,
+            protocol_timeout_seconds=protocol_timeout_seconds,
+            sandbox=sandbox,
+            working_directory=working_directory,
+            model=model,
+            workspace_provider=workspace_provider,
+        )
+
+    def app_server_command_line(self) -> list[str]:
+        return self._delegate.app_server_command_line()
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn_interactive(
+            agent_run_id,
+            profile,
+            messages,
+            on_approval,
+            on_message=on_message,
+            tools=tools,
+            workspace_id=workspace_id,
+        )
+
+
 def _tail(text: str, lines: int = 5) -> str:
     """The last few lines of stderr -- enough to diagnose, short enough to read.
 
@@ -509,14 +1070,19 @@ def _tail(text: str, lines: int = 5) -> str:
 
 
 __all__ = [
+    "CodexAppServerAgentRunner",
     "CodexAgentRunner",
     "CodexExecutionError",
     "CodexToolsUnsupportedError",
     "CodexUnavailableError",
     "action_messages",
+    "app_server_sandbox_policy",
+    "approval_request_from_app_server",
+    "messages_from_app_server_event",
     "messages_from_event",
     "parse_events",
     "render_prompt",
     "thread_id_of",
+    "turn_from_app_server_events",
     "turn_from_events",
 ]

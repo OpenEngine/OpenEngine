@@ -7,20 +7,30 @@ you assumed only tests your assumption.
 
 import asyncio
 import json
+import textwrap
 
 import pytest
 
 from engine.adapters.agent_runner.claude_code import (
     ClaudeCodeAgentRunner,
+    ClaudeCodeControlAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
     WORKSPACE_WRITE_TOOLS,
+    approval_request_from_control,
+    control_response_for,
     parse_events,
     session_id_of,
     turn_from_events,
 )
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolSpec, WorkspaceId
-from engine.ports import AgentRunner, FinishReason
+from engine.ports import (
+    AgentRunner,
+    ApprovalDecision,
+    ApprovalKind,
+    FinishReason,
+    InteractiveAgentRunner,
+)
 
 #: Captured from `claude -p --output-format stream-json --verbose --allowedTools
 #: Glob Read "List the directory names under packages/adapters, then reply
@@ -52,6 +62,9 @@ PROFILE = AgentProfile(
 
 def test_runner_satisfies_the_port() -> None:
     assert isinstance(ClaudeCodeAgentRunner(), AgentRunner)
+    assert not isinstance(ClaudeCodeAgentRunner(), InteractiveAgentRunner)
+    assert isinstance(ClaudeCodeControlAgentRunner(), AgentRunner)
+    assert isinstance(ClaudeCodeControlAgentRunner(), InteractiveAgentRunner)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -240,6 +253,136 @@ def test_stream_json_needs_verbose() -> None:
     argv = ClaudeCodeAgentRunner().command_line(PROFILE)
 
     assert argv[:5] == ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+
+
+# --- interactive control protocol ------------------------------------------
+
+
+CONTROL_APPROVAL = {
+    "type": "control_request",
+    "request_id": "permission-1",
+    "request": {
+        "subtype": "can_use_tool",
+        "tool_name": "Bash",
+        "input": {"command": "touch output.txt", "description": "create output"},
+        "tool_use_id": "toolu_1",
+        "title": "Claude wants to create output.txt",
+        "permission_suggestions": [
+            {
+                "type": "addRules",
+                "rules": [{"toolName": "Bash", "ruleContent": "touch output.txt"}],
+                "behavior": "allow",
+                "destination": "localSettings",
+            }
+        ],
+    },
+}
+
+
+def test_control_permission_is_normalized_without_a_decline_choice() -> None:
+    request = approval_request_from_control(CONTROL_APPROVAL)
+
+    assert request is not None
+    assert request.approval_id == "toolu_1"
+    assert request.kind is ApprovalKind.COMMAND_EXECUTION
+    assert request.command == "touch output.txt"
+    assert request.allowed_decisions == (
+        ApprovalDecision.ACCEPT,
+        ApprovalDecision.ACCEPT_FOR_SESSION,
+        ApprovalDecision.CANCEL,
+    )
+
+
+def test_control_cancel_denies_and_interrupts_the_whole_turn() -> None:
+    response = control_response_for(CONTROL_APPROVAL, ApprovalDecision.CANCEL)
+
+    assert response["response"]["response"] == {
+        "behavior": "deny",
+        "message": "Cancelled by user",
+        "interrupt": True,
+    }
+
+
+def test_control_session_approval_never_writes_provider_settings() -> None:
+    response = control_response_for(CONTROL_APPROVAL, ApprovalDecision.ACCEPT_FOR_SESSION)
+    permission = response["response"]["response"]["updatedPermissions"][0]
+
+    assert permission["destination"] == "session"
+
+
+def _fake_interactive_claude(tmp_path) -> str:
+    binary = tmp_path / "claude"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"type": "control_response", "response": {
+                "subtype": "success", "request_id": initialize["request_id"],
+                "response": {"commands": []}}})
+            user = receive()
+            assert user["type"] == "user"
+            send({"type": "system", "subtype": "init", "session_id": "session-1"})
+            send({"type": "assistant", "message": {"content": [{
+                "type": "tool_use", "id": "toolu_1", "name": "Bash",
+                "input": {"command": "touch output.txt"}}]}})
+            send({"type": "control_request", "request_id": "permission-1", "request": {
+                "subtype": "can_use_tool", "tool_name": "Bash",
+                "input": {"command": "touch output.txt"}, "tool_use_id": "toolu_1",
+                "permission_suggestions": [{"type": "addRules", "rules": [{
+                    "toolName": "Bash", "ruleContent": "touch output.txt"}],
+                    "behavior": "allow", "destination": "localSettings"}]}})
+            approval = receive()["response"]["response"]
+            destination = approval["updatedPermissions"][0]["destination"]
+            send({"type": "user", "message": {"content": [{
+                "type": "tool_result", "tool_use_id": "toolu_1",
+                "content": approval["behavior"] + ":" + destination}]}})
+            send({"type": "assistant", "message": {"content": [{
+                "type": "text", "text": "done"}]}})
+            send({"type": "result", "subtype": "success", "is_error": False,
+                  "result": "done", "usage": {}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def test_interactive_turn_round_trips_a_control_approval(tmp_path) -> None:
+    runner = ClaudeCodeControlAgentRunner(binary_path=_fake_interactive_claude(tmp_path))
+    observed: list[Message] = []
+    approvals = []
+
+    async def approve(request):
+        approvals.append(request)
+        return ApprovalDecision.ACCEPT_FOR_SESSION
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-1"),
+            PROFILE,
+            (Message.user("create it"),),
+            approve,
+            on_message=observed.append,
+        )
+    )
+
+    assert [request.command for request in approvals] == ["touch output.txt"]
+    assert turn.message.content == "done"
+    assert turn.steps[1].content == "allow:session"
+    assert observed == list(turn.transcript)
+    argv = runner.interactive_command_line(PROFILE)
+    assert argv[argv.index("--input-format") + 1] == "stream-json"
+    assert argv[argv.index("--permission-prompt-tool") + 1] == "stdio"
 
 
 # --- how long a turn may take -----------------------------------------------

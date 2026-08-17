@@ -46,6 +46,7 @@ class ApprovalKind(Enum):
 
     COMMAND_EXECUTION = "command_execution"
     FILE_CHANGE = "file_change"
+    TOOL_USE = "tool_use"
 
 
 class ApprovalDecision(Enum):
@@ -53,7 +54,6 @@ class ApprovalDecision(Enum):
 
     ACCEPT = "accept"
     ACCEPT_FOR_SESSION = "accept_for_session"
-    DECLINE = "decline"
     CANCEL = "cancel"
 
 
@@ -66,6 +66,8 @@ class ApprovalRequest:
     reason: str | None = None
     command: str | None = None
     cwd: str | None = None
+    tool_name: str | None = None
+    arguments: str | None = None
     allowed_decisions: tuple[ApprovalDecision, ...] = tuple(ApprovalDecision)
 
 
