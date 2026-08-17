@@ -1,7 +1,9 @@
 """Agent Runner capability, backed by the Claude Code CLI.
 
-Runs `claude -p --output-format stream-json --verbose`, prompt on stdin, JSONL
-events on stdout. The records this parses:
+The public ``ClaudeCodeAgentRunner`` runs `claude -p --output-format
+stream-json --verbose`; the separate ``ClaudeCodeControlAgentRunner`` adds
+stream-JSON input and Claude's control protocol so permission callbacks can
+pause and resume the same turn. The records this package parses:
 
     {"type":"system","subtype":"init","session_id":"4aeecd85-…","tools":[…]}
     {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_…",
@@ -30,7 +32,8 @@ Like Codex, Claude Code brings its own tools and cannot be handed ours, so a
 profile with grants is refused rather than quietly run without them. What it can
 be told is *which* of its own tools to use, via `allowed_tools` -- the read-only
 default is this adapter's equivalent of Codex's read-only sandbox. Workflow
-runs additionally attach the runtime's bound terminal MCP tools.
+runs additionally attach the runtime's bound terminal MCP tools. In an
+interactive turn, other built-in tools fall through to the approval callback.
 
 Stdlib only: a subprocess and a JSON parser.
 """
@@ -38,7 +41,7 @@ Stdlib only: a subprocess and a JSON parser.
 import asyncio
 import json
 import shutil
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
 from engine.domain.agents import AgentProfile
@@ -47,6 +50,10 @@ from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import (
     AgentTurn,
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalKind,
+    ApprovalRequest,
     FinishReason,
     McpServerConfig,
     TokenUsage,
@@ -69,6 +76,8 @@ WORKSPACE_WRITE_TOOLS = (*READ_ONLY_TOOLS, "Edit", "Write")
 #: Content blocks that are not worth recording. Thinking blocks are the model's
 #: working, not the conversation's.
 IGNORED_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+CLAUDE_FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit"})
 
 
 class ClaudeUnavailableError(RuntimeError):
@@ -109,6 +118,114 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
         if isinstance(event, dict):
             events.append(event)
     return tuple(events)
+
+
+def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | None:
+    """Normalize Claude Code's ``can_use_tool`` control request."""
+    if message.get("type") != "control_request" or "request_id" not in message:
+        return None
+    request = message.get("request") or {}
+    if not isinstance(request, dict) or request.get("subtype") != "can_use_tool":
+        return None
+
+    tool_name = str(request.get("tool_name", "tool"))
+    tool_input = request.get("input") or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {"input": tool_input}
+    if tool_name == "Bash":
+        kind = ApprovalKind.COMMAND_EXECUTION
+    elif tool_name in CLAUDE_FILE_TOOLS:
+        kind = ApprovalKind.FILE_CHANGE
+    else:
+        kind = ApprovalKind.TOOL_USE
+
+    suggestions = request.get("permission_suggestions")
+    allowed = [ApprovalDecision.ACCEPT]
+    if isinstance(suggestions, list) and suggestions:
+        allowed.append(ApprovalDecision.ACCEPT_FOR_SESSION)
+    allowed.append(ApprovalDecision.CANCEL)
+
+    reason = next(
+        (
+            str(request[field])
+            for field in ("title", "decision_reason", "description")
+            if request.get(field)
+        ),
+        None,
+    )
+    command = tool_input.get("command") if tool_name == "Bash" else None
+    return ApprovalRequest(
+        approval_id=str(request.get("tool_use_id") or message["request_id"]),
+        kind=kind,
+        reason=reason,
+        command=str(command) if command is not None else None,
+        tool_name=tool_name,
+        arguments=json.dumps(tool_input, sort_keys=True),
+        allowed_decisions=tuple(allowed),
+    )
+
+
+def control_response_for(
+    message: dict[str, Any], decision: ApprovalDecision
+) -> dict[str, Any]:
+    """Build the Claude control-protocol response for one Engine decision."""
+    request = message.get("request") or {}
+    tool_input = request.get("input") or {}
+    if decision is ApprovalDecision.CANCEL:
+        response: dict[str, Any] = {
+            "behavior": "deny",
+            "message": "Cancelled by user",
+            "interrupt": True,
+        }
+    else:
+        response = {"behavior": "allow", "updatedInput": tool_input}
+        if decision is ApprovalDecision.ACCEPT_FOR_SESSION:
+            suggestions = request.get("permission_suggestions") or []
+            response["updatedPermissions"] = [
+                {**suggestion, "destination": "session"}
+                for suggestion in suggestions
+                if isinstance(suggestion, dict)
+            ]
+    return {
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": message["request_id"],
+            "response": response,
+        },
+    }
+
+
+async def _write_json(stream: asyncio.StreamWriter, message: dict[str, Any]) -> None:
+    stream.write((json.dumps(message, separators=(",", ":")) + "\n").encode())
+    await stream.drain()
+
+
+async def _next_json_message(lines: AsyncIterator[bytes]) -> dict[str, Any]:
+    async for line in lines:
+        parsed = parse_events(line.decode(errors="replace"))
+        if parsed:
+            return parsed[0]
+    raise ClaudeExecutionError("Claude Code closed its event stream unexpectedly")
+
+
+async def _read_initialize_response(
+    lines: AsyncIterator[bytes], request_id: str, events: list[dict[str, Any]]
+) -> None:
+    while True:
+        message = await _next_json_message(lines)
+        response = message.get("response") or {}
+        if (
+            message.get("type") == "control_response"
+            and isinstance(response, dict)
+            and response.get("request_id") == request_id
+        ):
+            if response.get("subtype") == "error":
+                raise ClaudeExecutionError(
+                    f"Claude control initialization failed: {response.get('error')}"
+                )
+            return
+        events.append(message)
 
 
 def session_id_of(events: Iterable[dict[str, Any]]) -> str | None:
@@ -263,7 +380,7 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> AgentTurn:
     )
 
 
-class ClaudeCodeAgentRunner:
+class _ClaudeCodeRunner:
     """Runs an agent turn by shelling out to the Claude Code CLI.
 
     Implements `engine.ports.AgentRunner`.
@@ -277,6 +394,7 @@ class ClaudeCodeAgentRunner:
         self,
         binary_path: str = "claude",
         timeout_seconds: float | None = None,
+        protocol_timeout_seconds: float = 60.0,
         allowed_tools: Sequence[str] = READ_ONLY_TOOLS,
         working_directory: str = ".",
         model: str = "",
@@ -284,6 +402,7 @@ class ClaudeCodeAgentRunner:
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
+        self._protocol_timeout_seconds = protocol_timeout_seconds
         self._allowed_tools = tuple(allowed_tools)
         self._working_directory = working_directory
         self._model = model
@@ -330,6 +449,16 @@ class ClaudeCodeAgentRunner:
         if model:
             argv += ["--model", model]
         return argv
+
+    def interactive_command_line(self, profile: AgentProfile) -> list[str]:
+        """The bidirectional stream-JSON invocation used for approval turns."""
+        return [
+            *self.command_line(profile),
+            "--input-format",
+            "stream-json",
+            "--permission-prompt-tool",
+            "stdio",
+        ]
 
     async def run_turn(
         self,
@@ -415,6 +544,179 @@ class ClaudeCodeAgentRunner:
             )
         return turn_from_events(events)
 
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run Claude Code with its Agent SDK-compatible control protocol."""
+        if tools:
+            raise ClaudeToolsUnsupportedError([tool.name for tool in tools])
+        if workspace_id is not None and self._workspace_provider is None:
+            raise NotImplementedError(
+                "resolving a WorkspaceId to a path needs the workspace provider; "
+                "until then this runner works in its configured directory"
+            )
+        if shutil.which(self._binary_path) is None:
+            raise ClaudeUnavailableError(
+                f"{self._binary_path!r} is not on PATH -- install the Claude Code CLI, "
+                "or point the runner at the binary"
+            )
+
+        working_directory = self._working_directory
+        if workspace_id is not None:
+            assert self._workspace_provider is not None
+            working_directory = await self._workspace_provider.root_path(workspace_id)
+
+        process = await asyncio.create_subprocess_exec(
+            *self.interactive_command_line(profile),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_directory,
+        )
+        self._running[agent_run_id] = process
+        try:
+            events, stderr = await asyncio.wait_for(
+                self._read_interactive_stream(
+                    process,
+                    flatten(messages),
+                    on_approval,
+                    on_message or (lambda _message: None),
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError as timeout:
+            process.kill()
+            await process.wait()
+            raise ClaudeExecutionError(
+                f"Claude Code did not finish within {self._timeout_seconds:.0f}s"
+            ) from timeout
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
+        except Exception:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
+        finally:
+            self._running.pop(agent_run_id, None)
+
+        if process.returncode != 0:
+            raise ClaudeExecutionError(
+                f"claude interactive stream exited {process.returncode}: {_tail(stderr)}"
+            )
+        return turn_from_events(events)
+
+    async def _read_interactive_stream(
+        self,
+        process: asyncio.subprocess.Process,
+        prompt: str,
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver,
+    ) -> tuple[tuple[dict[str, Any], ...], str]:
+        """Drive Claude's stream-JSON input and permission control protocol."""
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        stderr_task = asyncio.create_task(process.stderr.read())
+        lines = read_lines(process.stdout).__aiter__()
+        events: list[dict[str, Any]] = []
+        observed: list[Message] = []
+        try:
+            initialize_id = "engine-initialize"
+            await _write_json(
+                process.stdin,
+                {
+                    "type": "control_request",
+                    "request_id": initialize_id,
+                    "request": {"subtype": "initialize", "hooks": None},
+                },
+            )
+            try:
+                await asyncio.wait_for(
+                    _read_initialize_response(lines, initialize_id, events),
+                    timeout=self._protocol_timeout_seconds,
+                )
+            except asyncio.TimeoutError as error:
+                raise ClaudeExecutionError(
+                    "Claude Code did not complete control initialization within "
+                    f"{self._protocol_timeout_seconds:g}s"
+                ) from error
+
+            await _write_json(
+                process.stdin,
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": prompt},
+                    "parent_tool_use_id": None,
+                    "session_id": "default",
+                },
+            )
+
+            while True:
+                message = await _next_json_message(lines)
+                request = approval_request_from_control(message)
+                if request is not None:
+                    decision = await on_approval(request)
+                    if decision not in request.allowed_decisions:
+                        raise ClaudeExecutionError(
+                            f"approval decision {decision.value!r} is not allowed for "
+                            f"{request.approval_id}"
+                        )
+                    await _write_json(process.stdin, control_response_for(message, decision))
+                    continue
+
+                if message.get("type") == "control_request":
+                    request_id = message.get("request_id")
+                    subtype = (message.get("request") or {}).get("subtype")
+                    await _write_json(
+                        process.stdin,
+                        {
+                            "type": "control_response",
+                            "response": {
+                                "subtype": "error",
+                                "request_id": request_id,
+                                "error": f"unsupported control request {subtype}",
+                            },
+                        },
+                    )
+                    raise ClaudeExecutionError(
+                        f"Claude requested unsupported interaction {subtype!r}"
+                    )
+                if message.get("type") in {"control_response", "control_cancel_request"}:
+                    continue
+
+                events.append(message)
+                for completed in messages_from_event(message):
+                    observed.append(completed)
+                    on_message(completed)
+                if message.get("type") == "result":
+                    break
+
+            process.stdin.close()
+            await process.wait()
+            stderr = (await stderr_task).decode(errors="replace")
+        finally:
+            if not stderr_task.done():
+                stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+
+        if process.returncode == 0:
+            transcript = turn_from_events(events).transcript
+            if transcript[: len(observed)] == tuple(observed):
+                for completed in transcript[len(observed) :]:
+                    on_message(completed)
+        return tuple(events), stderr
+
     async def run_turn_with_mcp(
         self,
         agent_run_id: AgentRunId,
@@ -480,6 +782,134 @@ class ClaudeCodeAgentRunner:
         process.terminate()
 
 
+class ClaudeCodeAgentRunner:
+    """The original one-shot Claude Code stream-JSON runner.
+
+    Permission-control streaming is exposed by
+    :class:`ClaudeCodeControlAgentRunner` so this adapter retains its original
+    transport and permission behavior.
+    """
+
+    def __init__(
+        self,
+        binary_path: str = "claude",
+        timeout_seconds: float | None = None,
+        allowed_tools: Sequence[str] = READ_ONLY_TOOLS,
+        working_directory: str = ".",
+        model: str = "",
+        workspace_provider: WorkspaceProvider | None = None,
+    ) -> None:
+        self._delegate = _ClaudeCodeRunner(
+            binary_path=binary_path,
+            timeout_seconds=timeout_seconds,
+            allowed_tools=allowed_tools,
+            working_directory=working_directory,
+            model=model,
+            workspace_provider=workspace_provider,
+        )
+
+    def command_line(
+        self, profile: AgentProfile, mcp_server: McpServerConfig | None = None
+    ) -> list[str]:
+        return self._delegate.command_line(profile, mcp_server)
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn(
+            agent_run_id, profile, messages, tools=tools, workspace_id=workspace_id
+        )
+
+    async def run_turn_streamed(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_message: TurnObserver,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn_streamed(
+            agent_run_id,
+            profile,
+            messages,
+            on_message,
+            tools=tools,
+            workspace_id=workspace_id,
+        )
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn_with_mcp(
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            workspace_id=workspace_id,
+        )
+
+    async def cancel(self, agent_run_id: AgentRunId) -> None:
+        await self._delegate.cancel(agent_run_id)
+
+
+class ClaudeCodeControlAgentRunner(ClaudeCodeAgentRunner):
+    """Approval-capable Claude runner using the stdio control protocol."""
+
+    def __init__(
+        self,
+        binary_path: str = "claude",
+        timeout_seconds: float | None = None,
+        protocol_timeout_seconds: float = 60.0,
+        allowed_tools: Sequence[str] = READ_ONLY_TOOLS,
+        working_directory: str = ".",
+        model: str = "",
+        workspace_provider: WorkspaceProvider | None = None,
+    ) -> None:
+        self._delegate = _ClaudeCodeRunner(
+            binary_path=binary_path,
+            timeout_seconds=timeout_seconds,
+            protocol_timeout_seconds=protocol_timeout_seconds,
+            allowed_tools=allowed_tools,
+            working_directory=working_directory,
+            model=model,
+            workspace_provider=workspace_provider,
+        )
+
+    def interactive_command_line(self, profile: AgentProfile) -> list[str]:
+        return self._delegate.interactive_command_line(profile)
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        return await self._delegate.run_turn_interactive(
+            agent_run_id,
+            profile,
+            messages,
+            on_approval,
+            on_message=on_message,
+            tools=tools,
+            workspace_id=workspace_id,
+        )
+
+
 def _tail(text: str, lines: int = 5) -> str:
     """The last few lines of stderr -- enough to diagnose, short enough to read."""
     kept = [line for line in text.strip().splitlines() if line.strip()]
@@ -490,9 +920,12 @@ __all__ = [
     "READ_ONLY_TOOLS",
     "WORKSPACE_WRITE_TOOLS",
     "ClaudeCodeAgentRunner",
+    "ClaudeCodeControlAgentRunner",
     "ClaudeExecutionError",
     "ClaudeToolsUnsupportedError",
     "ClaudeUnavailableError",
+    "approval_request_from_control",
+    "control_response_for",
     "messages_from_event",
     "parse_events",
     "session_id_of",

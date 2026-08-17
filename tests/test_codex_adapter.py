@@ -12,13 +12,17 @@ the shape you assumed rather than the one the CLI emits.
 
 import asyncio
 import json
+import textwrap
 
 import pytest
 
 from engine.adapters.agent_runner.codex import (
+    CodexAppServerAgentRunner,
     CodexAgentRunner,
     CodexExecutionError,
     CodexToolsUnsupportedError,
+    approval_request_from_app_server,
+    app_server_sandbox_policy,
     parse_events,
     render_prompt,
     thread_id_of,
@@ -33,7 +37,15 @@ from engine.domain import (
     ToolSpec,
     WorkspaceId,
 )
-from engine.ports import AgentRunner, FinishReason, McpAgentRunner, McpServerConfig
+from engine.ports import (
+    AgentRunner,
+    ApprovalDecision,
+    ApprovalKind,
+    FinishReason,
+    InteractiveAgentRunner,
+    McpAgentRunner,
+    McpServerConfig,
+)
 
 #: Captured from `codex exec --json --sandbox read-only "Reply with exactly the
 #: word: pong"` against codex-cli 0.144.4.
@@ -73,6 +85,9 @@ PROFILE = AgentProfile(
 
 def test_runner_satisfies_the_port() -> None:
     assert isinstance(CodexAgentRunner(), AgentRunner)
+    assert not isinstance(CodexAgentRunner(), InteractiveAgentRunner)
+    assert isinstance(CodexAppServerAgentRunner(), AgentRunner)
+    assert isinstance(CodexAppServerAgentRunner(), InteractiveAgentRunner)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -344,6 +359,129 @@ def test_chat_cannot_edit_the_tree_by_default() -> None:
 def test_a_nonsense_sandbox_is_caught_at_construction() -> None:
     with pytest.raises(ValueError):
         CodexAgentRunner(sandbox="yolo")
+
+
+# --- interactive app-server protocol ---------------------------------------
+
+
+def test_app_server_uses_the_v2_sandbox_shapes() -> None:
+    assert app_server_sandbox_policy("read-only") == {"type": "readOnly"}
+    assert app_server_sandbox_policy("workspace-write") == {"type": "workspaceWrite"}
+    assert app_server_sandbox_policy("danger-full-access") == {"type": "dangerFullAccess"}
+
+
+def test_app_server_approval_exposes_only_the_three_engine_decisions() -> None:
+    request = approval_request_from_app_server(
+        {
+            "id": 17,
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "reason": "needs write access",
+                "command": "touch output.txt",
+                "cwd": "/workspace",
+                "availableDecisions": ["accept", "acceptForSession", "decline", "cancel"],
+            },
+        }
+    )
+
+    assert request is not None
+    assert request.kind is ApprovalKind.COMMAND_EXECUTION
+    assert request.command == "touch output.txt"
+    assert request.allowed_decisions == (
+        ApprovalDecision.ACCEPT,
+        ApprovalDecision.ACCEPT_FOR_SESSION,
+        ApprovalDecision.CANCEL,
+    )
+
+
+def _fake_app_server(tmp_path) -> str:
+    binary = tmp_path / "codex"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"id": initialize["id"], "result": {"userAgent": "fake"}})
+            assert receive()["method"] == "initialized"
+            start = receive()
+            send({"id": start["id"], "result": {"thread": {"id": "thread-1"}}})
+            turn = receive()
+            send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
+            send({"method": "item/started", "params": {
+                "threadId": "thread-1", "turnId": "turn-1",
+                "item": {"id": "cmd-1", "type": "commandExecution",
+                         "command": "touch output.txt", "cwd": ".",
+                         "commandActions": [], "status": "inProgress"}}})
+            send({"id": "approval-1", "method": "item/commandExecution/requestApproval",
+                  "params": {"threadId": "thread-1", "turnId": "turn-1",
+                             "itemId": "cmd-1", "command": "touch output.txt",
+                             "cwd": ".", "availableDecisions":
+                             ["accept", "acceptForSession", "decline", "cancel"]}})
+            decision = receive()["result"]["decision"]
+            send({"method": "item/completed", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 1,
+                "item": {"id": "cmd-1", "type": "commandExecution",
+                         "command": "touch output.txt", "cwd": ".",
+                         "commandActions": [], "status": "completed", "exitCode": 0,
+                         "aggregatedOutput": decision}}})
+            send({"method": "item/completed", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 2,
+                "item": {"id": "msg-1", "type": "agentMessage", "text": "done"}}})
+            send({"method": "thread/tokenUsage/updated", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "tokenUsage": {
+                    "last": {"inputTokens": 10, "cachedInputTokens": 4,
+                             "outputTokens": 2, "reasoningOutputTokens": 0,
+                             "totalTokens": 12},
+                    "total": {"inputTokens": 10, "cachedInputTokens": 4,
+                              "outputTokens": 2, "reasoningOutputTokens": 0,
+                              "totalTokens": 12}}}})
+            send({"method": "turn/completed", "params": {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "items": [], "status": "completed"}}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:
+    runner = CodexAppServerAgentRunner(binary_path=_fake_app_server(tmp_path))
+    observed: list[Message] = []
+    approvals = []
+
+    async def approve(request):
+        approvals.append(request)
+        return ApprovalDecision.ACCEPT_FOR_SESSION
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-1"),
+            PROFILE,
+            (Message.user("create it"),),
+            approve,
+            on_message=observed.append,
+        )
+    )
+
+    assert [request.command for request in approvals] == ["touch output.txt"]
+    assert turn.message.content == "done"
+    assert turn.steps[1].content == "acceptForSession\n(exit 0)"
+    assert turn.usage is not None and turn.usage.cached_prompt_tokens == 4
+    assert observed == list(turn.transcript)
+    assert runner.app_server_command_line()[1:] == ["app-server"]
 
 
 # --- how long a turn may take -----------------------------------------------
