@@ -20,10 +20,12 @@ from engine.domain import (
     AgentInstanceId,
     AgentProfile,
     AgentRunId,
+    AgentRunStatus,
     ConversationId,
     HumanReviewCompleted,
     Message,
     Role,
+    RunFailed,
     RunId,
     RunPhase,
     RunRequested,
@@ -39,8 +41,9 @@ from engine.core.workflows.implementation_review import (
     IMPLEMENTATION_STEP,
     REVIEW_STEP,
 )
-from engine.ports import AgentTurn, Workspace, WorkspaceState
-from engine.runtime import AgentSession, Capabilities
+from engine.ports import AgentTurn, McpServerConfig, Workspace, WorkspaceState
+from engine.runtime import AgentSession, Capabilities, INVALID_COMPLETION_ERROR
+from engine.runtime.terminal_mcp import _mcp_response
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -172,6 +175,110 @@ class ConcurrentRunner:
 
     async def cancel(self, agent_run_id: AgentRunId) -> None:
         pass
+
+
+class TerminalToolRunner(ConcurrentRunner):
+    """Call one workflow terminal tool through the attached MCP server."""
+
+    def __init__(self, tool_name: str, arguments: dict[str, object]) -> None:
+        super().__init__()
+        self.tool_name = tool_name
+        self.arguments = arguments
+        self.cancelled = asyncio.Event()
+        self.acknowledgement: dict[str, object] | None = None
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.seen.append(tuple(messages))
+        self.workspace_ids.append(workspace_id)
+        host = mcp_server.args[mcp_server.args.index("--host") + 1]
+        port = int(mcp_server.args[mcp_server.args.index("--port") + 1])
+        token = mcp_server.args[mcp_server.args.index("--token") + 1]
+        self.acknowledgement = await _mcp_response(
+            host,
+            port,
+            token,
+            {
+                "jsonrpc": "2.0",
+                "id": "workflow-tool-call-1",
+                "method": "tools/call",
+                "params": {
+                    "name": self.tool_name,
+                    "arguments": self.arguments,
+                },
+            },
+        )
+        await self.cancelled.wait()
+        return AgentTurn(Message.assistant("Terminal result accepted."))
+
+    async def cancel(self, agent_run_id: AgentRunId) -> None:
+        self.cancelled.set()
+
+
+class InvalidThenTerminalToolRunner(TerminalToolRunner):
+    """Exit once without a valid call, then complete through MCP."""
+
+    def __init__(self, arguments: dict[str, object]) -> None:
+        super().__init__("complete_step", arguments)
+        self.attempts = 0
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.attempts += 1
+        if self.attempts == 1:
+            self.seen.append(tuple(messages))
+            self.workspace_ids.append(workspace_id)
+            return AgentTurn(
+                Message.assistant(
+                    '{"outcome":"success","summary":"Legacy response","outputs":{}}'
+                )
+            )
+        return await super().run_turn_with_mcp(
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            workspace_id,
+        )
+
+
+class ClarificationToolRunner(ConcurrentRunner):
+    """Request user input instead of completing the bound step."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.attempts += 1
+        question = ToolCall(
+            "question-1",
+            "AskUserQuestion",
+            json.dumps({"question": "Which behavior should remain compatible?"}),
+        )
+        return AgentTurn(
+            Message.assistant("Waiting for clarification."),
+            steps=(Message.assistant(tool_calls=(question,)),),
+        )
 
 
 def _session(runner: ConcurrentRunner) -> AgentSession:
@@ -347,9 +454,13 @@ def test_run_api_covers_workflow_lifecycle_phases(
 
 def test_create_workflow_run_executes_implementation_and_stops_at_review() -> None:
     store = InMemoryStateStore()
-    runner = ConcurrentRunner(
-        ('{"outcome":"success","summary":"Added cancellation handling.",'
-         '"outputs":{"changed_files":"worker.py"}}',)
+    runner = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Added cancellation handling.",
+            "outputs": {},
+        },
     )
     app = _workflow_app(store, runner)
 
@@ -393,15 +504,193 @@ def test_create_workflow_run_executes_implementation_and_stops_at_review() -> No
     assert history[0].prompt == "Add cancellation handling."
     assert history[0].repository == "acme/api"
     assert runner.workspace_ids == ["ws-1"]
-    assert "exactly one JSON object" in runner.seen[0][0].content
+    assert "`complete_step`" in runner.seen[0][0].content
+    assert "JSON" not in runner.seen[0][0].content
+
+
+def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
+    store = InMemoryStateStore()
+    runner = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Completed through MCP.",
+            "outputs": {},
+        },
+    )
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Complete the implementation through MCP.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(20):
+                reopened = await client.get(f"/api/runs/{run_id}")
+                if reopened.json()["phase"] == "reviewing":
+                    break
+                await asyncio.sleep(0.01)
+            return reopened, await store.history(run_id)
+
+    reopened, history = asyncio.run(scenario())
+
+    assert reopened.json()["phase"] == "reviewing"
+    assert reopened.json()["currentStepId"] == "review"
+    completed_step = reopened.json()["steps"][0]
+    assert completed_step["status"] == "completed"
+    assert completed_step["outcome"] == "success"
+    assert completed_step["summary"] == "Completed through MCP."
+    assert completed_step["outputs"] == []
+    assert completed_step["mcpRequestId"] == "workflow-tool-call-1"
+    assert isinstance(history[-1], StepCompleted)
+    assert history[-1].mcp_request_id == "workflow-tool-call-1"
+    assert runner.cancelled.is_set()
+    assert runner.acknowledgement == {
+        "jsonrpc": "2.0",
+        "id": "workflow-tool-call-1",
+        "result": {
+            "content": [{"type": "text", "text": "accepted"}],
+            "structuredContent": {"accepted": True},
+        },
+    }
+
+
+def test_invalid_exit_is_retried_and_then_completes_the_active_step() -> None:
+    store = InMemoryStateStore()
+    runner = InvalidThenTerminalToolRunner(
+        {
+            "outcome": "success",
+            "summary": "Completed after correction.",
+            "outputs": {},
+        }
+    )
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Complete after an invalid exit.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(20):
+                reopened = await client.get(f"/api/runs/{run_id}")
+                if reopened.json()["phase"] == "reviewing":
+                    break
+                await asyncio.sleep(0.01)
+            return reopened
+
+    reopened = asyncio.run(scenario())
+
+    assert reopened.json()["phase"] == "reviewing"
+    assert reopened.json()["steps"][0]["summary"] == "Completed after correction."
+    assert runner.attempts == 2
+    assert runner.seen[1][-1] == Message.user(INVALID_COMPLETION_ERROR)
+
+
+def test_clarification_call_leaves_the_active_step_implementing() -> None:
+    store = InMemoryStateStore()
+    runner = ClarificationToolRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Ask when a requirement is ambiguous.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(20):
+                state = await store.load(run_id)
+                if state is not None and state.current_agent_run_id is not None:
+                    agent_run = await store.agent_run(state.current_agent_run_id)
+                    if (
+                        agent_run is not None
+                        and agent_run.status is AgentRunStatus.SUCCEEDED
+                    ):
+                        break
+                await asyncio.sleep(0.01)
+            return await client.get(f"/api/runs/{run_id}"), await store.history(run_id)
+
+    reopened, history = asyncio.run(scenario())
+
+    assert reopened.json()["phase"] == "implementing"
+    assert reopened.json()["currentStepId"] == "implementation"
+    assert runner.attempts == 1
+    assert not any(isinstance(event, (StepCompleted, RunFailed)) for event in history)
+
+
+def test_fail_step_mcp_call_fails_the_active_workflow() -> None:
+    store = InMemoryStateStore()
+    runner = TerminalToolRunner(
+        "fail_step",
+        {"summary": "The implementation cannot continue."},
+    )
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Attempt the implementation through MCP.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(20):
+                reopened = await client.get(f"/api/runs/{run_id}")
+                if reopened.json()["phase"] == "failed":
+                    break
+                await asyncio.sleep(0.01)
+            return reopened, await store.history(run_id)
+
+    reopened, history = asyncio.run(scenario())
+
+    assert reopened.json()["phase"] == "failed"
+    assert reopened.json()["terminalOutcome"] == "failed"
+    assert reopened.json()["failureReason"] == "The implementation cannot continue."
+    assert reopened.json()["steps"][0]["status"] == "failed"
+    assert isinstance(history[-1], RunFailed)
+    assert history[-1].agent_run_id is not None
+    assert history[-1].mcp_request_id == "workflow-tool-call-1"
+    assert runner.cancelled.is_set()
+    assert runner.acknowledgement is not None
+    assert runner.acknowledgement["result"] == {
+        "content": [{"type": "text", "text": "accepted"}],
+        "structuredContent": {"accepted": True},
+    }
 
 
 def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
     store = InMemoryStateStore()
     default = ConcurrentRunner()
-    claude = ConcurrentRunner(
-        ('{"outcome":"success","summary":"Implemented with Claude.",'
-         '"outputs":{"changed_files":"feature.py"}}',)
+    claude = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implemented with Claude.",
+            "outputs": {},
+        },
     )
     app = _workflow_app(
         store,

@@ -56,6 +56,7 @@ def test_step_completion_is_an_event_with_string_outputs() -> None:
             {"name": "revision", "value": "abc123"},
             {"name": "branch", "value": "engine/ws-42"},
         ),
+        "mcp_request_id": None,
     }
 
 

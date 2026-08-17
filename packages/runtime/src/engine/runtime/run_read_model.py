@@ -39,6 +39,7 @@ class RunStepView:
     agent_id: AgentId | None = None
     agent_instance_id: AgentInstanceId | None = None
     agent_run_id: AgentRunId | None = None
+    mcp_request_id: str | int | None = None
     conversation_id: ConversationId | None = None
 
 
@@ -189,6 +190,7 @@ def _agent_step(
             if result is not None
             else state.current_agent_run_id if state.current_step_id == step_id else None
         ),
+        mcp_request_id=result.mcp_request_id if result is not None else None,
         conversation_id=instance.conversation_id if instance else None,
     )
 

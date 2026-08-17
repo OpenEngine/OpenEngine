@@ -334,10 +334,10 @@ Three limits worth knowing before you read anything into a conversation:
 
 - **Conversations are local to this checkout.** SQLite stores them in
   `conversations.sqlite3` in the process working directory.
-- **The agent has no engine tools.** Both CLIs bring their own (they read files,
-  run commands) and neither can be handed ours, so the foreman can discuss
-  dispatching work but not dispatch it. See `CodexToolsUnsupportedError` and
-  `ClaudeToolsUnsupportedError`, which are raised rather than ignored.
+- **Chat agents have no general engine tools.** Both CLIs bring their own (they
+  read files, run commands) and neither can be handed arbitrary `ToolSpec`s.
+  Workflow steps do receive the narrowly scoped, run-bound `complete_step` and
+  `fail_step` tools over MCP.
 - **Turns are expensive, and Codex turns are barely cached.** `codex exec` spends
   ~15k prompt tokens per model request on its own preamble and serves a flat ~10k
   of it from cache no matter what we send; Claude Code reaches ~86%. See the
@@ -460,9 +460,9 @@ Not yet implemented, by design — the remaining adapter methods raise
 - No GitHub API calls, no git operations.
 - No message delivery, no database, no schema, no migrations.
 - No HTTP surface on the control server, no task-queue polling in the worker.
-- No engine tools, so no profile grants any: the foreman can discuss dispatching
-  work but cannot dispatch it, and `AgentSession` refuses to run a profile whose
-  grants resolve to nothing rather than quietly dropping them.
+- No general engine tools, so no profile grants any: the foreman can discuss
+  dispatching work but cannot dispatch it. The terminal workflow MCP tools are
+  runtime-bound and are not profile grants.
 - No workspace-aware agent runs: the Codex adapter refuses a `WorkspaceId` it
   has no provider to resolve.
 

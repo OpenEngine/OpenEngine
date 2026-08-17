@@ -29,7 +29,8 @@ Two differences from the Codex adapter, both in this one's favour:
 Like Codex, Claude Code brings its own tools and cannot be handed ours, so a
 profile with grants is refused rather than quietly run without them. What it can
 be told is *which* of its own tools to use, via `allowed_tools` -- the read-only
-default is this adapter's equivalent of Codex's read-only sandbox.
+default is this adapter's equivalent of Codex's read-only sandbox. Workflow
+runs additionally attach the runtime's bound terminal MCP tools.
 
 Stdlib only: a subprocess and a JSON parser.
 """
@@ -44,7 +45,13 @@ from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
-from engine.ports.agent_runner import AgentTurn, FinishReason, TokenUsage, TurnObserver
+from engine.ports.agent_runner import (
+    AgentTurn,
+    FinishReason,
+    McpServerConfig,
+    TokenUsage,
+    TurnObserver,
+)
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
@@ -77,13 +84,13 @@ class ClaudeToolsUnsupportedError(NotImplementedError):
 
     Raised rather than ignored, for the same reason as the Codex adapter: an
     agent quietly less capable than its profile promises is worse than one that
-    refuses to start. Reaching our tools from here means exposing them over MCP.
+    refuses to start. Only the workflow terminal tools have an MCP bridge.
     """
 
     def __init__(self, tool_names: Sequence[str]) -> None:
         super().__init__(
             f"Claude Code runs its own tools and cannot be offered {list(tool_names)}; "
-            "exposing engine tools to it over MCP lands with the tools ticket"
+            "only the runtime-bound workflow terminal tools are available over MCP"
         )
         self.tool_names = tuple(tool_names)
 
@@ -283,7 +290,9 @@ class ClaudeCodeAgentRunner:
         self._workspace_provider = workspace_provider
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
-    def command_line(self, profile: AgentProfile) -> list[str]:
+    def command_line(
+        self, profile: AgentProfile, mcp_server: McpServerConfig | None = None
+    ) -> list[str]:
         """The argv this runner would use. Public so the wiring is inspectable
         without running anything."""
         argv = [self._binary_path, "-p", "--output-format", "stream-json", "--verbose"]
@@ -291,9 +300,32 @@ class ClaudeCodeAgentRunner:
             # A real system-prompt channel, unlike `codex exec` -- so the
             # instructions never enter the conversation text.
             argv += ["--append-system-prompt", profile.instructions.strip()]
-        if self._allowed_tools:
+        if mcp_server is not None:
+            argv += [
+                "--mcp-config",
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            mcp_server.name: {
+                                "command": mcp_server.command,
+                                "args": list(mcp_server.args),
+                            }
+                        }
+                    },
+                    separators=(",", ":"),
+                ),
+            ]
+        allowed_tools = self._allowed_tools
+        if mcp_server is not None:
+            allowed_tools = (
+                *allowed_tools,
+                "AskUserQuestion",
+                f"mcp__{mcp_server.name}__complete_step",
+                f"mcp__{mcp_server.name}__fail_step",
+            )
+        if allowed_tools:
             # Variadic, and an empty list would swallow the next flag.
-            argv += ["--allowedTools", *self._allowed_tools]
+            argv += ["--allowedTools", *allowed_tools]
         model = profile.model or self._model
         if model:
             argv += ["--model", model]
@@ -324,6 +356,7 @@ class ClaudeCodeAgentRunner:
         on_message: TurnObserver,
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
+        mcp_server: McpServerConfig | None = None,
     ) -> AgentTurn:
         """Run Claude Code, forwarding each completed JSONL block immediately."""
         if tools:
@@ -345,7 +378,7 @@ class ClaudeCodeAgentRunner:
             working_directory = await self._workspace_provider.root_path(workspace_id)
 
         process = await asyncio.create_subprocess_exec(
-            *self.command_line(profile),
+            *self.command_line(profile, mcp_server),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -381,6 +414,24 @@ class ClaudeCodeAgentRunner:
                 f"claude exited {process.returncode}: {_tail(stderr)}"
             )
         return turn_from_events(events)
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run a turn with the runtime's bound terminal tools attached."""
+        return await self.run_turn_streamed(
+            agent_run_id,
+            profile,
+            messages,
+            lambda _message: None,
+            workspace_id=workspace_id,
+            mcp_server=mcp_server,
+        )
 
     async def _read_stream(
         self,

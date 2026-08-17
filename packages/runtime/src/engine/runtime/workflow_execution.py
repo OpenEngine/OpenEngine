@@ -13,12 +13,13 @@ from engine.domain import (
     RunRequested,
     RunState,
     StartAgentRun,
+    StepCompleted,
     WorkspaceProvisioned,
 )
 from engine.ports import AgentRunner
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
-from engine.runtime.step_results import step_completed_from_turn
+from engine.runtime.step_results import requests_clarification_or_escalation
 
 
 class WorkflowExecutionError(RuntimeError):
@@ -80,21 +81,35 @@ class WorkflowExecutor:
                 ),
             )
             implementation = _only(commands, StartAgentRun)
-            turn = await self._dispatcher.run_workflow_agent(
+            delivered: Event | None = None
+
+            async def deliver_terminal(event: Event) -> None:
+                nonlocal state, delivered
+                state, _commands = await self._transition(state, event)
+                delivered = event
+
+            terminal = await self._dispatcher.run_workflow_agent(
                 implementation,
                 runner=runner,
                 runner_name=selected_name,
+                on_terminal_result=deliver_terminal,
             )
-            assert implementation.step is not None
-            result = step_completed_from_turn(
-                run_id=state.run_id,
-                step=implementation.step,
-                agent_run_id=implementation.agent_run_id,
-                turn=turn,
+            if delivered is not None:
+                # The MCP acknowledgement was sent only after this transition
+                # persisted the event. Never infer delivery from CLI transcript.
+                assert terminal == delivered
+                return
+            if isinstance(terminal, (StepCompleted, RunFailed)):
+                await self._transition(state, terminal)
+                return
+            if requests_clarification_or_escalation(terminal):
+                # The agent validly paused without completing the step. Its
+                # conversation is durable and the workflow stays IMPLEMENTING
+                # so a later response can resume the same logical instance.
+                return
+            raise WorkflowExecutionError(
+                "workflow runner exited without a valid completion state"
             )
-            # Applying the result moves the run to REVIEWING. The emitted
-            # reviewer command stays pending until reviewer execution lands.
-            await self._transition(state, result)
         except asyncio.CancelledError:
             raise
         except Exception as error:
