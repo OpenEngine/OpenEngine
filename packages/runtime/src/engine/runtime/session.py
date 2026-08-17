@@ -11,6 +11,7 @@ control server cannot drift into two subtly different notions of what a
 conversation is.
 """
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from uuid import uuid4
@@ -29,6 +30,7 @@ from engine.ports.agent_runner import (
 )
 from engine.ports.workspace_provider import WorkspaceState
 from engine.ports.state_store import StateStore
+from engine.runtime.approvals import ApprovalsUnsupportedError
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.profiles import BUILT_IN, profile_for
 
@@ -269,6 +271,7 @@ class AgentSession:
         runner: str | None = None,
         on_message: TurnObserver | None = None,
         on_approval: ApprovalHandler | None = None,
+        agent_run_id: AgentRunId | None = None,
     ) -> AgentTurn:
         """Add a message to the conversation and get the agent's reply.
 
@@ -281,11 +284,23 @@ class AgentSession:
         activity, and the final answer as each becomes available. A non-streaming
         runner still calls it, but only after the complete turn returns.
         `on_approval` is passed to interactive runners so they can pause until
-        the caller has presented a request and returned the user's decision.
+        the caller has presented a request and returned the user's decision; a
+        runner that cannot pause is an error rather than a silent downgrade to
+        running unattended.
+
+        `agent_run_id` lets a caller that has to name the execution before it
+        starts -- because it is brokering approvals for it, or replaying it
+        durably -- supply the id instead of learning it afterwards.
         """
         runner_name = runner or self.default_runner
         if runner_name not in self._runners:
             raise UnknownRunnerError(runner_name, self.runners)
+        selected_runner = self._runners[runner_name]
+        interactive: InteractiveAgentRunner | None = None
+        if on_approval is not None:
+            if not isinstance(selected_runner, InteractiveAgentRunner):
+                raise ApprovalsUnsupportedError(runner_name)
+            interactive = selected_runner
         store = self._capabilities.state_store
 
         instance = await store.load_instance(instance_id)
@@ -302,7 +317,7 @@ class AgentSession:
         await store.append_messages(instance_id, (question,))
 
         agent_run = AgentRun(
-            agent_run_id=_new_agent_run_id(),
+            agent_run_id=agent_run_id or _new_agent_run_id(),
             instance_id=instance_id,
             status=AgentRunStatus.RUNNING,
             runner=runner_name,
@@ -310,11 +325,8 @@ class AgentSession:
         await store.record_agent_run(agent_run)
 
         try:
-            selected_runner = self._runners[runner_name]
-            if on_approval is not None and isinstance(
-                selected_runner, InteractiveAgentRunner
-            ):
-                turn = await selected_runner.run_turn_interactive(
+            if interactive is not None and on_approval is not None:
+                turn = await interactive.run_turn_interactive(
                     agent_run.agent_run_id,
                     profile,
                     (*conversation.messages, question),
@@ -345,6 +357,14 @@ class AgentSession:
                 if on_message is not None:
                     for message in turn.transcript:
                         on_message(message)
+        except asyncio.CancelledError:
+            # Somebody stopped this on purpose. Recording it as failed would
+            # read as the agent breaking, and leaving it running would leave a
+            # row that never resolves.
+            await store.record_agent_run(
+                replace(agent_run, status=AgentRunStatus.CANCELLED, summary="cancelled")
+            )
+            raise
         except Exception as error:
             await store.record_agent_run(
                 replace(

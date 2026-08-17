@@ -17,11 +17,14 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from engine.domain.agents import AgentInstance, AgentRun
+from engine.domain.approvals import ApprovalRecord, ApprovalStatus
 from engine.domain.chat import Conversation, Message
 from engine.domain.events import Event
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
+    AgentRunId,
+    ApprovalId,
     ConversationId,
     RunId,
     StepId,
@@ -124,6 +127,34 @@ class StateStore(Protocol):
 
     async def record_agent_run(self, agent_run: AgentRun) -> None:
         """Upsert one execution's status and outcome, keyed by its id."""
+        ...
+
+    # --- approvals --------------------------------------------------------
+
+    async def record_approval(self, approval: ApprovalRecord) -> None:
+        """Upsert one request for consent, keyed by its id.
+
+        Durable rather than held in the process that is waiting, because the
+        pause outlives the connection that showed it and the answer has to be
+        auditable after the provider is gone.
+        """
+        ...
+
+    async def load_approval(self, approval_id: ApprovalId) -> ApprovalRecord | None:
+        ...
+
+    async def list_approvals(
+        self,
+        *,
+        instance_id: AgentInstanceId | None = None,
+        agent_run_id: AgentRunId | None = None,
+        status: ApprovalStatus | None = None,
+    ) -> Sequence[ApprovalRecord]:
+        """Persisted approvals, oldest first, narrowed by whatever is given.
+
+        Oldest first because these are a log of what was asked: reading them in
+        the order the agent asked is what makes a sequence of requests legible.
+        """
         ...
 
 

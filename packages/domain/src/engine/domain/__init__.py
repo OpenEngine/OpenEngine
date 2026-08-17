@@ -5,6 +5,13 @@ third-party packages, and certainly not adapters. Everything here is data.
 """
 
 from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRunStatus
+from engine.domain.approvals import (
+    ApprovalDecision,
+    ApprovalDecisionSource,
+    ApprovalKind,
+    ApprovalRecord,
+    ApprovalStatus,
+)
 from engine.domain.chat import Conversation, Message, Role, ToolCall
 from engine.domain.commands import (
     Command,
@@ -30,6 +37,7 @@ from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
     AgentRunId,
+    ApprovalId,
     ConversationId,
     IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     MessageId,
@@ -52,6 +60,12 @@ __all__ = [
     "AgentRunCompleted",
     "AgentRunId",
     "AgentRunStatus",
+    "ApprovalDecision",
+    "ApprovalDecisionSource",
+    "ApprovalId",
+    "ApprovalKind",
+    "ApprovalRecord",
+    "ApprovalStatus",
     "ChangesPublished",
     "Command",
     "Conversation",

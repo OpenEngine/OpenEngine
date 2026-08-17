@@ -22,7 +22,13 @@ import {
   type PropsWithChildren,
 } from "react";
 
-import { api, messageText, type ApiHistory, type ApiThread } from "./api";
+import {
+  api,
+  messageText,
+  runNotStartedError,
+  type ApiHistory,
+  type ApiThread,
+} from "./api";
 
 type NewChatDefaults = {
   agentId: string;
@@ -117,8 +123,12 @@ async function* readRunResponse(response: Response) {
       if (!line) continue;
       const event = JSON.parse(line) as
         | { type: "content" | "done"; content: ThreadAssistantMessagePart[] }
+        | { type: "approval" }
         | { type: "error"; error: string };
       if (event.type === "error") throw new Error(event.error);
+      // Approval snapshots ride the same stream and carry no message content.
+      // Presenting them is the approval UI's job, and it is not built yet.
+      if (event.type === "approval") continue;
       yield { content: event.content };
     }
     if (done) break;
@@ -199,32 +209,43 @@ function EngineRuntime({
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
       async *run({ messages, abortSignal, unstable_threadId }) {
-        const threadId =
-          unstable_threadId ?? (await threadInitializerRef.current?.())?.remoteId;
-        if (!threadId) throw new Error("The chat could not be initialized.");
         const lastUser = [...messages].reverse().find((message) => message.role === "user");
         const text = lastUser ? messageText(lastUser) : "";
         if (!text) throw new Error("Cannot send an empty message.");
 
-        // assistant-ui normally generates this after runEnd; doing it here
-        // makes the title the first model turn for a new conversation.
-        //
-        // Neither call names a runner: the conversation keeps the last one it
-        // was given, and sending the page's new-chat default with every turn
-        // would silently move an older chat onto it.
-        await api(`/api/threads/${threadId}/title`, {
-          method: "POST",
-          body: JSON.stringify({ text }),
-          signal: abortSignal,
-        });
-        await reloadThreadsRef.current?.();
+        let response: Response;
+        try {
+          const threadId =
+            unstable_threadId ?? (await threadInitializerRef.current?.())?.remoteId;
+          if (!threadId) throw new Error("The chat could not be initialized.");
 
-        const response = await fetch(`/api/threads/${threadId}/runs`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-          signal: abortSignal,
-        });
+          // assistant-ui normally generates this after runEnd; doing it here
+          // makes the title the first model turn for a new conversation.
+          //
+          // Neither call names a runner: the conversation keeps the last one it
+          // was given, and sending the page's new-chat default with every turn
+          // would silently move an older chat onto it.
+          await api(`/api/threads/${threadId}/title`, {
+            method: "POST",
+            body: JSON.stringify({ text }),
+            signal: abortSignal,
+          });
+          await reloadThreadsRef.current?.();
+
+          response = await fetch(`/api/threads/${threadId}/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+            signal: abortSignal,
+          });
+          if (!response.ok || !response.body) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.error ?? `${response.status} ${response.statusText}`);
+          }
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") throw error;
+          throw runNotStartedError(error);
+        }
         yield* readRunResponse(response);
       },
     }),

@@ -4,6 +4,15 @@ Depends on `engine.ports` (and through it `engine.domain`), never on a specific
 adapter. Adapters depend on the runtime, not the other way around.
 """
 
+from engine.runtime.approvals import (
+    ApprovalBroker,
+    ApprovalDecisionNotAllowedError,
+    ApprovalError,
+    ApprovalNotPendingError,
+    ApprovalPresenter,
+    ApprovalsUnsupportedError,
+    UnknownApprovalError,
+)
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher, UnhandledCommandError
 from engine.runtime.profiles import BUILT_IN, CODER, FOREMAN, UnknownAgentError, profile_for
@@ -43,6 +52,12 @@ __all__ = [
     "DEFAULT_RUNNER",
     "FOREMAN",
     "AgentSession",
+    "ApprovalBroker",
+    "ApprovalDecisionNotAllowedError",
+    "ApprovalError",
+    "ApprovalNotPendingError",
+    "ApprovalPresenter",
+    "ApprovalsUnsupportedError",
     "Capabilities",
     "Dispatcher",
     "InvalidStepResultError",
@@ -52,6 +67,7 @@ __all__ = [
     "TerminalResultRegistry",
     "UnhandledCommandError",
     "UnknownAgentError",
+    "UnknownApprovalError",
     "UnknownInstanceError",
     "UnknownRunnerError",
     "UnknownToolGrantError",

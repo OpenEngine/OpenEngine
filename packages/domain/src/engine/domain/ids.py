@@ -41,6 +41,14 @@ AgentInstanceId = NewType("AgentInstanceId", str)
 AgentRunId = NewType("AgentRunId", str)
 """One execution of an `AgentInstanceId`. An instance may run many times."""
 
+ApprovalId = NewType("ApprovalId", str)
+"""One request for user consent raised during an `AgentRunId`.
+
+Ours rather than the provider's: Codex and Claude each number their requests
+within a session they own, so their ids collide across runs and mean nothing
+after the process that issued them is gone.
+"""
+
 ConversationId = NewType("ConversationId", str)
 """The message history belonging to one agent instance."""
 
@@ -54,6 +62,7 @@ __all__ = [
     "AgentId",
     "AgentInstanceId",
     "AgentRunId",
+    "ApprovalId",
     "ConversationId",
     "MessageId",
     "RunId",

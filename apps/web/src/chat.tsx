@@ -9,9 +9,16 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import { type KeyboardEvent, useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
-import { api, attachWorkspace, detachWorkspace, type ApiThread } from "./api";
+import {
+  api,
+  attachWorkspace,
+  detachWorkspace,
+  messageText,
+  RUN_NOT_STARTED_ERROR_CODE,
+  type ApiThread,
+} from "./api";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
@@ -98,8 +105,10 @@ function Composer() {
   const canSend = useAuiState((state) => state.composer.canSend);
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const text = useAuiState((state) => state.composer.text);
+  const messages = useAuiState((state) => state.thread.messages);
   const draftKey = `${COMPOSER_DRAFT_KEY_PREFIX}${remoteId ?? NEW_CHAT_DRAFT_ID}`;
   const [restoredDraftKey, setRestoredDraftKey] = useState<string>();
+  const restoredFailure = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const savedDraft = window.localStorage.getItem(draftKey) ?? "";
@@ -114,6 +123,34 @@ function Composer() {
     if (text) window.localStorage.setItem(draftKey, text);
     else window.localStorage.removeItem(draftKey);
   }, [draftKey, restoredDraftKey, text]);
+
+  useEffect(() => {
+    // A pre-stream failure means the server never stored this user message,
+    // so put it back where it can be corrected or sent again.
+    const failed = messages.at(-1);
+    const submitted = messages.at(-2);
+    if (
+      failed?.role !== "assistant" ||
+      failed.status.type !== "incomplete" ||
+      failed.status.reason !== "error" ||
+      !failed.status.error ||
+      typeof failed.status.error !== "object" ||
+      !("code" in failed.status.error) ||
+      failed.status.error.code !== RUN_NOT_STARTED_ERROR_CODE ||
+      submitted?.role !== "user"
+    ) {
+      return;
+    }
+
+    const failureKey = `${draftKey}:${failed.id}`;
+    if (restoredFailure.current === failureKey) return;
+    restoredFailure.current = failureKey;
+
+    const submittedText = messageText(submitted);
+    if (submittedText && !aui.composer.getState().text) {
+      aui.composer.setText(submittedText);
+    }
+  }, [aui, draftKey, messages]);
 
   const send = () => {
     aui.composer.send();

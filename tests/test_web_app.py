@@ -8,7 +8,10 @@ import httpx
 import pytest
 
 from engine.adapters.agent_runner.claude_code import ClaudeCodeControlAgentRunner
-from engine.adapters.agent_runner.codex import CodexAppServerAgentRunner
+from engine.adapters.agent_runner.codex import (
+    INTERACTIVE_APPROVAL_POLICY,
+    CodexAppServerAgentRunner,
+)
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.api import ThreadService, create_app
@@ -44,7 +47,13 @@ from engine.core.workflows.implementation_review import (
     IMPLEMENTATION_STEP,
     REVIEW_STEP,
 )
-from engine.ports import AgentTurn, McpServerConfig, Workspace, WorkspaceState
+from engine.ports import (
+    AgentTurn,
+    InteractiveAgentRunner,
+    McpServerConfig,
+    Workspace,
+    WorkspaceState,
+)
 from engine.runtime import AgentSession, Capabilities, INVALID_COMPLETION_ERROR
 from engine.runtime.terminal_mcp import _mcp_response
 
@@ -79,6 +88,33 @@ def test_web_offers_the_interactive_provider_runners() -> None:
     )
     assert isinstance(runners["codex-app-server"], CodexAppServerAgentRunner)
     assert isinstance(runners["claude-control"], ClaudeCodeControlAgentRunner)
+    # Which of them pause is what decides whether a run brokers approvals, so
+    # it is read off the port rather than off the class name.
+    assert isinstance(runners["codex-app-server"], InteractiveAgentRunner)
+    assert isinstance(runners["claude-control"], InteractiveAgentRunner)
+    assert not isinstance(runners["codex"], InteractiveAgentRunner)
+    assert not isinstance(runners["claude"], InteractiveAgentRunner)
+
+
+def test_interactive_runners_may_do_what_the_user_approves() -> None:
+    """A gate is only a gate if what it lets through can then happen."""
+    runners = build_runners(Settings())
+
+    codex_argv = runners["codex-app-server"].command_line(PROFILES[CODER])
+    claude_argv = runners["claude-control"].interactive_command_line(PROFILES[CODER])
+    preapproved = claude_argv[
+        claude_argv.index("--allowedTools") + 1 : claude_argv.index("--input-format")
+    ]
+
+    # Codex: writable inside the worktree, and stopping to ask before it would
+    # step outside one.
+    assert codex_argv[codex_argv.index("--sandbox") + 1] == "workspace-write"
+    assert INTERACTIVE_APPROVAL_POLICY == "on-request"
+    # Claude: reads run unattended, everything else reaches the user.
+    assert preapproved == ["Read", "Glob", "Grep"]
+    assert "Bash" not in preapproved
+    assert "Edit" not in preapproved
+    assert claude_argv[claude_argv.index("--permission-prompt-tool") + 1] == "stdio"
 
 
 def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:

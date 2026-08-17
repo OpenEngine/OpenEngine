@@ -1,6 +1,7 @@
 """Durable workflow-run and conversation persistence backed by SQLite."""
 
 from collections.abc import Sequence
+from datetime import datetime
 import json
 from pathlib import Path
 import sqlite3
@@ -8,6 +9,13 @@ from threading import RLock
 from uuid import uuid4
 
 from engine.domain.agents import AgentInstance, AgentRun, AgentRunStatus
+from engine.domain.approvals import (
+    ApprovalDecision,
+    ApprovalDecisionSource,
+    ApprovalKind,
+    ApprovalRecord,
+    ApprovalStatus,
+)
 from engine.domain.chat import Conversation, Message, Role, ToolCall
 from engine.domain.events import (
     AgentRunCompleted,
@@ -23,6 +31,7 @@ from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
     AgentRunId,
+    ApprovalId,
     ConversationId,
     MessageId,
     RunId,
@@ -93,6 +102,29 @@ class SQLiteStateStore:
                     changed_files TEXT NOT NULL,
                     runner TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS approvals (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    approval_id TEXT NOT NULL UNIQUE,
+                    agent_run_id TEXT NOT NULL,
+                    instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id),
+                    runner TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    reason TEXT,
+                    command TEXT,
+                    cwd TEXT,
+                    tool_name TEXT,
+                    arguments TEXT,
+                    allowed_decisions TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    decision TEXT,
+                    decision_source TEXT,
+                    requested_at TEXT NOT NULL,
+                    decided_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS approvals_by_run
+                    ON approvals (agent_run_id);
                 """
             )
             columns = {
@@ -373,6 +405,94 @@ class SQLiteStateStore:
                 ),
             )
 
+    # --- approvals --------------------------------------------------------
+
+    async def record_approval(self, approval: ApprovalRecord) -> None:
+        with self._lock, self._connection:
+            exists = self._connection.execute(
+                "SELECT 1 FROM agent_instances WHERE instance_id = ?",
+                (approval.instance_id,),
+            ).fetchone()
+            if exists is None:
+                # The same integrity check `append_messages` makes, and stated
+                # here rather than left to the foreign key so both stores fail
+                # the same way.
+                raise KeyError(f"no agent instance {approval.instance_id!r}")
+            # Only the outcome is updatable: what was asked is a statement of
+            # what the provider wanted at one moment and does not get revised.
+            self._connection.execute(
+                """
+                INSERT INTO approvals (
+                    approval_id, agent_run_id, instance_id, runner, kind, reason,
+                    command, cwd, tool_name, arguments, allowed_decisions, status,
+                    decision, decision_source, requested_at, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(approval_id) DO UPDATE SET
+                    status = excluded.status,
+                    decision = excluded.decision,
+                    decision_source = excluded.decision_source,
+                    decided_at = excluded.decided_at
+                """,
+                (
+                    approval.approval_id,
+                    approval.agent_run_id,
+                    approval.instance_id,
+                    approval.runner,
+                    approval.kind.value,
+                    approval.reason,
+                    approval.command,
+                    approval.cwd,
+                    approval.tool_name,
+                    approval.arguments,
+                    json.dumps(
+                        [decision.value for decision in approval.allowed_decisions]
+                    ),
+                    approval.status.value,
+                    approval.decision.value if approval.decision else None,
+                    (
+                        approval.decision_source.value
+                        if approval.decision_source
+                        else None
+                    ),
+                    approval.requested_at.isoformat(),
+                    approval.decided_at.isoformat() if approval.decided_at else None,
+                ),
+            )
+
+    async def load_approval(self, approval_id: ApprovalId) -> ApprovalRecord | None:
+        with self._lock:
+            row = self._connection.execute(
+                f"SELECT {_APPROVAL_COLUMNS} FROM approvals WHERE approval_id = ?",
+                (approval_id,),
+            ).fetchone()
+        return _approval_from_row(row) if row is not None else None
+
+    async def list_approvals(
+        self,
+        *,
+        instance_id: AgentInstanceId | None = None,
+        agent_run_id: AgentRunId | None = None,
+        status: ApprovalStatus | None = None,
+    ) -> Sequence[ApprovalRecord]:
+        query = f"SELECT {_APPROVAL_COLUMNS} FROM approvals"
+        filters: list[str] = []
+        parameters: list[str] = []
+        if instance_id is not None:
+            filters.append("instance_id = ?")
+            parameters.append(instance_id)
+        if agent_run_id is not None:
+            filters.append("agent_run_id = ?")
+            parameters.append(agent_run_id)
+        if status is not None:
+            filters.append("status = ?")
+            parameters.append(status.value)
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
+        query += " ORDER BY sequence"
+        with self._lock:
+            rows = self._connection.execute(query, tuple(parameters)).fetchall()
+        return tuple(_approval_from_row(row) for row in rows)
+
     async def agent_run(self, agent_run_id: AgentRunId) -> AgentRun | None:
         """Read back one execution, matching the in-memory adapter's helper."""
         with self._lock:
@@ -420,6 +540,46 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
         workflow_step_id=(
             StepId(row["workflow_step_id"])
             if row["workflow_step_id"] is not None
+            else None
+        ),
+    )
+
+
+_APPROVAL_COLUMNS = """
+    approval_id, agent_run_id, instance_id, runner, kind, reason, command, cwd,
+    tool_name, arguments, allowed_decisions, status, decision, decision_source,
+    requested_at, decided_at
+"""
+
+
+def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
+    return ApprovalRecord(
+        approval_id=ApprovalId(row["approval_id"]),
+        agent_run_id=AgentRunId(row["agent_run_id"]),
+        instance_id=AgentInstanceId(row["instance_id"]),
+        runner=row["runner"],
+        kind=ApprovalKind(row["kind"]),
+        requested_at=datetime.fromisoformat(row["requested_at"]),
+        reason=row["reason"],
+        command=row["command"],
+        cwd=row["cwd"],
+        tool_name=row["tool_name"],
+        arguments=row["arguments"],
+        allowed_decisions=tuple(
+            ApprovalDecision(value) for value in json.loads(row["allowed_decisions"])
+        ),
+        status=ApprovalStatus(row["status"]),
+        decision=(
+            ApprovalDecision(row["decision"]) if row["decision"] is not None else None
+        ),
+        decision_source=(
+            ApprovalDecisionSource(row["decision_source"])
+            if row["decision_source"] is not None
+            else None
+        ),
+        decided_at=(
+            datetime.fromisoformat(row["decided_at"])
+            if row["decided_at"] is not None
             else None
         ),
     )

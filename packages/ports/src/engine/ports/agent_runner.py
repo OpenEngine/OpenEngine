@@ -23,6 +23,7 @@ from enum import Enum
 from typing import Protocol, runtime_checkable
 
 from engine.domain.agents import AgentProfile
+from engine.domain.approvals import ApprovalDecision, ApprovalKind
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
@@ -41,25 +42,14 @@ class FinishReason(Enum):
     ERROR = "error"
 
 
-class ApprovalKind(Enum):
-    """What the agent is asking the user to allow."""
-
-    COMMAND_EXECUTION = "command_execution"
-    FILE_CHANGE = "file_change"
-    TOOL_USE = "tool_use"
-
-
-class ApprovalDecision(Enum):
-    """Provider-neutral decisions a user can make about an approval request."""
-
-    ACCEPT = "accept"
-    ACCEPT_FOR_SESSION = "accept_for_session"
-    CANCEL = "cancel"
-
-
 @dataclass(frozen=True, slots=True)
 class ApprovalRequest:
-    """A normalized request emitted while an agent turn is paused."""
+    """A normalized request emitted while an agent turn is paused.
+
+    What the *provider* asked, carrying the provider's own request id. What was
+    made of it is `engine.domain.ApprovalRecord`, which is durable and keyed by
+    an id of ours -- adapters never see that, and never need to.
+    """
 
     approval_id: str
     kind: ApprovalKind

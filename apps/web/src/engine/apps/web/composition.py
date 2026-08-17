@@ -69,6 +69,20 @@ class Settings:
     claude_timeout_seconds: float | None = None
     """Same as `codex_timeout_seconds`."""
     claude_model: str = ""
+    interactive_codex_sandbox: str = "workspace-write"
+    """An approved command has to be able to do the thing it was approved for.
+
+    The read-only sandbox would refuse the write after the user allowed it, and
+    on-request approval is what keeps that from meaning "unattended": Codex
+    stops and asks before stepping outside the worktree.
+    """
+    interactive_claude_allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS
+    """Reads are preapproved; Bash and edits reach the user as requests.
+
+    Claude Code has no OS-level sandbox to fall back on, so the allow-list is
+    the whole of the distinction: what is on it runs unattended, and everything
+    else -- shell commands included -- goes to the permission callback.
+    """
     workflow_codex_sandbox: str = "workspace-write"
     """Workflow implementation may edit only its isolated worktree."""
     workflow_claude_allowed_tools: tuple[str, ...] = WORKSPACE_WRITE_TOOLS
@@ -122,7 +136,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
         "codex-app-server": CodexAppServerAgentRunner(
             binary_path=settings.codex_binary,
             timeout_seconds=settings.codex_timeout_seconds,
-            sandbox=settings.codex_sandbox,
+            sandbox=settings.interactive_codex_sandbox,
             working_directory=settings.codex_working_directory,
             model=settings.codex_model,
             workspace_provider=workspace_provider,
@@ -138,7 +152,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
         "claude-control": ClaudeCodeControlAgentRunner(
             binary_path=settings.claude_binary,
             timeout_seconds=settings.claude_timeout_seconds,
-            allowed_tools=settings.claude_allowed_tools,
+            allowed_tools=settings.interactive_claude_allowed_tools,
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             workspace_provider=workspace_provider,

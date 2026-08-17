@@ -311,9 +311,10 @@ you        ->  assistant-ui thread
 
 It needs the [Codex CLI](https://developers.openai.com/codex/cli) or
 [Claude Code](https://claude.com/claude-code) on `PATH` and logged in; the page
-reports it plainly if the one you picked is missing. Both run read-only by
-default — Codex sandboxed, Claude Code restricted to `Read`/`Glob`/`Grep` — so an
-agent you are talking to cannot edit the tree as a side effect of answering.
+reports it plainly if the one you picked is missing. The `codex` and `claude`
+runners run read-only — Codex sandboxed, Claude Code restricted to
+`Read`/`Glob`/`Grep` — so an agent you are talking to cannot edit the tree as a
+side effect of answering.
 Each new conversation gets its own branch-backed Git worktree under
 `/tmp/engine-workspaces`, and the chat shows the `cd` command for opening that
 checkout. The worktree is reused for every later turn in the conversation.
@@ -329,6 +330,45 @@ conversation is ours rather than a provider's, either runner can pick up a
 conversation the other started — including the other's tool output. Asked what
 the previous assistant had run, Claude quoted the exact `find` command Codex
 had used, having executed nothing itself.
+
+### Asking permission
+
+The other two runners — `codex-app-server` and `claude-control` — can do more,
+and stop to ask before they do. Codex works in a writable sandbox and asks
+before stepping outside it; Claude Code has reads preapproved and routes shell
+commands and edits to the user. What they are allowed to do and what they must
+ask about is one decision, made in `apps/web/composition.py`: a gate is only a
+gate if what it lets through can then happen.
+
+The pause is durable rather than a callback held in a connection. Each request
+is persisted before it appears anywhere, the decision is persisted before the
+provider is told, and the run stream carries the whole request as a snapshot:
+
+```json
+{"type": "approval",
+ "approval": {"id": "apv-4f2c19a8b307", "status": "pending",
+              "kind": "command_execution", "reason": "Run the test suite",
+              "command": "pytest", "cwd": "/workspace",
+              "allowedDecisions": ["accept", "accept_for_session", "cancel"]}}
+```
+
+A decision is its own request, so it can arrive on a different connection from
+the one that showed it:
+
+```http
+POST /api/threads/{thread_id}/runs/current/approvals/{approval_id}
+{ "decision": "accept" }
+```
+
+Closing the browser therefore does not cancel anything: reconnecting replays the
+pending request and the same CLI process carries on. Stopping the run does
+cancel it, and records the cancellation. What a restart cannot do is resume a
+subprocess that died with the server, so anything still `pending` when the
+process comes back is marked `interrupted` and stops being answerable — an
+approval that would resume nothing is not one worth offering.
+
+The approval UI is not built yet, so today this is reachable over the API rather
+than from the chat page.
 
 Three limits worth knowing before you read anything into a conversation:
 
