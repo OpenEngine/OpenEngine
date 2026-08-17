@@ -16,10 +16,11 @@ from engine.domain import (
     StepCompleted,
     StepId,
     StepSpec,
+    ToolCall,
     ToolSpec,
 )
 from engine.ports import AgentTurn, McpServerConfig
-from engine.runtime import Capabilities, Dispatcher
+from engine.runtime import Capabilities, Dispatcher, INVALID_COMPLETION_ERROR
 
 
 PROFILE = AgentProfile(AgentId("coder"), "Implement the requested change.")
@@ -119,7 +120,11 @@ def test_accepted_result_is_delivered_then_the_cli_is_cancelled() -> None:
     asyncio.run(scenario())
 
 
-class TranscriptOnlyMcpRunner(CallingMcpRunner):
+class RetryingMcpRunner(CallingMcpRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[Message, ...]] = []
+
     async def run_turn_with_mcp(
         self,
         agent_run_id: AgentRunId,
@@ -128,21 +133,74 @@ class TranscriptOnlyMcpRunner(CallingMcpRunner):
         mcp_server: McpServerConfig,
         workspace_id: str | None = None,
     ) -> AgentTurn:
-        return AgentTurn(
-            Message.assistant("I called complete_step."),
-            steps=(Message.assistant("tool complete_step reported success"),),
+        self.calls.append(tuple(messages))
+        if len(self.calls) == 1:
+            return AgentTurn(
+                Message.assistant("I called complete_step."),
+                steps=(Message.assistant("tool complete_step reported success"),),
+            )
+        return await super().run_turn_with_mcp(
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            workspace_id,
         )
 
 
-def test_a_transcript_claim_does_not_become_a_terminal_event() -> None:
+def test_an_invalid_exit_is_retried_with_the_completion_error() -> None:
     async def scenario() -> None:
-        runner = TranscriptOnlyMcpRunner()
+        runner = RetryingMcpRunner()
+        result = await Dispatcher(_capabilities(runner)).run_workflow_agent(
+            COMMAND, runner=runner
+        )
+
+        assert isinstance(result, StepCompleted)
+        assert len(runner.calls) == 2
+        assert runner.calls[1][-1] == Message.user(INVALID_COMPLETION_ERROR)
+        assert any(
+            message.content == "I called complete_step."
+            for message in runner.calls[1]
+        )
+        assert runner.cancelled.is_set()
+
+    asyncio.run(scenario())
+
+
+class ClarificationMcpRunner(CallingMcpRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: str | None = None,
+    ) -> AgentTurn:
+        self.calls += 1
+        clarification = ToolCall(
+            "question-1",
+            "request_user_input",
+            json.dumps({"question": "Which API should I preserve?"}),
+        )
+        return AgentTurn(
+            Message.assistant("Waiting for clarification."),
+            steps=(Message.assistant(tool_calls=(clarification,)),),
+        )
+
+
+def test_a_clarification_call_pauses_without_retrying() -> None:
+    async def scenario() -> None:
+        runner = ClarificationMcpRunner()
         result = await Dispatcher(_capabilities(runner)).run_workflow_agent(
             COMMAND, runner=runner
         )
 
         assert isinstance(result, AgentTurn)
-        assert result.message.content == "I called complete_step."
+        assert runner.calls == 1
         assert not runner.cancelled.is_set()
 
     asyncio.run(scenario())

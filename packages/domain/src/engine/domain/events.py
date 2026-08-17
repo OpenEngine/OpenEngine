@@ -66,7 +66,7 @@ class StepCompleted(Event):
     summary: str
     outputs: tuple[StepOutput, ...] = field(default=())
     mcp_request_id: str | int | None = None
-    """JSON-RPC request that submitted the result, absent for legacy JSON."""
+    """JSON-RPC request that submitted the result, absent for non-MCP producers."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -319,6 +319,7 @@ class ClaudeCodeAgentRunner:
         if mcp_server is not None:
             allowed_tools = (
                 *allowed_tools,
+                "AskUserQuestion",
                 f"mcp__{mcp_server.name}__complete_step",
                 f"mcp__{mcp_server.name}__fail_step",
             )

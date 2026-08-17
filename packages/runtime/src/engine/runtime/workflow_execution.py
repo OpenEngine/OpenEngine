@@ -19,7 +19,7 @@ from engine.domain import (
 from engine.ports import AgentRunner
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
-from engine.runtime.step_results import step_completed_from_turn
+from engine.runtime.step_results import requests_clarification_or_escalation
 
 
 class WorkflowExecutionError(RuntimeError):
@@ -99,19 +99,17 @@ class WorkflowExecutor:
                 # persisted the event. Never infer delivery from CLI transcript.
                 assert terminal == delivered
                 return
-            assert implementation.step is not None
             if isinstance(terminal, (StepCompleted, RunFailed)):
-                result = terminal
-            else:
-                result = step_completed_from_turn(
-                    run_id=state.run_id,
-                    step=implementation.step,
-                    agent_run_id=implementation.agent_run_id,
-                    turn=terminal,
-                )
-            # Applying the result moves the run to REVIEWING. The emitted
-            # reviewer command stays pending until reviewer execution lands.
-            await self._transition(state, result)
+                await self._transition(state, terminal)
+                return
+            if requests_clarification_or_escalation(terminal):
+                # The agent validly paused without completing the step. Its
+                # conversation is durable and the workflow stays IMPLEMENTING
+                # so a later response can resume the same logical instance.
+                return
+            raise WorkflowExecutionError(
+                "workflow runner exited without a valid completion state"
+            )
         except asyncio.CancelledError:
             raise
         except Exception as error:

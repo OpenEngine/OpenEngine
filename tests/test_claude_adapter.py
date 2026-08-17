@@ -257,6 +257,7 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
         }
     }
     allowed = argv[argv.index("--allowedTools") + 1 :]
+    assert "AskUserQuestion" in allowed
     assert "mcp__workflow__complete_step" in allowed
     assert "mcp__workflow__fail_step" in allowed
 
