@@ -74,6 +74,14 @@ export type ApiWorkflowRun = {
   } | null;
 };
 
+/** Choose the runner that answers this conversation from now on. */
+export function setThreadRunner(threadId: string, runner: string): Promise<ApiThread> {
+  return api<ApiThread>(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ runner }),
+  });
+}
+
 export function attachWorkspace(threadId: string): Promise<ApiThread> {
   return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "POST" });
 }

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import httpx
 import pytest
@@ -298,18 +298,22 @@ class ClarificationToolRunner(ConcurrentRunner):
 
 
 def _session(runner: ConcurrentRunner) -> AgentSession:
+    return _session_with({"test": runner})
+
+
+def _session_with(runners: Mapping[str, ConcurrentRunner]) -> AgentSession:
     unused = object()
     return AgentSession(
         Capabilities(
             workflow_runtime=unused,
             source_control=unused,
-            agent_runner=runner,
+            agent_runner=next(iter(runners.values())),
             communications=unused,
             workspace_provider=unused,
             state_store=InMemoryStateStore(),
         ),
         profiles=PROFILES,
-        runners={"test": runner},
+        runners=dict(runners),
     )
 
 
@@ -1214,6 +1218,43 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
         ("user", "hi"),
         ("assistant", "hello"),
     ]
+
+
+def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None:
+    """The conversation remembers its runner; a turn need not repeat it.
+
+    The header sends the choice once, so a turn that carries no runner has to
+    reach whoever the chat was last set to rather than the wired default.
+    """
+    first = ConcurrentRunner(("from the first",))
+    second = ConcurrentRunner(("from the second",))
+    runners = {"test": first, "other": second}
+    app = create_app(_session_with(runners), runners)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            switched = await client.patch(
+                f"/api/threads/{thread_id}", json={"runner": "other"}
+            )
+            await client.post(f"/api/threads/{thread_id}/runs", json={"text": "hi"})
+            reloaded = await client.get(f"/api/threads/{thread_id}")
+            unknown = await client.patch(
+                f"/api/threads/{thread_id}", json={"runner": "nobody"}
+            )
+            return switched, reloaded, unknown
+
+    switched, reloaded, unknown = asyncio.run(scenario())
+
+    assert switched.json()["runner"] == "other"
+    assert reloaded.json()["runner"] == "other"
+    assert [turn[-1].content for turn in second.seen] == ["hi"]
+    assert first.seen == []
+    assert unknown.status_code == 400
 
 
 def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
