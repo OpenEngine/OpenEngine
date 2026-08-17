@@ -208,9 +208,13 @@ function EngineRuntime({
 
         // assistant-ui normally generates this after runEnd; doing it here
         // makes the title the first model turn for a new conversation.
+        //
+        // Neither call names a runner: the conversation keeps the last one it
+        // was given, and sending the page's new-chat default with every turn
+        // would silently move an older chat onto it.
         await api(`/api/threads/${threadId}/title`, {
           method: "POST",
-          body: JSON.stringify({ text, runner: defaultsRef.current.runner }),
+          body: JSON.stringify({ text }),
           signal: abortSignal,
         });
         await reloadThreadsRef.current?.();
@@ -218,7 +222,7 @@ function EngineRuntime({
         const response = await fetch(`/api/threads/${threadId}/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, runner: defaultsRef.current.runner }),
+          body: JSON.stringify({ text }),
           signal: abortSignal,
         });
         yield* readRunResponse(response);

@@ -42,8 +42,10 @@ button { color: inherit; }
 .chat-header { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(190px, 320px) 130px; gap: 14px; align-items: end; padding: 16px 24px; background: #f9f7f2; border-bottom: 1px solid #dedbd2; }
 .eyebrow { color: #667064; font: 500 10px/1 ui-monospace, monospace; letter-spacing: .12em; }
 .chat-header p { margin: 7px 0 0; color: #72776f; font-size: 12px; }
-.chat-header label { display: grid; gap: 5px; color: #687067; font: 500 10px/1 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
+.chat-header label, .chat-header .header-fact { display: grid; gap: 5px; color: #687067; font: 500 10px/1 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
 .chat-header select { width: 100%; padding: 9px 30px 9px 10px; color: #252b24; background: #fff; border: 1px solid #d7d5cc; border-radius: 8px; font-family: inherit; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.chat-header .header-value { overflow: hidden; padding: 9px 10px; color: #252b24; background: #efede6; border: 1px solid #d7d5cc; border-radius: 8px; font-family: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+.chat-header .header-error { color: #a63d31; font-size: 10px; line-height: 1.4; text-transform: none; letter-spacing: 0; }
 .thread { min-height: 0; }
 .thread-viewport { display: flex; flex-direction: column; height: 100%; overflow-y: auto; scroll-behavior: smooth; }
 .welcome { width: min(760px, calc(100% - 48px)); margin: auto auto 0; padding: 80px 0 44px; }
@@ -198,7 +200,7 @@ button { color: inherit; }
   .new-thread { width: auto; flex: 0 0 auto; }
   .thread-item { min-width: 170px; flex: 0 0 auto; background: #293128; }
   .chat-header { grid-template-columns: 1fr 1fr; padding: 12px; }
-  .chat-header > div { display: none; }
+  .chat-header > .header-copy { display: none; }
   .welcome { padding-top: 48px; }
   .thread-footer { padding-inline: 12px; }
   .run-sidebar { display: flex; }
