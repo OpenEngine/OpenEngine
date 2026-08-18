@@ -640,8 +640,7 @@ function ConversationFooter() {
               you have to scroll a long conversation to reach. */}
           <WorkspaceTagline />
           <p className="composer-note">
-            The codex and claude runners only read. The approval runners can change this
-            chat's worktree, and stop to ask first.
+            Either runner can change this chat's worktree, and stops to ask first.
           </p>
         </>
       )}
