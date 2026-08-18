@@ -30,6 +30,8 @@ from engine.ports import (
 )
 from engine.runtime import (
     DEFAULT_RUNNER,
+    INTERRUPTED_TOOL_RESULT,
+    INTERRUPTED_TURN_NOTE,
     AgentSession,
     Capabilities,
     UnknownAgentError,
@@ -58,6 +60,49 @@ class ScriptedRunner:
 
     async def cancel(self, agent_run_id) -> None:
         pass
+
+
+class InterruptedRunner(ScriptedRunner):
+    """Reports work, asks for one more tool, and never comes back.
+
+    The shape of the moment somebody presses stop: some of what the agent did
+    has been reported, and the last thing it did is a call whose result was
+    still on its way.
+    """
+
+    READ = ToolCall(call_id="c1", name="Read", arguments='{"path": "worker.py"}')
+    WRITE = ToolCall(call_id="c2", name="Write", arguments='{"path": "worker.py"}')
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reported = asyncio.Event()
+
+    async def run_turn(self, *args, **kwargs):
+        raise AssertionError("the streaming method should be used")
+
+    async def run_turn_streamed(
+        self, agent_run_id, profile, messages, on_message, tools=(), workspace_id=None
+    ):
+        self.seen.append((agent_run_id, profile, tuple(messages)))
+        on_message(Message.assistant("Reading the worker first."))
+        on_message(Message.assistant(tool_calls=(self.READ,)))
+        on_message(Message.tool_result("c1", "def work(): ..."))
+        on_message(Message.assistant(tool_calls=(self.WRITE,)))
+        self.reported.set()
+        await asyncio.Event().wait()
+        raise AssertionError("this runner only ever ends by being cancelled")
+
+
+async def _stopped_mid_turn(
+    session: AgentSession, runner: InterruptedRunner, instance_id
+) -> None:
+    """Start a turn, let it report what it has done, then stop it."""
+    turn = asyncio.create_task(
+        session.say(instance_id, "fix the worker", on_message=lambda _message: None)
+    )
+    await runner.reported.wait()
+    turn.cancel()
+    await asyncio.gather(turn, return_exceptions=True)
 
 
 class BrokenRunner:
@@ -405,6 +450,69 @@ def test_a_failed_turn_is_recorded_as_failed() -> None:
     run = asyncio.run(store.agent_run(runner.seen[0]))
     assert run.status is AgentRunStatus.FAILED
     assert "codex exited 1" in run.summary
+
+
+def test_a_stopped_turn_keeps_the_work_it_had_already_reported() -> None:
+    """Stopping an agent does not undo what it did: the file it wrote is still
+    written. A transcript that leaves the work out is one the workspace
+    contradicts -- and the next turn believes the transcript."""
+    store = InMemoryStateStore()
+    runner = InterruptedRunner()
+    session = _session(runner, store)
+
+    async def scenario():
+        instance = await session.start(CODER)
+        await _stopped_mid_turn(session, runner, instance.instance_id)
+        return (
+            await session.history(instance.instance_id),
+            await store.agent_run(runner.seen[0][0]),
+        )
+
+    history, agent_run = asyncio.run(scenario())
+
+    assert [(message.role, message.content) for message in history] == [
+        (Role.USER, "fix the worker"),
+        (Role.ASSISTANT, "Reading the worker first."),
+        (Role.ASSISTANT, ""),
+        (Role.TOOL, "def work(): ..."),
+        (Role.ASSISTANT, ""),
+        # The call that was still in flight is answered, so it cannot be read
+        # later as a tool that ran and returned nothing.
+        (Role.TOOL, INTERRUPTED_TOOL_RESULT),
+        (Role.SYSTEM, INTERRUPTED_TURN_NOTE),
+    ]
+    assert history[4].tool_calls == (InterruptedRunner.WRITE,)
+    assert history[5].tool_call_id == "c2"
+    assert agent_run.status is AgentRunStatus.CANCELLED
+
+
+def test_the_next_turn_is_told_what_the_stopped_one_did() -> None:
+    """Storing it is only half of it. A runner starts cold every time, so the
+    stored partial is the only way the turn after an interruption knows any of
+    it happened."""
+    store = InMemoryStateStore()
+    stopped = InterruptedRunner()
+    resumed = ScriptedRunner(["Picked up where it left off."])
+
+    async def scenario():
+        session = _session(stopped, store)
+        instance = await session.start(CODER)
+        await _stopped_mid_turn(session, stopped, instance.instance_id)
+        await _session(resumed, store).say(instance.instance_id, "carry on")
+        return resumed.seen[0][2]
+
+    given = asyncio.run(scenario())
+
+    assert [message.content for message in given] == [
+        "fix the worker",
+        "Reading the worker first.",
+        "",
+        "def work(): ...",
+        "",
+        INTERRUPTED_TOOL_RESULT,
+        INTERRUPTED_TURN_NOTE,
+        "carry on",
+    ]
 
 
 def test_conversations_do_not_bleed_into_each_other() -> None:
