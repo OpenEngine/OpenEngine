@@ -169,7 +169,7 @@ export function NewWorkflowPage() {
             <a href="/runs">Cancel</a>
             <button disabled={submitting || !runner} type="submit">{submitting ? "Creating…" : "Create workflow run"}</button>
           </div>
-          <p className="form-note">The implementation starts after the run is created. Reviewer execution is not available yet.</p>
+          <p className="form-note">The implementation starts after the run is created, then a read-only review of it. The run then waits for your decision.</p>
         </form>
       </main>
     </div>
@@ -244,7 +244,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           if (cancelled) return;
           setRun(value);
           setError("");
-          if (["pending", "preparing_workspace", "implementing"].includes(value.phase)) {
+          if (["pending", "preparing_workspace", "implementing", "reviewing"].includes(value.phase)) {
             timer = window.setTimeout(load, 1000);
           }
         })

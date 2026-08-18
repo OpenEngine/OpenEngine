@@ -632,6 +632,9 @@ def create_app(
     workflow_executor = WorkflowExecutor(
         session.capabilities,
         workflow_runners or runners,
+        # Implementation writes, review reads: the reviewer is the chat runner
+        # of the same provider name, which is the read-only one.
+        review_runners=runners,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 
@@ -699,7 +702,7 @@ def create_app(
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
         task = asyncio.create_task(
-            workflow_executor.advance_to_review(event, runner_name)
+            workflow_executor.advance_through_review(event, runner_name)
         )
         workflow_tasks[run_id] = task
         task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))
