@@ -9,7 +9,7 @@ import {
   type EngineConfig,
   type RunnerOption,
 } from "./api";
-import { ChatSidebar, ChatThread } from "./chat";
+import { ChatSidebar, ChatThread, ConversationStats } from "./chat";
 import { EngineRuntimeProvider } from "./runtime";
 import { NewWorkflowPage, RunDetailPage, RunsPage } from "./runs";
 import "./styles.css";
@@ -30,15 +30,16 @@ function ChatApp({ initialThreadId }: { initialThreadId?: string }) {
       .catch((reason: Error) => setError(reason.message));
   }, []);
 
-  if (error) return <main className="fatal">Could not connect to openengine: {error}</main>;
+  if (error)
+    return <main className="state state-fatal">Could not connect to openengine: {error}</main>;
   if (!config || !agentId || !runner)
-    return <main className="loading">Starting openengine…</main>;
+    return <main className="state">Starting openengine…</main>;
 
   return (
     <EngineRuntimeProvider defaults={{ agentId, runner }} initialThreadId={initialThreadId}>
       <div className="app-shell">
         <ChatSidebar />
-        <main className="chat-panel">
+        <main className="panel">
           <ChatHeader
             config={config}
             agentId={agentId}
@@ -46,6 +47,7 @@ function ChatApp({ initialThreadId }: { initialThreadId?: string }) {
             onAgentChange={setAgentId}
             onRunnerChange={setRunner}
           />
+          <ConversationStats />
           <ChatThread />
         </main>
       </div>
@@ -89,14 +91,19 @@ function ChatHeader({
     );
 
   return (
-    <header className="chat-header">
-      <div className="header-copy">
-        <span className="eyebrow">NEW CHAT DEFAULTS</span>
-        <p>Choose what starts the next conversation and which runner answers.</p>
+    <header className="panel-head">
+      <div className="panel-head-copy">
+        <p className="eyebrow">New chat defaults</p>
+        <h1>New conversation</h1>
+        <p className="lede">Choose what starts the next conversation and which runner answers.</p>
       </div>
-      <label>
+      <label className="field">
         <span>Agent</span>
-        <select value={agentId} onChange={(event) => onAgentChange(event.target.value)}>
+        <select
+          className="field-box"
+          value={agentId}
+          onChange={(event) => onAgentChange(event.target.value)}
+        >
           {config.agents.map((agent) => (
             <option key={agent.id} value={agent.id}>
               {agent.id} — {agent.description}
@@ -104,9 +111,13 @@ function ChatHeader({
           ))}
         </select>
       </label>
-      <label>
+      <label className="field">
         <span>Runner</span>
-        <select value={runner} onChange={(event) => onRunnerChange(event.target.value)}>
+        <select
+          className="field-box"
+          value={runner}
+          onChange={(event) => onRunnerChange(event.target.value)}
+        >
           {config.runners.map((option) => (
             <option key={option.id} value={option.id}>
               {option.id}
@@ -133,6 +144,7 @@ function ConversationHeader({
   fallbackRunner: string;
 }) {
   const aui = useAui();
+  const listedTitle = useAuiState((state) => state.threadListItem.title);
   // Read the conversation rather than trusting the cached thread list for
   // this: the dropdown claims to name the runner that answers here, and the
   // list is a snapshot taken whenever it was last refreshed.
@@ -144,6 +156,7 @@ function ConversationHeader({
   // the truthful thing to show while it is being read.
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
   const workflowConversation = Boolean(thread?.workflowRunId);
+  const title = fetched?.title || listedTitle || "New chat";
 
   useEffect(() => {
     let current = true;
@@ -171,35 +184,40 @@ function ConversationHeader({
   }
 
   return (
-    <header className="chat-header">
-      <div className="header-copy">
-        <span className="eyebrow">THIS CONVERSATION</span>
-        <p>
+    <header className="panel-head">
+      <div className="panel-head-copy">
+        <p className="eyebrow">This conversation</p>
+        <h1>{title}</h1>
+        <p className="lede">
           {workflowConversation
             ? "A workflow step owns this transcript; its run chose the runner."
             : "This runner answers here until you pick another."}
         </p>
       </div>
-      <div className="header-fact">
+      <div className="field">
         <span>Agent</span>
-        <span className="header-value">{thread?.agentId ?? "…"}</span>
+        <span className="field-box">{thread?.agentId ?? "…"}</span>
       </div>
       {workflowConversation ? (
-        <div className="header-fact">
+        <div className="field">
           <span>Runner</span>
-          <span className="header-value">{runner}</span>
+          <span className="field-box">{runner}</span>
         </div>
       ) : (
-        <label>
+        <label className="field">
           <span>Runner</span>
-          <select value={runner} onChange={(event) => void choose(event.target.value)}>
+          <select
+            className="field-box"
+            value={runner}
+            onChange={(event) => void choose(event.target.value)}
+          >
             {runners.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.id}
               </option>
             ))}
           </select>
-          {error && <span className="header-error">{error}</span>}
+          {error && <span className="field-error">{error}</span>}
         </label>
       )}
     </header>
