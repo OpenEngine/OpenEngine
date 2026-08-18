@@ -388,8 +388,9 @@ class ThreadService:
             try:
                 while not task.done() or not observed.empty():
                     try:
-                        message = await asyncio.wait_for(observed.get(), timeout=0.1)
-                    except asyncio.TimeoutError:
+                        async with asyncio.timeout(0.1):
+                            message = await observed.get()
+                    except TimeoutError:
                         continue
                     await run.observe(message)
                 return await task
