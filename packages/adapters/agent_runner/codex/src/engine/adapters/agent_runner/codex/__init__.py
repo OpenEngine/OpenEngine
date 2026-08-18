@@ -81,6 +81,10 @@ import shutil
 from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
+from engine.adapters.agent_runner.codex.permissions import (
+    CODEX_PERMISSION_TRANSLATOR,
+    CodexPermissionTranslator,
+)
 from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
@@ -560,6 +564,8 @@ class CodexAgentRunner:
     that is a decision with someone behind it. A deployment that wants a ceiling
     anyway can still pass one.
     """
+
+    permission_translator = CODEX_PERMISSION_TRANSLATOR
 
     def __init__(
         self,
@@ -1068,10 +1074,12 @@ def _tail(text: str, lines: int = 5) -> str:
 
 __all__ = [
     "APP_SERVER_APPROVAL_ENVELOPE",
+    "CODEX_PERMISSION_TRANSLATOR",
     "INTERACTIVE_APPROVAL_POLICY",
     "SANDBOX_MODES",
     "CodexAgentRunner",
     "CodexExecutionError",
+    "CodexPermissionTranslator",
     "CodexToolsUnsupportedError",
     "CodexUnavailableError",
     "action_messages",

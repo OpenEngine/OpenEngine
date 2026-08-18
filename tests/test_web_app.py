@@ -18,6 +18,7 @@ from engine.apps.web.api import ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_review_runners,
     build_runners,
     build_workflow_runners,
 )
@@ -56,6 +57,7 @@ from engine.ports import (
 )
 from engine.runtime import AgentSession, Capabilities, INVALID_COMPLETION_ERROR
 from engine.runtime.terminal_mcp import _mcp_response
+from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -138,6 +140,24 @@ def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:
     assert "Bash" not in claude_tools
 
 
+def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -> None:
+    """What keeps a review read-only is the runner it gets, not its prompt."""
+    settings = Settings()
+    workflow_runners = build_workflow_runners(settings)
+    reviewers = build_review_runners(settings)
+
+    assert set(workflow_runners) <= set(reviewers)
+    codex_argv = reviewers["codex"].command_line(PROFILES[CODER])
+    claude_argv = reviewers["claude"].command_line(PROFILES[CODER])
+
+    assert codex_argv[codex_argv.index("--sandbox") + 1] == "read-only"
+    assert claude_argv[claude_argv.index("--allowedTools") + 1 :] == [
+        "Read",
+        "Glob",
+        "Grep",
+    ]
+
+
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     database = tmp_path / "conversations.sqlite3"
     runner = ConcurrentRunner()
@@ -210,6 +230,8 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
 class ConcurrentRunner:
     """A controllably slow runner that records how much work overlaps."""
 
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
     def __init__(self, replies: Sequence[str] = ("ok",)) -> None:
         self.replies = list(replies)
         self.seen: list[tuple[Message, ...]] = []
@@ -236,6 +258,12 @@ class ConcurrentRunner:
 
     async def cancel(self, agent_run_id: AgentRunId) -> None:
         pass
+
+
+def _rejected(acknowledgement: dict[str, object] | None) -> bool:
+    """Whether the broker refused a terminal tool call instead of accepting it."""
+    result = (acknowledgement or {}).get("result")
+    return isinstance(result, dict) and result.get("isError") is True
 
 
 class TerminalToolRunner(ConcurrentRunner):
@@ -275,6 +303,11 @@ class TerminalToolRunner(ConcurrentRunner):
                 },
             },
         )
+        if _rejected(self.acknowledgement):
+            # A refused tool call leaves the CLI running, so it ends its turn
+            # the way any provider would. Only an accepted result is followed
+            # by the runtime cancelling the process.
+            return AgentTurn(Message.assistant("The terminal call was refused."))
         await self.cancelled.wait()
         return AgentTurn(Message.assistant("Terminal result accepted."))
 
@@ -465,13 +498,38 @@ def _workflow_state(phase: RunPhase) -> RunState:
     )
 
 
+def _reviewer(
+    summary: str = "The change matches the task.",
+    findings: str = "No blocking findings.",
+) -> TerminalToolRunner:
+    """A reviewer that completes its step with the output the step declares."""
+    return TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": summary,
+            "outputs": {"findings": findings},
+        },
+    )
+
+
 def _workflow_app(
     store: InMemoryStateStore,
     runner: ConcurrentRunner,
     workspaces: object | None = None,
     workflow_runners: dict[str, ConcurrentRunner] | None = None,
+    reviewers: dict[str, ConcurrentRunner] | None = None,
 ):
+    """Wire the app the way the composition root does.
+
+    `workflow_runners` implement and may write; the chat runner registered under
+    the same name reviews, and is the one that may not.
+    """
     unused = object()
+    implementers = dict(workflow_runners or {"test": runner})
+    chat_runners: dict[str, ConcurrentRunner] = dict(
+        reviewers or {name: _reviewer() for name in implementers}
+    )
     session = AgentSession(
         Capabilities(
             workflow_runtime=unused,
@@ -482,13 +540,26 @@ def _workflow_app(
             state_store=store,
         ),
         profiles=PROFILES,
-        runners={"test": runner},
+        runners=chat_runners,
     )
     return create_app(
         session,
-        {"test": runner},
-        workflow_runners=workflow_runners,
+        chat_runners,
+        workflow_runners=implementers,
+        review_runners=chat_runners,
     )
+
+
+async def _await_phase(
+    client: httpx.AsyncClient, run_id: RunId, phase: str
+) -> httpx.Response:
+    """Poll a run until it reaches `phase`, or return the last view it had."""
+    for _ in range(200):
+        response = await client.get(f"/api/runs/{run_id}")
+        if response.json()["phase"] == phase:
+            return response
+        await asyncio.sleep(0.01)
+    return response
 
 
 @pytest.mark.parametrize(
@@ -548,9 +619,9 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
-def test_create_workflow_run_executes_implementation_and_stops_at_review() -> None:
+def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     store = InMemoryStateStore()
-    runner = TerminalToolRunner(
+    implementer = TerminalToolRunner(
         "complete_step",
         {
             "outcome": "success",
@@ -558,7 +629,11 @@ def test_create_workflow_run_executes_implementation_and_stops_at_review() -> No
             "outputs": {},
         },
     )
-    app = _workflow_app(store, runner)
+    reviewer = _reviewer(
+        summary="The handling is correct.",
+        findings="worker.py cancels the task, and the new test covers it.",
+    )
+    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -572,36 +647,98 @@ def test_create_workflow_run_executes_implementation_and_stops_at_review() -> No
                 },
             )
             run_id = RunId(created.json()["runId"])
-            for _ in range(20):
-                reopened = await client.get(f"/api/runs/{run_id}")
-                if reopened.json()["phase"] == "reviewing":
-                    break
-                await asyncio.sleep(0.01)
+            reopened = await _await_phase(client, run_id, "awaiting_human_review")
             listed = await client.get("/api/runs")
-            return created, reopened, listed, await store.history(run_id)
+            instances = await store.list_instances(workflow_run_id=run_id)
+            conversations = {
+                instance.workflow_step_id: await store.load_conversation(
+                    instance.instance_id
+                )
+                for instance in instances
+            }
+            return created, reopened, listed, await store.history(run_id), conversations
 
-    created, reopened, listed, history = asyncio.run(scenario())
+    created, reopened, listed, history, conversations = asyncio.run(scenario())
+    body = reopened.json()
 
     assert created.status_code == 201
     assert created.json()["phase"] == "pending"
     assert created.json()["currentStepId"] is None
-    assert reopened.json()["phase"] == "reviewing"
-    assert reopened.json()["currentStepId"] == "review"
-    assert reopened.json()["steps"][0]["summary"] == "Added cancellation handling."
-    assert reopened.json()["steps"][0]["conversationUrl"]
-    assert reopened.json()["steps"][1]["status"] == "in_progress"
+    assert body["phase"] == "awaiting_human_review"
+    assert body["currentStepId"] == "human-review"
+    assert body["steps"][0]["status"] == "completed"
+    assert body["steps"][0]["summary"] == "Added cancellation handling."
+    assert body["steps"][0]["conversationUrl"]
+    assert body["steps"][1]["status"] == "completed"
+    assert body["steps"][1]["outcome"] == "success"
+    assert body["steps"][1]["summary"] == "The handling is correct."
+    assert body["steps"][1]["outputs"] == [
+        {"name": "findings", "value": "worker.py cancels the task, and the new test covers it."}
+    ]
+    assert body["steps"][1]["conversationUrl"]
+    assert body["steps"][2]["status"] == "action_required"
+    assert "worker.py cancels the task" in body["pendingHumanReview"]["summary"]
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]
     ]
-    assert len(history) == 3
+    assert len(history) == 4
     assert isinstance(history[0], RunRequested)
     assert isinstance(history[1], WorkspaceProvisioned)
     assert isinstance(history[2], StepCompleted)
+    assert isinstance(history[3], StepCompleted)
     assert history[0].prompt == "Add cancellation handling."
     assert history[0].repository == "acme/api"
-    assert runner.workspace_ids == ["ws-1"]
-    assert "`complete_step`" in runner.seen[0][0].content
-    assert "JSON" not in runner.seen[0][0].content
+    assert (history[2].step_id, history[3].step_id) == (IMPLEMENTATION_STEP, REVIEW_STEP)
+    # Two executions, one each, in the single workspace the run provisioned.
+    assert implementer.workspace_ids == ["ws-1"]
+    assert reviewer.workspace_ids == ["ws-1"]
+    # Two conversations, kept apart: the review is its own durable instance.
+    assert set(conversations) == {IMPLEMENTATION_STEP, REVIEW_STEP}
+    assert all(conversation.messages for conversation in conversations.values())
+    assert "`complete_step`" in implementer.seen[0][0].content
+    assert "JSON" not in implementer.seen[0][0].content
+
+
+def test_the_reviewer_reads_the_task_and_the_implementation_result() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Took the lock around the shared counter.",
+            "outputs": {},
+        },
+    )
+    reviewer = _reviewer()
+    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Fix the race and add a regression test.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            return await _await_phase(client, run_id, "awaiting_human_review")
+
+    reopened = asyncio.run(scenario())
+    prompt = reviewer.seen[0][0].content
+
+    assert reopened.json()["phase"] == "awaiting_human_review"
+    assert "Fix the race and add a regression test." in prompt
+    assert "Took the lock around the shared counter." in prompt
+    assert "Outcome: success" in prompt
+    assert "do not modify" in prompt
+    # The step declares an output, so the reviewer is told to report one.
+    assert "findings" in prompt
+    # One turn each: the write-enabled runner implemented and did not review.
+    assert len(implementer.seen) == 1
+    assert len(reviewer.seen) == 1
 
 
 def test_implementation_conversation_periodically_streams_durable_progress() -> None:
@@ -701,25 +838,22 @@ def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
                 },
             )
             run_id = RunId(created.json()["runId"])
-            for _ in range(20):
-                reopened = await client.get(f"/api/runs/{run_id}")
-                if reopened.json()["phase"] == "reviewing":
-                    break
-                await asyncio.sleep(0.01)
+            reopened = await _await_phase(client, run_id, "awaiting_human_review")
             return reopened, await store.history(run_id)
 
     reopened, history = asyncio.run(scenario())
 
-    assert reopened.json()["phase"] == "reviewing"
-    assert reopened.json()["currentStepId"] == "review"
+    assert reopened.json()["phase"] == "awaiting_human_review"
     completed_step = reopened.json()["steps"][0]
     assert completed_step["status"] == "completed"
     assert completed_step["outcome"] == "success"
     assert completed_step["summary"] == "Completed through MCP."
     assert completed_step["outputs"] == []
     assert completed_step["mcpRequestId"] == "workflow-tool-call-1"
-    assert isinstance(history[-1], StepCompleted)
-    assert history[-1].mcp_request_id == "workflow-tool-call-1"
+    implementation = history[2]
+    assert isinstance(implementation, StepCompleted)
+    assert implementation.step_id == IMPLEMENTATION_STEP
+    assert implementation.mcp_request_id == "workflow-tool-call-1"
     assert runner.cancelled.is_set()
     assert runner.acknowledgement == {
         "jsonrpc": "2.0",
@@ -754,16 +888,11 @@ def test_invalid_exit_is_retried_and_then_completes_the_active_step() -> None:
                 },
             )
             run_id = RunId(created.json()["runId"])
-            for _ in range(20):
-                reopened = await client.get(f"/api/runs/{run_id}")
-                if reopened.json()["phase"] == "reviewing":
-                    break
-                await asyncio.sleep(0.01)
-            return reopened
+            return await _await_phase(client, run_id, "awaiting_human_review")
 
     reopened = asyncio.run(scenario())
 
-    assert reopened.json()["phase"] == "reviewing"
+    assert reopened.json()["phase"] == "awaiting_human_review"
     assert reopened.json()["steps"][0]["summary"] == "Completed after correction."
     assert runner.attempts == 2
     assert runner.seen[1][-1] == Message.user(INVALID_COMPLETION_ERROR)
@@ -850,9 +979,115 @@ def test_fail_step_mcp_call_fails_the_active_workflow() -> None:
     }
 
 
+def test_a_failing_reviewer_fails_the_run_after_a_successful_implementation() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implemented the change.",
+            "outputs": {},
+        },
+    )
+    reviewer = TerminalToolRunner(
+        "fail_step",
+        {"summary": "The workspace no longer holds the implemented change."},
+    )
+    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement a change the reviewer cannot inspect.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            reopened = await _await_phase(client, run_id, "failed")
+            return reopened, await store.history(run_id)
+
+    reopened, history = asyncio.run(scenario())
+    body = reopened.json()
+
+    assert body["phase"] == "failed"
+    assert body["terminalOutcome"] == "failed"
+    assert body["failureReason"] == (
+        "The workspace no longer holds the implemented change."
+    )
+    assert body["steps"][0]["status"] == "completed"
+    assert body["steps"][1]["status"] == "failed"
+    assert body["pendingHumanReview"] is None
+    assert isinstance(history[-1], RunFailed)
+    assert history[-1].agent_run_id is not None
+    assert reviewer.cancelled.is_set()
+
+
+def test_a_reviewer_that_omits_a_declared_output_fails_the_run() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implemented the change.",
+            "outputs": {},
+        },
+    )
+    # Valid for the implementation step, which declares no outputs, and not for
+    # the review step, which declares `findings`.
+    reviewer = TerminalToolRunner(
+        "complete_step",
+        {"outcome": "success", "summary": "Looks fine.", "outputs": {}},
+    )
+    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement a change the reviewer reports badly.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            reopened = await _await_phase(client, run_id, "failed")
+            return reopened, await store.history(run_id)
+
+    reopened, history = asyncio.run(scenario())
+    body = reopened.json()
+
+    assert body["phase"] == "failed"
+    assert body["steps"][0]["status"] == "completed"
+    assert body["steps"][1]["status"] == "failed"
+    assert "terminal result" in body["failureReason"]
+    assert REVIEW_STEP in body["failureReason"]
+    assert isinstance(history[-1], RunFailed)
+    # Corrected rather than accepted, and only up to the runtime's limit.
+    assert len(reviewer.seen) == 3
+    assert reviewer.seen[-1][-1] == Message.user(INVALID_COMPLETION_ERROR)
+    assert reviewer.acknowledgement is not None
+    assert reviewer.acknowledgement["result"] == {
+        "content": [
+            {
+                "type": "text",
+                "text": "step result is missing required outputs: findings",
+            }
+        ],
+        "isError": True,
+    }
+    assert not reviewer.cancelled.is_set()
+
+
 def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
     store = InMemoryStateStore()
-    default = ConcurrentRunner()
+    codex = ConcurrentRunner()
+    codex_reviewer = _reviewer()
     claude = TerminalToolRunner(
         "complete_step",
         {
@@ -861,10 +1096,12 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
             "outputs": {},
         },
     )
+    claude_reviewer = _reviewer(summary="Reviewed with Claude.")
     app = _workflow_app(
         store,
-        default,
-        workflow_runners={"codex": default, "claude": claude},
+        codex,
+        workflow_runners={"codex": codex, "claude": claude},
+        reviewers={"codex": codex_reviewer, "claude": claude_reviewer},
     )
 
     async def scenario():
@@ -880,23 +1117,23 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
                 },
             )
             run_id = RunId(created.json()["runId"])
-            for _ in range(20):
-                reopened = await client.get(f"/api/runs/{run_id}")
-                if reopened.json()["phase"] == "reviewing":
-                    break
-                await asyncio.sleep(0.01)
-            instance_id = AgentInstanceId(
-                reopened.json()["steps"][0]["agentInstanceId"]
-            )
-            return reopened, await store.load_instance(instance_id)
+            reopened = await _await_phase(client, run_id, "awaiting_human_review")
+            return reopened, [
+                await store.load_instance(AgentInstanceId(step["agentInstanceId"]))
+                for step in reopened.json()["steps"][:2]
+            ]
 
-    reopened, instance = asyncio.run(scenario())
+    reopened, instances = asyncio.run(scenario())
 
     assert reopened.json()["steps"][0]["summary"] == "Implemented with Claude."
-    assert default.seen == []
+    assert reopened.json()["steps"][1]["summary"] == "Reviewed with Claude."
+    # The provider a run picks answers for both steps, and the other one for
+    # neither -- write-enabled for the implementation, read-only for the review.
     assert len(claude.seen) == 1
-    assert instance is not None
-    assert instance.runner == "claude"
+    assert len(claude_reviewer.seen) == 1
+    assert codex.seen == []
+    assert codex_reviewer.seen == []
+    assert [instance.runner for instance in instances] == ["claude", "claude"]
 
 
 @pytest.mark.parametrize(
@@ -1558,6 +1795,71 @@ def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
             "result": "engine",
         },
         {"type": "text", "text": "Found it."},
+    ]
+
+
+def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript() -> None:
+    """Pressing stop ends the turn, not the record of it. What the agent had
+    already done is on disk whatever the button does, so a reload that showed
+    the question alone would be a transcript the worktree disagrees with."""
+    call = ToolCall(call_id="call-1", name="Write", arguments='{"path":"worker.py"}')
+
+    class StoppedMidWorkRunner(ConcurrentRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reported = asyncio.Event()
+
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            raise AssertionError("the streaming method should be used")
+
+        async def run_turn_streamed(
+            self, agent_run_id, profile, messages, on_message, tools=(), workspace_id=None
+        ) -> AgentTurn:
+            on_message(Message.assistant("Rewriting the worker."))
+            on_message(Message.assistant(tool_calls=(call,)))
+            self.reported.set()
+            await asyncio.Event().wait()
+            raise AssertionError("this runner only ever ends by being stopped")
+
+    runner = StoppedMidWorkRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            started = asyncio.create_task(
+                client.post(f"/api/threads/{thread_id}/runs", json={"text": "rewrite it"})
+            )
+            await runner.reported.wait()
+            stopped = await client.delete(f"/api/threads/{thread_id}/runs/current")
+            await started
+            # A fresh page load: the stream is gone, so this is all the client
+            # gets to know about the turn that was stopped.
+            return stopped, await client.get(f"/api/threads/{thread_id}/messages")
+
+    stopped, messages = asyncio.run(scenario())
+
+    assert stopped.status_code == 204
+    reloaded = messages.json()["messages"]
+    # The note the next turn is given is prompt context, not something to show
+    # a person, so it does not become a message here.
+    assert [message["role"] for message in reloaded] == ["user", "assistant"]
+    assert reloaded[1]["content"] == [
+        {"type": "text", "text": "Rewriting the worker."},
+        {
+            "type": "tool-call",
+            "toolCallId": "call-1",
+            "toolName": "Write",
+            "args": {"path": "worker.py"},
+            "argsText": '{"path":"worker.py"}',
+            # Answered rather than left pending, which is what a client shows
+            # as a tool still running.
+            "result": "interrupted",
+        },
     ]
 
 

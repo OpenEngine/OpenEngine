@@ -31,7 +31,7 @@ class Settings:
     workspace_root: str = "/tmp/engine-workspaces"
     postgres_dsn: str = ""
     engine_config: EngineConfig = EngineConfig()
-    """Provider-neutral settings loaded from TOML; runner translation lands next."""
+    """Provider-neutral settings loaded from TOML; policy enforcement lands next."""
     config_path: Path | None = None
 
 

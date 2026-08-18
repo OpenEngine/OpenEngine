@@ -49,6 +49,14 @@ from engine.runtime.terminal_mcp import (
 )
 
 
+#: How many times a workflow agent that ended a turn without a terminal result
+#: is told so and asked again. A provider that has ignored the correction twice
+#: will not comply on the third pass, and retrying forever would keep spending
+#: on a run that cannot finish -- so the step fails with a reason a human can
+#: read instead of hanging.
+_TERMINAL_RESULT_CORRECTIONS = 2
+
+
 class UnhandledCommandError(RuntimeError):
     """A command reached dispatch with no capability mapped to it."""
 
@@ -247,6 +255,7 @@ class Dispatcher:
         async with broker:
             messages = (prompt,)
             transcript: list[Message] = []
+            corrections = 0
             while True:
                 streaming = isinstance(runner, StreamingMcpAgentRunner)
                 if streaming:
@@ -305,7 +314,22 @@ class Dispatcher:
                 transcript.extend(turn.transcript)
                 if requests_clarification_or_escalation(turn):
                     return None, turn, tuple(transcript)
+                if corrections >= _TERMINAL_RESULT_CORRECTIONS:
+                    failure = RunFailed(
+                        run_id=command.run_id,
+                        reason=(
+                            f"the {command.step.step_id} agent ended "
+                            f"{corrections + 1} turns without reporting a valid "
+                            "terminal result"
+                        ),
+                        agent_run_id=command.agent_run_id,
+                    )
+                    # Returned rather than raised: this is the step's result,
+                    # so it is recorded and folded like any other failure, and
+                    # the transcript that led to it stays with the agent.
+                    return failure, turn, tuple(transcript)
 
+                corrections += 1
                 correction = Message.user(INVALID_COMPLETION_ERROR)
                 transcript.append(correction)
                 on_message(correction)

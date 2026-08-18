@@ -17,7 +17,7 @@ from dataclasses import replace
 from uuid import uuid4
 
 from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRunStatus
-from engine.domain.chat import Message
+from engine.domain.chat import Message, Role
 from engine.domain.ids import AgentId, AgentInstanceId, AgentRunId, TaskId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import (
@@ -41,6 +41,22 @@ NO_TOOLS: Mapping[str, ToolSpec] = {}
 #: What the single wired runner is called when the composition root does not
 #: name several.
 DEFAULT_RUNNER = "default"
+
+#: Stands in for the result of a tool call the interruption arrived in the
+#: middle of. Every call needs an answer: a request with nothing after it reads
+#: to the next turn as a tool that returned nothing, rather than one that was
+#: cut off with its work possibly already done.
+INTERRUPTED_TOOL_RESULT = "interrupted"
+
+#: Said once, after a stopped turn's work. The work is the part that cannot be
+#: taken back -- files it changed are still changed -- so a later turn that is
+#: not told this either repeats what already happened or reports as its own
+#: work it never did.
+INTERRUPTED_TURN_NOTE = (
+    "The turn above was interrupted before it finished. Some reported actions "
+    "or file changes may already have happened -- inspect the workspace rather "
+    "than assuming the work was completed or undone."
+)
 
 
 class UnknownInstanceError(KeyError):
@@ -291,6 +307,11 @@ class AgentSession:
         `agent_run_id` lets a caller that has to name the execution before it
         starts -- because it is brokering approvals for it, or replaying it
         durably -- supply the id instead of learning it afterwards.
+
+        A turn that is cancelled keeps whatever a reporting runner had already
+        told us it did, marked as interrupted. A runner that reports nothing
+        until it returns leaves nothing to keep, which is why the workspace and
+        not this is the last word on what actually happened.
         """
         runner_name = runner or self.default_runner
         if runner_name not in self._runners:
@@ -324,6 +345,18 @@ class AgentSession:
         )
         await store.record_agent_run(agent_run)
 
+        # Kept in case this turn is stopped: a runner that reports as it goes
+        # has already told us what the agent did, and the alternative to
+        # storing it is a conversation that denies work the workspace still
+        # has. Unused when the turn finishes -- `turn.transcript` is
+        # authoritative then, and is what gets stored.
+        partial: list[Message] = []
+
+        def record(message: Message) -> None:
+            partial.append(message)
+            if on_message is not None:
+                on_message(message)
+
         try:
             if interactive is not None and on_approval is not None:
                 turn = await interactive.run_turn_interactive(
@@ -331,7 +364,7 @@ class AgentSession:
                     profile,
                     (*conversation.messages, question),
                     on_approval,
-                    on_message=on_message,
+                    on_message=record,
                     tools=tools,
                     workspace_id=instance.workspace_id,
                 )
@@ -342,7 +375,7 @@ class AgentSession:
                     agent_run.agent_run_id,
                     profile,
                     (*conversation.messages, question),
-                    on_message,
+                    record,
                     tools=tools,
                     workspace_id=instance.workspace_id,
                 )
@@ -361,9 +394,18 @@ class AgentSession:
             # Somebody stopped this on purpose. Recording it as failed would
             # read as the agent breaking, and leaving it running would leave a
             # row that never resolves.
+            #
+            # The run goes first and the work second, because an await inside a
+            # cancelled task can itself be interrupted and only one of these can
+            # then happen: a run stuck RUNNING for ever is worse than a partial
+            # nobody kept.
             await store.record_agent_run(
                 replace(agent_run, status=AgentRunStatus.CANCELLED, summary="cancelled")
             )
+            if partial:
+                await store.append_messages(
+                    instance_id, _interrupted_transcript(partial)
+                )
             raise
         except Exception as error:
             await store.record_agent_run(
@@ -395,6 +437,35 @@ class AgentSession:
         return tuple(self._tools[grant] for grant in profile.capabilities)
 
 
+def _interrupted_transcript(partial: Sequence[Message]) -> tuple[Message, ...]:
+    """What a stopped turn leaves behind, in a shape a later turn can read.
+
+    Two things are added and both are added at the end, because a conversation
+    is append-only: the calls that never came back are closed off, and the note
+    that explains why follows them. Nothing already written is touched, so the
+    text this renders to still starts with the text it rendered to before.
+    """
+    answered = {
+        message.tool_call_id
+        for message in partial
+        if message.role is Role.TOOL and message.tool_call_id
+    }
+    unanswered = tuple(
+        call.call_id
+        for message in partial
+        for call in message.tool_calls
+        if call.call_id not in answered
+    )
+    return (
+        *partial,
+        *(
+            Message.tool_result(call_id, INTERRUPTED_TOOL_RESULT)
+            for call_id in unanswered
+        ),
+        Message.system(INTERRUPTED_TURN_NOTE),
+    )
+
+
 def _new_agent_run_id() -> AgentRunId:
     """Mint an id for one execution.
 
@@ -408,6 +479,8 @@ def _new_agent_run_id() -> AgentRunId:
 
 __all__ = [
     "DEFAULT_RUNNER",
+    "INTERRUPTED_TOOL_RESULT",
+    "INTERRUPTED_TURN_NOTE",
     "AgentSession",
     "UnknownInstanceError",
     "UnknownRunnerError",

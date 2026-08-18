@@ -6,6 +6,7 @@ A composition root. Depends on adapters; nothing depends on it.
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_review_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -14,6 +15,7 @@ from engine.apps.web.composition import (
 __all__ = [
     "Settings",
     "build_capabilities",
+    "build_review_runners",
     "build_runners",
     "build_session",
     "build_workflow_runners",

@@ -388,8 +388,9 @@ class ThreadService:
             try:
                 while not task.done() or not observed.empty():
                     try:
-                        message = await asyncio.wait_for(observed.get(), timeout=0.1)
-                    except asyncio.TimeoutError:
+                        async with asyncio.timeout(0.1):
+                            message = await observed.get()
+                    except TimeoutError:
                         continue
                     await run.observe(message)
                 return await task
@@ -625,13 +626,17 @@ def create_app(
     static_directory: Path | None = None,
     *,
     workflow_runners: Mapping[str, AgentRunner] | None = None,
+    review_runners: Mapping[str, AgentRunner] | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
+    if workflow_runners is not None and review_runners is None:
+        raise ValueError("review_runners are required with workflow_runners")
     service = ThreadService(session, runners)
     run_reader = RunReader(session.state_store)
     workflow_executor = WorkflowExecutor(
         session.capabilities,
-        workflow_runners or runners,
+        workflow_runners if workflow_runners is not None else runners,
+        review_runners=review_runners if review_runners is not None else runners,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 
@@ -722,7 +727,7 @@ def create_app(
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
         task = asyncio.create_task(
-            workflow_executor.advance_to_review(event, runner_name)
+            workflow_executor.advance_through_review(event, runner_name)
         )
         workflow_tasks[run_id] = task
         task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))

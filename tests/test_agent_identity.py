@@ -33,6 +33,7 @@ from engine.domain import (
 )
 from engine.ports import AgentRunner, AgentTurn, FinishReason
 from engine.runtime import Capabilities, Dispatcher
+from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 FOREMAN = AgentProfile(
     agent_id=AgentId("foreman"),
@@ -115,6 +116,8 @@ def test_tool_arguments_stay_unparsed() -> None:
 class FakeAgentRunner:
     """Satisfies `AgentRunner` by shape alone. Replies with a canned turn, and
     records what it was asked, so a test can assert on the whole call."""
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
 
     def __init__(self, turn: AgentTurn | None = None) -> None:
         self.turn = turn or AgentTurn(Message.assistant("on it"))
