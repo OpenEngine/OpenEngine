@@ -455,12 +455,12 @@ def store(request, tmp_path) -> StateStore:
 
 def test_stores_agree_on_what_an_approval_is(store: StateStore) -> None:
     async def scenario():
-        instance = await store.create_instance(CODER, runner="claude-control")
+        instance = await store.create_instance(CODER, runner="claude")
         asked = ApprovalRecord(
             approval_id=ApprovalId("apv-1"),
             agent_run_id=AgentRunId("ar-1"),
             instance_id=instance.instance_id,
-            runner="claude-control",
+            runner="claude",
             kind=ApprovalKind.COMMAND_EXECUTION,
             requested_at=datetime.now(UTC),
             reason="Run the test suite",
@@ -517,12 +517,12 @@ def test_stores_agree_on_what_a_session_grant_is(store: StateStore) -> None:
     exists to answer: the provider it was given to is gone by then."""
 
     async def scenario():
-        instance = await store.create_instance(CODER, runner="claude-control")
+        instance = await store.create_instance(CODER, runner="claude")
         elsewhere = await store.create_instance(CODER)
         granted = SessionGrant(
             grant_id=SessionGrantId("grant-1"),
             instance_id=instance.instance_id,
-            runner="claude-control",
+            runner="claude",
             approval_kind=ApprovalKind.COMMAND_EXECUTION,
             normalized_scope="command_execution|/workspace|pytest",
             created_from_approval_id=ApprovalId("apv-1"),

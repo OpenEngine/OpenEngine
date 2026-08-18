@@ -17,7 +17,6 @@ import textwrap
 import pytest
 
 from engine.adapters.agent_runner.codex import (
-    CodexAppServerAgentRunner,
     CodexAgentRunner,
     CodexExecutionError,
     CodexToolsUnsupportedError,
@@ -85,9 +84,7 @@ PROFILE = AgentProfile(
 
 def test_runner_satisfies_the_port() -> None:
     assert isinstance(CodexAgentRunner(), AgentRunner)
-    assert not isinstance(CodexAgentRunner(), InteractiveAgentRunner)
-    assert isinstance(CodexAppServerAgentRunner(), AgentRunner)
-    assert isinstance(CodexAppServerAgentRunner(), InteractiveAgentRunner)
+    assert isinstance(CodexAgentRunner(), InteractiveAgentRunner)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -468,7 +465,7 @@ def _fake_app_server(tmp_path) -> str:
 
 
 def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:
-    runner = CodexAppServerAgentRunner(binary_path=_fake_app_server(tmp_path))
+    runner = CodexAgentRunner(binary_path=_fake_app_server(tmp_path))
     observed: list[Message] = []
     approvals = []
 

@@ -304,17 +304,16 @@ you        ->  assistant-ui thread
                engine web API             stream and coordinate concurrent chats
                engine.runtime.AgentSession    load history, record the run
                engine.ports.AgentRunner       one turn
-               engine.adapters.agent_runner.codex        codex exec --json
+               engine.adapters.agent_runner.codex        codex app-server
                  …or.claude_code                         claude -p            <- the model
                engine.adapters.state_store.sqlite   store the whole turn
 ```
 
 It needs the [Codex CLI](https://developers.openai.com/codex/cli) or
 [Claude Code](https://claude.com/claude-code) on `PATH` and logged in; the page
-reports it plainly if the one you picked is missing. The `codex` and `claude`
-runners run read-only — Codex sandboxed, Claude Code restricted to
-`Read`/`Glob`/`Grep` — so an agent you are talking to cannot edit the tree as a
-side effect of answering.
+reports it plainly if the one you picked is missing. There is one runner per
+CLI — `codex` and `claude` — because the dropdown names the agent you are
+talking to rather than the transport it is driven over.
 Each new conversation gets its own branch-backed Git worktree under
 `/tmp/engine-workspaces`, and the chat shows the `cd` command for opening that
 checkout. The worktree is reused for every later turn in the conversation.
@@ -333,12 +332,12 @@ had used, having executed nothing itself.
 
 ### Asking permission
 
-The other two runners — `codex-app-server` and `claude-control` — can do more,
-and stop to ask before they do. Codex works in a writable sandbox and asks
-before stepping outside it; Claude Code has reads preapproved and routes shell
-commands and edits to the user. What they are allowed to do and what they must
-ask about is one decision, made in `apps/web/composition.py`: a gate is only a
-gate if what it lets through can then happen.
+Both runners can change the worktree, and stop to ask before they do. Codex
+works in a writable sandbox and asks before stepping outside it; Claude Code has
+reads preapproved and routes shell commands and edits to the user. What they are
+allowed to do and what they must ask about is one decision, made in
+`apps/web/composition.py`: a gate is only a gate if what it lets through can then
+happen.
 
 The pause is durable rather than a callback held in a connection. Each request
 is persisted before it appears anywhere, the decision is persisted before the

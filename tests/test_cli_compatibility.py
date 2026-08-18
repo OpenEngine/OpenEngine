@@ -48,14 +48,14 @@ import pytest
 
 from engine.adapters.agent_runner.claude_code import (
     READ_ONLY_TOOLS,
-    ClaudeCodeControlAgentRunner,
+    ClaudeCodeAgentRunner,
     approval_request_from_control,
     control_response_for,
 )
 from engine.adapters.agent_runner.codex import (
     APP_SERVER_DECISIONS,
     INTERACTIVE_APPROVAL_POLICY,
-    CodexAppServerAgentRunner,
+    CodexAgentRunner,
     approval_request_from_app_server,
 )
 from engine.adapters.state_store.memory import InMemoryStateStore
@@ -630,13 +630,13 @@ def fake_claude(directory: Path) -> str:
 FAKES = {
     "codex": (
         fake_codex,
-        lambda binary, workspace: CodexAppServerAgentRunner(
+        lambda binary, workspace: CodexAgentRunner(
             binary_path=binary, working_directory=str(workspace)
         ),
     ),
     "claude": (
         fake_claude,
-        lambda binary, workspace: ClaudeCodeControlAgentRunner(
+        lambda binary, workspace: ClaudeCodeAgentRunner(
             binary_path=binary, working_directory=str(workspace)
         ),
     ),
@@ -838,8 +838,8 @@ def test_allowing_for_the_session_is_never_a_provider_wide_bypass() -> None:
         [{"toolName": "Bash", "ruleContent": "pytest -q"}]
     ]
 
-    claude_argv = ClaudeCodeControlAgentRunner().interactive_command_line(PROFILES[CODER])
-    codex_argv = CodexAppServerAgentRunner(sandbox="workspace-write").command_line(
+    claude_argv = ClaudeCodeAgentRunner().interactive_command_line(PROFILES[CODER])
+    codex_argv = CodexAgentRunner(sandbox="workspace-write").command_line(
         PROFILES[CODER]
     )
     assert "--dangerously-skip-permissions" not in claude_argv
@@ -902,7 +902,7 @@ LIVE = {
     # this matrix exists to answer three different ways.
     "codex": (
         "codex",
-        lambda binary, workspace: CodexAppServerAgentRunner(
+        lambda binary, workspace: CodexAgentRunner(
             binary_path=binary,
             sandbox="read-only",
             working_directory=str(workspace),
@@ -910,7 +910,7 @@ LIVE = {
     ),
     "claude": (
         "claude",
-        lambda binary, workspace: ClaudeCodeControlAgentRunner(
+        lambda binary, workspace: ClaudeCodeAgentRunner(
             binary_path=binary,
             allowed_tools=READ_ONLY_TOOLS,
             working_directory=str(workspace),

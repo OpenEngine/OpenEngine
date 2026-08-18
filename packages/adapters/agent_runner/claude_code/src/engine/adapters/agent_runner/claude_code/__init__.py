@@ -1,9 +1,10 @@
 """Agent Runner capability, backed by the Claude Code CLI.
 
-The public ``ClaudeCodeAgentRunner`` runs `claude -p --output-format
-stream-json --verbose`; the separate ``ClaudeCodeControlAgentRunner`` adds
-stream-JSON input and Claude's control protocol so permission callbacks can
-pause and resume the same turn. The records this package parses:
+``ClaudeCodeAgentRunner`` runs `claude -p --output-format stream-json
+--verbose`, and adds stream-JSON input and Claude's control protocol when the
+turn may pause: a permission callback then stops and resumes the same run.
+Which invocation is used is the caller's choice of method, not a choice of
+runner. The records this package parses:
 
     {"type":"system","subtype":"init","session_id":"4aeecd85-…","tools":[…]}
     {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_…",
@@ -63,9 +64,10 @@ from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
-#: Claude Code's own tools that only read. The default, because an agent you are
-#: talking to should not edit the tree as a side effect of answering. Anything
-#: outside this list is denied by the CLI rather than silently allowed.
+#: Claude Code's own tools that only read. The default, because answering should
+#: not change the tree on its own: anything outside this list reaches the
+#: approval callback in an interactive turn, and is denied by the CLI in a turn
+#: with nobody to ask.
 READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 
 #: File operations a workflow implementation agent may use inside its isolated
@@ -380,10 +382,13 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> AgentTurn:
     )
 
 
-class _ClaudeCodeRunner:
+class ClaudeCodeAgentRunner:
     """Runs an agent turn by shelling out to the Claude Code CLI.
 
-    Implements `engine.ports.AgentRunner`.
+    Implements `engine.ports.AgentRunner`, `StreamingAgentRunner`,
+    `InteractiveAgentRunner` and `McpAgentRunner` -- one runner rather than one
+    per invocation, because whether a turn can pause for permission is a
+    property of the turn being asked for and not of the agent answering it.
 
     `timeout_seconds=None` -- the default -- lets a turn take as long as it
     takes, for the reasons the Codex runner's docstring gives: a long run is
@@ -782,134 +787,6 @@ class _ClaudeCodeRunner:
         process.terminate()
 
 
-class ClaudeCodeAgentRunner:
-    """The original one-shot Claude Code stream-JSON runner.
-
-    Permission-control streaming is exposed by
-    :class:`ClaudeCodeControlAgentRunner` so this adapter retains its original
-    transport and permission behavior.
-    """
-
-    def __init__(
-        self,
-        binary_path: str = "claude",
-        timeout_seconds: float | None = None,
-        allowed_tools: Sequence[str] = READ_ONLY_TOOLS,
-        working_directory: str = ".",
-        model: str = "",
-        workspace_provider: WorkspaceProvider | None = None,
-    ) -> None:
-        self._delegate = _ClaudeCodeRunner(
-            binary_path=binary_path,
-            timeout_seconds=timeout_seconds,
-            allowed_tools=allowed_tools,
-            working_directory=working_directory,
-            model=model,
-            workspace_provider=workspace_provider,
-        )
-
-    def command_line(
-        self, profile: AgentProfile, mcp_server: McpServerConfig | None = None
-    ) -> list[str]:
-        return self._delegate.command_line(profile, mcp_server)
-
-    async def run_turn(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        tools: Sequence[ToolSpec] = (),
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn(
-            agent_run_id, profile, messages, tools=tools, workspace_id=workspace_id
-        )
-
-    async def run_turn_streamed(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        on_message: TurnObserver,
-        tools: Sequence[ToolSpec] = (),
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn_streamed(
-            agent_run_id,
-            profile,
-            messages,
-            on_message,
-            tools=tools,
-            workspace_id=workspace_id,
-        )
-
-    async def run_turn_with_mcp(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        mcp_server: McpServerConfig,
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn_with_mcp(
-            agent_run_id,
-            profile,
-            messages,
-            mcp_server,
-            workspace_id=workspace_id,
-        )
-
-    async def cancel(self, agent_run_id: AgentRunId) -> None:
-        await self._delegate.cancel(agent_run_id)
-
-
-class ClaudeCodeControlAgentRunner(ClaudeCodeAgentRunner):
-    """Approval-capable Claude runner using the stdio control protocol."""
-
-    def __init__(
-        self,
-        binary_path: str = "claude",
-        timeout_seconds: float | None = None,
-        protocol_timeout_seconds: float = 60.0,
-        allowed_tools: Sequence[str] = READ_ONLY_TOOLS,
-        working_directory: str = ".",
-        model: str = "",
-        workspace_provider: WorkspaceProvider | None = None,
-    ) -> None:
-        self._delegate = _ClaudeCodeRunner(
-            binary_path=binary_path,
-            timeout_seconds=timeout_seconds,
-            protocol_timeout_seconds=protocol_timeout_seconds,
-            allowed_tools=allowed_tools,
-            working_directory=working_directory,
-            model=model,
-            workspace_provider=workspace_provider,
-        )
-
-    def interactive_command_line(self, profile: AgentProfile) -> list[str]:
-        return self._delegate.interactive_command_line(profile)
-
-    async def run_turn_interactive(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        on_approval: ApprovalHandler,
-        on_message: TurnObserver | None = None,
-        tools: Sequence[ToolSpec] = (),
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn_interactive(
-            agent_run_id,
-            profile,
-            messages,
-            on_approval,
-            on_message=on_message,
-            tools=tools,
-            workspace_id=workspace_id,
-        )
-
-
 def _tail(text: str, lines: int = 5) -> str:
     """The last few lines of stderr -- enough to diagnose, short enough to read."""
     kept = [line for line in text.strip().splitlines() if line.strip()]
@@ -920,7 +797,6 @@ __all__ = [
     "READ_ONLY_TOOLS",
     "WORKSPACE_WRITE_TOOLS",
     "ClaudeCodeAgentRunner",
-    "ClaudeCodeControlAgentRunner",
     "ClaudeExecutionError",
     "ClaudeToolsUnsupportedError",
     "ClaudeUnavailableError",

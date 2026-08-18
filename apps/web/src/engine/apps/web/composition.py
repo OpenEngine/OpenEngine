@@ -27,12 +27,8 @@ from engine.adapters.agent_runner.claude_code import (
     READ_ONLY_TOOLS,
     WORKSPACE_WRITE_TOOLS,
     ClaudeCodeAgentRunner,
-    ClaudeCodeControlAgentRunner,
 )
-from engine.adapters.agent_runner.codex import (
-    CodexAgentRunner,
-    CodexAppServerAgentRunner,
-)
+from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.sqlite import SQLiteStateStore
@@ -57,14 +53,17 @@ class Settings:
     port: int = 8000
     codex_binary: str = "codex"
     codex_sandbox: str = "read-only"
-    """Chat should not be able to edit the tree as a side effect of answering."""
+    """What a turn nobody is watching may do: read, and nothing else.
+
+    `build_capabilities` wires the one runner a non-interactive caller reaches
+    for, so it gets the sandbox that needs no one present. Chat is the other
+    case and takes `interactive_codex_sandbox`.
+    """
     codex_working_directory: str = "."
     codex_timeout_seconds: float | None = None
     """No ceiling: a turn runs until it is done or someone cancels it."""
     codex_model: str = ""
     claude_binary: str = "claude"
-    claude_allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS
-    """Claude Code's equivalent of Codex's read-only sandbox."""
     claude_working_directory: str = "."
     claude_timeout_seconds: float | None = None
     """Same as `codex_timeout_seconds`."""
@@ -122,18 +121,15 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     "codex" and "claude" are opaque strings, exactly like tool grants. The first
     entry is the default, so it is also what a conversation gets when nobody
     picks.
+
+    One entry per CLI: the dropdown names the agent you are talking to, not the
+    transport it is driven over. Both pause for approval, because a runner that
+    could only run unattended is not a second choice worth offering -- what it
+    would do without asking, these do after asking.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
         "codex": CodexAgentRunner(
-            binary_path=settings.codex_binary,
-            timeout_seconds=settings.codex_timeout_seconds,
-            sandbox=settings.codex_sandbox,
-            working_directory=settings.codex_working_directory,
-            model=settings.codex_model,
-            workspace_provider=workspace_provider,
-        ),
-        "codex-app-server": CodexAppServerAgentRunner(
             binary_path=settings.codex_binary,
             timeout_seconds=settings.codex_timeout_seconds,
             sandbox=settings.interactive_codex_sandbox,
@@ -142,14 +138,6 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             workspace_provider=workspace_provider,
         ),
         "claude": ClaudeCodeAgentRunner(
-            binary_path=settings.claude_binary,
-            timeout_seconds=settings.claude_timeout_seconds,
-            allowed_tools=settings.claude_allowed_tools,
-            working_directory=settings.claude_working_directory,
-            model=settings.claude_model,
-            workspace_provider=workspace_provider,
-        ),
-        "claude-control": ClaudeCodeControlAgentRunner(
             binary_path=settings.claude_binary,
             timeout_seconds=settings.claude_timeout_seconds,
             allowed_tools=settings.interactive_claude_allowed_tools,

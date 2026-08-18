@@ -1,9 +1,10 @@
 """Agent Runner capability, backed by the Codex CLI.
 
-The public ``CodexAgentRunner`` runs `codex exec --json`; the separate
-``CodexAppServerAgentRunner`` adds app-server's stdio JSON-RPC transport so
-approval requests can pause and resume the same turn. The event vocabulary
-this package parses is small and stable:
+``CodexAgentRunner`` drives two Codex transports: `codex exec --json` for a
+turn that runs start to finish, and app-server's stdio JSON-RPC for one that may
+pause on an approval request and resume where it stopped. Which is used is the
+caller's choice of method, not a choice of runner. The event vocabulary this
+package parses is small and stable:
 
     {"type": "thread.started",  "thread_id": "019f..."}
     {"type": "turn.started"}
@@ -543,10 +544,13 @@ async def _read_rpc_response(
         return result
 
 
-class _CodexRunner:
+class CodexAgentRunner:
     """Runs an agent turn by shelling out to the Codex CLI.
 
-    Implements `engine.ports.AgentRunner`.
+    Implements `engine.ports.AgentRunner`, `StreamingAgentRunner`,
+    `InteractiveAgentRunner` and `McpAgentRunner` -- one runner rather than one
+    per transport, because which of Codex's two the CLI is driven over is a
+    property of the turn being asked for and not of the agent answering it.
 
     `timeout_seconds=None` -- the default -- lets a turn take as long as it
     takes. A wall clock is the wrong thing to cut an agent off with: a long run
@@ -1032,137 +1036,6 @@ class _CodexRunner:
         process.terminate()
 
 
-class CodexAgentRunner:
-    """The original ``codex exec --json`` runner.
-
-    Approval-capable app-server execution is intentionally a separate public
-    runner so selecting this adapter never changes its transport or permission
-    behavior.
-    """
-
-    def __init__(
-        self,
-        binary_path: str = "codex",
-        timeout_seconds: float | None = None,
-        sandbox: str = "read-only",
-        working_directory: str = ".",
-        model: str = "",
-        workspace_provider: WorkspaceProvider | None = None,
-    ) -> None:
-        self._delegate = _CodexRunner(
-            binary_path=binary_path,
-            timeout_seconds=timeout_seconds,
-            sandbox=sandbox,
-            working_directory=working_directory,
-            model=model,
-            workspace_provider=workspace_provider,
-        )
-
-    def command_line(
-        self,
-        profile: AgentProfile,
-        working_directory: str | None = None,
-        mcp_server: McpServerConfig | None = None,
-    ) -> list[str]:
-        return self._delegate.command_line(profile, working_directory, mcp_server)
-
-    async def run_turn(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        tools: Sequence[ToolSpec] = (),
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn(
-            agent_run_id, profile, messages, tools=tools, workspace_id=workspace_id
-        )
-
-    async def run_turn_streamed(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        on_message: TurnObserver,
-        tools: Sequence[ToolSpec] = (),
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn_streamed(
-            agent_run_id,
-            profile,
-            messages,
-            on_message,
-            tools=tools,
-            workspace_id=workspace_id,
-        )
-
-    async def run_turn_with_mcp(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        mcp_server: McpServerConfig,
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn_with_mcp(
-            agent_run_id,
-            profile,
-            messages,
-            mcp_server,
-            workspace_id=workspace_id,
-        )
-
-    async def cancel(self, agent_run_id: AgentRunId) -> None:
-        await self._delegate.cancel(agent_run_id)
-
-
-class CodexAppServerAgentRunner(CodexAgentRunner):
-    """Approval-capable Codex runner using app-server JSON-RPC."""
-
-    def __init__(
-        self,
-        binary_path: str = "codex",
-        timeout_seconds: float | None = None,
-        protocol_timeout_seconds: float = 60.0,
-        sandbox: str = "read-only",
-        working_directory: str = ".",
-        model: str = "",
-        workspace_provider: WorkspaceProvider | None = None,
-    ) -> None:
-        self._delegate = _CodexRunner(
-            binary_path=binary_path,
-            timeout_seconds=timeout_seconds,
-            protocol_timeout_seconds=protocol_timeout_seconds,
-            sandbox=sandbox,
-            working_directory=working_directory,
-            model=model,
-            workspace_provider=workspace_provider,
-        )
-
-    def app_server_command_line(self) -> list[str]:
-        return self._delegate.app_server_command_line()
-
-    async def run_turn_interactive(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        on_approval: ApprovalHandler,
-        on_message: TurnObserver | None = None,
-        tools: Sequence[ToolSpec] = (),
-        workspace_id: WorkspaceId | None = None,
-    ) -> AgentTurn:
-        return await self._delegate.run_turn_interactive(
-            agent_run_id,
-            profile,
-            messages,
-            on_approval,
-            on_message=on_message,
-            tools=tools,
-            workspace_id=workspace_id,
-        )
-
-
 def _tail(text: str, lines: int = 5) -> str:
     """The last few lines of stderr -- enough to diagnose, short enough to read.
 
@@ -1177,7 +1050,6 @@ __all__ = [
     "APP_SERVER_APPROVAL_ENVELOPE",
     "INTERACTIVE_APPROVAL_POLICY",
     "SANDBOX_MODES",
-    "CodexAppServerAgentRunner",
     "CodexAgentRunner",
     "CodexExecutionError",
     "CodexToolsUnsupportedError",

@@ -13,7 +13,6 @@ import pytest
 
 from engine.adapters.agent_runner.claude_code import (
     ClaudeCodeAgentRunner,
-    ClaudeCodeControlAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
     WORKSPACE_WRITE_TOOLS,
@@ -64,9 +63,7 @@ PROFILE = AgentProfile(
 
 def test_runner_satisfies_the_port() -> None:
     assert isinstance(ClaudeCodeAgentRunner(), AgentRunner)
-    assert not isinstance(ClaudeCodeAgentRunner(), InteractiveAgentRunner)
-    assert isinstance(ClaudeCodeControlAgentRunner(), AgentRunner)
-    assert isinstance(ClaudeCodeControlAgentRunner(), InteractiveAgentRunner)
+    assert isinstance(ClaudeCodeAgentRunner(), InteractiveAgentRunner)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -360,7 +357,7 @@ def _fake_interactive_claude(tmp_path) -> str:
 
 
 def test_interactive_turn_round_trips_a_control_approval(tmp_path) -> None:
-    runner = ClaudeCodeControlAgentRunner(binary_path=_fake_interactive_claude(tmp_path))
+    runner = ClaudeCodeAgentRunner(binary_path=_fake_interactive_claude(tmp_path))
     observed: list[Message] = []
     approvals = []
 

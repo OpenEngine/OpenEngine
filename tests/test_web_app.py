@@ -7,10 +7,10 @@ from collections.abc import Mapping, Sequence
 import httpx
 import pytest
 
-from engine.adapters.agent_runner.claude_code import ClaudeCodeControlAgentRunner
+from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
 from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
-    CodexAppServerAgentRunner,
+    CodexAgentRunner,
 )
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
@@ -77,31 +77,40 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     capabilities.state_store.close()
 
 
-def test_web_offers_the_interactive_provider_runners() -> None:
+def test_web_offers_one_interactive_runner_per_cli() -> None:
     runners = build_runners(Settings())
 
-    assert tuple(runners) == (
-        "codex",
-        "codex-app-server",
-        "claude",
-        "claude-control",
-    )
-    assert isinstance(runners["codex-app-server"], CodexAppServerAgentRunner)
-    assert isinstance(runners["claude-control"], ClaudeCodeControlAgentRunner)
+    assert tuple(runners) == ("codex", "claude")
+    assert isinstance(runners["codex"], CodexAgentRunner)
+    assert isinstance(runners["claude"], ClaudeCodeAgentRunner)
     # Which of them pause is what decides whether a run brokers approvals, so
     # it is read off the port rather than off the class name.
-    assert isinstance(runners["codex-app-server"], InteractiveAgentRunner)
-    assert isinstance(runners["claude-control"], InteractiveAgentRunner)
-    assert not isinstance(runners["codex"], InteractiveAgentRunner)
-    assert not isinstance(runners["claude"], InteractiveAgentRunner)
+    assert isinstance(runners["codex"], InteractiveAgentRunner)
+    assert isinstance(runners["claude"], InteractiveAgentRunner)
+
+
+def test_the_runner_nobody_is_watching_stays_read_only(tmp_path) -> None:
+    """One class serves both callers now, so the sandbox is the whole difference.
+
+    `build_runners` widens it because someone is there to approve; the port
+    implementation a non-interactive caller reaches for has nobody to ask, and
+    must not have been widened along with it.
+    """
+    capabilities = build_capabilities(Settings(sqlite_path=str(tmp_path / "c.sqlite3")))
+    try:
+        argv = capabilities.agent_runner.command_line(PROFILES[CODER])
+    finally:
+        capabilities.state_store.close()
+
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
 
 
 def test_interactive_runners_may_do_what_the_user_approves() -> None:
     """A gate is only a gate if what it lets through can then happen."""
     runners = build_runners(Settings())
 
-    codex_argv = runners["codex-app-server"].command_line(PROFILES[CODER])
-    claude_argv = runners["claude-control"].interactive_command_line(PROFILES[CODER])
+    codex_argv = runners["codex"].command_line(PROFILES[CODER])
+    claude_argv = runners["claude"].interactive_command_line(PROFILES[CODER])
     preapproved = claude_argv[
         claude_argv.index("--allowedTools") + 1 : claude_argv.index("--input-format")
     ]
