@@ -39,6 +39,7 @@ from engine.runtime import (
     UnknownRunnerError,
     UnknownToolGrantError,
 )
+from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -48,6 +49,8 @@ PROFILES = {
 
 class ScriptedRunner:
     """Answers from a list. Records every call so ordering can be asserted."""
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
 
     def __init__(self, replies: Sequence[str] = ("ok",)) -> None:
         self._replies = list(replies)
@@ -107,6 +110,8 @@ async def _stopped_mid_turn(
 
 class BrokenRunner:
     """Fails the way a real one does: after the question was asked."""
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
 
     def __init__(self) -> None:
         self.seen: list[AgentRunId] = []
@@ -345,6 +350,8 @@ def test_what_the_agent_did_is_stored_alongside_what_it_said() -> None:
     steps = (Message.assistant(tool_calls=(call,)), Message.tool_result("c1", "README.md"))
 
     class StepRunner:
+        permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
         async def run_turn(self, agent_run_id, profile, messages, tools=(), workspace_id=None):
             return AgentTurn(Message.assistant("one file"), steps=steps)
 

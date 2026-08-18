@@ -27,6 +27,7 @@ from engine.domain.approvals import ApprovalDecision, ApprovalKind
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
+from engine.ports.permissions import PermissionTranslator
 
 
 class FinishReason(Enum):
@@ -148,6 +149,9 @@ class McpServerConfig:
 class AgentRunner(Protocol):
     """Runs one agent turn to completion."""
 
+    permission_translator: PermissionTranslator
+    """Maps this provider's approval requests into Engine permission scopes."""
+
     async def run_turn(
         self,
         agent_run_id: AgentRunId,
@@ -242,6 +246,7 @@ __all__ = [
     "InteractiveAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
+    "PermissionTranslator",
     "StreamingAgentRunner",
     "TokenUsage",
     "TurnObserver",

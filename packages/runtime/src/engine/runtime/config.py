@@ -1,8 +1,8 @@
 """Provider-neutral configuration loaded before applications compose adapters.
 
 This module deliberately stops at reading and validating Engine's vocabulary.
-Adapters do not consume these settings yet; translating the policy into each
-provider's permission model is a separate concern.
+Runners expose provider translators for that vocabulary, while policy
+evaluation remains a separate concern.
 """
 
 from __future__ import annotations
@@ -11,8 +11,9 @@ import os
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
+
+from engine.ports.permissions import ApprovalCapability
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
@@ -22,19 +23,9 @@ class EngineConfigError(ValueError):
     """A configuration file could not be found, parsed, or validated."""
 
 
-class ApprovalCapability(StrEnum):
-    """Engine's provider-neutral approval vocabulary."""
-
-    BASH = "bash"
-    EDIT = "edit"
-    MCP = "mcp"
-    READ = "read"
-    WEB = "web"
-
-
 @dataclass(frozen=True, slots=True)
 class BashApprovalConfig:
-    """Command patterns grouped by the decision they will eventually produce."""
+    """Shell patterns grouped by the decision they will eventually produce."""
 
     allow: tuple[str, ...] = ()
     ask: tuple[str, ...] = ()
@@ -160,7 +151,7 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
     return (
         f"configuration: {source}; approvals loaded "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}; "
-        "runner translation not enabled)"
+        "policy enforcement not enabled)"
     )
 
 

@@ -56,6 +56,7 @@ from engine.ports import (
 )
 from engine.runtime import AgentSession, Capabilities, INVALID_COMPLETION_ERROR
 from engine.runtime.terminal_mcp import _mcp_response
+from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -209,6 +210,8 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
 
 class ConcurrentRunner:
     """A controllably slow runner that records how much work overlaps."""
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
 
     def __init__(self, replies: Sequence[str] = ("ok",)) -> None:
         self.replies = list(replies)
