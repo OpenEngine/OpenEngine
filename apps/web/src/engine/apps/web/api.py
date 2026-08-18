@@ -626,16 +626,17 @@ def create_app(
     static_directory: Path | None = None,
     *,
     workflow_runners: Mapping[str, AgentRunner] | None = None,
+    review_runners: Mapping[str, AgentRunner] | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
+    if workflow_runners is not None and review_runners is None:
+        raise ValueError("review_runners are required with workflow_runners")
     service = ThreadService(session, runners)
     run_reader = RunReader(session.state_store)
     workflow_executor = WorkflowExecutor(
         session.capabilities,
-        workflow_runners or runners,
-        # Implementation writes, review reads: the reviewer is the chat runner
-        # of the same provider name, which is the read-only one.
-        review_runners=runners,
+        workflow_runners if workflow_runners is not None else runners,
+        review_runners=review_runners if review_runners is not None else runners,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 

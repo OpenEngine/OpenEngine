@@ -18,6 +18,7 @@ from engine.apps.web.api import ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_review_runners,
     build_runners,
     build_workflow_runners,
 )
@@ -143,7 +144,7 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
     """What keeps a review read-only is the runner it gets, not its prompt."""
     settings = Settings()
     workflow_runners = build_workflow_runners(settings)
-    reviewers = build_runners(settings)
+    reviewers = build_review_runners(settings)
 
     assert set(workflow_runners) <= set(reviewers)
     codex_argv = reviewers["codex"].command_line(PROFILES[CODER])
@@ -510,7 +511,12 @@ def _workflow_app(
         profiles=PROFILES,
         runners=chat_runners,
     )
-    return create_app(session, chat_runners, workflow_runners=implementers)
+    return create_app(
+        session,
+        chat_runners,
+        workflow_runners=implementers,
+        review_runners=chat_runners,
+    )
 
 
 async def _await_phase(
