@@ -45,6 +45,10 @@ import shutil
 from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
+from engine.adapters.agent_runner.claude_code.permissions import (
+    CLAUDE_PERMISSION_TRANSLATOR,
+    ClaudePermissionTranslator,
+)
 from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
@@ -394,6 +398,8 @@ class ClaudeCodeAgentRunner:
     takes, for the reasons the Codex runner's docstring gives: a long run is
     usually a large task, and `cancel` is the way one ends early.
     """
+
+    permission_translator = CLAUDE_PERMISSION_TRANSLATOR
 
     def __init__(
         self,
@@ -794,10 +800,12 @@ def _tail(text: str, lines: int = 5) -> str:
 
 
 __all__ = [
+    "CLAUDE_PERMISSION_TRANSLATOR",
     "READ_ONLY_TOOLS",
     "WORKSPACE_WRITE_TOOLS",
     "ClaudeCodeAgentRunner",
     "ClaudeExecutionError",
+    "ClaudePermissionTranslator",
     "ClaudeToolsUnsupportedError",
     "ClaudeUnavailableError",
     "approval_request_from_control",

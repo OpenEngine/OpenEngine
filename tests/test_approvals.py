@@ -49,6 +49,7 @@ from engine.runtime import (
     Capabilities,
     normalized_scope,
 )
+from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -82,6 +83,8 @@ class ApprovalRunner:
     than an exception -- so a test asserting that the denied action never ran is
     asserting against the shape the real adapters produce.
     """
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
 
     def __init__(
         self,
@@ -157,6 +160,8 @@ class DyingApprovalRunner(ApprovalRunner):
 
 class PlainRunner:
     """A runner with no interactive method at all, like `codex exec`."""
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
 
     def __init__(self) -> None:
         self.seen: list[tuple[Message, ...]] = []

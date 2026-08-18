@@ -21,6 +21,7 @@ from engine.domain import (
 )
 from engine.ports import AgentTurn, McpServerConfig
 from engine.runtime import Capabilities, Dispatcher, INVALID_COMPLETION_ERROR
+from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 
 PROFILE = AgentProfile(AgentId("coder"), "Implement the requested change.")
@@ -47,6 +48,8 @@ def _capabilities(runner: object) -> Capabilities:
 
 
 class CallingMcpRunner:
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
     def __init__(self) -> None:
         self.cancelled = asyncio.Event()
 

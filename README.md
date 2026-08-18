@@ -54,10 +54,10 @@ Capabilities are `read`, `edit`, `bash`, `web`, and `mcp`. Configuration is
 strict: unknown keys, unknown capabilities, duplicate entries, and incorrectly
 typed values stop startup with an error instead of silently weakening a policy.
 
-This first configuration slice only loads and validates the policy. Startup
-output says `runner translation not enabled` because translating these settings
-to Codex and Claude Code is intentionally a follow-up change; until that lands,
-their existing permission defaults remain in effect.
+Engine loads and validates the policy, and each runner exposes a translator
+from its provider approval requests into these capabilities. Policy enforcement
+is not enabled yet, so Codex and Claude Code retain their existing permission
+defaults.
 
 ## What is it.
 
