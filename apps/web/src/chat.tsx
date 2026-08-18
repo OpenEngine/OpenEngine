@@ -8,6 +8,7 @@ import {
   ThreadPrimitive,
   useAui,
   useAuiState,
+  useToolCallElapsed,
 } from "@assistant-ui/react";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
@@ -24,6 +25,7 @@ import {
   type ApprovalDecision,
 } from "./api";
 import { useApprovals } from "./approvals";
+import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
@@ -37,6 +39,74 @@ function toolResultText(result: unknown): string {
   }
 }
 
+/** The argument worth putting on the folded line: the thing the call is about.
+ *
+ *  A row that says only "ran Bash" makes the reader open every one of them to
+ *  find the call they remember. The command, or the file, is what they are
+ *  scanning for, so it goes where scanning finds it. */
+const DETAIL_KEYS = ["command", "file_path", "path", "pattern", "query", "url", "notebook_path"];
+
+function toolDetail(args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const record = args as Record<string, unknown>;
+  for (const key of DETAIL_KEYS) {
+    const value = record[key];
+    if (typeof value !== "string" || !value.trim()) continue;
+    const line = value.trim().split("\n")[0];
+    return line.length > 72 ? `${line.slice(0, 71)}…` : line;
+  }
+  return "";
+}
+
+/** How long the call took, once that is a fact.
+ *
+ *  Only a run this browser watched carries timing; a transcript loaded from the
+ *  server does not, and the hook says so by returning nothing. An empty right
+ *  edge is the honest answer there. */
+function ToolElapsed() {
+  const elapsed = useToolCallElapsed();
+  if (elapsed === undefined) return null;
+  const seconds = elapsed / 1000;
+  return <span>{seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s</span>;
+}
+
+function ToolCall({
+  toolName,
+  args,
+  argsText,
+  result,
+  running,
+}: {
+  toolName: string;
+  args: unknown;
+  argsText: string;
+  result: unknown;
+  running: boolean;
+}) {
+  const detail = toolDetail(args);
+  return (
+    <details className="tool" data-live={running || undefined}>
+      <summary className="tool-head">
+        <span className="tool-name">
+          <span className="tool-caret" aria-hidden="true">
+            ▸
+          </span>
+          <span className="tool-title">
+            {running ? "running" : "ran"} {toolName}
+          </span>
+          {detail && <span className="tool-detail">{detail}</span>}
+        </span>
+        <span className="tool-meta">
+          <ToolElapsed />
+          {running && <span className="tool-live">LIVE</span>}
+        </span>
+      </summary>
+      <pre>{argsText || JSON.stringify(args, null, 2)}</pre>
+      {result !== undefined && <pre className="tool-result">{toolResultText(result)}</pre>}
+    </details>
+  );
+}
+
 function TextParts() {
   return (
     <MessagePrimitive.Parts>
@@ -44,13 +114,13 @@ function TextParts() {
         part.type === "text" ? (
           <MessagePartPrimitive.Text component="p" />
         ) : part.type === "tool-call" ? (
-          <details className="tool-call">
-            <summary>{part.status.type === "running" ? "running" : "ran"} {part.toolName}</summary>
-            <pre>{part.argsText || JSON.stringify(part.args, null, 2)}</pre>
-            {part.result !== undefined && (
-              <pre className="tool-result">{toolResultText(part.result)}</pre>
-            )}
-          </details>
+          <ToolCall
+            toolName={part.toolName}
+            args={part.args}
+            argsText={part.argsText}
+            result={part.result}
+            running={part.status.type === "running"}
+          />
         ) : null
       }
     </MessagePrimitive.Parts>
@@ -91,19 +161,16 @@ function AssistantMessage() {
 
   return (
     <MessagePrimitive.Root className="message message-assistant">
-      <div className="assistant-mark">e</div>
-      <div className="assistant-content">
-        <TextParts />
-        {/* After the parts, which is after the command it was asked about ran:
-            reading down the turn gives you the request, then what the agent
-            did with the answer. */}
-        <TurnApprovals />
-        <MessagePrimitive.Error>
-          <p className="message-error">
-            <Ticked text={errorText(error)} />
-          </p>
-        </MessagePrimitive.Error>
-      </div>
+      <TextParts />
+      {/* After the parts, which is after the command it was asked about ran:
+          reading down the turn gives you the request, then what the agent
+          did with the answer. */}
+      <TurnApprovals />
+      <MessagePrimitive.Error>
+        <p className="notice message-error">
+          <Ticked text={errorText(error)} />
+        </p>
+      </MessagePrimitive.Error>
     </MessagePrimitive.Root>
   );
 }
@@ -181,11 +248,11 @@ function Composer() {
   };
 
   return (
-    <div className="composer-stack">
-      <div className="message-queue" aria-live="polite">
+    <>
+      <div className="queue" aria-live="polite">
         <ComposerPrimitive.Queue>
           {() => (
-            <div className="queued-message">
+            <div className="queued">
               <span className="queued-label">Queued</span>
               <QueueItemPrimitive.Text className="queued-text" />
               <QueueItemPrimitive.Remove
@@ -215,7 +282,7 @@ function Composer() {
           onKeyDown={queueOnEnter}
         />
         <ComposerPrimitive.Cancel
-          className="composer-button composer-cancel"
+          className="btn"
           onClick={(event) => {
             const { remoteId } = aui.threadListItem.getState();
             if (!remoteId) return;
@@ -245,16 +312,11 @@ function Composer() {
         >
           Stop
         </ComposerPrimitive.Cancel>
-        <button
-          type="button"
-          className="composer-button"
-          disabled={!canSend}
-          onClick={send}
-        >
+        <button type="button" className="btn btn-primary" disabled={!canSend} onClick={send}>
           {isRunning ? "Queue" : "Send"}
         </button>
       </ComposerPrimitive.Root>
-    </div>
+    </>
   );
 }
 
@@ -272,8 +334,8 @@ function WorkflowBacklink() {
     | undefined;
   if (!custom?.workflowRunId) return null;
   return (
-    <a className="workflow-backlink" href={`/runs/${custom.workflowRunId}`}>
-      ← Back to run <code>{custom.workflowRunId}</code>
+    <a className="backlink" href={`/runs/${custom.workflowRunId}`}>
+      ← Back to run {custom.workflowRunId}
       {custom.workflowStepId && <> · {custom.workflowStepId} step</>}
     </a>
   );
@@ -293,7 +355,7 @@ function Ticked({ text }: { text: string }) {
 
 /** This chat's worktree: where it is, how to read its work, and a way to
  *  hand the directory back or ask for it again. */
-function WorkspaceTagline() {
+function WorkspaceLine() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
     | undefined;
@@ -336,36 +398,25 @@ function WorkspaceTagline() {
   }
 
   return (
-    <div className="workspace-tagline">
-      <p>
-        {attached ? (
-          <>
-            Working in <code>cd {workspace.workspaceRoot}</code>
-          </>
-        ) : workspace.workspaceRef ? (
-          <>
-            Detached — the work is on <code>git checkout {workspace.workspaceRef}</code>
-          </>
-        ) : (
-          <>No worktree. Attach one to give this chat somewhere to work.</>
-        )}
-      </p>
-      <button
-        type="button"
-        className="workspace-button"
-        onClick={() => void toggle()}
-        disabled={busy}
-      >
-        {busy
-          ? "Working…"
-          : attached
-            ? "Detach"
-            : workspace.workspaceRef
-              ? "Reattach"
-              : "Attach"}
+    <div className="dock-workspace">
+      {attached ? (
+        <>
+          <span className="micro">Working in</span>
+          <code className="dock-path">cd {workspace.workspaceRoot}</code>
+        </>
+      ) : workspace.workspaceRef ? (
+        <>
+          <span className="micro">Detached — the work is on</span>
+          <code className="dock-path">git checkout {workspace.workspaceRef}</code>
+        </>
+      ) : (
+        <span className="micro">No worktree — attach one to give this chat somewhere to work</span>
+      )}
+      <button type="button" className="link-flame" onClick={() => void toggle()} disabled={busy}>
+        {busy ? "Working…" : attached ? "Detach" : workspace.workspaceRef ? "Reattach" : "Attach"}
       </button>
       {error && (
-        <p className="workspace-error">
+        <p className="notice dock-error">
           <Ticked text={error} />
         </p>
       )}
@@ -528,9 +579,7 @@ function ApprovalEntry({
             {approval.cwd && (
               <div>
                 <dt>Working directory</dt>
-                <dd>
-                  <code>{approval.cwd}</code>
-                </dd>
+                <dd>{approval.cwd}</dd>
               </div>
             )}
           </dl>
@@ -542,7 +591,7 @@ function ApprovalEntry({
               <button
                 key={decision}
                 type="button"
-                className={`approval-button approval-${decision}`}
+                className={`btn ${decision === "cancel" ? "" : "btn-primary"}`}
                 // Disabled the instant one is chosen: a second click is a second
                 // decision, and the server refuses those rather than applying
                 // them to whatever is running by then.
@@ -557,7 +606,7 @@ function ApprovalEntry({
           <p className="approval-outcome">{outcomeText(approval)}</p>
         )}
         {error && (
-          <p className="approval-error">
+          <p className="notice">
             <Ticked text={error} />
           </p>
         )}
@@ -589,7 +638,7 @@ function TurnApprovals() {
 
   if (!remoteId || !mine.length) return null;
   return (
-    <div className="approval-list">
+    <div className="approvals">
       {mine.map(({ approval }) => (
         <ApprovalEntry key={approval.id} threadId={remoteId} approval={approval} />
       ))}
@@ -597,51 +646,96 @@ function TurnApprovals() {
   );
 }
 
+/** The line of figures under the conversation heading.
+ *
+ *  Every cell is counted from the transcript this browser is holding, so each
+ *  one is a fact about what is on screen rather than an estimate of anything. */
+export function ConversationStats() {
+  const messages = useAuiState((state) => state.thread.messages);
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const approvals = useApprovals(remoteId);
+
+  const toolCalls = useMemo(
+    () =>
+      messages.reduce(
+        (total, message) =>
+          total +
+          (Array.isArray(message.content)
+            ? message.content.filter((part) => part.type === "tool-call").length
+            : 0),
+        0,
+      ),
+    [messages],
+  );
+  const pending = approvals.filter((entry) => entry.approval.status === "pending").length;
+
+  return (
+    <StatStrip>
+      <Stat label="Turns" value={messages.length} />
+      <Stat label="Tool calls" value={toolCalls} />
+      <Stat
+        label="Approvals"
+        value={pending ? `${approvals.length} · ${pending} open` : approvals.length}
+        tone={pending ? "alert" : undefined}
+      />
+      <Stat
+        label="Status"
+        value={isRunning ? "Live" : "Idle"}
+        tone={isRunning ? "live" : undefined}
+      />
+    </StatStrip>
+  );
+}
+
 export function ChatThread() {
   return (
     <ThreadPrimitive.Root className="thread">
-      <ThreadPrimitive.Viewport className="thread-viewport">
+      <ThreadPrimitive.Viewport className="stream">
         <WorkflowBacklink />
-        <div className="welcome">
-          <span className="eyebrow">OPENENGINE / CHAT</span>
-          <h1>Start a conversation.</h1>
-          <p>Each chat has its own agent history and Git worktree.</p>
-        </div>
+        <ThreadPrimitive.Empty>
+          <div className="welcome">
+            <div className="welcome-copy">
+              <p className="eyebrow">OpenEngine / Chat</p>
+              <h1>Start a conversation.</h1>
+              <p className="lede">Each chat has its own agent history and Git worktree.</p>
+            </div>
+          </div>
+        </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages>
           {({ message }) =>
             message.role === "user" ? <UserMessage /> : <AssistantMessage />
           }
         </ThreadPrimitive.Messages>
-        <ConversationFooter />
+        <Dock />
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
   );
 }
 
-function ConversationFooter() {
+function Dock() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
     | undefined;
   const workflowConversation = Boolean(custom?.workflowRunId);
   return (
-    <ThreadPrimitive.ViewportFooter className="thread-footer">
-      <ThreadPrimitive.ScrollToBottom className="scroll-button">
+    <ThreadPrimitive.ViewportFooter className="dock">
+      <ThreadPrimitive.ScrollToBottom className="btn jump-button">
         Jump to latest
       </ThreadPrimitive.ScrollToBottom>
       {workflowConversation ? (
-        <p className="workflow-conversation-note">
+        <p className="step-note">
           This transcript belongs to a workflow step. Return to the run for status and actions.
         </p>
       ) : (
         <>
           <Composer />
-          {/* Under the composer rather than in the welcome header: a detached
-              chat refuses to run, so the way to fix that cannot be somewhere
-              you have to scroll a long conversation to reach. */}
-          <WorkspaceTagline />
-          <p className="composer-note">
-            Either runner can change this chat's worktree, and stops to ask first.
-          </p>
+          <div className="dock-foot">
+            {/* Under the composer rather than in the heading: a detached chat
+                refuses to run, so the way to fix that cannot be somewhere you
+                have to scroll a long conversation to reach. */}
+            <WorkspaceLine />
+          </div>
         </>
       )}
     </ThreadPrimitive.ViewportFooter>
@@ -654,34 +748,34 @@ function ThreadItemMeta() {
     | undefined;
   const isRunning = useAuiState((state) => state.threadListItem.isRunning);
   return (
-    <span className="thread-meta">
-      {isRunning && <span className="running-dot" aria-label="Agent is running" />}
+    <span className="rail-item-meta">
+      {isRunning && <span className="rail-live" aria-label="Agent is running" />}
       {[custom?.agentId, custom?.runner].filter(Boolean).join(" · ")}
     </span>
   );
 }
 
 function ThreadListItem({ archived = false }: { archived?: boolean }) {
+  const copy = (
+    <>
+      <span className="rail-item-title" data-clamp="">
+        <ThreadListItemPrimitive.Title fallback="New chat" />
+      </span>
+      <ThreadItemMeta />
+    </>
+  );
   return (
-    <ThreadListItemPrimitive.Root className="thread-item">
+    <ThreadListItemPrimitive.Root className="rail-item">
       {archived ? (
-        <div className="thread-trigger">
-          <span className="thread-copy">
-            <ThreadListItemPrimitive.Title fallback="New chat" />
-            <ThreadItemMeta />
-          </span>
-        </div>
+        <div className="rail-item-trigger">{copy}</div>
       ) : (
-        <ThreadListItemPrimitive.Trigger className="thread-trigger">
-          <span className="thread-copy">
-            <ThreadListItemPrimitive.Title fallback="New chat" />
-            <ThreadItemMeta />
-          </span>
+        <ThreadListItemPrimitive.Trigger className="rail-item-trigger">
+          {copy}
         </ThreadListItemPrimitive.Trigger>
       )}
       {archived ? (
         <ThreadListItemPrimitive.Unarchive
-          className="thread-action restore-action"
+          className="rail-item-action"
           aria-label="Restore chat"
           title="Restore chat"
         >
@@ -689,7 +783,7 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
         </ThreadListItemPrimitive.Unarchive>
       ) : (
         <ThreadListItemPrimitive.Archive
-          className="thread-action danger"
+          className="rail-item-action"
           aria-label="Archive chat"
           title="Archive chat"
         >
@@ -702,28 +796,30 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
 
 export function ChatSidebar() {
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        <span className="brand-mark">e</span>
-        <span>openengine</span>
-      </div>
-      <a className="run-nav-link run-nav-secondary chat-run-link" href="/runs">Workflow runs</a>
-      <ThreadListPrimitive.Root className="thread-list">
-        <ThreadListPrimitive.New className="new-thread">+ New chat</ThreadListPrimitive.New>
-        <div className="thread-list-label">Conversations</div>
-        <ThreadListPrimitive.Items>
-          {() => <ThreadListItem />}
-        </ThreadListPrimitive.Items>
-        <details className="archived-list">
-          <summary>Archived</summary>
-          <ThreadListPrimitive.Items archived>
-            {() => <ThreadListItem archived />}
-          </ThreadListPrimitive.Items>
-        </details>
+    <aside className="rail">
+      <RailBrand href="/conversations" />
+      <ThreadListPrimitive.Root className="rail-list">
+        <div className="rail-nav">
+          <a className="rail-button" href="/runs">
+            Workflow runs
+          </a>
+          <ThreadListPrimitive.New className="rail-button rail-button-primary">
+            + New chat
+          </ThreadListPrimitive.New>
+        </div>
+        <p className="rail-label">Conversations</p>
+        <div className="rail-scroll">
+          <ThreadListPrimitive.Items>{() => <ThreadListItem />}</ThreadListPrimitive.Items>
+          <details className="rail-archive">
+            <summary>Archived</summary>
+            <ThreadListPrimitive.Items archived>
+              {() => <ThreadListItem archived />}
+            </ThreadListPrimitive.Items>
+          </details>
+        </div>
       </ThreadListPrimitive.Root>
-      <div className="sidebar-foot">
-        <span className="status-dot" /> Local openengine
-      </div>
+      <div className="rail-tail" />
+      <RailFoot />
     </aside>
   );
 }

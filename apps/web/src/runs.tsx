@@ -1,9 +1,22 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api, type ApiRunStep, type ApiWorkflowRun, type EngineConfig } from "./api";
+import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
 
 function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
+}
+
+/** How loudly a run's phase should read. Failure is the only thing that gets
+ *  the accent; a run still moving is ink, and one not started yet is a rule. */
+function phaseAccent(phase: string): "flame" | "quiet" | undefined {
+  if (phase === "failed") return "flame";
+  if (phase === "pending" || phase === "preparing_workspace") return "quiet";
+  return undefined;
+}
+
+function conversationCount(run: ApiWorkflowRun) {
+  return run.steps.filter((step) => step.conversationUrl).length;
 }
 
 function RunNavigation({
@@ -16,37 +29,56 @@ function RunNavigation({
   activeView?: "runs" | "new";
 }) {
   return (
-    <aside className="sidebar run-sidebar">
-      <a className="brand" href="/runs">
-        <span className="brand-mark">e</span>
-        <span>openengine</span>
-      </a>
-      <nav className="run-nav" aria-label="Work">
-        <a className={`run-nav-link ${activeView === "runs" ? "run-nav-primary" : "run-nav-secondary"}`} href="/runs">
+    <aside className="rail">
+      <RailBrand href="/runs" />
+      <div className="rail-nav">
+        <a
+          className={`rail-button ${activeView === "runs" ? "rail-button-primary" : ""}`}
+          href="/runs"
+        >
           Workflow runs
         </a>
-        <a className={`run-nav-link new-workflow-link ${activeView === "new" ? "run-nav-primary" : "run-nav-secondary"}`} href="/runs/new">
+        <a
+          className={`rail-button ${activeView === "new" ? "rail-button-primary" : ""}`}
+          href="/runs/new"
+        >
           + New workflow
         </a>
-        <div className="thread-list-label">Recent runs</div>
+      </div>
+      <p className="rail-label">Recent runs</p>
+      <nav className="rail-scroll" aria-label="Recent runs">
         {runs.map((run) => (
-          <div className="run-nav-group" key={run.runId}>
-            <a className="run-nav-item" data-active={activeRunId === run.runId || undefined} href={`/runs/${run.runId}`}>
-              <strong>{run.taskPrompt || run.runId}</strong>
-              <span>{phaseLabel(run.phase)} · {run.workflowVersion || run.workflowId}</span>
-            </a>
-            {run.steps.some((step) => step.conversationUrl) && (
-              <div className="run-conversations" aria-label={`Conversations for ${run.taskPrompt}`}>
-                {run.steps.filter((step) => step.conversationUrl).map((step) => (
-                  <a href={step.conversationUrl!} key={step.stepId}>{step.name} conversation</a>
-                ))}
+          <div key={run.runId}>
+            <div className="rail-item" data-active={activeRunId === run.runId || undefined}>
+              <a className="rail-item-trigger" href={`/runs/${run.runId}`}>
+                <span className="rail-item-title" data-clamp="">
+                  {run.taskPrompt || run.runId}
+                </span>
+                <span className="rail-item-meta">
+                  {phaseLabel(run.phase)} · {run.workflowVersion || run.workflowId}
+                </span>
+              </a>
+            </div>
+            {conversationCount(run) > 0 && (
+              <div className="rail-sub" aria-label={`Conversations for ${run.taskPrompt}`}>
+                {run.steps
+                  .filter((step) => step.conversationUrl)
+                  .map((step) => (
+                    <a href={step.conversationUrl!} key={step.stepId}>
+                      {step.name} conversation
+                    </a>
+                  ))}
               </div>
             )}
           </div>
         ))}
       </nav>
-      <a className="conversation-nav" href="/conversations">Standalone conversations</a>
-      <div className="sidebar-foot"><span className="status-dot" /> Local openengine</div>
+      <div className="rail-tail">
+        <a className="rail-button" href="/conversations">
+          Standalone conversations
+        </a>
+      </div>
+      <RailFoot />
     </aside>
   );
 }
@@ -64,31 +96,114 @@ function useRuns() {
 
 export function RunsPage() {
   const { runs, error } = useRuns();
+  const [filter, setFilter] = useState<string>("");
+
+  // Built from the phases actually present rather than from a fixed list, so a
+  // filter is never offered that would empty the page, and a phase the workflow
+  // grows later still gets a button.
+  const phases = useMemo(() => {
+    const seen: string[] = [];
+    for (const run of runs) if (!seen.includes(run.phase)) seen.push(run.phase);
+    return seen;
+  }, [runs]);
+  const shown = filter ? runs.filter((run) => run.phase === filter) : runs;
+
+  const awaiting = runs.filter((run) => run.phase === "awaiting_human_review").length;
+  const failed = runs.filter((run) => run.phase === "failed").length;
+  const conversations = runs.reduce((total, run) => total + conversationCount(run), 0);
+
   return (
     <div className="app-shell">
       <RunNavigation runs={runs} />
-      <main className="runs-panel">
-        <header className="runs-hero">
-          <span className="eyebrow">OPENENGINE / WORK</span>
+      <main className="panel-scroll">
+        <header className="hero">
+          <p className="eyebrow">OpenEngine / Work</p>
           <h1>Workflow runs</h1>
-          <p>Each run brings the task, agent steps, outputs, and human decision together.</p>
+          <p className="lede">
+            Each run brings the task, agent steps, outputs, and human decision together.
+          </p>
         </header>
-        {error ? <p className="run-error">Could not load runs: {error}</p> : runs.length ? (
-          <div className="run-grid">
-            {runs.map((run) => (
-              <a className="run-card" href={`/runs/${run.runId}`} key={run.runId}>
-                <div className="run-card-top">
-                  <span className={`phase phase-${run.phase}`}>{phaseLabel(run.phase)}</span>
-                  <code>{run.runId}</code>
-                </div>
-                <h2>{run.taskPrompt}</h2>
-                <p>{run.repository}</p>
-                <footer>{run.workflowName} · {run.workflowVersion}</footer>
+        <StatStrip>
+          <Stat label="Runs" value={runs.length} />
+          <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />
+          <Stat label="Failed" value={failed} tone={failed ? "alert" : undefined} />
+          <Stat label="Conversations" value={conversations} />
+        </StatStrip>
+        {runs.length > 0 && (
+          <div className="toolbar">
+            <div className="segmented" role="group" aria-label="Filter runs by phase">
+              <button type="button" aria-pressed={!filter} onClick={() => setFilter("")}>
+                All
+              </button>
+              {phases.map((phase) => (
+                <button
+                  key={phase}
+                  type="button"
+                  aria-pressed={filter === phase}
+                  onClick={() => setFilter(filter === phase ? "" : phase)}
+                >
+                  {phaseLabel(phase)}
+                </button>
+              ))}
+            </div>
+            <div className="toolbar-end">
+              <span className="micro">
+                {shown.length} of {runs.length} shown
+              </span>
+              <a className="btn" href="/runs/new">
+                Run a workflow
               </a>
-            ))}
+            </div>
+          </div>
+        )}
+        {error ? (
+          <p className="notice notice-block">
+            Could not load runs: {error}
+          </p>
+        ) : runs.length ? (
+          <div className="cards">
+            {shown.map((run) => {
+              const current = run.steps.find((step) => step.stepId === run.currentStepId);
+              return (
+                <a
+                  className="card"
+                  data-accent={phaseAccent(run.phase)}
+                  href={`/runs/${run.runId}`}
+                  key={run.runId}
+                >
+                  <div className="card-top">
+                    <span className={`chip ${run.phase === "pending" ? "chip-flame" : ""}`}>
+                      {phaseLabel(run.phase)}
+                    </span>
+                    <code className="card-id">{run.runId}</code>
+                  </div>
+                  <h2>{run.taskPrompt || run.runId}</h2>
+                  <dl className="card-stats">
+                    <div>
+                      <dt>Steps</dt>
+                      <dd>{run.steps.length}</dd>
+                    </div>
+                    <div>
+                      <dt>Chats</dt>
+                      <dd>{conversationCount(run)}</dd>
+                    </div>
+                    <div>
+                      <dt>Stage</dt>
+                      <dd>{current?.name ?? run.terminalOutcome ?? "—"}</dd>
+                    </div>
+                  </dl>
+                  <footer>
+                    {run.workflowName} · {run.workflowVersion}
+                  </footer>
+                </a>
+              );
+            })}
           </div>
         ) : (
-          <div className="empty-runs"><h2>No workflow runs yet.</h2><p>Standalone conversations remain available from the sidebar.</p></div>
+          <div className="empty">
+            <h2>No workflow runs yet.</h2>
+            <p>Standalone conversations remain available from the sidebar.</p>
+          </div>
         )}
       </main>
     </div>
@@ -137,13 +252,16 @@ export function NewWorkflowPage() {
   return (
     <div className="app-shell">
       <RunNavigation runs={runs} activeView="new" />
-      <main className="new-workflow-panel">
-        <header className="new-workflow-header">
-          <span className="eyebrow">OPENENGINE / NEW WORKFLOW</span>
+      <main className="panel-scroll">
+        <header className="hero hero-narrow">
+          <p className="eyebrow">OpenEngine / New workflow</p>
           <h1>Start a workflow</h1>
-          <p>Create one run that keeps its stages, agent conversations, outputs, and final human decision together.</p>
+          <p className="lede">
+            Create one run that keeps its stages, agent conversations, outputs, and final human
+            decision together.
+          </p>
         </header>
-        <form className="new-workflow-form" onSubmit={submit}>
+        <form className="form" onSubmit={submit}>
           <label>
             <span>Workflow definition</span>
             <select disabled value="implementation-review-v1">
@@ -152,24 +270,54 @@ export function NewWorkflowPage() {
           </label>
           <label>
             <span>Repository</span>
-            <input required value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository or local path" />
+            <input
+              required
+              value={repository}
+              onChange={(event) => setRepository(event.target.value)}
+              placeholder="owner/repository or local path"
+            />
           </label>
           <label>
             <span>Implementation runner</span>
-            <select required value={runner} onChange={(event) => setRunner(event.target.value)}>
-              {runners.map((name) => <option key={name} value={name}>{name}</option>)}
+            <select
+              required
+              value={runner}
+              onChange={(event) => setRunner(event.target.value)}
+            >
+              {runners.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
             </select>
           </label>
           <label>
             <span>Task prompt</span>
-            <textarea required rows={9} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe what the implementation agent should change and what success looks like." />
+            <textarea
+              required
+              rows={9}
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="Describe what the implementation agent should change and what success looks like."
+            />
           </label>
-          {error && <p className="run-error" role="alert">{error}</p>}
-          <div className="new-workflow-actions">
-            <a href="/runs">Cancel</a>
-            <button disabled={submitting || !runner} type="submit">{submitting ? "Creating…" : "Create workflow run"}</button>
+          {error && (
+            <p className="notice" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="form-actions">
+            <a className="back-link" href="/runs">
+              Cancel
+            </a>
+            <button className="btn btn-primary" disabled={submitting || !runner} type="submit">
+              {submitting ? "Creating…" : "Create workflow run"}
+            </button>
           </div>
-          <p className="form-note">The implementation starts after the run is created, then a read-only review of it. The run then waits for your decision.</p>
+          <p className="form-note">
+            The implementation starts after the run is created. Reviewer execution is not
+            available yet.
+          </p>
         </form>
       </main>
     </div>
@@ -187,10 +335,18 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
     ...run.steps.map((step) => ({ id: step.stepId, name: step.name, status: step.status })),
   ];
   return (
-    <ol className="stage-progress" aria-label="Current workflow stage">
+    <ol className="stages" aria-label="Current workflow stage">
       {stages.map((stage) => (
-        <li className={`stage-progress-${stage.status}`} aria-current={stage.status === "in_progress" || stage.status === "action_required" ? "step" : undefined} key={stage.id}>
-          <span aria-hidden="true" className="stage-marker" />
+        <li
+          className="stage"
+          data-status={stage.status}
+          aria-current={
+            stage.status === "in_progress" || stage.status === "action_required"
+              ? "step"
+              : undefined
+          }
+          key={stage.id}
+        >
           <span>{stage.name}</span>
         </li>
       ))}
@@ -200,15 +356,20 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
 
 function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   return (
-    <article className={`run-step ${current ? "run-step-current" : ""}`}>
-      <div className="step-rail"><span /></div>
+    <article className={`step ${current ? "step-current" : ""}`}>
+      <div className="step-rail" aria-hidden="true" />
       <div className="step-body">
         <header>
-          <div><span className="step-kind">{step.kind} step</span><h2>{step.name}</h2></div>
-          <span className={`step-status step-status-${step.status}`}>{phaseLabel(step.status)}</span>
+          <div>
+            <span className="eyebrow">{step.kind} step</span>
+            <h2>{step.name}</h2>
+          </div>
+          <span className={`chip ${step.status === "action_required" ? "chip-flame" : ""}`}>
+            {phaseLabel(step.status)}
+          </span>
         </header>
         {step.outcome && (
-          <p className={`step-outcome ${step.changesRequested ? "changes-requested" : ""}`}>
+          <p className="step-outcome" data-changes={step.changesRequested || undefined}>
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
           </p>
         )}
@@ -216,14 +377,23 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
         {step.outputs.length > 0 && (
           <dl className="step-outputs">
             {step.outputs.map((output) => (
-              <div key={output.name}><dt>{output.name}</dt><dd>{output.value}</dd></div>
+              <div key={output.name}>
+                <dt>{output.name}</dt>
+                <dd>{output.value}</dd>
+              </div>
             ))}
           </dl>
         )}
         {step.agentId && (
-          <div className="agent-row">
-            <span>Agent <strong>{step.agentId}</strong></span>
-            {step.conversationUrl ? <a href={step.conversationUrl}>Open conversation →</a> : <span>Conversation not started</span>}
+          <div className="step-agent">
+            <span>Agent {step.agentId}</span>
+            {step.conversationUrl ? (
+              <a className="link-flame" href={step.conversationUrl}>
+                Open conversation →
+              </a>
+            ) : (
+              <span>Conversation not started</span>
+            )}
           </div>
         )}
       </div>
@@ -262,43 +432,70 @@ export function RunDetailPage({ runId }: { runId: string }) {
   return (
     <div className="app-shell">
       <RunNavigation runs={runs} activeRunId={runId} />
-      <main className="run-detail-panel">
-        {error ? <p className="run-error">Could not load run: {error}</p> : !run ? (
-          <p className="loading-inline">Loading workflow run…</p>
+      <main className="panel-scroll">
+        {error ? (
+          <p className="notice notice-block">
+            Could not load run: {error}
+          </p>
+        ) : !run ? (
+          <p className="state-inline">Loading workflow run…</p>
         ) : (
           <>
-            <header className="run-detail-header">
-              <a href="/runs" className="back-link">← All workflow runs</a>
-              <div className="run-title-row">
-                <div><span className="eyebrow">{run.workflowName} / {run.workflowVersion}</span><h1>{run.taskPrompt}</h1></div>
-                <span className={`phase phase-${run.phase}`}>{phaseLabel(run.phase)}</span>
+            <header className="detail-head">
+              <a href="/runs" className="back-link">
+                ← All workflow runs
+              </a>
+              <div className="detail-title">
+                <div>
+                  <p className="eyebrow">
+                    {run.workflowName} / {run.workflowVersion}
+                  </p>
+                  <h1>{run.taskPrompt}</h1>
+                </div>
+                <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
+                  {phaseLabel(run.phase)}
+                </span>
               </div>
-              <dl className="run-facts">
-                <div><dt>Run ID</dt><dd><code>{run.runId}</code></dd></div>
-                <div><dt>Workflow</dt><dd>{run.workflowId}</dd></div>
-                <div><dt>Repository</dt><dd>{run.repository}</dd></div>
-                <div><dt>Current step</dt><dd>{run.currentStepId ?? "—"}</dd></div>
-                <div><dt>Final outcome</dt><dd>{run.terminalOutcome ?? "In progress"}</dd></div>
-              </dl>
             </header>
+            <StatStrip>
+              <Stat label="Run ID" value={run.runId} />
+              <Stat label="Repository" value={run.repository} />
+              <Stat label="Current step" value={run.currentStepId ?? "—"} />
+              <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
+            </StatStrip>
             <StageProgress run={run} />
             {run.pendingHumanReview && (
-              <section className="pending-action">
-                <span className="eyebrow">ACTION REQUIRED</span>
+              <section className="callout callout-action">
+                <p className="eyebrow">Action required</p>
                 <h2>{run.pendingHumanReview.title}</h2>
-                <p>The implementation and agent review are complete. A human approval or rejection is the final decision.</p>
+                <p>
+                  The implementation and agent review are complete. A human approval or rejection
+                  is the final decision.
+                </p>
               </section>
             )}
             {run.humanDecision && (
-              <section className={`human-decision decision-${run.humanDecision.outcome}`}>
-                <span className="eyebrow">FINAL HUMAN DECISION</span>
+              <section
+                className={`callout ${run.humanDecision.outcome === "rejected" ? "callout-rejected" : ""}`}
+              >
+                <p className="eyebrow">Final human decision</p>
                 <h2>{run.humanDecision.outcome}</h2>
                 <p>{run.humanDecision.summary || "No decision summary was provided."}</p>
               </section>
             )}
-            {run.failureReason && <p className="run-error">{run.failureReason}</p>}
-            <section className="run-timeline" aria-label="Workflow steps">
-              {run.steps.map((step) => <StepCard key={step.stepId} step={step} current={run.currentStepId === step.stepId} />)}
+            {run.failureReason && (
+              <p className="notice notice-block">
+                {run.failureReason}
+              </p>
+            )}
+            <section className="timeline" aria-label="Workflow steps">
+              {run.steps.map((step) => (
+                <StepCard
+                  key={step.stepId}
+                  step={step}
+                  current={run.currentStepId === step.stepId}
+                />
+              ))}
             </section>
           </>
         )}
