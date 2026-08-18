@@ -20,6 +20,7 @@ from engine.ports.agent_runner import (
     McpAgentRunner,
     McpServerConfig,
     StreamingAgentRunner,
+    StreamingMcpAgentRunner,
     TokenUsage,
     TurnObserver,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "SourceControl",
     "StateStore",
     "StreamingAgentRunner",
+    "StreamingMcpAgentRunner",
     "TokenUsage",
     "TurnObserver",
     "Workspace",

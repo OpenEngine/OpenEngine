@@ -31,6 +31,7 @@ from engine.ports import (
     InteractiveAgentRunner,
     McpAgentRunner,
     McpServerConfig,
+    StreamingMcpAgentRunner,
 )
 
 #: Captured from `claude -p --output-format stream-json --verbose --allowedTools
@@ -389,6 +390,7 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     argv = ClaudeCodeAgentRunner().command_line(PROFILE, mcp_server=server)
 
     assert isinstance(ClaudeCodeAgentRunner(), McpAgentRunner)
+    assert isinstance(ClaudeCodeAgentRunner(), StreamingMcpAgentRunner)
     config = json.loads(argv[argv.index("--mcp-config") + 1])
     assert config == {
         "mcpServers": {

@@ -44,6 +44,7 @@ from engine.ports import (
     InteractiveAgentRunner,
     McpAgentRunner,
     McpServerConfig,
+    StreamingMcpAgentRunner,
 )
 
 #: Captured from `codex exec --json --sandbox read-only "Reply with exactly the
@@ -347,6 +348,7 @@ def test_terminal_mcp_configuration_is_passed_to_codex() -> None:
     argv = CodexAgentRunner().command_line(PROFILE, mcp_server=server)
 
     assert isinstance(CodexAgentRunner(), McpAgentRunner)
+    assert isinstance(CodexAgentRunner(), StreamingMcpAgentRunner)
     assert 'mcp_servers.workflow.command="/usr/bin/python3"' in argv
     assert 'mcp_servers.workflow.args=["-m", "terminal"]' in argv
 

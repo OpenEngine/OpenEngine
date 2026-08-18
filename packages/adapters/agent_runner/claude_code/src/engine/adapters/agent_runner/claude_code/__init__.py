@@ -386,9 +386,10 @@ class ClaudeCodeAgentRunner:
     """Runs an agent turn by shelling out to the Claude Code CLI.
 
     Implements `engine.ports.AgentRunner`, `StreamingAgentRunner`,
-    `InteractiveAgentRunner` and `McpAgentRunner` -- one runner rather than one
-    per invocation, because whether a turn can pause for permission is a
-    property of the turn being asked for and not of the agent answering it.
+    `InteractiveAgentRunner`, `McpAgentRunner`, and `StreamingMcpAgentRunner`
+    -- one runner rather than one per invocation, because whether a turn can
+    pause for permission is a property of the turn being asked for and not of
+    the agent answering it.
 
     `timeout_seconds=None` -- the default -- lets a turn take as long as it
     takes, for the reasons the Codex runner's docstring gives: a long run is
@@ -731,11 +732,30 @@ class ClaudeCodeAgentRunner:
         workspace_id: WorkspaceId | None = None,
     ) -> AgentTurn:
         """Run a turn with the runtime's bound terminal tools attached."""
+        return await self.run_turn_with_mcp_streamed(
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            lambda _message: None,
+            workspace_id,
+        )
+
+    async def run_turn_with_mcp_streamed(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_message: TurnObserver,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run with terminal tools while reporting completed transcript messages."""
         return await self.run_turn_streamed(
             agent_run_id,
             profile,
             messages,
-            lambda _message: None,
+            on_message,
             workspace_id=workspace_id,
             mcp_server=mcp_server,
         )

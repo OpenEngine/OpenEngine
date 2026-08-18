@@ -282,6 +282,37 @@ class TerminalToolRunner(ConcurrentRunner):
         self.cancelled.set()
 
 
+class WorkflowProgressRunner(TerminalToolRunner):
+    """Hold a streamed MCP workflow turn open so its progress can be observed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "complete_step",
+            {"outcome": "success", "summary": "Progress streamed.", "outputs": {}},
+        )
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run_turn_with_mcp_streamed(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_message,
+        workspace_id=None,
+    ) -> AgentTurn:
+        progress = Message.assistant("Inspecting the implementation.")
+        on_message(progress)
+        self.started.set()
+        await self.release.wait()
+        turn = await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+        on_message(turn.message)
+        return AgentTurn(turn.message, steps=(progress, *turn.steps))
+
+
 class InvalidThenTerminalToolRunner(TerminalToolRunner):
     """Exit once without a valid call, then complete through MCP."""
 
@@ -571,6 +602,79 @@ def test_create_workflow_run_executes_implementation_and_stops_at_review() -> No
     assert runner.workspace_ids == ["ws-1"]
     assert "`complete_step`" in runner.seen[0][0].content
     assert "JSON" not in runner.seen[0][0].content
+
+
+def test_implementation_conversation_periodically_streams_durable_progress() -> None:
+    store = InMemoryStateStore()
+    runner = WorkflowProgressRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Show implementation progress.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = created.json()["runId"]
+            for _ in range(50):
+                if runner.started.is_set():
+                    break
+                current = await client.get(f"/api/runs/{run_id}")
+                assert current.json()["phase"] != "failed", current.json()[
+                    "failureReason"
+                ]
+                await asyncio.sleep(0.01)
+            assert runner.started.is_set()
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            for _ in range(20):
+                conversation = await store.load_conversation(instance_id)
+                if conversation is not None and len(conversation.messages) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+
+            loaded = await client.get(f"/api/threads/{instance_id}/messages")
+            streaming = asyncio.create_task(
+                client.get(f"/api/threads/{instance_id}/runs/current")
+            )
+            await asyncio.sleep(0.05)
+            runner.release.set()
+            response = await asyncio.wait_for(streaming, timeout=2)
+            finished = await store.load_conversation(instance_id)
+            events = [json.loads(line) for line in response.text.splitlines()]
+            return loaded.json(), events, finished
+
+    loaded, events, finished = asyncio.run(scenario())
+
+    assert loaded["unstable_resume"] is True
+    assert [message["role"] for message in loaded["messages"]] == ["user"]
+    assert events[0] == {
+        "type": "content",
+        "content": [{"type": "text", "text": "Inspecting the implementation."}],
+    }
+    assert events[-1] == {
+        "type": "done",
+        "content": [
+            {"type": "text", "text": "Inspecting the implementation."},
+            {"type": "text", "text": "Terminal result accepted."},
+        ],
+    }
+    assert finished is not None
+    assert [message.role for message in finished.messages] == [
+        Role.USER,
+        Role.ASSISTANT,
+        Role.ASSISTANT,
+    ]
+    assert [message.content for message in finished.messages[1:]] == [
+        "Inspecting the implementation.",
+        "Terminal result accepted.",
+    ]
 
 
 def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
