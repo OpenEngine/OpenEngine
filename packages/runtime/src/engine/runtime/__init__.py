@@ -30,6 +30,8 @@ from engine.runtime.profiles import BUILT_IN, CODER, FOREMAN, UnknownAgentError,
 from engine.runtime.run_read_model import RunReader, WorkflowRunView
 from engine.runtime.session import (
     DEFAULT_RUNNER,
+    INTERRUPTED_TOOL_RESULT,
+    INTERRUPTED_TURN_NOTE,
     AgentSession,
     UnknownInstanceError,
     UnknownRunnerError,
@@ -62,6 +64,8 @@ from engine.runtime.terminal_mcp import (
 from engine.runtime.workflow_execution import WorkflowExecutionError, WorkflowExecutor
 
 __all__ = [
+    "INTERRUPTED_TOOL_RESULT",
+    "INTERRUPTED_TURN_NOTE",
     "INVALID_COMPLETION_ERROR",
     "BUILT_IN",
     "CODER",

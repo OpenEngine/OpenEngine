@@ -1457,6 +1457,71 @@ def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
     ]
 
 
+def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript() -> None:
+    """Pressing stop ends the turn, not the record of it. What the agent had
+    already done is on disk whatever the button does, so a reload that showed
+    the question alone would be a transcript the worktree disagrees with."""
+    call = ToolCall(call_id="call-1", name="Write", arguments='{"path":"worker.py"}')
+
+    class StoppedMidWorkRunner(ConcurrentRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reported = asyncio.Event()
+
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            raise AssertionError("the streaming method should be used")
+
+        async def run_turn_streamed(
+            self, agent_run_id, profile, messages, on_message, tools=(), workspace_id=None
+        ) -> AgentTurn:
+            on_message(Message.assistant("Rewriting the worker."))
+            on_message(Message.assistant(tool_calls=(call,)))
+            self.reported.set()
+            await asyncio.Event().wait()
+            raise AssertionError("this runner only ever ends by being stopped")
+
+    runner = StoppedMidWorkRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            started = asyncio.create_task(
+                client.post(f"/api/threads/{thread_id}/runs", json={"text": "rewrite it"})
+            )
+            await runner.reported.wait()
+            stopped = await client.delete(f"/api/threads/{thread_id}/runs/current")
+            await started
+            # A fresh page load: the stream is gone, so this is all the client
+            # gets to know about the turn that was stopped.
+            return stopped, await client.get(f"/api/threads/{thread_id}/messages")
+
+    stopped, messages = asyncio.run(scenario())
+
+    assert stopped.status_code == 204
+    reloaded = messages.json()["messages"]
+    # The note the next turn is given is prompt context, not something to show
+    # a person, so it does not become a message here.
+    assert [message["role"] for message in reloaded] == ["user", "assistant"]
+    assert reloaded[1]["content"] == [
+        {"type": "text", "text": "Rewriting the worker."},
+        {
+            "type": "tool-call",
+            "toolCallId": "call-1",
+            "toolName": "Write",
+            "args": {"path": "worker.py"},
+            "argsText": '{"path":"worker.py"}',
+            # Answered rather than left pending, which is what a client shows
+            # as a tool still running.
+            "result": "interrupted",
+        },
+    ]
+
+
 def test_active_run_survives_stream_disconnect_and_replays_progress() -> None:
     call = ToolCall(call_id="call-1", name="Read", arguments='{"path":"README.md"}')
 
