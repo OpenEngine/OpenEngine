@@ -17,6 +17,7 @@ import textwrap
 import pytest
 
 from engine.adapters.agent_runner.codex import (
+    CODEX_PERMISSION_TRANSLATOR,
     CodexAgentRunner,
     CodexExecutionError,
     CodexToolsUnsupportedError,
@@ -38,12 +39,17 @@ from engine.domain import (
 )
 from engine.ports import (
     AgentRunner,
+    ApprovalCapability,
     ApprovalDecision,
     ApprovalKind,
+    ApprovalRequest,
     FinishReason,
     InteractiveAgentRunner,
     McpAgentRunner,
     McpServerConfig,
+    StreamingMcpAgentRunner,
+    PermissionScope,
+    PermissionTranslator,
 )
 
 #: Captured from `codex exec --json --sandbox read-only "Reply with exactly the
@@ -83,8 +89,37 @@ PROFILE = AgentProfile(
 
 
 def test_runner_satisfies_the_port() -> None:
-    assert isinstance(CodexAgentRunner(), AgentRunner)
-    assert isinstance(CodexAgentRunner(), InteractiveAgentRunner)
+    runner = CodexAgentRunner()
+
+    assert isinstance(runner, AgentRunner)
+    assert isinstance(runner, InteractiveAgentRunner)
+    assert isinstance(runner.permission_translator, PermissionTranslator)
+
+
+@pytest.mark.parametrize(
+    ("kind", "command", "expected"),
+    [
+        (
+            ApprovalKind.COMMAND_EXECUTION,
+            "uv run pytest",
+            PermissionScope(ApprovalCapability.BASH, "uv run pytest"),
+        ),
+        (ApprovalKind.FILE_CHANGE, None, PermissionScope(ApprovalCapability.EDIT)),
+        (ApprovalKind.TOOL_USE, None, None),
+    ],
+)
+def test_permission_translator_maps_codex_requests_to_engine_capabilities(
+    kind: ApprovalKind,
+    command: str | None,
+    expected: PermissionScope | None,
+) -> None:
+    request = ApprovalRequest(
+        approval_id="provider-approval",
+        kind=kind,
+        command=command,
+    )
+
+    assert CODEX_PERMISSION_TRANSLATOR.scope_for(request) == expected
 
 
 # --- parsing ----------------------------------------------------------------
@@ -347,6 +382,7 @@ def test_terminal_mcp_configuration_is_passed_to_codex() -> None:
     argv = CodexAgentRunner().command_line(PROFILE, mcp_server=server)
 
     assert isinstance(CodexAgentRunner(), McpAgentRunner)
+    assert isinstance(CodexAgentRunner(), StreamingMcpAgentRunner)
     assert 'mcp_servers.workflow.command="/usr/bin/python3"' in argv
     assert 'mcp_servers.workflow.args=["-m", "terminal"]' in argv
 

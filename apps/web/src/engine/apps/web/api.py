@@ -388,8 +388,9 @@ class ThreadService:
             try:
                 while not task.done() or not observed.empty():
                     try:
-                        message = await asyncio.wait_for(observed.get(), timeout=0.1)
-                    except asyncio.TimeoutError:
+                        async with asyncio.timeout(0.1):
+                            message = await observed.get()
+                    except TimeoutError:
                         continue
                     await run.observe(message)
                 return await task
@@ -625,15 +626,42 @@ def create_app(
     static_directory: Path | None = None,
     *,
     workflow_runners: Mapping[str, AgentRunner] | None = None,
+    review_runners: Mapping[str, AgentRunner] | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
+    if workflow_runners is not None and review_runners is None:
+        raise ValueError("review_runners are required with workflow_runners")
     service = ThreadService(session, runners)
     run_reader = RunReader(session.state_store)
     workflow_executor = WorkflowExecutor(
         session.capabilities,
-        workflow_runners or runners,
+        workflow_runners if workflow_runners is not None else runners,
+        review_runners=review_runners if review_runners is not None else runners,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
+
+    def workflow_is_active(thread: ChatThread) -> bool:
+        return (
+            thread.workflow_run_id is not None
+            and thread.workflow_run_id in workflow_tasks
+        )
+
+    async def stream_workflow_conversation(
+        instance_id: AgentInstanceId, run_id: RunId
+    ) -> AsyncIterator[bytes]:
+        """Poll durable workflow progress into the chat client's snapshot stream."""
+        previous: list[dict[str, object]] | None = None
+        while True:
+            history = await service.history(instance_id)
+            content = _latest_assistant_content(history)
+            active = run_id in workflow_tasks
+            if not active:
+                yield _json_line({"type": "done", "content": content})
+                return
+            if content != previous:
+                previous = content
+                yield _json_line({"type": "content", "content": content})
+            await asyncio.sleep(0.25)
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -699,7 +727,7 @@ def create_app(
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
         task = asyncio.create_task(
-            workflow_executor.advance_to_review(event, runner_name)
+            workflow_executor.advance_through_review(event, runner_name)
         )
         workflow_tasks[run_id] = task
         task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))
@@ -771,20 +799,25 @@ def create_app(
 
     async def messages(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
-        try:
-            history = await service.history(instance_id)
-        except KeyError:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
+        history = await service.history(instance_id)
         active = service.active_run(instance_id)
+        workflow_active = workflow_is_active(thread)
+        visible_history = _through_latest_user(history) if workflow_active else history
         return JSONResponse(
             {
-                "messages": _messages_json(history),
+                "messages": _messages_json(visible_history),
                 # A complete assistant transcript can become durable just
                 # before ActiveRun flips to done. In that window replaying it
                 # would duplicate the assistant message in the client.
-                "unstable_resume": active is not None
-                and bool(history)
-                and history[-1].role is Role.USER,
+                "unstable_resume": workflow_active
+                or (
+                    active is not None
+                    and bool(history)
+                    and history[-1].role is Role.USER
+                ),
             }
         )
 
@@ -855,14 +888,20 @@ def create_app(
 
     async def resume_run(request: Request) -> Response:
         instance_id = _thread_id(request)
-        if await service.get(instance_id) is None:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
         # Keep a completed snapshot available for the small race where history
         # observed an active run immediately before it finished.
         run = service.latest_run(instance_id)
-        if run is None:
-            return Response(status_code=204)
-        return StreamingResponse(run.stream(), media_type="application/x-ndjson")
+        if run is not None:
+            return StreamingResponse(run.stream(), media_type="application/x-ndjson")
+        if thread.workflow_run_id is not None:
+            return StreamingResponse(
+                stream_workflow_conversation(instance_id, thread.workflow_run_id),
+                media_type="application/x-ndjson",
+            )
+        return Response(status_code=204)
 
     async def cancel_run(request: Request) -> Response:
         instance_id = _thread_id(request)
@@ -1121,6 +1160,24 @@ def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:
         _merge_message(assistant_content, message)
     flush_assistant()
     return result
+
+
+def _through_latest_user(messages: tuple[Message, ...]) -> tuple[Message, ...]:
+    """Hide an in-flight assistant transcript that resume will stream anew."""
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role is Role.USER:
+            return messages[: index + 1]
+    return messages
+
+
+def _latest_assistant_content(
+    messages: tuple[Message, ...],
+) -> list[dict[str, object]]:
+    """Build the current assistant snapshot after the latest user message."""
+    content: list[dict[str, object]] = []
+    for message in messages[len(_through_latest_user(messages)) :]:
+        _merge_message(content, message)
+    return content
 
 
 def _merge_message(content: list[dict[str, object]], message: Message) -> bool:

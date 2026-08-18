@@ -12,9 +12,9 @@ the runner never invokes a tool itself, so what an agent may do stays governed
 by its profile rather than by whichever adapter happens to be running it.
 
 Runners whose providers expose progress or pause for user approval may
-additionally implement `StreamingAgentRunner` or `InteractiveAgentRunner`. The
-original `run_turn` method remains the fallback, so callers do not need to
-special-case runners with neither capability.
+additionally implement `StreamingAgentRunner`, `StreamingMcpAgentRunner`, or
+`InteractiveAgentRunner`. The original `run_turn` method remains the fallback,
+so callers do not need to special-case runners with neither capability.
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -27,6 +27,7 @@ from engine.domain.approvals import ApprovalDecision, ApprovalKind
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
+from engine.ports.permissions import PermissionTranslator
 
 
 class FinishReason(Enum):
@@ -148,6 +149,9 @@ class McpServerConfig:
 class AgentRunner(Protocol):
     """Runs one agent turn to completion."""
 
+    permission_translator: PermissionTranslator
+    """Maps this provider's approval requests into Engine permission scopes."""
+
     async def run_turn(
         self,
         agent_run_id: AgentRunId,
@@ -186,6 +190,23 @@ class McpAgentRunner(AgentRunner, Protocol):
 
 TurnObserver = Callable[[Message], None]
 """Receives each conversation message as soon as a runner completes it."""
+
+
+@runtime_checkable
+class StreamingMcpAgentRunner(McpAgentRunner, Protocol):
+    """An MCP-capable runner that also exposes completed transcript messages."""
+
+    async def run_turn_with_mcp_streamed(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_message: TurnObserver,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        ...
+
 
 ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalDecision]]
 """Presents an approval request and waits for the user's decision."""
@@ -242,6 +263,8 @@ __all__ = [
     "InteractiveAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
+    "StreamingMcpAgentRunner",
+    "PermissionTranslator",
     "StreamingAgentRunner",
     "TokenUsage",
     "TurnObserver",

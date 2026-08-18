@@ -414,7 +414,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           if (cancelled) return;
           setRun(value);
           setError("");
-          if (["pending", "preparing_workspace", "implementing"].includes(value.phase)) {
+          if (["pending", "preparing_workspace", "implementing", "reviewing"].includes(value.phase)) {
             timer = window.setTimeout(load, 1000);
           }
         })

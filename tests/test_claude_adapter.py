@@ -12,6 +12,7 @@ import textwrap
 import pytest
 
 from engine.adapters.agent_runner.claude_code import (
+    CLAUDE_PERMISSION_TRANSLATOR,
     ClaudeCodeAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
@@ -25,12 +26,17 @@ from engine.adapters.agent_runner.claude_code import (
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolSpec, WorkspaceId
 from engine.ports import (
     AgentRunner,
+    ApprovalCapability,
     ApprovalDecision,
     ApprovalKind,
+    ApprovalRequest,
     FinishReason,
     InteractiveAgentRunner,
     McpAgentRunner,
     McpServerConfig,
+    StreamingMcpAgentRunner,
+    PermissionScope,
+    PermissionTranslator,
 )
 
 #: Captured from `claude -p --output-format stream-json --verbose --allowedTools
@@ -62,8 +68,52 @@ PROFILE = AgentProfile(
 
 
 def test_runner_satisfies_the_port() -> None:
-    assert isinstance(ClaudeCodeAgentRunner(), AgentRunner)
-    assert isinstance(ClaudeCodeAgentRunner(), InteractiveAgentRunner)
+    runner = ClaudeCodeAgentRunner()
+
+    assert isinstance(runner, AgentRunner)
+    assert isinstance(runner, InteractiveAgentRunner)
+    assert isinstance(runner.permission_translator, PermissionTranslator)
+
+
+@pytest.mark.parametrize(
+    ("kind", "tool_name", "command", "expected"),
+    [
+        (
+            ApprovalKind.COMMAND_EXECUTION,
+            "Bash",
+            "uv run pytest",
+            PermissionScope(ApprovalCapability.BASH, "uv run pytest"),
+        ),
+        (ApprovalKind.TOOL_USE, "Read", None, PermissionScope(ApprovalCapability.READ)),
+        (ApprovalKind.TOOL_USE, "Glob", None, PermissionScope(ApprovalCapability.READ)),
+        (ApprovalKind.TOOL_USE, "Grep", None, PermissionScope(ApprovalCapability.READ)),
+        (ApprovalKind.FILE_CHANGE, "Edit", None, PermissionScope(ApprovalCapability.EDIT)),
+        (ApprovalKind.FILE_CHANGE, "Write", None, PermissionScope(ApprovalCapability.EDIT)),
+        (ApprovalKind.TOOL_USE, "WebFetch", None, PermissionScope(ApprovalCapability.WEB)),
+        (ApprovalKind.TOOL_USE, "WebSearch", None, PermissionScope(ApprovalCapability.WEB)),
+        (
+            ApprovalKind.TOOL_USE,
+            "mcp__github__get_issue",
+            None,
+            PermissionScope(ApprovalCapability.MCP),
+        ),
+        (ApprovalKind.TOOL_USE, "FutureTool", None, None),
+    ],
+)
+def test_permission_translator_maps_claude_tools_to_engine_capabilities(
+    kind: ApprovalKind,
+    tool_name: str,
+    command: str | None,
+    expected: PermissionScope | None,
+) -> None:
+    request = ApprovalRequest(
+        approval_id="provider-approval",
+        kind=kind,
+        tool_name=tool_name,
+        command=command,
+    )
+
+    assert CLAUDE_PERMISSION_TRANSLATOR.scope_for(request) == expected
 
 
 # --- parsing ----------------------------------------------------------------
@@ -389,6 +439,7 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     argv = ClaudeCodeAgentRunner().command_line(PROFILE, mcp_server=server)
 
     assert isinstance(ClaudeCodeAgentRunner(), McpAgentRunner)
+    assert isinstance(ClaudeCodeAgentRunner(), StreamingMcpAgentRunner)
     config = json.loads(argv[argv.index("--mcp-config") + 1])
     assert config == {
         "mcpServers": {

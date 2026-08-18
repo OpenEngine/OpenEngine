@@ -138,7 +138,7 @@ def test_startup_description_is_explicit_that_rules_are_not_enforced(
     assert "auto_approve=on" in description
     assert "allow=read, mcp" in description
     assert "bash_rules=2" in description
-    assert "runner translation not enabled" in description
+    assert "policy enforcement not enabled" in description
 
 
 def test_web_entrypoint_puts_explicit_config_in_composition_settings(

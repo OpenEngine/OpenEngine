@@ -1,0 +1,15 @@
+[approvals]
+auto_approve = false
+allow = ["read", "edit"]
+
+[approvals.bash]
+allow = [
+  ".venv/bin/python -m pytest tests/**",
+  "uv run pytest **",
+  "mkdir **",
+  "git add **",
+  "git commit **",
+  "git checkout **",
+  "git push **",
+  "gh pr create **",
+]

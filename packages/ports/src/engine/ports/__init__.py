@@ -20,10 +20,16 @@ from engine.ports.agent_runner import (
     McpAgentRunner,
     McpServerConfig,
     StreamingAgentRunner,
+    StreamingMcpAgentRunner,
     TokenUsage,
     TurnObserver,
 )
 from engine.ports.communications import Communications
+from engine.ports.permissions import (
+    ApprovalCapability,
+    PermissionScope,
+    PermissionTranslator,
+)
 from engine.ports.source_control import SourceControl
 from engine.ports.state_store import StateStore
 from engine.ports.workflow_runtime import WorkflowRuntime
@@ -36,14 +42,18 @@ __all__ = [
     "ApprovalHandler",
     "ApprovalKind",
     "ApprovalRequest",
+    "ApprovalCapability",
     "Communications",
     "FinishReason",
     "InteractiveAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
+    "PermissionScope",
+    "PermissionTranslator",
     "SourceControl",
     "StateStore",
     "StreamingAgentRunner",
+    "StreamingMcpAgentRunner",
     "TokenUsage",
     "TurnObserver",
     "Workspace",

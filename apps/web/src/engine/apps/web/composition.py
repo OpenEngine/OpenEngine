@@ -93,7 +93,7 @@ class Settings:
     workspace_root: str = "/tmp/engine-workspaces"
     sqlite_path: str = "conversations.sqlite3"
     engine_config: EngineConfig = EngineConfig()
-    """Provider-neutral settings loaded from TOML; runner translation lands next."""
+    """Provider-neutral settings loaded from TOML; policy enforcement lands next."""
     config_path: Path | None = None
     """The single TOML source, or ``None`` when built-in defaults are active."""
 
@@ -152,8 +152,38 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     }
 
 
+def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
+    """Read-only runners used only for workflow review steps."""
+    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
+    return {
+        "codex": CodexAgentRunner(
+            binary_path=settings.codex_binary,
+            timeout_seconds=settings.codex_timeout_seconds,
+            sandbox=settings.codex_sandbox,
+            working_directory=settings.codex_working_directory,
+            model=settings.codex_model,
+            workspace_provider=workspace_provider,
+        ),
+        "claude": ClaudeCodeAgentRunner(
+            binary_path=settings.claude_binary,
+            timeout_seconds=settings.claude_timeout_seconds,
+            allowed_tools=READ_ONLY_TOOLS,
+            working_directory=settings.claude_working_directory,
+            model=settings.claude_model,
+            workspace_provider=workspace_provider,
+        ),
+    }
+
+
 def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
-    """Write-enabled runners used only for workflow implementation steps."""
+    """Write-enabled runners used only for workflow implementation steps.
+
+    Named to match `build_review_runners` on purpose, and a subset of it: a run
+    implements with the write-enabled runner of the provider it picked, and is
+    then reviewed by the read-only runner of that same name. The reviewer is
+    told not to modify the workspace, but what actually stops it is being run
+    without the tools to.
+    """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
         "codex": CodexAgentRunner(
@@ -200,6 +230,7 @@ def build_session(
 __all__ = [
     "Settings",
     "build_capabilities",
+    "build_review_runners",
     "build_runners",
     "build_workflow_runners",
     "build_session",

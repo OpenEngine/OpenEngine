@@ -45,6 +45,10 @@ import shutil
 from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
+from engine.adapters.agent_runner.claude_code.permissions import (
+    CLAUDE_PERMISSION_TRANSLATOR,
+    ClaudePermissionTranslator,
+)
 from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
@@ -386,14 +390,17 @@ class ClaudeCodeAgentRunner:
     """Runs an agent turn by shelling out to the Claude Code CLI.
 
     Implements `engine.ports.AgentRunner`, `StreamingAgentRunner`,
-    `InteractiveAgentRunner` and `McpAgentRunner` -- one runner rather than one
-    per invocation, because whether a turn can pause for permission is a
-    property of the turn being asked for and not of the agent answering it.
+    `InteractiveAgentRunner`, `McpAgentRunner`, and `StreamingMcpAgentRunner`
+    -- one runner rather than one per invocation, because whether a turn can
+    pause for permission is a property of the turn being asked for and not of
+    the agent answering it.
 
     `timeout_seconds=None` -- the default -- lets a turn take as long as it
     takes, for the reasons the Codex runner's docstring gives: a long run is
     usually a large task, and `cancel` is the way one ends early.
     """
+
+    permission_translator = CLAUDE_PERMISSION_TRANSLATOR
 
     def __init__(
         self,
@@ -731,11 +738,30 @@ class ClaudeCodeAgentRunner:
         workspace_id: WorkspaceId | None = None,
     ) -> AgentTurn:
         """Run a turn with the runtime's bound terminal tools attached."""
+        return await self.run_turn_with_mcp_streamed(
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            lambda _message: None,
+            workspace_id,
+        )
+
+    async def run_turn_with_mcp_streamed(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_message: TurnObserver,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run with terminal tools while reporting completed transcript messages."""
         return await self.run_turn_streamed(
             agent_run_id,
             profile,
             messages,
-            lambda _message: None,
+            on_message,
             workspace_id=workspace_id,
             mcp_server=mcp_server,
         )
@@ -794,10 +820,12 @@ def _tail(text: str, lines: int = 5) -> str:
 
 
 __all__ = [
+    "CLAUDE_PERMISSION_TRANSLATOR",
     "READ_ONLY_TOOLS",
     "WORKSPACE_WRITE_TOOLS",
     "ClaudeCodeAgentRunner",
     "ClaudeExecutionError",
+    "ClaudePermissionTranslator",
     "ClaudeToolsUnsupportedError",
     "ClaudeUnavailableError",
     "approval_request_from_control",

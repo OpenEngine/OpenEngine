@@ -15,6 +15,7 @@ from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_review_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -34,6 +35,7 @@ def report_wiring(settings: Settings) -> None:
     """Print the composed capability graph, as the other two roots do."""
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
+    review_runners = build_review_runners(settings)
     workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners)
     print(
@@ -51,6 +53,13 @@ def report_wiring(settings: Settings) -> None:
         + ", ".join(
             f"{name} ({type(runner).__name__})"
             for name, runner in workflow_runners.items()
+        )
+    )
+    print(
+        "review runners: "
+        + ", ".join(
+            f"{name} ({type(runner).__name__})"
+            for name, runner in review_runners.items()
         )
     )
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
@@ -74,6 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
+    review_runners = build_review_runners(settings)
     workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners)
     app = create_app(
@@ -81,6 +91,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         runners,
         STATIC_DIRECTORY,
         workflow_runners=workflow_runners,
+        review_runners=review_runners,
     )
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)
