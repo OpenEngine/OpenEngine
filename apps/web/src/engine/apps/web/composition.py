@@ -153,7 +153,14 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 
 
 def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
-    """Write-enabled runners used only for workflow implementation steps."""
+    """Write-enabled runners used only for workflow implementation steps.
+
+    Named to match `build_runners` on purpose, and a subset of it: a run
+    implements with the write-enabled runner of the provider it picked, and is
+    then reviewed by the read-only runner of that same name. The reviewer is
+    told not to modify the workspace, but what actually stops it is being run
+    without the tools to.
+    """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
         "codex": CodexAgentRunner(

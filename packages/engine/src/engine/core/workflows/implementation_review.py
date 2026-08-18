@@ -55,11 +55,22 @@ IMPLEMENTATION_PROFILE = AgentProfile(
 REVIEW_PROFILE = AgentProfile(
     agent_id=AgentId("review-agent"),
     instructions=(
-        "Review the implementation for correctness, regressions, and missing tests. "
-        "Inspect the workspace but do not modify it. Report findings for a human; "
-        "you do not approve or reject the run."
+        "Review the implementation already made in the provided workspace. Read the "
+        "changed code and the code around it before judging it, and check "
+        "correctness, regressions the change could cause, and tests that should "
+        "exist but do not. Inspect the workspace only: do not edit, revert, "
+        "commit, or otherwise modify anything, and do not fix what you find. "
+        "Report every finding with the file it is in and why it matters, and say "
+        "so explicitly when you find nothing. Complete the step with your findings "
+        "even when they are serious; fail it only when the review itself could not "
+        "be carried out. The human reviewer decides what happens to this run -- you "
+        "do not approve or reject it."
     ),
     capabilities=(),
+    # Left to the runner's default on purpose. A run picks its provider, and the
+    # reviewer runs on the same one, so no single model name here would be
+    # correct for both Codex and Claude Code.
+    model="",
     description="Inspects an implementation without modifying it.",
 )
 
@@ -70,6 +81,10 @@ IMPLEMENTATION_STEP_SPEC = StepSpec(
 REVIEW_STEP_SPEC = StepSpec(
     step_id=REVIEW_STEP,
     agent_id=REVIEW_PROFILE.agent_id,
+    # The human decision needs the findings themselves, not a reviewer's
+    # one-line verdict on them, so they are a declared output the terminal tool
+    # refuses to complete the step without.
+    required_outputs=("findings",),
 )
 
 
@@ -102,7 +117,8 @@ def review_prompt(task_prompt: str, implementation: StepCompleted) -> str:
 
     return (
         "Inspect the workspace but do not modify it. Review the implementation "
-        "and report findings for the human reviewer.\n\n"
+        "below against the original task and report what a human deciding this "
+        "run needs to know, in the `findings` output.\n\n"
         f"Original task:\n{task_prompt}\n\n"
         "Implementation result:\n"
         f"Outcome: {implementation.outcome}\n"
@@ -122,7 +138,8 @@ def human_review_summary(
         f"Outputs:\n{_outputs_text(implementation.outputs)}\n\n"
         "Review:\n"
         f"Outcome: {review.outcome}\n"
-        f"{review.summary}"
+        f"{review.summary}\n"
+        f"Outputs:\n{_outputs_text(review.outputs)}"
     )
 
 
