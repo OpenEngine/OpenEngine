@@ -20,6 +20,45 @@ All three entrypoints run today and report their wiring:
 uv run engine-web
 ```
 
+## Configuration
+
+Each entrypoint accepts one provider-neutral TOML configuration file:
+
+```bash
+uv run engine-web --config ./engine.toml
+uv run engine-worker --config ./engine.toml
+uv run engine-control-server --config ./engine.toml
+```
+
+`--config` takes precedence over the `ENGINE_CONFIG` environment variable. If
+neither is set, Engine reads `./engine.toml` when it exists, otherwise it uses
+built-in defaults. Configurations are not merged.
+
+The first supported settings describe approval intent in Engine vocabulary:
+
+```toml
+[approvals]
+auto_approve = false
+allow = ["read"]
+
+[approvals.bash]
+allow = [
+  "uv run pytest **",
+  "git status **",
+]
+ask = ["git push **"]
+deny = ["sudo **"]
+```
+
+Capabilities are `read`, `edit`, `bash`, `web`, and `mcp`. Configuration is
+strict: unknown keys, unknown capabilities, duplicate entries, and incorrectly
+typed values stop startup with an error instead of silently weakening a policy.
+
+This first configuration slice only loads and validates the policy. Startup
+output says `runner translation not enabled` because translating these settings
+to Codex and Claude Code is intentionally a follow-up change; until that lands,
+their existing permission defaults remain in effect.
+
 ## What is it.
 
 We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.
