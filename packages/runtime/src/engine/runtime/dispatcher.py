@@ -28,7 +28,14 @@ from engine.domain.commands import (
 )
 from engine.domain.events import RunFailed, StepCompleted
 from engine.domain.ids import ConversationId
-from engine.ports import AgentRunner, AgentTurn, McpAgentRunner
+from engine.ports import (
+    AgentRunner,
+    AgentTurn,
+    McpAgentRunner,
+    StreamingAgentRunner,
+    StreamingMcpAgentRunner,
+    TurnObserver,
+)
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
@@ -138,23 +145,50 @@ class Dispatcher:
             runner=runner_name,
         )
         await caps.state_store.record_agent_run(agent_run)
+        observed: list[Message] = []
+        pending: asyncio.Queue[Message | None] = asyncio.Queue()
+
+        def observe(message: Message) -> None:
+            observed.append(message)
+            pending.put_nowait(message)
+
+        async def persist_progress() -> None:
+            while (message := await pending.get()) is not None:
+                await caps.state_store.append_messages(instance.instance_id, (message,))
+
+        progress_task = asyncio.create_task(persist_progress())
         try:
-            if isinstance(selected_runner, McpAgentRunner):
-                result, turn, transcript = await self._run_with_terminal_mcp(
-                    selected_runner,
-                    command,
-                    prompt,
-                    on_terminal_result,
-                )
-            else:
-                result = None
-                turn = await selected_runner.run_turn(
-                    command.agent_run_id,
-                    command.profile,
-                    (prompt,),
-                    workspace_id=command.workspace_id,
-                )
-                transcript = turn.transcript
+            try:
+                if isinstance(selected_runner, McpAgentRunner):
+                    result, turn, transcript = await self._run_with_terminal_mcp(
+                        selected_runner,
+                        command,
+                        prompt,
+                        on_terminal_result,
+                        observe,
+                    )
+                elif isinstance(selected_runner, StreamingAgentRunner):
+                    result = None
+                    turn = await selected_runner.run_turn_streamed(
+                        command.agent_run_id,
+                        command.profile,
+                        (prompt,),
+                        observe,
+                        workspace_id=command.workspace_id,
+                    )
+                    transcript = turn.transcript
+                else:
+                    result = None
+                    turn = await selected_runner.run_turn(
+                        command.agent_run_id,
+                        command.profile,
+                        (prompt,),
+                        workspace_id=command.workspace_id,
+                    )
+                    transcript = turn.transcript
+            finally:
+                pending.put_nowait(None)
+                await progress_task
         except Exception as error:
             await caps.state_store.record_agent_run(
                 replace(
@@ -164,8 +198,22 @@ class Dispatcher:
                 )
             )
             raise
-        if transcript:
-            await caps.state_store.append_messages(instance.instance_id, transcript)
+        # Streaming runners have already persisted the observed prefix. The
+        # returned turn remains authoritative for anything only synthesized at
+        # completion, while terminal cancellation may leave a longer observed
+        # prefix than the partial turn returned by the provider.
+        unseen = transcript
+        if observed:
+            if transcript[: len(observed)] == tuple(observed):
+                unseen = transcript[len(observed) :]
+            elif tuple(observed[: len(transcript)]) == transcript:
+                unseen = ()
+            else:
+                raise RuntimeError(
+                    "streamed workflow transcript does not match completed turn"
+                )
+        if unseen:
+            await caps.state_store.append_messages(instance.instance_id, unseen)
         if result is not None:
             status = (
                 AgentRunStatus.FAILED
@@ -193,6 +241,7 @@ class Dispatcher:
         command: StartAgentRun,
         prompt: Message,
         deliver: Callable[[TerminalEvent], Awaitable[None]] | None,
+        on_message: TurnObserver,
     ) -> tuple[TerminalEvent | None, AgentTurn | None, tuple[Message, ...]]:
         """Run until a terminal result or clarification request is produced."""
         assert command.step is not None
@@ -208,15 +257,25 @@ class Dispatcher:
             transcript: list[Message] = []
             corrections = 0
             while True:
-                run_task = asyncio.create_task(
-                    runner.run_turn_with_mcp(
+                streaming = isinstance(runner, StreamingMcpAgentRunner)
+                if streaming:
+                    turn_call = runner.run_turn_with_mcp_streamed(
+                        command.agent_run_id,
+                        command.profile,
+                        messages,
+                        broker.config,
+                        on_message,
+                        workspace_id=command.workspace_id,
+                    )
+                else:
+                    turn_call = runner.run_turn_with_mcp(
                         command.agent_run_id,
                         command.profile,
                         messages,
                         broker.config,
                         workspace_id=command.workspace_id,
                     )
-                )
+                run_task = asyncio.create_task(turn_call)
                 result_task = asyncio.create_task(broker.result())
                 done, _pending = await asyncio.wait(
                     (run_task, result_task), return_when=asyncio.FIRST_COMPLETED
@@ -240,12 +299,18 @@ class Dispatcher:
                         # already-delivered terminal event remains authoritative.
                         pass
                     if turn is not None:
+                        if not streaming:
+                            for message in turn.transcript:
+                                on_message(message)
                         transcript.extend(turn.transcript)
                     return result, turn, tuple(transcript)
 
                 result_task.cancel()
                 await asyncio.gather(result_task, return_exceptions=True)
                 turn = await run_task
+                if not streaming:
+                    for message in turn.transcript:
+                        on_message(message)
                 transcript.extend(turn.transcript)
                 if requests_clarification_or_escalation(turn):
                     return None, turn, tuple(transcript)
@@ -267,6 +332,7 @@ class Dispatcher:
                 corrections += 1
                 correction = Message.user(INVALID_COMPLETION_ERROR)
                 transcript.append(correction)
+                on_message(correction)
                 messages = (*messages, *turn.transcript, correction)
 
 

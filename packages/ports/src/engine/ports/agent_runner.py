@@ -12,9 +12,9 @@ the runner never invokes a tool itself, so what an agent may do stays governed
 by its profile rather than by whichever adapter happens to be running it.
 
 Runners whose providers expose progress or pause for user approval may
-additionally implement `StreamingAgentRunner` or `InteractiveAgentRunner`. The
-original `run_turn` method remains the fallback, so callers do not need to
-special-case runners with neither capability.
+additionally implement `StreamingAgentRunner`, `StreamingMcpAgentRunner`, or
+`InteractiveAgentRunner`. The original `run_turn` method remains the fallback,
+so callers do not need to special-case runners with neither capability.
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -191,6 +191,23 @@ class McpAgentRunner(AgentRunner, Protocol):
 TurnObserver = Callable[[Message], None]
 """Receives each conversation message as soon as a runner completes it."""
 
+
+@runtime_checkable
+class StreamingMcpAgentRunner(McpAgentRunner, Protocol):
+    """An MCP-capable runner that also exposes completed transcript messages."""
+
+    async def run_turn_with_mcp_streamed(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_message: TurnObserver,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        ...
+
+
 ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalDecision]]
 """Presents an approval request and waits for the user's decision."""
 
@@ -246,6 +263,7 @@ __all__ = [
     "InteractiveAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
+    "StreamingMcpAgentRunner",
     "PermissionTranslator",
     "StreamingAgentRunner",
     "TokenUsage",
