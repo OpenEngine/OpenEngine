@@ -19,9 +19,9 @@ The state store is SQLite rather than Postgres: conversations survive a process
 restart without requiring an external database service.
 """
 
-from dataclasses import dataclass
-
 from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
 
 from engine.adapters.agent_runner.claude_code import (
     READ_ONLY_TOOLS,
@@ -35,7 +35,7 @@ from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 from engine.ports import AgentRunner
-from engine.runtime import AgentSession, Capabilities
+from engine.runtime import AgentSession, Capabilities, EngineConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +92,10 @@ class Settings:
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
     sqlite_path: str = "conversations.sqlite3"
+    engine_config: EngineConfig = EngineConfig()
+    """Provider-neutral settings loaded from TOML; runner translation lands next."""
+    config_path: Path | None = None
+    """The single TOML source, or ``None`` when built-in defaults are active."""
 
 
 def build_capabilities(settings: Settings) -> Capabilities:

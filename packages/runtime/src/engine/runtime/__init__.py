@@ -14,6 +14,17 @@ from engine.runtime.approvals import (
     UnknownApprovalError,
 )
 from engine.runtime.capabilities import Capabilities
+from engine.runtime.config import (
+    ApprovalCapability,
+    ApprovalConfig,
+    BashApprovalConfig,
+    EngineConfig,
+    EngineConfigError,
+    LoadedEngineConfig,
+    describe_loaded_config,
+    load_engine_config,
+    parse_engine_config,
+)
 from engine.runtime.dispatcher import Dispatcher, UnhandledCommandError
 from engine.runtime.profiles import BUILT_IN, CODER, FOREMAN, UnknownAgentError, profile_for
 from engine.runtime.run_read_model import RunReader, WorkflowRunView
@@ -63,9 +74,15 @@ __all__ = [
     "ApprovalNotPendingError",
     "ApprovalPresenter",
     "ApprovalsUnsupportedError",
+    "ApprovalCapability",
+    "ApprovalConfig",
+    "BashApprovalConfig",
     "Capabilities",
     "Dispatcher",
+    "EngineConfig",
+    "EngineConfigError",
     "InvalidStepResultError",
+    "LoadedEngineConfig",
     "RunReader",
     "TerminalMcpBroker",
     "TerminalResultAlreadySubmittedError",
@@ -81,10 +98,13 @@ __all__ = [
     "WorkflowExecutionError",
     "WorkflowExecutor",
     "complete_step_tool",
+    "describe_loaded_config",
     "fail_step_tool",
     "matching_grant",
     "normalized_scope",
     "profile_for",
+    "load_engine_config",
+    "parse_engine_config",
     "session_grant_from",
     "run_failed_from_tool_call",
     "requests_clarification_or_escalation",

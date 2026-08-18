@@ -8,6 +8,7 @@ move independently.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
@@ -15,7 +16,7 @@ from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.postgres import PostgresStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
-from engine.runtime import Capabilities, Dispatcher
+from engine.runtime import Capabilities, Dispatcher, EngineConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,9 @@ class Settings:
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
     postgres_dsn: str = ""
+    engine_config: EngineConfig = EngineConfig()
+    """Provider-neutral settings loaded from TOML; runner translation lands next."""
+    config_path: Path | None = None
 
 
 def build_capabilities(settings: Settings) -> Capabilities:
