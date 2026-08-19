@@ -411,6 +411,7 @@ class ClaudeCodeAgentRunner:
         working_directory: str = ".",
         model: str = "",
         workspace_provider: WorkspaceProvider | None = None,
+        attribution: bool = True,
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
@@ -418,6 +419,7 @@ class ClaudeCodeAgentRunner:
         self._allowed_tools = tuple(allowed_tools)
         self._working_directory = working_directory
         self._model = model
+        self._attribution = attribution
         self._workspace_provider = workspace_provider
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
@@ -427,6 +429,20 @@ class ClaudeCodeAgentRunner:
         """The argv this runner would use. Public so the wiring is inspectable
         without running anything."""
         argv = [self._binary_path, "-p", "--output-format", "stream-json", "--verbose"]
+        if not self._attribution:
+            argv += [
+                "--settings",
+                json.dumps(
+                    {
+                        "attribution": {
+                            "commit": "",
+                            "pr": "",
+                            "sessionUrl": False,
+                        }
+                    },
+                    separators=(",", ":"),
+                ),
+            ]
         if profile.instructions.strip():
             # A real system-prompt channel, unlike `codex exec` -- so the
             # instructions never enter the conversation text.

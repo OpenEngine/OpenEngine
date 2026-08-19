@@ -34,9 +34,11 @@ uv run engine-control-server --config ./engine.toml
 neither is set, Engine reads `./engine.toml` when it exists, otherwise it uses
 built-in defaults. Configurations are not merged.
 
-The first supported settings describe approval intent in Engine vocabulary:
+Engine supports agent attribution and provider-neutral approval intent:
 
 ```toml
+attribution = false
+
 [approvals]
 auto_approve = false
 allow = ["read"]
@@ -49,6 +51,9 @@ allow = [
 ask = ["git push **"]
 deny = ["sudo **"]
 ```
+
+Set `attribution = false` to keep both Codex and Claude Code from adding agent
+attribution to commits and pull requests. Attribution is enabled by default.
 
 Capabilities are `read`, `edit`, `bash`, `web`, and `mcp`. Configuration is
 strict: unknown keys, unknown capabilities, duplicate entries, and incorrectly

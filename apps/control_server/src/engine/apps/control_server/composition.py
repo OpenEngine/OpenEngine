@@ -40,7 +40,7 @@ def build_capabilities(settings: Settings) -> Capabilities:
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=GitHubSourceControl(settings.github_token),
-        agent_runner=CodexAgentRunner(),
+        agent_runner=CodexAgentRunner(attribution=settings.engine_config.attribution),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
         workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
         state_store=PostgresStateStore(settings.postgres_dsn),
