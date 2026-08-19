@@ -63,7 +63,12 @@ from engine.ports import (
     Workspace,
     WorkspaceState,
 )
-from engine.runtime import AgentSession, Capabilities, INVALID_COMPLETION_ERROR
+from engine.runtime import (
+    INVALID_COMPLETION_ERROR,
+    AgentSession,
+    Capabilities,
+    EngineConfig,
+)
 from engine.runtime.terminal_mcp import _mcp_response
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
@@ -134,6 +139,17 @@ def test_interactive_runners_may_do_what_the_user_approves() -> None:
     assert "Bash" not in preapproved
     assert "Edit" not in preapproved
     assert claude_argv[claude_argv.index("--permission-prompt-tool") + 1] == "stdio"
+
+
+def test_engine_config_disables_attribution_for_every_workflow_runner() -> None:
+    runners = build_workflow_runners(Settings(engine_config=EngineConfig(attribution=False)))
+
+    codex_argv = runners["codex"].command_line(PROFILES[CODER])
+    claude_argv = runners["claude"].command_line(PROFILES[CODER])
+    assert "developer_instructions=" in codex_argv[codex_argv.index("-c") + 1]
+    assert json.loads(claude_argv[claude_argv.index("--settings") + 1])[
+        "attribution"
+    ]["commit"] == ""
 
 
 def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:

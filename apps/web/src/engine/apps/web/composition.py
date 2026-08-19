@@ -110,6 +110,7 @@ def build_capabilities(settings: Settings) -> Capabilities:
             sandbox=settings.codex_sandbox,
             working_directory=settings.codex_working_directory,
             model=settings.codex_model,
+            attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
@@ -139,6 +140,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             sandbox=settings.interactive_codex_sandbox,
             working_directory=settings.codex_working_directory,
             model=settings.codex_model,
+            attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
         "claude": ClaudeCodeAgentRunner(
@@ -147,6 +149,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             allowed_tools=settings.interactive_claude_allowed_tools,
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
+            attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
     }
@@ -162,6 +165,7 @@ def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             sandbox=settings.codex_sandbox,
             working_directory=settings.codex_working_directory,
             model=settings.codex_model,
+            attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
         "claude": ClaudeCodeAgentRunner(
@@ -170,6 +174,7 @@ def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             allowed_tools=READ_ONLY_TOOLS,
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
+            attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
     }
@@ -192,6 +197,7 @@ def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             sandbox=settings.workflow_codex_sandbox,
             working_directory=settings.codex_working_directory,
             model=settings.codex_model,
+            attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
         "claude": ClaudeCodeAgentRunner(
@@ -200,6 +206,7 @@ def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             allowed_tools=settings.workflow_claude_allowed_tools,
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
+            attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
     }

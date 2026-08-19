@@ -110,6 +110,11 @@ from engine.runtime.transcript import flatten
 #: effect of answering a question.
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
 
+NO_ATTRIBUTION_INSTRUCTIONS = (
+    "Do not add AI attribution to commits or pull requests, including "
+    "Co-authored-by trailers or generated-by notices."
+)
+
 #: What an interactive turn asks app-server for. Codex runs what its sandbox
 #: allows and asks before anything that would escape it -- which is what makes
 #: a writable sandbox safe to pair with: the approvals are the boundary, not
@@ -598,6 +603,7 @@ class CodexAgentRunner:
         working_directory: str = ".",
         model: str = "",
         workspace_provider: WorkspaceProvider | None = None,
+        attribution: bool = True,
     ) -> None:
         if sandbox not in SANDBOX_MODES:
             raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
@@ -607,6 +613,7 @@ class CodexAgentRunner:
         self._sandbox = sandbox
         self._working_directory = working_directory
         self._model = model
+        self._attribution = attribution
         self._workspace_provider = workspace_provider
         #: Live processes, so `cancel` has something to reach for.
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
@@ -629,6 +636,11 @@ class CodexAgentRunner:
             "-C",
             working_directory or self._working_directory,
         ]
+        if not self._attribution:
+            argv += [
+                "-c",
+                f"developer_instructions={json.dumps(NO_ATTRIBUTION_INSTRUCTIONS)}",
+            ]
         if mcp_server is not None:
             prefix = f"mcp_servers.{mcp_server.name}"
             argv += [
@@ -644,7 +656,13 @@ class CodexAgentRunner:
 
     def app_server_command_line(self) -> list[str]:
         """The stable stdio app-server transport used for interactive turns."""
-        return [self._binary_path, "app-server"]
+        argv = [self._binary_path, "app-server"]
+        if not self._attribution:
+            argv += [
+                "-c",
+                f"developer_instructions={json.dumps(NO_ATTRIBUTION_INSTRUCTIONS)}",
+            ]
+        return argv
 
     async def run_turn(
         self,

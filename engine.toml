@@ -1,3 +1,5 @@
+attribution = false
+
 [approvals]
 auto_approve = false
 allow = ["read", "edit"]

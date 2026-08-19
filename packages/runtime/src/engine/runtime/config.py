@@ -46,6 +46,7 @@ class EngineConfig:
     """All configuration understood by this version of Engine."""
 
     approvals: ApprovalConfig = ApprovalConfig()
+    attribution: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +103,11 @@ def load_engine_config(
 def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     """Validate a decoded TOML document and return immutable settings."""
 
-    _reject_unknown(document, {"approvals"}, "configuration")
+    _reject_unknown(document, {"attribution", "approvals"}, "configuration")
+    attribution = document.get("attribution", True)
+    if not isinstance(attribution, bool):
+        raise EngineConfigError("attribution must be a boolean")
+
     approvals = _table(document.get("approvals", {}), "approvals")
     _reject_unknown(approvals, {"auto_approve", "allow", "bash"}, "approvals")
 
@@ -125,6 +130,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     _reject_unknown(bash, {"allow", "ask", "deny"}, "approvals.bash")
 
     return EngineConfig(
+        attribution=attribution,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -148,8 +154,9 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
         for patterns in (approvals.bash.allow, approvals.bash.ask, approvals.bash.deny)
     )
     auto_approve = "on" if approvals.auto_approve else "off"
+    attribution = "on" if loaded.config.attribution else "off"
     return (
-        f"configuration: {source}; approvals loaded "
+        f"configuration: {source}; attribution={attribution}; approvals loaded "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}; "
         "policy enforcement not enabled)"
     )

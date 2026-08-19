@@ -98,6 +98,15 @@ def test_runner_satisfies_the_port() -> None:
     assert isinstance(runner.permission_translator, PermissionTranslator)
 
 
+def test_attribution_can_be_disabled_for_both_codex_transports() -> None:
+    runner = CodexAgentRunner(attribution=False)
+
+    for argv in (runner.command_line(PROFILE), runner.app_server_command_line()):
+        instruction = argv[argv.index("-c") + 1]
+        assert instruction.startswith("developer_instructions=")
+        assert "Co-authored-by" in instruction
+
+
 @pytest.mark.parametrize(
     ("kind", "command", "expected"),
     [

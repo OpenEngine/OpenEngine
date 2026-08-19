@@ -76,6 +76,13 @@ def test_runner_satisfies_the_port() -> None:
     assert isinstance(runner.permission_translator, PermissionTranslator)
 
 
+def test_attribution_can_be_disabled_for_commits_and_pull_requests() -> None:
+    argv = ClaudeCodeAgentRunner(attribution=False).command_line(PROFILE)
+
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings == {"attribution": {"commit": "", "pr": "", "sessionUrl": False}}
+
+
 @pytest.mark.parametrize(
     ("kind", "tool_name", "command", "expected"),
     [
