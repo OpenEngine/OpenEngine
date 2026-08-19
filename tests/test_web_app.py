@@ -356,6 +356,48 @@ class WorkflowProgressRunner(TerminalToolRunner):
         return AgentTurn(turn.message, steps=(progress, *turn.steps))
 
 
+class InterruptibleImplementationRunner(TerminalToolRunner):
+    """Wait on the first turn, then complete after a human follow-up."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "complete_step",
+            {
+                "outcome": "success",
+                "summary": "Applied the human guidance.",
+                "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+            },
+        )
+        self.started = asyncio.Event()
+        self.never = asyncio.Event()
+        self.attempts = 0
+        self.cancel_calls = 0
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.attempts += 1
+        if self.attempts == 1:
+            self.seen.append(tuple(messages))
+            self.workspace_ids.append(workspace_id)
+            self.started.set()
+            await self.never.wait()
+            raise AssertionError("the first implementation turn should be interrupted")
+        return await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+    async def cancel(self, agent_run_id: AgentRunId) -> None:
+        self.cancel_calls += 1
+        if self.attempts > 1:
+            self.cancelled.set()
+
+
 class ApprovalWorkflowRunner(TerminalToolRunner):
     """Pause an MCP workflow turn until its conversation approves a command."""
 
@@ -934,6 +976,85 @@ def test_implementation_conversation_periodically_streams_durable_progress() -> 
     assert [message.content for message in finished.messages[1:]] == [
         "Inspecting the implementation.",
         "Terminal result accepted.",
+    ]
+
+
+def test_editable_implementation_conversation_can_interrupt_and_continue() -> None:
+    store = InMemoryStateStore()
+    runner = InterruptibleImplementationRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement the configurable behavior.",
+                    "repository": "acme/api",
+                },
+            )
+            await asyncio.wait_for(runner.started.wait(), timeout=1)
+            run_id = created.json()["runId"]
+            detail = await client.get(f"/api/runs/{run_id}")
+            implementation_id = detail.json()["steps"][0]["agentInstanceId"]
+            implementation = await client.get(f"/api/threads/{implementation_id}")
+
+            stopped = await client.delete(
+                f"/api/threads/{implementation_id}/runs/current"
+            )
+            still_implementing = await client.get(f"/api/runs/{run_id}")
+            continued = await client.post(
+                f"/api/threads/{implementation_id}/runs",
+                json={"text": "Keep the public response shape unchanged."},
+            )
+            completed = await _await_phase(client, RunId(run_id), "awaiting_human_review")
+            review_id = completed.json()["steps"][1]["agentInstanceId"]
+            review = await client.get(f"/api/threads/{review_id}")
+            refused = await client.post(
+                f"/api/threads/{review_id}/runs",
+                json={"text": "Change the review."},
+            )
+            conversation = await store.load_conversation(implementation_id)
+            return (
+                implementation,
+                stopped,
+                still_implementing,
+                continued,
+                completed,
+                review,
+                refused,
+                conversation,
+            )
+
+    (
+        implementation,
+        stopped,
+        still_implementing,
+        continued,
+        completed,
+        review,
+        refused,
+        conversation,
+    ) = asyncio.run(scenario())
+
+    assert implementation.json()["editable"] is True
+    assert stopped.status_code == 204
+    assert still_implementing.json()["phase"] == "implementing"
+    assert continued.status_code == 200
+    assert completed.json()["steps"][0]["summary"] == "Applied the human guidance."
+    assert review.json()["editable"] is False
+    assert refused.status_code == 409
+    assert "read-only" in refused.json()["error"]
+    assert runner.cancel_calls >= 2  # interruption, then terminal MCP completion
+    assert conversation is not None
+    assert [
+        message.content for message in conversation.messages if message.role is Role.USER
+    ][-1] == "Keep the public response shape unchanged."
+    assert [(message.role, message.content) for message in runner.seen[-1]] == [
+        (Role.USER, conversation.messages[0].content),
+        (Role.USER, "Keep the public response shape unchanged."),
     ]
 
 

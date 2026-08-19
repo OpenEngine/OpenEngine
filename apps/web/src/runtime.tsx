@@ -102,6 +102,7 @@ function remoteMetadata(thread: ApiThread) {
       workspaceAttached: thread.workspaceAttached,
       workflowRunId: thread.workflowRunId,
       workflowStepId: thread.workflowStepId,
+      editable: thread.editable,
     },
   };
 }

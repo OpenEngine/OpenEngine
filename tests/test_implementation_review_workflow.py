@@ -9,7 +9,9 @@ from engine.core.decide import WORKFLOW_DECIDERS
 from engine.core.workflows.implementation_review import (
     HUMAN_REVIEW_STEP,
     IMPLEMENTATION_STEP,
+    IMPLEMENTATION_STEP_SPEC,
     REVIEW_STEP,
+    REVIEW_STEP_SPEC,
     WORKFLOW_ID,
 )
 from engine.domain import (
@@ -35,6 +37,11 @@ RUN_ID = RunId("run-42")
 TASK_ID = TaskId("task-7")
 WORKSPACE_ID = WorkspaceId("workspace-42")
 TASK_PROMPT = "Fix the race and add a regression test."
+
+
+def test_only_the_implementation_step_has_an_editable_conversation() -> None:
+    assert IMPLEMENTATION_STEP_SPEC.editable is True
+    assert REVIEW_STEP_SPEC.editable is False
 
 
 def pending_state() -> RunState:

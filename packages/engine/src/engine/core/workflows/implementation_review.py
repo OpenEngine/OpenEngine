@@ -78,6 +78,7 @@ IMPLEMENTATION_STEP_SPEC = StepSpec(
     step_id=IMPLEMENTATION_STEP,
     agent_id=IMPLEMENTATION_PROFILE.agent_id,
     required_outputs=("pr_url",),
+    editable=True,
 )
 REVIEW_STEP_SPEC = StepSpec(
     step_id=REVIEW_STEP,
@@ -176,6 +177,17 @@ def start_review_command(
         step=REVIEW_STEP_SPEC,
         profile=REVIEW_PROFILE,
         prompt=review_prompt(state.prompt, implementation),
+    )
+
+
+def start_implementation_command(state: RunState) -> StartAgentRun:
+    """Recreate the active implementation command for a conversational turn."""
+
+    return _start_agent(
+        state,
+        step=IMPLEMENTATION_STEP_SPEC,
+        profile=IMPLEMENTATION_PROFILE,
+        prompt=implementation_prompt(state.prompt),
     )
 
 
@@ -318,5 +330,6 @@ __all__ = [
     "human_review_summary",
     "implementation_prompt",
     "review_prompt",
+    "start_implementation_command",
     "start_review_command",
 ]
