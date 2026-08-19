@@ -981,9 +981,16 @@ def create_app(
         active = service.active_run(instance_id)
         workflow_active = workflow_is_active(thread)
         visible_history = _through_latest_user(history) if workflow_active else history
+        # What a conversation was asked to allow is part of the transcript, and
+        # is loaded with it. The run stream replays these too, but it is only
+        # opened for a run this process is still executing -- so a step that has
+        # since finished, or one whose task this process no longer holds, used
+        # to come back from a page load with its approvals missing entirely.
+        approvals = await session.state_store.list_approvals(instance_id=instance_id)
         return JSONResponse(
             {
                 "messages": _messages_json(visible_history),
+                "approvals": [_approval_json(record) for record in approvals],
                 # A complete assistant transcript can become durable just
                 # before ActiveRun flips to done. In that window replaying it
                 # would duplicate the assistant message in the client.

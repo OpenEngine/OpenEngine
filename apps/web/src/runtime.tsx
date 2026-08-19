@@ -160,6 +160,22 @@ function HistoryProvider({ children }: PropsWithChildren) {
         const rows = await api<ApiHistory>(
           `/api/threads/${remoteId}/messages`,
         );
+        // Restoring the transcript restores what it was asked to allow. Only a
+        // run this process is still executing has a stream to replay these on,
+        // so a step that has finished -- or a browser that arrives after one
+        // did -- would otherwise show a conversation that had never paused.
+        //
+        // All on the turn the transcript ends on, because nothing durable ties
+        // a request to the turn that raised it: the anchor is observed while a
+        // reply streams, and a reload has no stream to observe. That end is the
+        // reply being resumed when the transcript stops at a user message and
+        // the last reply otherwise, which is the anchor `resume` would publish
+        // under, so the two paths land one card rather than two.
+        const anchor =
+          rows.messages.length -
+          (rows.messages.at(-1)?.role === "assistant" ? 1 : 0);
+        for (const approval of rows.approvals)
+          publishApproval(remoteId, approval, anchor);
         let parentId: string | null = null;
         return {
           unstable_resume: rows.unstable_resume,

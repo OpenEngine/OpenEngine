@@ -1277,6 +1277,60 @@ def test_workflow_conversation_replays_every_approval_after_reconnect() -> None:
     assert streamed[1]["status"] == "pending"
 
 
+def test_conversation_transcript_carries_approvals_after_its_run_ends() -> None:
+    """Reloading a finished step still shows what it was asked to allow.
+
+    The run stream replays approvals, but it is only opened for a run this
+    process is still executing. A step whose task has since finished has no
+    stream to reconnect to, so its transcript has to carry them instead.
+    """
+    store = InMemoryStateStore()
+    runner = ApprovalWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Make the approved change.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(100):
+                pending = await store.list_approvals(status=ApprovalStatus.PENDING)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending
+            request = pending[0]
+            await client.post(
+                f"/api/threads/{request.instance_id}/runs/current/approvals/"
+                f"{request.approval_id}",
+                json={"decision": "accept"},
+            )
+            await _await_phase(client, run_id, "awaiting_human_review")
+            return request, await client.get(
+                f"/api/threads/{request.instance_id}/messages"
+            )
+
+    request, loaded = asyncio.run(scenario())
+    history = loaded.json()
+
+    # Nothing is executing this run any more, so nothing will reopen the
+    # stream: the transcript is the only thing left to carry the request.
+    assert history["unstable_resume"] is False
+    assert [approval["id"] for approval in history["approvals"]] == [
+        str(request.approval_id)
+    ]
+    assert history["approvals"][0]["status"] == "decided"
+    assert history["approvals"][0]["decision"] == "accept"
+    assert history["approvals"][0]["command"] == "pytest"
+
+
 def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
     store = InMemoryStateStore()
     runner = TerminalToolRunner(
@@ -1420,9 +1474,15 @@ def test_fail_step_mcp_call_fails_the_active_workflow() -> None:
                 },
             )
             run_id = RunId(created.json()["runId"])
-            for _ in range(20):
+            for _ in range(100):
                 reopened = await client.get(f"/api/runs/{run_id}")
-                if reopened.json()["phase"] == "failed":
+                # Answering the tool call and failing the run are separate
+                # tasks, so the run can read as failed while the answer is
+                # still on its way back to the agent that asked.
+                if (
+                    reopened.json()["phase"] == "failed"
+                    and runner.acknowledgement is not None
+                ):
                     break
                 await asyncio.sleep(0.01)
             return reopened, await store.history(run_id)
