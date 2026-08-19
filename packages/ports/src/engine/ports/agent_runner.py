@@ -191,6 +191,9 @@ class McpAgentRunner(AgentRunner, Protocol):
 TurnObserver = Callable[[Message], None]
 """Receives each conversation message as soon as a runner completes it."""
 
+ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalDecision]]
+"""Presents an approval request and waits for the user's decision."""
+
 
 @runtime_checkable
 class StreamingMcpAgentRunner(McpAgentRunner, Protocol):
@@ -208,9 +211,21 @@ class StreamingMcpAgentRunner(McpAgentRunner, Protocol):
         ...
 
 
-ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalDecision]]
-"""Presents an approval request and waits for the user's decision."""
+@runtime_checkable
+class InteractiveMcpAgentRunner(McpAgentRunner, Protocol):
+    """An MCP-capable runner that can pause for approval during a turn."""
 
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        ...
 
 @runtime_checkable
 class StreamingAgentRunner(AgentRunner, Protocol):
@@ -261,6 +276,7 @@ __all__ = [
     "ApprovalRequest",
     "FinishReason",
     "InteractiveAgentRunner",
+    "InteractiveMcpAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
     "StreamingMcpAgentRunner",

@@ -26,7 +26,9 @@ from engine.domain import (
 )
 from engine.ports import AgentRunner
 from engine.runtime.capabilities import Capabilities
+from engine.runtime.config import ApprovalConfig
 from engine.runtime.dispatcher import Dispatcher
+from engine.runtime.permission_policy import ApprovalPolicy
 from engine.runtime.step_results import requests_clarification_or_escalation
 
 
@@ -63,6 +65,7 @@ class WorkflowExecutor:
         runners: Mapping[str, AgentRunner] | None = None,
         *,
         review_runners: Mapping[str, AgentRunner],
+        approval_config: ApprovalConfig | None = None,
     ) -> None:
         self._capabilities = capabilities
         self._dispatcher = Dispatcher(capabilities)
@@ -71,6 +74,9 @@ class WorkflowExecutor:
         # A missing reviewer is a wiring mistake, and finding it at startup is
         # better than silently reviewing with write access.
         self._review_runners = dict(review_runners)
+        self._approval_policy = (
+            ApprovalPolicy(approval_config) if approval_config is not None else None
+        )
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
             raise WorkflowExecutionError(
@@ -245,6 +251,11 @@ class WorkflowExecutor:
             runner=runner,
             runner_name=runner_name,
             on_terminal_result=deliver_terminal,
+            on_approval=(
+                self._approval_policy.handler(runner.permission_translator)
+                if self._approval_policy is not None
+                else None
+            ),
         )
         if folded is not None:
             # The MCP acknowledgement was sent only after this transition

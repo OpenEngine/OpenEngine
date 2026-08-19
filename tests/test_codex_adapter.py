@@ -45,6 +45,7 @@ from engine.ports import (
     ApprovalRequest,
     FinishReason,
     InteractiveAgentRunner,
+    InteractiveMcpAgentRunner,
     McpAgentRunner,
     McpServerConfig,
     StreamingMcpAgentRunner,
@@ -525,6 +526,22 @@ def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:
     assert turn.usage is not None and turn.usage.cached_prompt_tokens == 4
     assert observed == list(turn.transcript)
     assert runner.app_server_command_line()[1:] == ["app-server"]
+
+
+def test_interactive_app_server_receives_terminal_mcp_configuration() -> None:
+    server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
+    runner = CodexAgentRunner()
+    argv = runner.app_server_command_line(server)
+
+    assert isinstance(runner, InteractiveMcpAgentRunner)
+    assert argv == [
+        "codex",
+        "app-server",
+        "-c",
+        'mcp_servers.workflow.command="/usr/bin/python3"',
+        "-c",
+        'mcp_servers.workflow.args=["-m", "terminal"]',
+    ]
 
 
 # --- how long a turn may take -----------------------------------------------

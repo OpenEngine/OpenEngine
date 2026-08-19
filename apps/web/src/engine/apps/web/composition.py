@@ -93,7 +93,7 @@ class Settings:
     workspace_root: str = "/tmp/engine-workspaces"
     sqlite_path: str = "conversations.sqlite3"
     engine_config: EngineConfig = EngineConfig()
-    """Provider-neutral settings loaded from TOML; policy enforcement lands next."""
+    """Provider-neutral settings enforced for chat and workflow approvals."""
     config_path: Path | None = None
     """The single TOML source, or ``None`` when built-in defaults are active."""
 

@@ -54,10 +54,12 @@ Capabilities are `read`, `edit`, `bash`, `web`, and `mcp`. Configuration is
 strict: unknown keys, unknown capabilities, duplicate entries, and incorrectly
 typed values stop startup with an error instead of silently weakening a policy.
 
-Engine loads and validates the policy, and each runner exposes a translator
-from its provider approval requests into these capabilities. Policy enforcement
-is not enabled yet, so Codex and Claude Code retain their existing permission
-defaults.
+Engine loads, validates, and enforces the policy for interactive chats and
+workflow conversations. Explicit Bash rules are evaluated in deny, ask, allow
+order. Other capabilities in `allow` and commands matching `bash.allow` run
+without prompting. `auto_approve = true` accepts any remaining classified
+request; unclassified requests still fail closed. Workflow requests that need
+to ask are denied because workflows have no live human approval presenter.
 
 ## What is it.
 

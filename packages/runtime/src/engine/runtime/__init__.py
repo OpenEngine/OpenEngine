@@ -26,6 +26,7 @@ from engine.runtime.config import (
     parse_engine_config,
 )
 from engine.runtime.dispatcher import Dispatcher, UnhandledCommandError
+from engine.runtime.permission_policy import ApprovalPolicy
 from engine.runtime.profiles import BUILT_IN, CODER, FOREMAN, UnknownAgentError, profile_for
 from engine.runtime.run_read_model import RunReader, WorkflowRunView
 from engine.runtime.session import (
@@ -77,6 +78,7 @@ __all__ = [
     "ApprovalError",
     "ApprovalNotPendingError",
     "ApprovalPresenter",
+    "ApprovalPolicy",
     "ApprovalsUnsupportedError",
     "ApprovalCapability",
     "ApprovalConfig",

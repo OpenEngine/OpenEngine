@@ -19,6 +19,8 @@ from engine.domain import (
     AgentProfile,
     AgentRunId,
     AgentRunStatus,
+    ApprovalDecision,
+    ApprovalKind,
     HumanReviewCompleted,
     Message,
     RunId,
@@ -30,17 +32,20 @@ from engine.domain import (
     WorkspaceId,
     WorkspaceProvisioned,
 )
-from engine.ports import AgentTurn, McpServerConfig
-from engine.runtime import AgentSession, Capabilities
+from engine.ports import (
+    AgentTurn,
+    ApprovalCapability,
+    ApprovalRequest,
+    McpServerConfig,
+    PermissionScope,
+)
+from engine.runtime import AgentSession, ApprovalConfig, BashApprovalConfig, Capabilities
 from engine.runtime.step_results import step_completed_from_arguments
 from engine.runtime.terminal_mcp import (
     TerminalDelivery,
     TerminalEvent,
     TerminalResultRegistry,
 )
-from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
-
-
 _IDENTITY = ("-c", "user.name=Engine Tests", "-c", "user.email=engine@example.test")
 
 
@@ -130,14 +135,20 @@ class MockTerminalMcpBroker:
         self._result.set_result(event)
 
 
+class CommandTranslator:
+    def scope_for(self, request: ApprovalRequest) -> PermissionScope | None:
+        return PermissionScope(ApprovalCapability.BASH, request.command)
+
+
 class CompletingRunner:
     """A provider stand-in whose only behavior is its mocked MCP call."""
 
-    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+    permission_translator = CommandTranslator()
 
     def __init__(self, arguments: dict[str, object]) -> None:
         self.arguments = arguments
         self.calls: list[tuple[AgentRunId, WorkspaceId | None]] = []
+        self.decisions: list[ApprovalDecision] = []
         self.cancelled = asyncio.Event()
 
     async def run_turn(
@@ -163,6 +174,29 @@ class CompletingRunner:
         await broker.complete(f"{broker.step.step_id}-call", self.arguments)
         await self.cancelled.wait()
         return AgentTurn(Message.assistant("Terminal result accepted."))
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval,
+        on_message=None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        self.decisions.append(
+            await on_approval(
+                ApprovalRequest(
+                    "approval-1",
+                    ApprovalKind.COMMAND_EXECUTION,
+                    command="uv run pytest",
+                )
+            )
+        )
+        return await self.run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
 
     async def cancel(self, agent_run_id: AgentRunId) -> None:
         self.cancelled.set()
@@ -221,6 +255,9 @@ def test_implementation_review_workflow_completes_end_to_end(
         {"test": reviewer},
         workflow_runners={"test": implementer},
         review_runners={"test": reviewer},
+        approval_config=ApprovalConfig(
+            bash=BashApprovalConfig(allow=("uv run pytest **",))
+        ),
     )
 
     async def scenario():
@@ -316,4 +353,5 @@ def test_implementation_review_workflow_completes_end_to_end(
         run and run.status is AgentRunStatus.SUCCEEDED for run in agent_runs
     ), agent_runs
     assert implementer.calls[0][1] == reviewer.calls[0][1] == state.workspace_id
+    assert implementer.decisions == reviewer.decisions == [ApprovalDecision.ACCEPT]
     assert asyncio.run(workspaces.state(state.workspace_id)).attached

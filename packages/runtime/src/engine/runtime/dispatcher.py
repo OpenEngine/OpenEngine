@@ -31,11 +31,15 @@ from engine.domain.ids import ConversationId
 from engine.ports import (
     AgentRunner,
     AgentTurn,
+    ApprovalHandler,
+    InteractiveAgentRunner,
+    InteractiveMcpAgentRunner,
     McpAgentRunner,
     StreamingAgentRunner,
     StreamingMcpAgentRunner,
     TurnObserver,
 )
+from engine.runtime.approvals import ApprovalsUnsupportedError
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
@@ -117,6 +121,7 @@ class Dispatcher:
         runner: AgentRunner | None = None,
         runner_name: str = "",
         on_terminal_result: Callable[[TerminalEvent], Awaitable[None]] | None = None,
+        on_approval: ApprovalHandler | None = None,
     ) -> AgentTurn | TerminalEvent:
         """Run a workflow step, preferring a directly delivered MCP result."""
         caps = self._capabilities
@@ -166,7 +171,21 @@ class Dispatcher:
                         prompt,
                         on_terminal_result,
                         observe,
+                        on_approval,
                     )
+                elif on_approval is not None:
+                    if not isinstance(selected_runner, InteractiveAgentRunner):
+                        raise ApprovalsUnsupportedError(runner_name or "default")
+                    result = None
+                    turn = await selected_runner.run_turn_interactive(
+                        command.agent_run_id,
+                        command.profile,
+                        (prompt,),
+                        on_approval,
+                        observe,
+                        workspace_id=command.workspace_id,
+                    )
+                    transcript = turn.transcript
                 elif isinstance(selected_runner, StreamingAgentRunner):
                     result = None
                     turn = await selected_runner.run_turn_streamed(
@@ -242,6 +261,7 @@ class Dispatcher:
         prompt: Message,
         deliver: Callable[[TerminalEvent], Awaitable[None]] | None,
         on_message: TurnObserver,
+        on_approval: ApprovalHandler | None,
     ) -> tuple[TerminalEvent | None, AgentTurn | None, tuple[Message, ...]]:
         """Run until a terminal result or clarification request is produced."""
         assert command.step is not None
@@ -257,8 +277,21 @@ class Dispatcher:
             transcript: list[Message] = []
             corrections = 0
             while True:
-                streaming = isinstance(runner, StreamingMcpAgentRunner)
-                if streaming:
+                if on_approval is not None:
+                    if not isinstance(runner, InteractiveMcpAgentRunner):
+                        raise ApprovalsUnsupportedError("workflow")
+                    streaming = True
+                    turn_call = runner.run_turn_with_mcp_interactive(
+                        command.agent_run_id,
+                        command.profile,
+                        messages,
+                        broker.config,
+                        on_approval,
+                        on_message,
+                        workspace_id=command.workspace_id,
+                    )
+                elif isinstance(runner, StreamingMcpAgentRunner):
+                    streaming = True
                     turn_call = runner.run_turn_with_mcp_streamed(
                         command.agent_run_id,
                         command.profile,
@@ -268,6 +301,7 @@ class Dispatcher:
                         workspace_id=command.workspace_id,
                     )
                 else:
+                    streaming = False
                     turn_call = runner.run_turn_with_mcp(
                         command.agent_run_id,
                         command.profile,

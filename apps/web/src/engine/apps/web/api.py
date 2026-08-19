@@ -54,8 +54,10 @@ from engine.ports import (
 from engine.runtime import (
     AgentSession,
     ApprovalBroker,
+    ApprovalConfig,
     ApprovalDecisionNotAllowedError,
     ApprovalNotPendingError,
+    ApprovalPolicy,
     RunReader,
     UnknownApprovalError,
     WorkflowExecutionError,
@@ -228,12 +230,18 @@ class ThreadService:
     """Coordinates assistant-ui threads over an ``AgentSession``."""
 
     def __init__(
-        self, session: AgentSession, runners: Mapping[str, AgentRunner]
+        self,
+        session: AgentSession,
+        runners: Mapping[str, AgentRunner],
+        approval_config: ApprovalConfig | None = None,
     ) -> None:
         self.session = session
         self.approvals = ApprovalBroker(session.state_store)
         """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
+        self._approval_policy = (
+            ApprovalPolicy(approval_config) if approval_config is not None else None
+        )
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
         self._active_runs: dict[AgentInstanceId, ActiveRun] = {}
@@ -368,7 +376,7 @@ class ThreadService:
         self._active_runs[instance_id] = run
         on_approval = None
         if isinstance(self._runners.get(selected_runner), InteractiveAgentRunner):
-            on_approval = self.approvals.handler(
+            broker_handler = self.approvals.handler(
                 agent_run_id=agent_run_id,
                 instance_id=instance_id,
                 runner=selected_runner,
@@ -376,6 +384,14 @@ class ThreadService:
                 # Where this turn will actually work, so consent it collects is
                 # bounded by the same worktree the agent is standing in.
                 workspace_id=thread.workspace_id,
+            )
+            on_approval = (
+                self._approval_policy.handler(
+                    self._runners[selected_runner].permission_translator,
+                    broker_handler,
+                )
+                if self._approval_policy is not None
+                else broker_handler
             )
 
         async def execute() -> str:
@@ -631,16 +647,18 @@ def create_app(
     *,
     workflow_runners: Mapping[str, AgentRunner] | None = None,
     review_runners: Mapping[str, AgentRunner] | None = None,
+    approval_config: ApprovalConfig | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
         raise ValueError("review_runners are required with workflow_runners")
-    service = ThreadService(session, runners)
+    service = ThreadService(session, runners, approval_config)
     run_reader = RunReader(session.state_store)
     workflow_executor = WorkflowExecutor(
         session.capabilities,
         workflow_runners if workflow_runners is not None else runners,
         review_runners=review_runners if review_runners is not None else runners,
+        approval_config=approval_config,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 

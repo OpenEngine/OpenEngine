@@ -620,9 +620,20 @@ class CodexAgentRunner:
             argv += ["--model", model]
         return argv
 
-    def app_server_command_line(self) -> list[str]:
+    def app_server_command_line(
+        self, mcp_server: McpServerConfig | None = None
+    ) -> list[str]:
         """The stable stdio app-server transport used for interactive turns."""
-        return [self._binary_path, "app-server"]
+        argv = [self._binary_path, "app-server"]
+        if mcp_server is not None:
+            prefix = f"mcp_servers.{mcp_server.name}"
+            argv += [
+                "-c",
+                f"{prefix}.command={json.dumps(mcp_server.command)}",
+                "-c",
+                f"{prefix}.args={json.dumps(list(mcp_server.args))}",
+            ]
+        return argv
 
     async def run_turn(
         self,
@@ -724,6 +735,7 @@ class CodexAgentRunner:
         on_message: TurnObserver | None = None,
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
+        mcp_server: McpServerConfig | None = None,
     ) -> AgentTurn:
         """Run a turn over app-server's bidirectional JSON-RPC transport."""
         if tools:
@@ -746,7 +758,7 @@ class CodexAgentRunner:
         working_directory = os.path.abspath(working_directory)
 
         process = await asyncio.create_subprocess_exec(
-            *self.app_server_command_line(),
+            *self.app_server_command_line(mcp_server),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -788,6 +800,27 @@ class CodexAgentRunner:
                 f"codex app-server exited {process.returncode}: {_tail(stderr)}"
             )
         return turn_from_app_server_events(events)
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run with terminal MCP tools over the approval-capable transport."""
+        return await self.run_turn_interactive(
+            agent_run_id,
+            profile,
+            messages,
+            on_approval,
+            on_message,
+            workspace_id=workspace_id,
+            mcp_server=mcp_server,
+        )
 
     async def _read_app_server(
         self,

@@ -32,6 +32,7 @@ from engine.ports import (
     ApprovalRequest,
     FinishReason,
     InteractiveAgentRunner,
+    InteractiveMcpAgentRunner,
     McpAgentRunner,
     McpServerConfig,
     StreamingMcpAgentRunner,
@@ -449,6 +450,17 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
             }
         }
     }
+
+
+def test_interactive_claude_receives_terminal_mcp_configuration() -> None:
+    server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
+    runner = ClaudeCodeAgentRunner()
+    argv = runner.interactive_command_line(PROFILE, server)
+
+    assert isinstance(runner, InteractiveMcpAgentRunner)
+    config = json.loads(argv[argv.index("--mcp-config") + 1])
+    assert config["mcpServers"]["workflow"]["command"] == "/usr/bin/python3"
+    assert argv[argv.index("--permission-prompt-tool") + 1] == "stdio"
     allowed = argv[argv.index("--allowedTools") + 1 :]
     assert "AskUserQuestion" in allowed
     assert "mcp__workflow__complete_step" in allowed
