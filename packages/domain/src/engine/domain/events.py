@@ -10,7 +10,6 @@ Placeholder set for Ticket 1; the real vocabulary lands with the engine itself.
 from dataclasses import dataclass, field
 
 from engine.domain.ids import (
-    IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     AgentRunId,
     RunId,
     StepId,
@@ -35,7 +34,7 @@ class RunRequested(Event):
     task_id: TaskId
     prompt: str
     repository: str
-    workflow_id: WorkflowId = IMPLEMENTATION_REVIEW_WORKFLOW_ID
+    workflow_id: WorkflowId
 
 
 @dataclass(frozen=True, slots=True)

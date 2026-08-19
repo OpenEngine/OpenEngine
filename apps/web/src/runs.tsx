@@ -6,8 +6,7 @@ import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
 const IN_PROGRESS_PHASES = new Set([
   "pending",
   "preparing_workspace",
-  "implementing",
-  "reviewing",
+  "running_agent",
 ]);
 
 function phaseLabel(value: string) {

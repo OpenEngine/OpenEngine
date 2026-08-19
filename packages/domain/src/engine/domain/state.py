@@ -9,7 +9,6 @@ from enum import Enum
 
 from engine.domain.events import HumanReviewCompleted, StepCompleted
 from engine.domain.ids import (
-    IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     AgentRunId,
     RunId,
     StepId,
@@ -25,8 +24,6 @@ class RunPhase(Enum):
 
     PENDING = "pending"
     PREPARING_WORKSPACE = "preparing_workspace"
-    IMPLEMENTING = "implementing"
-    REVIEWING = "reviewing"
     AWAITING_HUMAN_REVIEW = "awaiting_human_review"
     RUNNING_AGENT = "running_agent"
     PUBLISHING = "publishing"
@@ -40,7 +37,7 @@ class RunState:
 
     run_id: RunId
     task_id: TaskId
-    workflow_id: WorkflowId = IMPLEMENTATION_REVIEW_WORKFLOW_ID
+    workflow_id: WorkflowId
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""
     prompt: str = ""

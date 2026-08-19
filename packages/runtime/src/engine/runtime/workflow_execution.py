@@ -85,10 +85,10 @@ class WorkflowExecutor:
     def catalog(self) -> WorkflowCatalog:
         return self._catalog
 
-    async def advance_through_review(
+    async def start(
         self, initial_event: RunRequested, runner_name: str = ""
     ) -> None:
-        """Compatibility name: start and drive any configured workflow."""
+        """Start and drive any configured workflow."""
 
         try:
             selected_name = self._runner_name(runner_name)
@@ -132,11 +132,7 @@ class WorkflowExecutor:
             selected_name = self._runner_name(runner_name)
             state = await self._require_state(run_id)
             definition = self._definition_for(state)
-            if state.phase not in (
-                RunPhase.RUNNING_AGENT,
-                RunPhase.IMPLEMENTING,
-                RunPhase.REVIEWING,
-            ):
+            if state.phase is not RunPhase.RUNNING_AGENT:
                 raise WorkflowExecutionError("run is not executing an agent step")
             step = definition.step(state.current_step_id) if state.current_step_id else None
             if not isinstance(step, AgentStep):
@@ -164,14 +160,6 @@ class WorkflowExecutor:
             raise
         except Exception as error:
             await self._fail(run_id, error)
-
-    async def resume_implementation(
-        self, run_id: RunId, message: str, runner_name: str = ""
-    ) -> None:
-        await self.resume_agent_step(run_id, message, runner_name)
-
-    async def resume_review(self, run_id: RunId, runner_name: str = "") -> None:
-        await self.resume_agent_step(run_id, None, runner_name)
 
     async def complete_human_review(
         self, event: HumanReviewCompleted

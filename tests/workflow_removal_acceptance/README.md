@@ -11,15 +11,14 @@ The suite is intentionally separate from the general workflow unit tests:
   implementation/review phases to `running_agent` and clears stale active-run
   IDs in terminal states so it compares workflow behavior rather than obsolete
   runtime representation.
-- `test_legacy_sqlite_upgrade.py` opens a database written by the SQLite adapter
-  at `d15456f` and defines the required snapshot-migration behavior.
+- `test_legacy_sqlite_rejection.py` opens a database written by the SQLite
+  adapter at `d15456f` and verifies the explicit policy that pre-DSL active runs
+  are unsupported rather than migrated through workflow-specific code.
 - `test_removal_gate.py` uses Python's AST to prove that the legacy module and
   all imports of it are gone.
 
-The migration and removal gates are strict expected failures while the legacy
-implementation still exists. `strict=True` is deliberate: when either gate
-starts passing, pytest fails with `XPASS` until the marker is removed. This
-prevents completed acceptance criteria from remaining silently marked as debt.
+All tests are active acceptance checks. No compatibility path or expected
+failure remains after the hardcoded reducer is removed.
 
 Run only this clearly labeled suite with:
 

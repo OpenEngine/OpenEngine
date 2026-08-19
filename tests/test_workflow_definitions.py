@@ -7,15 +7,8 @@ import pytest
 import openengine as oe
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.core import decide
-from engine.core.workflows.implementation_review import (
-    IMPLEMENTATION_PROFILE,
-    IMPLEMENTATION_STEP_SPEC,
-    REVIEW_PROFILE,
-    REVIEW_STEP_SPEC,
-    WORKFLOW_NAME_PROMPT,
-    WORKFLOW_NAMING_PROFILE,
-)
 from engine.domain import (
+    AgentId,
     AgentRunId,
     AgentStep,
     HumanReviewCompleted,
@@ -29,6 +22,7 @@ from engine.domain import (
     StepId,
     TaskId,
     WorkflowId,
+    WorkspaceAccess,
     WorkspaceId,
     WorkspaceProvisioned,
 )
@@ -214,7 +208,7 @@ workflow = oe.workflow(
         load_workflow_catalog(tmp_path)
 
 
-def test_checked_in_definition_matches_the_compatibility_contract() -> None:
+def test_checked_in_definition_is_the_implementation_review_source_of_truth() -> None:
     root = Path(__file__).parents[1]
     loaded = load_workflow_catalog(root / "workflows")
     definition = loaded.require(WorkflowId("implementation-review-v1"))
@@ -222,14 +216,23 @@ def test_checked_in_definition_matches_the_compatibility_contract() -> None:
 
     assert definition.name == "Implementation review"
     assert definition.version == "v1"
-    assert definition.naming_profile == WORKFLOW_NAMING_PROFILE
-    assert definition.naming_prompt == WORKFLOW_NAME_PROMPT
+    assert definition.naming_profile is not None
+    assert definition.naming_profile.agent_id == AgentId("implementation-agent")
+    assert "concise display name" in definition.naming_profile.instructions
+    assert "at most eight words" in definition.naming_prompt
     assert isinstance(implementation, AgentStep)
-    assert implementation.profile == IMPLEMENTATION_PROFILE
-    assert implementation.spec == IMPLEMENTATION_STEP_SPEC
+    assert implementation.step_id == StepId("implementation")
+    assert implementation.profile.agent_id == AgentId("implementation-agent")
+    assert implementation.required_outputs == ("pr_url",)
+    assert implementation.editable is True
+    assert implementation.workspace_access is WorkspaceAccess.WRITE
     assert isinstance(review, AgentStep)
-    assert review.profile == REVIEW_PROFILE
-    assert review.spec == REVIEW_STEP_SPEC
+    assert review.step_id == StepId("review")
+    assert review.profile.agent_id == AgentId("review-agent")
+    assert review.profile.capabilities == ("add_comment",)
+    assert review.required_outputs == ("findings",)
+    assert review.editable is False
+    assert review.workspace_access is WorkspaceAccess.READ
 
 
 def test_sqlite_round_trips_a_workflow_definition_snapshot() -> None:

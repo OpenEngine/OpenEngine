@@ -26,6 +26,7 @@ from engine.domain import (
     StepOutput,
     TaskId,
     ToolCall,
+    WorkflowId,
 )
 from engine.ports import StateStore
 
@@ -283,6 +284,7 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
     state = RunState(
         run_id=run_id,
         task_id=TaskId("task-durable"),
+        workflow_id=WorkflowId("durability-test-v1"),
         phase=RunPhase.FAILED,
         repository="acme/api",
         prompt="Fix the race.",

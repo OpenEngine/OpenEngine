@@ -43,16 +43,13 @@ from engine.domain import (
     RunRequested,
     RunState,
     StepCompleted,
+    StepId,
     StepOutput,
     TaskId,
     ToolCall,
+    WorkflowId,
     WorkspaceId,
     WorkspaceProvisioned,
-)
-from engine.core.workflows.implementation_review import (
-    HUMAN_REVIEW_STEP,
-    IMPLEMENTATION_STEP,
-    REVIEW_STEP,
 )
 from engine.ports import (
     AgentTurn,
@@ -67,6 +64,10 @@ from engine.runtime.terminal_mcp import _mcp_response
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
+WORKFLOW_ID = WorkflowId("implementation-review-v1")
+IMPLEMENTATION_STEP = StepId("implementation")
+REVIEW_STEP = StepId("review")
+HUMAN_REVIEW_STEP = StepId("human-review")
 PROFILES = {
     CODER: AgentProfile(
         agent_id=CODER,
@@ -541,8 +542,10 @@ def _session_with(runners: Mapping[str, ConcurrentRunner]) -> AgentSession:
     )
 
 
-def _workflow_state(phase: RunPhase) -> RunState:
-    run_id = RunId(f"run-{phase.value}")
+def _workflow_state(
+    phase: RunPhase, active_step: StepId = IMPLEMENTATION_STEP
+) -> RunState:
+    run_id = RunId(f"run-{phase.value}-{active_step}")
     implementation = StepCompleted(
         run_id=run_id,
         step_id=IMPLEMENTATION_STEP,
@@ -560,8 +563,6 @@ def _workflow_state(phase: RunPhase) -> RunState:
         outputs=(StepOutput("findings", "Cancellation coverage missing"),),
     )
     values = {
-        RunPhase.IMPLEMENTING: (IMPLEMENTATION_STEP, (), None, ""),
-        RunPhase.REVIEWING: (REVIEW_STEP, (implementation,), None, ""),
         RunPhase.AWAITING_HUMAN_REVIEW: (
             HUMAN_REVIEW_STEP,
             (implementation, review),
@@ -594,10 +595,18 @@ def _workflow_state(phase: RunPhase) -> RunState:
             "Tests did not pass.",
         ),
     }
-    current_step, results, decision, reason = values[phase]
+    if phase is RunPhase.RUNNING_AGENT:
+        current_step, results, decision, reason = (
+            (REVIEW_STEP, (implementation,), None, "")
+            if active_step == REVIEW_STEP
+            else (IMPLEMENTATION_STEP, (), None, "")
+        )
+    else:
+        current_step, results, decision, reason = values[phase]
     return RunState(
         run_id=run_id,
         task_id=TaskId("task-42"),
+        workflow_id=WORKFLOW_ID,
         phase=phase,
         repository="acme/api",
         prompt="Fix the race and add a regression test.",
@@ -678,20 +687,20 @@ async def _await_phase(
 
 
 @pytest.mark.parametrize(
-    ("phase", "terminal_outcome"),
+    ("phase", "active_step", "terminal_outcome"),
     [
-        (RunPhase.IMPLEMENTING, None),
-        (RunPhase.REVIEWING, None),
-        (RunPhase.AWAITING_HUMAN_REVIEW, None),
-        (RunPhase.SUCCEEDED, "approved"),
-        (RunPhase.FAILED, "failed"),
+        (RunPhase.RUNNING_AGENT, IMPLEMENTATION_STEP, None),
+        (RunPhase.RUNNING_AGENT, REVIEW_STEP, None),
+        (RunPhase.AWAITING_HUMAN_REVIEW, HUMAN_REVIEW_STEP, None),
+        (RunPhase.SUCCEEDED, HUMAN_REVIEW_STEP, "approved"),
+        (RunPhase.FAILED, IMPLEMENTATION_STEP, "failed"),
     ],
 )
 def test_run_api_covers_workflow_lifecycle_phases(
-    phase: RunPhase, terminal_outcome: str | None
+    phase: RunPhase, active_step: StepId, terminal_outcome: str | None
 ) -> None:
     store = InMemoryStateStore()
-    state = _workflow_state(phase)
+    state = _workflow_state(phase, active_step)
     asyncio.run(store.save(state))
     app = _workflow_app(store, ConcurrentRunner())
 
@@ -822,7 +831,7 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
 
 def test_startup_restarts_a_review_whose_command_was_lost() -> None:
     store = InMemoryStateStore()
-    state = _workflow_state(RunPhase.REVIEWING)
+    state = _workflow_state(RunPhase.RUNNING_AGENT, REVIEW_STEP)
     state = replace(
         state,
         workspace_id=WorkspaceId("ws-1"),
@@ -1053,7 +1062,7 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
 
     assert implementation.json()["editable"] is True
     assert stopped.status_code == 204
-    assert still_implementing.json()["phase"] == "implementing"
+    assert still_implementing.json()["phase"] == "running_agent"
     assert continued.status_code == 200
     assert completed.json()["steps"][0]["summary"] == "Applied the human guidance."
     assert review.json()["editable"] is False
@@ -1249,7 +1258,7 @@ def test_clarification_call_leaves_the_active_step_implementing() -> None:
 
     reopened, history = asyncio.run(scenario())
 
-    assert reopened.json()["phase"] == "implementing"
+    assert reopened.json()["phase"] == "running_agent"
     assert reopened.json()["currentStepId"] == "implementation"
     assert runner.attempts == 1
     assert not any(isinstance(event, (StepCompleted, RunFailed)) for event in history)
@@ -1491,7 +1500,7 @@ def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> N
 
 def test_workflow_conversation_is_nested_under_its_run_not_standalone() -> None:
     store = InMemoryStateStore()
-    state = _workflow_state(RunPhase.REVIEWING)
+    state = _workflow_state(RunPhase.RUNNING_AGENT, REVIEW_STEP)
     asyncio.run(store.save(state))
     asyncio.run(
         store.create_instance(

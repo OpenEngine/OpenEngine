@@ -713,10 +713,10 @@ def create_app(
     async def restore_agent_steps() -> None:
         """Restart agent commands whose process-local dispatch was lost."""
         for state in await session.state_store.list_runs():
-            if state.phase not in (
-                RunPhase.RUNNING_AGENT,
-                RunPhase.REVIEWING,
-            ) or state.run_id in workflow_tasks:
+            if (
+                state.phase is not RunPhase.RUNNING_AGENT
+                or state.run_id in workflow_tasks
+            ):
                 continue
             instances = await session.state_store.list_instances(
                 workflow_run_id=state.run_id
@@ -778,7 +778,7 @@ def create_app(
         state = await session.state_store.load(thread.workflow_run_id)
         if (
             state is None
-            or state.phase not in (RunPhase.RUNNING_AGENT, RunPhase.IMPLEMENTING)
+            or state.phase is not RunPhase.RUNNING_AGENT
             or state.current_step_id != thread.workflow_step_id
         ):
             raise RuntimeError("this workflow step is no longer active")
@@ -798,7 +798,7 @@ def create_app(
         state = await session.state_store.load(thread.workflow_run_id)
         if (
             state is None
-            or state.phase not in (RunPhase.RUNNING_AGENT, RunPhase.IMPLEMENTING)
+            or state.phase is not RunPhase.RUNNING_AGENT
             or state.current_step_id != thread.workflow_step_id
         ):
             raise RuntimeError("this workflow step is no longer active")
@@ -917,7 +917,7 @@ def create_app(
         track_workflow(
             run_id,
             asyncio.create_task(
-                workflow_executor.advance_through_review(event, runner_name)
+                workflow_executor.start(event, runner_name)
             ),
         )
         run = await run_reader.get(run_id)

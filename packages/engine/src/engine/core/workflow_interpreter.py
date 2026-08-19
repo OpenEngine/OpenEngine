@@ -103,11 +103,7 @@ def decide_workflow(
             return replace(state, name=event.name), ()
 
         case StepCompleted() if (
-            state.phase in (
-                RunPhase.RUNNING_AGENT,
-                RunPhase.IMPLEMENTING,
-                RunPhase.REVIEWING,
-            )
+            state.phase is RunPhase.RUNNING_AGENT
             and event.step_id == state.current_step_id
             and event.agent_run_id == state.current_agent_run_id
         ):
@@ -156,11 +152,7 @@ def decide_workflow(
             )
 
         case AgentRunCompleted() if (
-            state.phase in (
-                RunPhase.RUNNING_AGENT,
-                RunPhase.IMPLEMENTING,
-                RunPhase.REVIEWING,
-            )
+            state.phase is RunPhase.RUNNING_AGENT
             and event.agent_run_id == state.current_agent_run_id
             and not event.succeeded
         ):

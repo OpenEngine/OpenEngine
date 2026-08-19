@@ -35,6 +35,8 @@ WORKFLOW_SPECIFIC_TOKENS = (
     "start_implementation_command",
     "start_review_command",
     "implementation-review-v1",
+    "RunPhase.IMPLEMENTING",
+    "RunPhase.REVIEWING",
 )
 
 
@@ -84,19 +86,11 @@ def _workflow_specific_production_references() -> list[str]:
     return sorted(violations)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="removal gate: the compatibility reducer has not been deleted yet",
-)
 def test_acceptance_hardcoded_workflow_module_and_imports_are_gone() -> None:
     assert not LEGACY_FILE.exists(), LEGACY_FILE.relative_to(ROOT)
     assert not LEGACY_PACKAGE.exists(), LEGACY_PACKAGE.relative_to(ROOT)
     assert _legacy_imports() == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="removal gate: production still contains workflow-specific dispatch",
-)
 def test_acceptance_production_has_no_implementation_review_special_cases() -> None:
     assert _workflow_specific_production_references() == []

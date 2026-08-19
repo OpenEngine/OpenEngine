@@ -18,7 +18,6 @@ from engine.domain import (
     StepId,
     StepOutput,
     WorkflowDefinition,
-    WorkspaceAccess,
 )
 from engine.ports.state_store import StateStore
 from engine.runtime.workflows import WorkflowCatalog
@@ -128,7 +127,7 @@ class RunReader:
             task_id=str(state.task_id),
             task_prompt=state.prompt,
             repository=state.repository,
-            phase=_phase_value(state, definition),
+            phase=state.phase.value,
             current_step_id=state.current_step_id,
             terminal_outcome=_terminal_outcome(state),
             steps=steps,
@@ -224,22 +223,6 @@ def _terminal_outcome(state: RunState) -> str | None:
     if state.phase is RunPhase.FAILED:
         return "failed"
     return None
-
-
-def _phase_value(
-    state: RunState, definition: WorkflowDefinition | None
-) -> str:
-    """Keep established UI labels while the durable state uses RUNNING_AGENT."""
-
-    if state.phase is not RunPhase.RUNNING_AGENT or definition is None:
-        return state.phase.value
-    step = definition.step(state.current_step_id) if state.current_step_id else None
-    if isinstance(step, AgentStep):
-        if step.workspace_access is WorkspaceAccess.WRITE:
-            return RunPhase.IMPLEMENTING.value
-        if step.workspace_access is WorkspaceAccess.READ:
-            return RunPhase.REVIEWING.value
-    return state.phase.value
 
 
 __all__ = [
