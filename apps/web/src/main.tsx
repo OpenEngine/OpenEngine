@@ -214,7 +214,7 @@ function ConversationHeader({
         <p className="lede">
           {workflowConversation
             ? thread?.editable
-              ? "A workflow step owns this transcript; you can interrupt or send guidance while it is active."
+              ? "A workflow step owns this transcript; sending guidance reactivates it if it has closed."
               : "A workflow step owns this transcript; its run chose the runner."
             : "This runner answers here until you pick another."}
         </p>

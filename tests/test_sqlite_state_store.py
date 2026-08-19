@@ -22,6 +22,7 @@ from engine.domain import (
     RunPhase,
     RunState,
     StepCompleted,
+    StepReactivated,
     StepId,
     StepOutput,
     TaskId,
@@ -295,7 +296,8 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
     first = SQLiteStateStore(path)
     asyncio.run(first.save(state))
     named = RunNamed(run_id=run_id, name=state.name)
-    asyncio.run(first.append_events(run_id, (named,)))
+    reactivated = StepReactivated(run_id=run_id, step_id=StepId("implementation"))
+    asyncio.run(first.append_events(run_id, (named, reactivated)))
     asyncio.run(
         first.create_instance(
             AgentId("review-agent"),
@@ -318,7 +320,7 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
 
     assert loaded == state
     assert runs == (state,)
-    assert history == (named,)
+    assert history == (named, reactivated)
     assert instances[0].instance_id == "review-instance"
     assert instances[0].conversation_id == "review-conversation"
     assert instances[0].workflow_run_id == run_id

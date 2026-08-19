@@ -27,6 +27,7 @@ from engine.domain.events import (
     RunNamed,
     RunRequested,
     StepCompleted,
+    StepReactivated,
     WorkspaceProvisioned,
 )
 from engine.domain.ids import (
@@ -818,6 +819,12 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
 def _event_to_dict(event: Event) -> dict[str, object]:
     if isinstance(event, StepCompleted):
         return {"type": "StepCompleted", **_step_to_dict(event)}
+    if isinstance(event, StepReactivated):
+        return {
+            "type": "StepReactivated",
+            "run_id": event.run_id,
+            "step_id": event.step_id,
+        }
     if isinstance(event, HumanReviewCompleted):
         return {"type": "HumanReviewCompleted", **_review_to_dict(event)}
     if isinstance(event, RunRequested):
@@ -872,6 +879,11 @@ def _event_from_dict(value: dict[str, object]) -> Event:
     kind = value["type"]
     if kind == "StepCompleted":
         return _step_from_dict(value)
+    if kind == "StepReactivated":
+        return StepReactivated(
+            run_id=RunId(str(value["run_id"])),
+            step_id=StepId(str(value["step_id"])),
+        )
     if kind == "HumanReviewCompleted":
         return _review_from_dict(value)
     if kind == "RunRequested":

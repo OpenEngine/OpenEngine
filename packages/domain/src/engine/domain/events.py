@@ -77,6 +77,13 @@ class StepCompleted(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class StepReactivated(Event):
+    """A human message reopened a previously closed workflow step."""
+
+    step_id: StepId
+
+
+@dataclass(frozen=True, slots=True)
 class HumanReviewCompleted(Event):
     """A human made the final decision for a workflow review step."""
 
@@ -112,5 +119,6 @@ __all__ = [
     "RunNamed",
     "RunRequested",
     "StepCompleted",
+    "StepReactivated",
     "WorkspaceProvisioned",
 ]

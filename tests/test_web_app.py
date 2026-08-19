@@ -43,6 +43,7 @@ from engine.domain import (
     RunRequested,
     RunState,
     StepCompleted,
+    StepReactivated,
     StepOutput,
     TaskId,
     ToolCall,
@@ -1068,6 +1069,66 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
         (Role.USER, conversation.messages[0].content),
         (Role.USER, "Keep the public response shape unchanged."),
     ]
+
+
+def test_message_reactivates_a_closed_implementation_step() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Initial implementation.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    reviewer = _reviewer()
+    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement the configurable behavior.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            awaiting = await _await_phase(client, run_id, "awaiting_human_review")
+            implementation_id = awaiting.json()["steps"][0]["agentInstanceId"]
+            approved = await client.post(
+                f"/api/runs/{run_id}/human-review",
+                json={"approved": True, "summary": "Approved."},
+            )
+
+            implementer.arguments["summary"] = "Implementation updated from guidance."
+            continued = await client.post(
+                f"/api/threads/{implementation_id}/runs",
+                json={"text": "Also preserve the legacy response header."},
+            )
+            reopened = await _await_phase(client, run_id, "awaiting_human_review")
+            conversation = await store.load_conversation(implementation_id)
+            return approved, continued, reopened, conversation, await store.history(run_id)
+
+    approved, continued, reopened, conversation, history = asyncio.run(scenario())
+
+    assert approved.json()["phase"] == "succeeded"
+    assert continued.status_code == 200
+    assert reopened.json()["phase"] == "awaiting_human_review"
+    assert reopened.json()["steps"][0]["summary"] == (
+        "Implementation updated from guidance."
+    )
+    assert reopened.json()["humanDecision"] is None
+    assert sum(isinstance(event, StepReactivated) for event in history) == 1
+    assert conversation is not None
+    assert [
+        message.content for message in conversation.messages if message.role is Role.USER
+    ][-1] == "Also preserve the legacy response header."
+    # The repeated review receives the new implementation result, rather than
+    # silently replaying only its original, now-stale context.
+    assert "Implementation updated from guidance." in reviewer.seen[-1][-1].content
 
 
 def test_approval_requests_pop_in_on_workflow_conversations() -> None:

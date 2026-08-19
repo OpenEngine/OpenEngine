@@ -33,6 +33,7 @@ from engine.domain.events import (
     RunNamed,
     RunRequested,
     StepCompleted,
+    StepReactivated,
     WorkspaceProvisioned,
 )
 from engine.domain.ids import (
@@ -95,6 +96,7 @@ __all__ = [
     "SessionGrantId",
     "StartAgentRun",
     "StepCompleted",
+    "StepReactivated",
     "StepId",
     "StepOutput",
     "StepSpec",
