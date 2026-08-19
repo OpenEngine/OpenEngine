@@ -107,6 +107,23 @@ function remoteMetadata(thread: ApiThread) {
   };
 }
 
+/** Publish the durable approval snapshots returned beside a transcript.
+ *
+ *  Nothing durable ties a request to the turn that raised it, so restored
+ *  requests collect on the turn at the end of the transcript. */
+function publishHistoryApprovals(threadId: string, history: ApiHistory): void {
+  const anchor =
+    history.messages.length -
+    (history.messages.at(-1)?.role === "assistant" ? 1 : 0);
+  for (const approval of history.approvals)
+    publishApproval(threadId, approval, anchor);
+}
+
+async function refreshApprovals(threadId: string): Promise<void> {
+  const history = await api<ApiHistory>(`/api/threads/${threadId}/messages`);
+  publishHistoryApprovals(threadId, history);
+}
+
 /** `messageIndex` is where the assistant turn this stream is producing will sit
  *  in the thread, which is the only moment anybody knows it: an approval
  *  belongs beside the command it is about, and by the time it is answered the
@@ -165,17 +182,11 @@ function HistoryProvider({ children }: PropsWithChildren) {
         // so a step that has finished -- or a browser that arrives after one
         // did -- would otherwise show a conversation that had never paused.
         //
-        // All on the turn the transcript ends on, because nothing durable ties
-        // a request to the turn that raised it: the anchor is observed while a
-        // reply streams, and a reload has no stream to observe. That end is the
-        // reply being resumed when the transcript stops at a user message and
-        // the last reply otherwise, which is the anchor `resume` would publish
-        // under, so the two paths land one card rather than two.
-        const anchor =
-          rows.messages.length -
-          (rows.messages.at(-1)?.role === "assistant" ? 1 : 0);
-        for (const approval of rows.approvals)
-          publishApproval(remoteId, approval, anchor);
+        // The end is the reply being resumed when the transcript stops at a
+        // user message and the last reply otherwise, which is the anchor
+        // `resume` would publish under, so the two paths land one card rather
+        // than two.
+        publishHistoryApprovals(remoteId, rows);
         let parentId: string | null = null;
         return {
           unstable_resume: rows.unstable_resume,
@@ -351,8 +362,17 @@ function EngineRuntime({
     adapter: threadAdapter,
     initialThreadId,
     onThreadIdChange(threadId) {
-      if (threadId) window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
-      else window.localStorage.removeItem(ACTIVE_THREAD_KEY);
+      if (threadId) {
+        window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
+        // A previously visited thread can keep its messages in memory, so its
+        // history adapter does not necessarily load again on traversal. The
+        // durable snapshots may have changed while another chat was open.
+        void refreshApprovals(threadId).catch((error: unknown) => {
+          console.error("Could not refresh conversation approvals.", error);
+        });
+      } else {
+        window.localStorage.removeItem(ACTIVE_THREAD_KEY);
+      }
     },
   });
 
