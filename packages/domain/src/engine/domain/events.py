@@ -39,6 +39,13 @@ class RunRequested(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class RunNamed(Event):
+    """An agent supplied the concise display name for a workflow run."""
+
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceProvisioned(Event):
     """A workspace provider handed back a usable checkout."""
 
@@ -102,6 +109,7 @@ __all__ = [
     "Event",
     "HumanReviewCompleted",
     "RunFailed",
+    "RunNamed",
     "RunRequested",
     "StepCompleted",
     "WorkspaceProvisioned",

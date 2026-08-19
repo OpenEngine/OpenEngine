@@ -67,6 +67,7 @@ export type ApiRunStep = {
 
 export type ApiWorkflowRun = {
   runId: string;
+  name: string;
   workflowId: string;
   workflowName: string;
   workflowVersion: string;

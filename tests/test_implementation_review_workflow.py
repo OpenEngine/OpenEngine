@@ -21,6 +21,7 @@ from engine.domain import (
     ProvisionWorkspace,
     RequestHumanReview,
     RunId,
+    RunNamed,
     RunPhase,
     RunRequested,
     RunState,
@@ -155,6 +156,19 @@ def test_provisioning_starts_implementation_with_the_original_prompt() -> None:
     assert command.step.step_id == IMPLEMENTATION_STEP
     assert command.step.required_outputs == ("pr_url",)
     assert "do not fetch, pull, or merge main" in command.profile.instructions
+
+
+def test_a_generated_name_is_recorded_without_changing_the_active_step() -> None:
+    state, _ = implementing()
+
+    named, commands = decide(
+        state, RunNamed(run_id=RUN_ID, name="Fix shared counter race")
+    )
+
+    assert named.name == "Fix shared counter race"
+    assert named.phase is RunPhase.IMPLEMENTING
+    assert named.current_step_id == IMPLEMENTATION_STEP
+    assert commands == ()
 
 
 def test_implementation_success_starts_review_with_result_context() -> None:

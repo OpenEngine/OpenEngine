@@ -18,6 +18,7 @@ from engine.domain import (
     Message,
     Role,
     RunId,
+    RunNamed,
     RunPhase,
     RunState,
     StepCompleted,
@@ -285,6 +286,7 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
         phase=RunPhase.FAILED,
         repository="acme/api",
         prompt="Fix the race.",
+        name="Fix shared counter race",
         current_step_id=StepId("human-review"),
         step_results=(result,),
         human_review=review,
@@ -292,6 +294,8 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
 
     first = SQLiteStateStore(path)
     asyncio.run(first.save(state))
+    named = RunNamed(run_id=run_id, name=state.name)
+    asyncio.run(first.append_events(run_id, (named,)))
     asyncio.run(
         first.create_instance(
             AgentId("review-agent"),
@@ -307,12 +311,14 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
     try:
         loaded = asyncio.run(second.load(run_id))
         runs = asyncio.run(second.list_runs())
+        history = asyncio.run(second.history(run_id))
         instances = asyncio.run(second.list_instances(workflow_run_id=run_id))
     finally:
         second.close()
 
     assert loaded == state
     assert runs == (state,)
+    assert history == (named,)
     assert instances[0].instance_id == "review-instance"
     assert instances[0].conversation_id == "review-conversation"
     assert instances[0].workflow_run_id == run_id

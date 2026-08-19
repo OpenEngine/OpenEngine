@@ -43,6 +43,7 @@ class RunState:
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""
     prompt: str = ""
+    name: str = ""
     workspace_id: WorkspaceId | None = None
     agent_runs: tuple[AgentRunId, ...] = field(default=())
     max_agent_runs: int = 3

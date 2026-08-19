@@ -38,6 +38,7 @@ from engine.domain import (
     Role,
     RunFailed,
     RunId,
+    RunNamed,
     RunPhase,
     RunRequested,
     RunState,
@@ -275,8 +276,13 @@ def _rejected(acknowledgement: dict[str, object] | None) -> bool:
 class TerminalToolRunner(ConcurrentRunner):
     """Call one workflow terminal tool through the attached MCP server."""
 
-    def __init__(self, tool_name: str, arguments: dict[str, object]) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        tool_name: str,
+        arguments: dict[str, object],
+        name: str = "Named workflow",
+    ) -> None:
+        super().__init__((name,))
         self.tool_name = tool_name
         self.arguments = arguments
         self.cancelled = asyncio.Event()
@@ -703,6 +709,7 @@ def test_run_api_covers_workflow_lifecycle_phases(
     assert [run["runId"] for run in listed.json()["runs"]] == [state.run_id]
     assert detail.status_code == 200
     assert body["taskPrompt"] == "Fix the race and add a regression test."
+    assert body["name"] == body["taskPrompt"]
     assert body["workflowId"] == "implementation-review-v1"
     assert body["phase"] == phase.value
     assert body["currentStepId"] == state.current_step_id
@@ -790,22 +797,27 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]
     ]
-    assert len(history) == 4
+    assert len(history) == 5
     assert isinstance(history[0], RunRequested)
     assert isinstance(history[1], WorkspaceProvisioned)
-    assert isinstance(history[2], StepCompleted)
+    assert isinstance(history[2], RunNamed)
     assert isinstance(history[3], StepCompleted)
+    assert isinstance(history[4], StepCompleted)
     assert history[0].prompt == "Add cancellation handling."
     assert history[0].repository == "acme/api"
-    assert (history[2].step_id, history[3].step_id) == (IMPLEMENTATION_STEP, REVIEW_STEP)
+    assert (history[3].step_id, history[4].step_id) == (
+        IMPLEMENTATION_STEP,
+        REVIEW_STEP,
+    )
     # Two executions, one each, in the single workspace the run provisioned.
-    assert implementer.workspace_ids == ["ws-1"]
+    assert implementer.workspace_ids == ["ws-1", "ws-1"]
     assert reviewer.workspace_ids == ["ws-1"]
     # Two conversations, kept apart: the review is its own durable instance.
     assert set(conversations) == {IMPLEMENTATION_STEP, REVIEW_STEP}
     assert all(conversation.messages for conversation in conversations.values())
-    assert "`complete_step`" in implementer.seen[0][0].content
-    assert "JSON" not in implementer.seen[0][0].content
+    assert "Name this workflow" in implementer.seen[0][-1].content
+    assert "`complete_step`" in implementer.seen[1][0].content
+    assert "JSON" not in implementer.seen[1][0].content
 
 
 def test_startup_restarts_a_review_whose_command_was_lost() -> None:
@@ -901,8 +913,8 @@ def test_the_reviewer_reads_the_task_and_the_implementation_result() -> None:
     assert "do not modify" in prompt
     # The step declares an output, so the reviewer is told to report one.
     assert "findings" in prompt
-    # One turn each: the write-enabled runner implemented and did not review.
-    assert len(implementer.seen) == 1
+    # The write-enabled runner named and implemented, but did not review.
+    assert len(implementer.seen) == 2
     assert len(reviewer.seen) == 1
 
 
@@ -1158,7 +1170,7 @@ def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
         {"name": "pr_url", "value": "https://github.com/acme/api/pull/42"}
     ]
     assert completed_step["mcpRequestId"] == "workflow-tool-call-1"
-    implementation = history[2]
+    implementation = history[3]
     assert isinstance(implementation, StepCompleted)
     assert implementation.step_id == IMPLEMENTATION_STEP
     assert implementation.mcp_request_id == "workflow-tool-call-1"
@@ -1203,7 +1215,7 @@ def test_invalid_exit_is_retried_and_then_completes_the_active_step() -> None:
     assert reopened.json()["phase"] == "awaiting_human_review"
     assert reopened.json()["steps"][0]["summary"] == "Completed after correction."
     assert runner.attempts == 2
-    assert runner.seen[1][-1] == Message.user(INVALID_COMPLETION_ERROR)
+    assert runner.seen[2][-1] == Message.user(INVALID_COMPLETION_ERROR)
 
 
 def test_clarification_call_leaves_the_active_step_implementing() -> None:
@@ -1403,6 +1415,7 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
             "summary": "Implemented with Claude.",
             "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         },
+        name='"Implement selected provider feature"',
     )
     claude_reviewer = _reviewer(summary="Reviewed with Claude.")
     app = _workflow_app(
@@ -1435,12 +1448,15 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
 
     assert reopened.json()["steps"][0]["summary"] == "Implemented with Claude."
     assert reopened.json()["steps"][1]["summary"] == "Reviewed with Claude."
+    assert reopened.json()["name"] == "Implement selected provider feature"
     # The provider a run picks answers for both steps, and the other one for
     # neither -- write-enabled for the implementation, read-only for the review.
-    assert len(claude.seen) == 1
+    assert len(claude.seen) == 2
     assert len(claude_reviewer.seen) == 1
     assert codex.seen == []
     assert codex_reviewer.seen == []
+    assert claude.seen[0][0] == Message.user("Implement the feature.")
+    assert "Name this workflow" in claude.seen[0][1].content
     assert [instance.runner for instance in instances] == ["claude", "claude"]
 
 

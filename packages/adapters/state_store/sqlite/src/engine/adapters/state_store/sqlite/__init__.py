@@ -24,6 +24,7 @@ from engine.domain.events import (
     Event,
     HumanReviewCompleted,
     RunFailed,
+    RunNamed,
     RunRequested,
     StepCompleted,
     WorkspaceProvisioned,
@@ -758,6 +759,7 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "phase": state.phase.value,
         "repository": state.repository,
         "prompt": state.prompt,
+        "name": state.name,
         "workspace_id": state.workspace_id,
         "agent_runs": list(state.agent_runs),
         "max_agent_runs": state.max_agent_runs,
@@ -780,6 +782,7 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         phase=RunPhase(str(value["phase"])),
         repository=str(value.get("repository", "")),
         prompt=str(value.get("prompt", "")),
+        name=str(value.get("name", "")),
         workspace_id=(
             WorkspaceId(str(value["workspace_id"]))
             if value.get("workspace_id") is not None
@@ -825,6 +828,12 @@ def _event_to_dict(event: Event) -> dict[str, object]:
             "prompt": event.prompt,
             "repository": event.repository,
             "workflow_id": event.workflow_id,
+        }
+    if isinstance(event, RunNamed):
+        return {
+            "type": "RunNamed",
+            "run_id": event.run_id,
+            "name": event.name,
         }
     if isinstance(event, WorkspaceProvisioned):
         return {
@@ -872,6 +881,11 @@ def _event_from_dict(value: dict[str, object]) -> Event:
             prompt=str(value["prompt"]),
             repository=str(value["repository"]),
             workflow_id=WorkflowId(str(value["workflow_id"])),
+        )
+    if kind == "RunNamed":
+        return RunNamed(
+            run_id=RunId(str(value["run_id"])),
+            name=str(value["name"]),
         )
     if kind == "WorkspaceProvisioned":
         return WorkspaceProvisioned(

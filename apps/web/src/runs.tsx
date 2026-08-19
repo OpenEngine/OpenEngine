@@ -66,7 +66,7 @@ function RunNavigation({
             >
               <a className="rail-item-trigger" href={`/runs/${run.runId}`}>
                 <span className="rail-item-title" data-clamp="">
-                  {run.taskPrompt || run.runId}
+                  {run.name}
                 </span>
                 <span className="rail-item-meta">
                   {IN_PROGRESS_PHASES.has(run.phase) && (
@@ -77,7 +77,7 @@ function RunNavigation({
               </a>
             </div>
             {conversationCount(run) > 0 && (
-              <div className="rail-sub" aria-label={`Conversations for ${run.taskPrompt}`}>
+              <div className="rail-sub" aria-label={`Conversations for ${run.name}`}>
                 {run.steps
                   .filter((step) => step.conversationUrl)
                   .map((step) => (
@@ -218,7 +218,7 @@ export function RunsPage() {
                     </span>
                     <code className="card-id">{run.runId}</code>
                   </div>
-                  <h2>{run.taskPrompt || run.runId}</h2>
+                  <h2>{run.name}</h2>
                   <dl className="card-stats">
                     <div>
                       <dt>Steps</dt>
@@ -491,7 +491,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
                   <p className="eyebrow">
                     {run.workflowName} / {run.workflowVersion}
                   </p>
-                  <h1>{run.taskPrompt}</h1>
+                  <h1>{run.name}</h1>
+                  <p className="lede">{run.taskPrompt}</p>
                 </div>
                 <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
                   {phaseLabel(run.phase)}

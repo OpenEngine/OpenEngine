@@ -1246,6 +1246,7 @@ def _workflow_step_editable(step_id: StepId | None) -> bool:
 def _run_json(run: WorkflowRunView) -> dict[str, object]:
     result: dict[str, object] = {
         "runId": str(run.run_id),
+        "name": run.name,
         "workflowId": run.workflow_id,
         "workflowName": run.workflow_name,
         "workflowVersion": run.workflow_version,
