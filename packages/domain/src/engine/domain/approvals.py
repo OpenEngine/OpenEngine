@@ -64,12 +64,16 @@ class ApprovalDecisionSource(Enum):
     """Who produced the decision.
 
     A session grant is a decision the user made earlier, applied again without
-    asking. Recording the difference is what keeps an audit trail able to answer
-    "who allowed this?" once such grants exist.
+    asking. A policy decision was never any one person's: it is the deployment's
+    configuration, applied to a request nobody was shown. Recording the
+    difference is what keeps an audit trail able to answer "who allowed this?"
+    -- and "nobody, the config did" is an answer that has to be tellable from
+    "somebody clicked approve".
     """
 
     USER = "user"
     SESSION_GRANT = "session_grant"
+    POLICY = "policy"
 
 
 @dataclass(frozen=True, slots=True)

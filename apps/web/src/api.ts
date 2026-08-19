@@ -124,7 +124,7 @@ export type ApiApproval = {
   arguments: string | null;
   allowedDecisions: ApprovalDecision[];
   decision: ApprovalDecision | null;
-  decisionSource: "user" | "session_grant" | null;
+  decisionSource: "user" | "session_grant" | "policy" | null;
 };
 
 /** Answer the request this conversation's run is paused on.

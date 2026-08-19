@@ -48,6 +48,7 @@ from typing import Any
 from engine.adapters.agent_runner.claude_code.permissions import (
     CLAUDE_PERMISSION_TRANSLATOR,
     ClaudePermissionTranslator,
+    allowed_tools_for,
 )
 from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
@@ -872,6 +873,7 @@ __all__ = [
     "ClaudePermissionTranslator",
     "ClaudeToolsUnsupportedError",
     "ClaudeUnavailableError",
+    "allowed_tools_for",
     "approval_request_from_control",
     "control_response_for",
     "messages_from_event",

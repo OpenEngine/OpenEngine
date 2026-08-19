@@ -34,7 +34,7 @@ uv run engine-control-server --config ./engine.toml
 neither is set, Engine reads `./engine.toml` when it exists, otherwise it uses
 built-in defaults. Configurations are not merged.
 
-Engine supports agent attribution and provider-neutral approval intent:
+Engine supports agent attribution and provider-neutral approval policy:
 
 ```toml
 attribution = false
@@ -59,10 +59,31 @@ Capabilities are `read`, `edit`, `bash`, `web`, and `mcp`. Configuration is
 strict: unknown keys, unknown capabilities, duplicate entries, and incorrectly
 typed values stop startup with an error instead of silently weakening a policy.
 
-Engine loads and validates the policy, and each runner exposes a translator
-from its provider approval requests into these capabilities. Policy enforcement
-is not enabled yet, so Codex and Claude Code retain their existing permission
-defaults.
+The policy is enforced in two places, and each runner's adapter owns the
+translation between Engine's vocabulary and its provider's:
+
+* **Before the turn**, `approvals.allow` builds the interactive Claude Code
+  runner's `--allowedTools`: a preapproved tool never raises a request at all.
+  Codex has no equivalent, because its pre-turn knob is a sandbox — a ceiling
+  rather than a preapproval, and one narrowed from the policy would refuse a
+  write that a person had just approved.
+* **During the turn**, every approval request a provider raises is classified
+  back into a capability and answered from the same policy. Allowed and denied
+  requests are recorded with a `policy` decision source and nobody is shown
+  them; anything the policy has not ruled on is put to a person, including any
+  request no runner could classify.
+
+Shell is deliberately never preapproved to the provider, because a shell policy
+is written per command rather than per capability: `Bash` reaches the approval
+callback on both runners, and `approvals.bash` is applied there. Patterns are
+globs over the command line, where a trailing `**` also matches no arguments at
+all, and the most restrictive matching rule wins -- `deny`, then `ask`, then
+`allow`. An explicit `deny` also outranks `auto_approve`.
+
+Workflow implementation and review runners are not built from the policy: what
+they may do is a property of the step, and a reviewer that cannot write should
+not become one that can because a chat was granted `edit`. The approvals they
+raise mid-run are governed like any other.
 
 ## What is it.
 

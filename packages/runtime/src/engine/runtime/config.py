@@ -144,7 +144,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
 
 def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
-    """A compact startup description that does not imply policy is enforced."""
+    """A compact startup description of the policy this process will apply."""
 
     source = str(loaded.path) if loaded.path is not None else "defaults (no engine.toml)"
     approvals = loaded.config.approvals
@@ -156,9 +156,8 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
     auto_approve = "on" if approvals.auto_approve else "off"
     attribution = "on" if loaded.config.attribution else "off"
     return (
-        f"configuration: {source}; attribution={attribution}; approvals loaded "
-        f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}; "
-        "policy enforcement not enabled)"
+        f"configuration: {source}; attribution={attribution}; approvals enforced "
+        f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules})"
     )
 
 

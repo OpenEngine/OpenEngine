@@ -16,7 +16,9 @@ from engine.adapters.agent_runner.claude_code import (
     ClaudeCodeAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
+    READ_ONLY_TOOLS,
     WORKSPACE_WRITE_TOOLS,
+    allowed_tools_for,
     approval_request_from_control,
     control_response_for,
     parse_events,
@@ -122,6 +124,29 @@ def test_permission_translator_maps_claude_tools_to_engine_capabilities(
     )
 
     assert CLAUDE_PERMISSION_TRANSLATOR.scope_for(request) == expected
+
+
+def test_capabilities_preapprove_the_tools_that_are_only_tools() -> None:
+    """The other direction: a policy, as the CLI's own allow-list."""
+    assert allowed_tools_for(()) == ()
+    assert allowed_tools_for((ApprovalCapability.READ,)) == READ_ONLY_TOOLS
+    assert allowed_tools_for(
+        (ApprovalCapability.EDIT, ApprovalCapability.READ)
+    ) == ("Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit")
+    assert allowed_tools_for((ApprovalCapability.WEB,)) == ("WebFetch", "WebSearch")
+
+
+def test_shell_and_mcp_are_never_preapproved_to_the_provider() -> None:
+    """Both are still allowable -- one request at a time, through the callback.
+
+    Preapproving `Bash` would run the commands `approvals.bash.deny` names
+    before anything could consult the patterns, and an MCP grant names a server
+    this list is built before knowing.
+    """
+    everything = allowed_tools_for(tuple(ApprovalCapability))
+
+    assert "Bash" not in everything
+    assert not any(tool.startswith("mcp__") for tool in everything)
 
 
 # --- parsing ----------------------------------------------------------------
