@@ -806,7 +806,15 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
   );
 }
 
-export function ChatSidebar() {
+/** `onOpenProjectManager` points the next conversation at the project manager;
+ *  the primitive it is composed onto then opens that conversation. Absent when
+ *  the server ships no such agent, because a button that would fail on send is
+ *  worse than no button. */
+export function ChatSidebar({
+  onOpenProjectManager,
+}: {
+  onOpenProjectManager?: () => void;
+}) {
   return (
     <aside className="rail">
       <RailBrand href="/conversations" />
@@ -819,6 +827,19 @@ export function ChatSidebar() {
             + New chat
           </ThreadListPrimitive.New>
         </div>
+        {onOpenProjectManager && (
+          <>
+            <p className="rail-label">Projects</p>
+            <div className="rail-nav">
+              <ThreadListPrimitive.New
+                className="rail-button rail-button-ember"
+                onClick={onOpenProjectManager}
+              >
+                Project Manager
+              </ThreadListPrimitive.New>
+            </div>
+          </>
+        )}
         <p className="rail-label">Conversations</p>
         <div className="rail-scroll">
           <ThreadListPrimitive.Items>{() => <ThreadListItem />}</ThreadListPrimitive.Items>

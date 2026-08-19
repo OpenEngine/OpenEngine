@@ -1,7 +1,8 @@
 /* openengine — a square, printed, high-contrast system.
  *
  *  Three surfaces and one accent: a near-black rail, a paper panel, and flame
- *  for the one thing on a screen that wants acting on. Nothing is rounded and
+ *  for the one thing on a screen that wants acting on. Ember is the exception,
+ *  and stays one: it marks the project manager. Nothing is rounded and
  *  nothing floats; structure is drawn with rules, not with shadows. Labels and
  *  every figure are monospaced so columns of them line up down the page. */
 
@@ -23,6 +24,12 @@
   --flame: #e8452b;
   --flame-deep: #c9351d;
   --flame-wash: #fbe7e2;
+
+  /* Orange, and the only thing wearing it: the project manager. Bright enough
+   * to be told apart from flame at a glance, so it carries ink rather than
+   * white -- white on this is a button you have to lean in to read. */
+  --ember: #f08a24;
+  --ember-deep: #d97512;
 
   --night: #111111;
   --night-raised: #1c1c1b;
@@ -202,6 +209,12 @@ ul, ol { padding: 0; list-style: none; }
   border-color: var(--flame);
 }
 .rail-button-primary:hover { background: var(--flame-deep); border-color: var(--flame-deep); }
+.rail-button-ember {
+  color: var(--ink);
+  background: var(--ember);
+  border-color: var(--ember);
+}
+.rail-button-ember:hover { background: var(--ember-deep); border-color: var(--ember-deep); }
 
 .rail-label {
   padding: 22px var(--rail-pad, 18px) 8px;

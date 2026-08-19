@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import {
   api,
+  PROJECT_MANAGER_AGENT_ID,
   setThreadRunner,
   type ApiThread,
   type EngineConfig,
@@ -55,7 +56,15 @@ function ChatApp({
             conversationUrl={window.location.pathname.replace(/\/$/, "")}
           />
         ) : (
-          <ChatSidebar />
+          // The project manager is the new-chat interface with its agent
+          // already chosen, so it is the same screen rather than another one.
+          <ChatSidebar
+            onOpenProjectManager={
+              config.agents.some((agent) => agent.id === PROJECT_MANAGER_AGENT_ID)
+                ? () => setAgentId(PROJECT_MANAGER_AGENT_ID)
+                : undefined
+            }
+          />
         )}
         <main className="panel">
           <ChatHeader

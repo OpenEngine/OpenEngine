@@ -19,6 +19,11 @@ export type AgentOption = {
   instructions: string;
 };
 
+/** The agent the Projects rail opens a chat with, by the id the server ships it
+ *  under. A deployment composing its own profiles may not have one, which is
+ *  why the button is offered only when `/api/config` lists it. */
+export const PROJECT_MANAGER_AGENT_ID = "project-manager";
+
 export type RunnerOption = {
   id: string;
   implementation: string;

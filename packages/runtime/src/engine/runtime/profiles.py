@@ -45,9 +45,25 @@ CODER = AgentProfile(
     description="Reads and reasons about the code in the working tree.",
 )
 
+PROJECT_MANAGER = AgentProfile(
+    agent_id=AgentId("project-manager"),
+    instructions=(
+        "You are the project manager for this engine. Talk through what a "
+        "project needs, break its goals into workflows worth running, and say "
+        "plainly what each one would do and in what order.\n\n"
+        "You cannot yet inspect or schedule workflows -- those tools are not "
+        "built. Until they are, describe the plan you would run rather than "
+        "implying anything has been scheduled."
+    ),
+    # Empty for the same reason the foreman's is: the grants this profile
+    # wants are the workflow tools, and they go in when those tools do.
+    capabilities=(),
+    description="Plans projects and the workflows that deliver them.",
+)
+
 #: Every profile the system knows, by id.
 BUILT_IN: Mapping[AgentId, AgentProfile] = {
-    profile.agent_id: profile for profile in (FOREMAN, CODER)
+    profile.agent_id: profile for profile in (FOREMAN, CODER, PROJECT_MANAGER)
 }
 
 
@@ -67,4 +83,11 @@ def profile_for(agent_id: AgentId, profiles: Mapping[AgentId, AgentProfile] = BU
         raise UnknownAgentError(agent_id, profiles) from None
 
 
-__all__ = ["BUILT_IN", "CODER", "FOREMAN", "UnknownAgentError", "profile_for"]
+__all__ = [
+    "BUILT_IN",
+    "CODER",
+    "FOREMAN",
+    "PROJECT_MANAGER",
+    "UnknownAgentError",
+    "profile_for",
+]
