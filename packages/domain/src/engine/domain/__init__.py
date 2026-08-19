@@ -52,7 +52,22 @@ from engine.domain.ids import (
 )
 from engine.domain.state import RunPhase, RunState
 from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
-from engine.domain.workflow import StepOutput, StepSpec
+from engine.domain.workflow import (
+    AgentStep,
+    HumanReviewStep,
+    OutcomeTransition,
+    StepOutput,
+    StepSpec,
+    TemplateBinding,
+    TerminalOutcome,
+    Transition,
+    ValueReference,
+    WorkflowDefinition,
+    WorkflowStep,
+    WorkflowTemplate,
+    WorkspaceAccess,
+    WorkspaceSpec,
+)
 
 __all__ = [
     "AgentId",
@@ -63,6 +78,7 @@ __all__ = [
     "AgentRunCompleted",
     "AgentRunId",
     "AgentRunStatus",
+    "AgentStep",
     "ApprovalDecision",
     "ApprovalDecisionSource",
     "ApprovalId",
@@ -75,10 +91,12 @@ __all__ = [
     "ConversationId",
     "Event",
     "HumanReviewCompleted",
+    "HumanReviewStep",
     "IMPLEMENTATION_REVIEW_WORKFLOW_ID",
     "Message",
     "MessageId",
     "Notify",
+    "OutcomeTransition",
     "PersistRun",
     "ProvisionWorkspace",
     "PublishChanges",
@@ -98,12 +116,21 @@ __all__ = [
     "StepId",
     "StepOutput",
     "StepSpec",
+    "TemplateBinding",
+    "TerminalOutcome",
     "TaskId",
     "ToolCall",
     "ToolParameter",
     "ToolParameterType",
     "ToolSpec",
+    "Transition",
+    "ValueReference",
+    "WorkflowDefinition",
     "WorkflowId",
+    "WorkflowStep",
+    "WorkflowTemplate",
+    "WorkspaceAccess",
     "WorkspaceId",
+    "WorkspaceSpec",
     "WorkspaceProvisioned",
 ]

@@ -24,12 +24,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
-from engine.core.workflows.implementation_review import (
-    IMPLEMENTATION_STEP_SPEC,
-    REVIEW_STEP_SPEC,
-)
 from engine.domain import (
+    AgentStep,
     AgentId,
+    AgentInstance,
     AgentInstanceId,
     AgentRunId,
     AgentRunStatus,
@@ -37,7 +35,6 @@ from engine.domain import (
     ApprovalId,
     ApprovalRecord,
     HumanReviewCompleted,
-    IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     Message,
     Role,
     RunId,
@@ -48,6 +45,7 @@ from engine.domain import (
     StepId,
     TaskId,
     WorkflowId,
+    WorkflowDefinition,
     WorkspaceId,
 )
 from engine.ports import (
@@ -65,7 +63,10 @@ from engine.runtime import (
     UnknownApprovalError,
     WorkflowExecutionError,
     WorkflowExecutor,
+    WorkflowCatalog,
     WorkflowRunView,
+    load_engine_config,
+    load_workflow_catalog,
 )
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -235,12 +236,16 @@ class ThreadService:
     """Coordinates assistant-ui threads over an ``AgentSession``."""
 
     def __init__(
-        self, session: AgentSession, runners: Mapping[str, AgentRunner]
+        self,
+        session: AgentSession,
+        runners: Mapping[str, AgentRunner],
+        workflow_catalog: WorkflowCatalog | None = None,
     ) -> None:
         self.session = session
         self.approvals = ApprovalBroker(session.state_store)
         """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
+        self._workflow_catalog = workflow_catalog
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
         self._active_runs: dict[AgentInstanceId, ActiveRun] = {}
@@ -278,7 +283,7 @@ class ThreadService:
             archived=instance.archived,
             workflow_run_id=instance.workflow_run_id,
             workflow_step_id=instance.workflow_step_id,
-            editable=_workflow_step_editable(instance.workflow_step_id),
+            editable=await self._instance_step_editable(instance),
         )
         self._threads[instance.instance_id] = await self._sync_workspace(thread)
         self._locks[instance.instance_id] = asyncio.Lock()
@@ -626,7 +631,7 @@ class ThreadService:
                     archived=instance.archived,
                     workflow_run_id=instance.workflow_run_id,
                     workflow_step_id=instance.workflow_step_id,
-                    editable=_workflow_step_editable(instance.workflow_step_id),
+                    editable=await self._instance_step_editable(instance),
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
@@ -636,6 +641,17 @@ class ThreadService:
             await self.approvals.interrupt_orphans()
             self._restored = True
 
+    async def _instance_step_editable(self, instance: AgentInstance) -> bool:
+        if instance.workflow_run_id is None or instance.workflow_step_id is None:
+            return False
+        state = await self.session.state_store.load(instance.workflow_run_id)
+        if state is None:
+            return False
+        definition = state.workflow_definition
+        if definition is None and self._workflow_catalog is not None:
+            definition = self._workflow_catalog.get(state.workflow_id)
+        return _workflow_step_editable(definition, instance.workflow_step_id)
+
 
 def create_app(
     session: AgentSession,
@@ -644,12 +660,22 @@ def create_app(
     *,
     workflow_runners: Mapping[str, AgentRunner] | None = None,
     review_runners: Mapping[str, AgentRunner] | None = None,
+    workflow_catalog: WorkflowCatalog | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
         raise ValueError("review_runners are required with workflow_runners")
-    service = ThreadService(session, runners)
-    run_reader = RunReader(session.state_store)
+    if workflow_catalog is None:
+        loaded_config = load_engine_config()
+        catalog = (
+            load_workflow_catalog(loaded_config.workflows_directory)
+            if loaded_config.workflows_directory is not None
+            else WorkflowCatalog.from_definitions(())
+        )
+    else:
+        catalog = workflow_catalog
+    service = ThreadService(session, runners, catalog)
+    run_reader = RunReader(session.state_store, catalog)
 
     async def approval_changed(_approval: ApprovalRecord) -> None:
         # Workflow conversation streams poll the durable approval record along
@@ -672,6 +698,7 @@ def create_app(
         workflow_runners if workflow_runners is not None else runners,
         review_runners=review_runners if review_runners is not None else runners,
         approval_handler=workflow_approval_handler,
+        catalog=catalog,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 
@@ -683,40 +710,52 @@ def create_app(
             else None
         )
 
-    async def restore_reviews() -> None:
-        """Restart review commands whose process-local dispatch was lost."""
+    async def restore_agent_steps() -> None:
+        """Restart agent commands whose process-local dispatch was lost."""
         for state in await session.state_store.list_runs():
-            if state.phase is not RunPhase.REVIEWING or state.run_id in workflow_tasks:
+            if state.phase not in (
+                RunPhase.RUNNING_AGENT,
+                RunPhase.REVIEWING,
+            ) or state.run_id in workflow_tasks:
                 continue
             instances = await session.state_store.list_instances(
                 workflow_run_id=state.run_id
             )
-            implementation_step_id = (
-                state.step_results[-1].step_id if state.step_results else None
-            )
-            implementation = next(
+            current = next(
                 (
                     instance
                     for instance in instances
-                    if instance.workflow_step_id == implementation_step_id
+                    if instance.workflow_step_id == state.current_step_id
+                ),
+                None,
+            )
+            previous = next(
+                (
+                    instance
+                    for instance in instances
+                    if instance.runner
                 ),
                 None,
             )
             runner_name = (
-                implementation.runner
-                if implementation is not None and implementation.runner
+                current.runner
+                if current is not None and current.runner
+                else previous.runner
+                if previous is not None
                 else workflow_executor.default_runner
             )
             track_workflow(
                 state.run_id,
                 asyncio.create_task(
-                    workflow_executor.resume_review(state.run_id, runner_name)
+                    workflow_executor.resume_agent_step(
+                        state.run_id, runner_name=runner_name
+                    )
                 ),
             )
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        await restore_reviews()
+        await restore_agent_steps()
         try:
             yield
         finally:
@@ -739,7 +778,7 @@ def create_app(
         state = await session.state_store.load(thread.workflow_run_id)
         if (
             state is None
-            or state.phase is not RunPhase.IMPLEMENTING
+            or state.phase not in (RunPhase.RUNNING_AGENT, RunPhase.IMPLEMENTING)
             or state.current_step_id != thread.workflow_step_id
         ):
             raise RuntimeError("this workflow step is no longer active")
@@ -759,12 +798,12 @@ def create_app(
         state = await session.state_store.load(thread.workflow_run_id)
         if (
             state is None
-            or state.phase is not RunPhase.IMPLEMENTING
+            or state.phase not in (RunPhase.RUNNING_AGENT, RunPhase.IMPLEMENTING)
             or state.current_step_id != thread.workflow_step_id
         ):
             raise RuntimeError("this workflow step is no longer active")
         task = asyncio.create_task(
-            workflow_executor.resume_implementation(
+            workflow_executor.resume_agent_step(
                 thread.workflow_run_id, text, thread.runner
             )
         )
@@ -821,6 +860,14 @@ def create_app(
                 "defaultRunner": session.default_runner,
                 "workflowRunners": list(workflow_executor.runners),
                 "defaultWorkflowRunner": workflow_executor.default_runner,
+                "workflows": [
+                    {
+                        "id": str(definition.workflow_id),
+                        "name": definition.name,
+                        "version": definition.version,
+                    }
+                    for definition in catalog
+                ],
             }
         )
 
@@ -841,7 +888,8 @@ def create_app(
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
         except ValueError as error:
             return _error(str(error), 400)
-        if workflow_id != IMPLEMENTATION_REVIEW_WORKFLOW_ID:
+        definition = catalog.get(workflow_id)
+        if definition is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
         runner_name = str(body.get("runner") or workflow_executor.default_runner)
         if runner_name not in workflow_executor.runners:
@@ -862,6 +910,7 @@ def create_app(
             workflow_id=workflow_id,
             prompt=prompt,
             repository=repository,
+            workflow_definition=definition,
         )
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
@@ -876,9 +925,18 @@ def create_app(
         return JSONResponse(_run_json(run), status_code=201)
 
     async def get_run(request: Request) -> JSONResponse:
-        run = await run_reader.get(RunId(request.path_params["run_id"]))
+        run_id = RunId(request.path_params["run_id"])
+        run = await run_reader.get(run_id)
         if run is None:
             return _error("run not found", 404)
+        task = workflow_tasks.get(run_id)
+        if run.terminal_outcome is not None and task is not None and not task.done():
+            # A terminal MCP result is persisted before its acknowledgement is
+            # sent. Do not expose the terminal snapshot until that final piece
+            # of the runner protocol has completed too.
+            await asyncio.shield(task)
+            run = await run_reader.get(run_id)
+            assert run is not None
         return JSONResponse(_run_json(run))
 
     async def complete_human_review(request: Request) -> JSONResponse:
@@ -1234,13 +1292,15 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
     return result
 
 
-def _workflow_step_editable(step_id: StepId | None) -> bool:
-    """Resolve UI behavior from the built-in workflow's step configuration."""
+def _workflow_step_editable(
+    definition: WorkflowDefinition | None, step_id: StepId | None
+) -> bool:
+    """Resolve UI behavior from the run's compiled workflow snapshot."""
 
-    return any(
-        step.step_id == step_id and step.editable
-        for step in (IMPLEMENTATION_STEP_SPEC, REVIEW_STEP_SPEC)
-    )
+    if definition is None or step_id is None:
+        return False
+    step = definition.step(step_id)
+    return isinstance(step, AgentStep) and step.editable
 
 
 def _run_json(run: WorkflowRunView) -> dict[str, object]:

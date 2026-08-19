@@ -257,6 +257,8 @@ export function NewWorkflowPage() {
   const [repository, setRepository] = useState(".");
   const [runners, setRunners] = useState<string[]>([]);
   const [runner, setRunner] = useState("");
+  const [workflows, setWorkflows] = useState<EngineConfig["workflows"]>([]);
+  const [workflowId, setWorkflowId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -265,6 +267,8 @@ export function NewWorkflowPage() {
       .then((config) => {
         setRunners(config.workflowRunners);
         setRunner(config.defaultWorkflowRunner);
+        setWorkflows(config.workflows);
+        setWorkflowId(config.workflows[0]?.id ?? "");
       })
       .catch((reason: Error) => setError(reason.message));
   }, []);
@@ -277,7 +281,7 @@ export function NewWorkflowPage() {
       const run = await api<ApiWorkflowRun>("/api/runs", {
         method: "POST",
         body: JSON.stringify({
-          workflowId: "implementation-review-v1",
+          workflowId,
           prompt,
           repository,
           runner,
@@ -305,8 +309,16 @@ export function NewWorkflowPage() {
         <form className="form" onSubmit={submit}>
           <label>
             <span>Workflow definition</span>
-            <select disabled value="implementation-review-v1">
-              <option value="implementation-review-v1">Implementation review · v1</option>
+            <select
+              required
+              value={workflowId}
+              onChange={(event) => setWorkflowId(event.target.value)}
+            >
+              {workflows.map((workflow) => (
+                <option key={workflow.id} value={workflow.id}>
+                  {workflow.name} · {workflow.version}
+                </option>
+              ))}
             </select>
           </label>
           <label>

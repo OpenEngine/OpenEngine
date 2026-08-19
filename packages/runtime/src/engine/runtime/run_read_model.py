@@ -1,29 +1,27 @@
-"""Run-oriented read model for the implementation-review workflow."""
+"""Catalog-driven run read model."""
 
 from dataclasses import dataclass, field
 
-from engine.core.workflows.implementation_review import (
-    HUMAN_REVIEW_STEP,
-    IMPLEMENTATION_PROFILE,
-    IMPLEMENTATION_STEP,
-    REVIEW_PROFILE,
-    REVIEW_STEP,
-    WORKFLOW_ID,
-    human_review_summary,
-)
-from engine.domain.agents import AgentInstance
-from engine.domain.events import StepCompleted
-from engine.domain.ids import (
+from engine.core.workflow_interpreter import render_template
+from engine.domain import (
     AgentId,
+    AgentInstance,
     AgentInstanceId,
     AgentRunId,
+    AgentStep,
     ConversationId,
+    HumanReviewStep,
     RunId,
+    RunPhase,
+    RunState,
+    StepCompleted,
     StepId,
+    StepOutput,
+    WorkflowDefinition,
+    WorkspaceAccess,
 )
-from engine.domain.state import RunPhase, RunState
-from engine.domain.workflow import StepOutput
 from engine.ports.state_store import StateStore
+from engine.runtime.workflows import WorkflowCatalog
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,10 +76,15 @@ class WorkflowRunView:
 
 
 class RunReader:
-    """Build complete run views from one durable store boundary."""
+    """Build complete run views from durable state and its definition snapshot."""
 
-    def __init__(self, store: StateStore) -> None:
+    def __init__(self, store: StateStore, catalog: WorkflowCatalog | None = None) -> None:
         self._store = store
+        self._catalog = (
+            catalog
+            if catalog is not None
+            else WorkflowCatalog.from_definitions(())
+        )
 
     async def list(self) -> tuple[WorkflowRunView, ...]:
         return tuple([await self._view(state) for state in await self._store.list_runs()])
@@ -91,6 +94,7 @@ class RunReader:
         return await self._view(state) if state is not None else None
 
     async def _view(self, state: RunState) -> WorkflowRunView:
+        definition = state.workflow_definition or self._catalog.get(state.workflow_id)
         instances = await self._store.list_instances(workflow_run_id=state.run_id)
         by_step = {
             instance.workflow_step_id: instance
@@ -99,37 +103,14 @@ class RunReader:
         }
         results = {result.step_id: result for result in state.step_results}
         steps = (
-            _agent_step(
-                state,
-                IMPLEMENTATION_STEP,
-                "Implementation",
-                IMPLEMENTATION_PROFILE.agent_id,
-                by_step.get(IMPLEMENTATION_STEP),
-                results.get(IMPLEMENTATION_STEP),
-            ),
-            _agent_step(
-                state,
-                REVIEW_STEP,
-                "Review",
-                REVIEW_PROFILE.agent_id,
-                by_step.get(REVIEW_STEP),
-                results.get(REVIEW_STEP),
-            ),
-            _human_step(state),
-        )
-        implementation = results.get(IMPLEMENTATION_STEP)
-        review = results.get(REVIEW_STEP)
-        pending = None
-        if (
-            state.phase is RunPhase.AWAITING_HUMAN_REVIEW
-            and implementation is not None
-            and review is not None
-        ):
-            pending = PendingHumanReviewView(
-                step_id=HUMAN_REVIEW_STEP,
-                title=f"Review implementation for {state.task_id}",
-                summary=human_review_summary(implementation, review),
+            tuple(
+                _step_view(state, step, by_step.get(step.step_id), results.get(step.step_id))
+                for step in definition.steps
             )
+            if definition is not None
+            else ()
+        )
+        pending = _pending_human_review(state, definition)
         decision = None
         if state.human_review is not None:
             decision = HumanDecisionView(
@@ -142,16 +123,12 @@ class RunReader:
             run_id=state.run_id,
             name=state.name or state.prompt or str(state.run_id),
             workflow_id=str(state.workflow_id),
-            workflow_name=(
-                "Implementation review"
-                if state.workflow_id == WORKFLOW_ID
-                else str(state.workflow_id)
-            ),
-            workflow_version=("v1" if state.workflow_id == WORKFLOW_ID else ""),
+            workflow_name=definition.name if definition is not None else str(state.workflow_id),
+            workflow_version=definition.version if definition is not None else "",
             task_id=str(state.task_id),
             task_prompt=state.prompt,
             repository=state.repository,
-            phase=state.phase.value,
+            phase=_phase_value(state, definition),
             current_step_id=state.current_step_id,
             terminal_outcome=_terminal_outcome(state),
             steps=steps,
@@ -161,18 +138,33 @@ class RunReader:
         )
 
 
-def _agent_step(
+def _step_view(
     state: RunState,
-    step_id: StepId,
-    name: str,
-    agent_id: AgentId,
+    step: AgentStep | HumanReviewStep,
     instance: AgentInstance | None,
     result: StepCompleted | None,
 ) -> RunStepView:
-    status = _step_status(state, step_id, result is not None)
+    if isinstance(step, HumanReviewStep):
+        if state.human_review is not None and state.human_review.step_id == step.step_id:
+            status = "completed"
+            outcome = "approved" if state.human_review.approved else "rejected"
+            summary = state.human_review.summary
+        elif state.phase is RunPhase.AWAITING_HUMAN_REVIEW and state.current_step_id == step.step_id:
+            status, outcome, summary = "action_required", None, "Human decision required."
+        else:
+            status, outcome, summary = _step_status(state, step.step_id, False), None, ""
+        return RunStepView(
+            step_id=step.step_id,
+            name=step.name,
+            kind="human",
+            status=status,
+            outcome=outcome,
+            summary=summary,
+        )
+    status = _step_status(state, step.step_id, result is not None)
     return RunStepView(
-        step_id=step_id,
-        name=name,
+        step_id=step.step_id,
+        name=step.name,
         kind="agent",
         status=status,
         outcome=result.outcome if result is not None else None,
@@ -182,37 +174,31 @@ def _agent_step(
             else state.failure_reason if status == "failed" else ""
         ),
         outputs=result.outputs if result is not None else (),
-        changes_requested=(
-            result is not None and result.outcome == "changes_requested"
-        ),
-        agent_id=agent_id,
+        changes_requested=result is not None and result.outcome == "changes_requested",
+        agent_id=step.profile.agent_id,
         agent_instance_id=instance.instance_id if instance else None,
         agent_run_id=(
             result.agent_run_id
             if result is not None
-            else state.current_agent_run_id if state.current_step_id == step_id else None
+            else state.current_agent_run_id if state.current_step_id == step.step_id else None
         ),
         mcp_request_id=result.mcp_request_id if result is not None else None,
         conversation_id=instance.conversation_id if instance else None,
     )
 
 
-def _human_step(state: RunState) -> RunStepView:
-    if state.human_review is not None:
-        status = "completed"
-        outcome = "approved" if state.human_review.approved else "rejected"
-        summary = state.human_review.summary
-    elif state.phase is RunPhase.AWAITING_HUMAN_REVIEW:
-        status, outcome, summary = "action_required", None, "Human decision required."
-    else:
-        status, outcome, summary = _step_status(state, HUMAN_REVIEW_STEP, False), None, ""
-    return RunStepView(
-        step_id=HUMAN_REVIEW_STEP,
-        name="Human review",
-        kind="human",
-        status=status,
-        outcome=outcome,
-        summary=summary,
+def _pending_human_review(
+    state: RunState, definition: WorkflowDefinition | None
+) -> PendingHumanReviewView | None:
+    if state.phase is not RunPhase.AWAITING_HUMAN_REVIEW or definition is None:
+        return None
+    step = definition.step(state.current_step_id) if state.current_step_id else None
+    if not isinstance(step, HumanReviewStep):
+        return None
+    return PendingHumanReviewView(
+        step_id=step.step_id,
+        title=render_template(step.title, state),
+        summary=render_template(step.summary, state),
     )
 
 
@@ -238,6 +224,22 @@ def _terminal_outcome(state: RunState) -> str | None:
     if state.phase is RunPhase.FAILED:
         return "failed"
     return None
+
+
+def _phase_value(
+    state: RunState, definition: WorkflowDefinition | None
+) -> str:
+    """Keep established UI labels while the durable state uses RUNNING_AGENT."""
+
+    if state.phase is not RunPhase.RUNNING_AGENT or definition is None:
+        return state.phase.value
+    step = definition.step(state.current_step_id) if state.current_step_id else None
+    if isinstance(step, AgentStep):
+        if step.workspace_access is WorkspaceAccess.WRITE:
+            return RunPhase.IMPLEMENTING.value
+        if step.workspace_access is WorkspaceAccess.READ:
+            return RunPhase.REVIEWING.value
+    return state.phase.value
 
 
 __all__ = [

@@ -1,8 +1,8 @@
-"""The built-in implementation -> review -> human decision workflow.
+"""Legacy compatibility contract for implementation-review-v1.
 
-This is deliberately one hardcoded, versioned state machine.  Profiles,
-prompts, identifiers, and transitions live together so replacing it with a
-configuration-backed workflow later does not change event or command contracts.
+New runs use the repository-owned definition in ``workflows/`` and the generic
+interpreter. These exports remain temporarily for replay/tests of states created
+before workflow definition snapshots existed.
 """
 
 from dataclasses import replace
@@ -106,7 +106,6 @@ REVIEW_STEP_SPEC = StepSpec(
     # refuses to complete the step without.
     required_outputs=("findings",),
 )
-
 
 def agent_instance_id(run_id: RunId, step_id: StepId) -> AgentInstanceId:
     """Return the stable agent-instance id for one workflow step."""

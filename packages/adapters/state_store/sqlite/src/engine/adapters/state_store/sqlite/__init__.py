@@ -8,7 +8,7 @@ import sqlite3
 from threading import RLock
 from uuid import uuid4
 
-from engine.domain.agents import AgentInstance, AgentRun, AgentRunStatus
+from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRunStatus
 from engine.domain.approvals import (
     ApprovalDecision,
     ApprovalDecisionSource,
@@ -44,7 +44,20 @@ from engine.domain.ids import (
     WorkspaceId,
 )
 from engine.domain.state import RunPhase, RunState
-from engine.domain.workflow import StepOutput
+from engine.domain.workflow import (
+    AgentStep,
+    HumanReviewStep,
+    OutcomeTransition,
+    StepOutput,
+    TemplateBinding,
+    TerminalOutcome,
+    Transition,
+    ValueReference,
+    WorkflowDefinition,
+    WorkflowTemplate,
+    WorkspaceAccess,
+    WorkspaceSpec,
+)
 
 
 class SQLiteStateStore:
@@ -770,6 +783,11 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
             _review_to_dict(state.human_review) if state.human_review else None
         ),
         "failure_reason": state.failure_reason,
+        "workflow_definition": (
+            _workflow_to_dict(state.workflow_definition)
+            if state.workflow_definition is not None
+            else None
+        ),
     }
 
 
@@ -812,6 +830,195 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
             _review_from_dict(review) if isinstance(review, dict) else None
         ),
         failure_reason=str(value.get("failure_reason", "")),
+        workflow_definition=(
+            _workflow_from_dict(value["workflow_definition"])
+            if isinstance(value.get("workflow_definition"), dict)
+            else None
+        ),
+    )
+
+
+def _profile_to_dict(profile: AgentProfile) -> dict[str, object]:
+    return {
+        "agent_id": profile.agent_id,
+        "instructions": profile.instructions,
+        "capabilities": list(profile.capabilities),
+        "model": profile.model,
+        "description": profile.description,
+    }
+
+
+def _profile_from_dict(value: dict[str, object]) -> AgentProfile:
+    return AgentProfile(
+        agent_id=AgentId(str(value["agent_id"])),
+        instructions=str(value["instructions"]),
+        capabilities=tuple(str(item) for item in value.get("capabilities", [])),
+        model=str(value.get("model", "")),
+        description=str(value.get("description", "")),
+    )
+
+
+def _template_to_dict(template: WorkflowTemplate) -> dict[str, object]:
+    return {
+        "text": template.text,
+        "bindings": [
+            {
+                "name": binding.name,
+                "source": binding.reference.source,
+                "step_id": binding.reference.step_id,
+                "field": binding.reference.field,
+            }
+            for binding in template.bindings
+        ],
+    }
+
+
+def _template_from_dict(value: dict[str, object]) -> WorkflowTemplate:
+    return WorkflowTemplate(
+        text=str(value["text"]),
+        bindings=tuple(
+            TemplateBinding(
+                name=str(binding["name"]),
+                reference=ValueReference(
+                    source=str(binding["source"]),
+                    step_id=(
+                        StepId(str(binding["step_id"]))
+                        if binding.get("step_id") is not None
+                        else None
+                    ),
+                    field=str(binding.get("field", "")),
+                ),
+            )
+            for binding in value.get("bindings", [])
+            if isinstance(binding, dict)
+        ),
+    )
+
+
+def _transition_to_dict(transition: Transition) -> dict[str, object]:
+    return {
+        "step_id": transition.step_id,
+        "terminal": transition.terminal.value if transition.terminal else None,
+    }
+
+
+def _transition_from_dict(value: dict[str, object]) -> Transition:
+    return Transition(
+        step_id=(StepId(str(value["step_id"])) if value.get("step_id") else None),
+        terminal=(
+            TerminalOutcome(str(value["terminal"]))
+            if value.get("terminal")
+            else None
+        ),
+    )
+
+
+def _workflow_to_dict(definition: WorkflowDefinition) -> dict[str, object]:
+    steps: list[dict[str, object]] = []
+    for step in definition.steps:
+        if isinstance(step, AgentStep):
+            steps.append(
+                {
+                    "kind": "agent",
+                    "step_id": step.step_id,
+                    "name": step.name,
+                    "profile": _profile_to_dict(step.profile),
+                    "prompt": _template_to_dict(step.prompt),
+                    "transitions": [
+                        {
+                            "outcome": edge.outcome,
+                            "transition": _transition_to_dict(edge.transition),
+                        }
+                        for edge in step.transitions
+                    ],
+                    "required_outputs": list(step.required_outputs),
+                    "editable": step.editable,
+                    "workspace_access": step.workspace_access.value,
+                }
+            )
+        else:
+            steps.append(
+                {
+                    "kind": "human_review",
+                    "step_id": step.step_id,
+                    "name": step.name,
+                    "title": _template_to_dict(step.title),
+                    "summary": _template_to_dict(step.summary),
+                    "approved": _transition_to_dict(step.approved),
+                    "rejected": _transition_to_dict(step.rejected),
+                }
+            )
+    return {
+        "workflow_id": definition.workflow_id,
+        "name": definition.name,
+        "version": definition.version,
+        "workspace": {"base_ref": definition.workspace.base_ref},
+        "steps": steps,
+        "naming_profile": (
+            _profile_to_dict(definition.naming_profile)
+            if definition.naming_profile is not None
+            else None
+        ),
+        "naming_prompt": definition.naming_prompt,
+    }
+
+
+def _workflow_from_dict(value: dict[str, object]) -> WorkflowDefinition:
+    steps = []
+    for raw in value.get("steps", []):
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("kind") == "agent":
+            steps.append(
+                AgentStep(
+                    step_id=StepId(str(raw["step_id"])),
+                    name=str(raw["name"]),
+                    profile=_profile_from_dict(raw["profile"]),
+                    prompt=_template_from_dict(raw["prompt"]),
+                    transitions=tuple(
+                        OutcomeTransition(
+                            outcome=str(edge["outcome"]),
+                            transition=_transition_from_dict(edge["transition"]),
+                        )
+                        for edge in raw.get("transitions", [])
+                        if isinstance(edge, dict)
+                    ),
+                    required_outputs=tuple(
+                        str(item) for item in raw.get("required_outputs", [])
+                    ),
+                    editable=bool(raw.get("editable", False)),
+                    workspace_access=WorkspaceAccess(
+                        str(raw.get("workspace_access", "read"))
+                    ),
+                )
+            )
+        else:
+            steps.append(
+                HumanReviewStep(
+                    step_id=StepId(str(raw["step_id"])),
+                    name=str(raw["name"]),
+                    title=_template_from_dict(raw["title"]),
+                    summary=_template_from_dict(raw["summary"]),
+                    approved=_transition_from_dict(raw["approved"]),
+                    rejected=_transition_from_dict(raw["rejected"]),
+                )
+            )
+    workspace = value.get("workspace", {})
+    naming = value.get("naming_profile")
+    return WorkflowDefinition(
+        workflow_id=WorkflowId(str(value["workflow_id"])),
+        name=str(value["name"]),
+        version=str(value["version"]),
+        steps=tuple(steps),
+        workspace=WorkspaceSpec(
+            base_ref=str(workspace.get("base_ref", "origin/main"))
+            if isinstance(workspace, dict)
+            else "origin/main"
+        ),
+        naming_profile=(
+            _profile_from_dict(naming) if isinstance(naming, dict) else None
+        ),
+        naming_prompt=str(value.get("naming_prompt", "")),
     )
 
 

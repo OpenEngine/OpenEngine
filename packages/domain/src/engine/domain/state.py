@@ -17,6 +17,7 @@ from engine.domain.ids import (
     WorkflowId,
     WorkspaceId,
 )
+from engine.domain.workflow import WorkflowDefinition
 
 
 class RunPhase(Enum):
@@ -52,6 +53,8 @@ class RunState:
     step_results: tuple[StepCompleted, ...] = field(default=())
     human_review: HumanReviewCompleted | None = None
     failure_reason: str = ""
+    workflow_definition: WorkflowDefinition | None = None
+    """The compiled definition snapshot used by this run."""
 
     @property
     def agent_runs_remaining(self) -> int:

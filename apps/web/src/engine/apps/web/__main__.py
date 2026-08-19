@@ -25,6 +25,8 @@ from engine.runtime import (
     LoadedEngineConfig,
     describe_loaded_config,
     load_engine_config,
+    load_workflow_catalog,
+    WorkflowLoadError,
 )
 
 #: Vite's production output, served by the same process as the API.
@@ -72,7 +74,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         loaded = load_engine_config(args.config)
-    except EngineConfigError as error:
+        workflow_catalog = (
+            load_workflow_catalog(loaded.workflows_directory)
+            if loaded.workflows_directory is not None
+            else None
+        )
+    except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
     settings = Settings(engine_config=loaded.config, config_path=loaded.path)
@@ -92,6 +99,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         STATIC_DIRECTORY,
         workflow_runners=workflow_runners,
         review_runners=review_runners,
+        workflow_catalog=workflow_catalog,
     )
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)

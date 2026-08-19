@@ -13,3 +13,6 @@ allow = [
   "git push **",
   "gh pr create **",
 ]
+
+[workflows]
+directory = "workflows"
