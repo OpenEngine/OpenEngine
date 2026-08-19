@@ -15,19 +15,19 @@ const IN_PROGRESS_PHASES = new Set([
  *  check a run, or by closing the tab — should not be what throws it out. */
 const WORKFLOW_DRAFT_KEY = "engine.workflowDraft";
 
-function phaseLabel(value: string) {
+export function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
 }
 
 /** How loudly a run's phase should read. Failure is the only thing that gets
  *  the accent; a run still moving is ink, and one not started yet is a rule. */
-function phaseAccent(phase: string): "flame" | "quiet" | undefined {
+export function phaseAccent(phase: string): "flame" | "quiet" | undefined {
   if (phase === "failed") return "flame";
   if (phase === "pending" || phase === "preparing_workspace") return "quiet";
   return undefined;
 }
 
-function conversationCount(run: ApiWorkflowRun) {
+export function conversationCount(run: ApiWorkflowRun) {
   return run.steps.filter((step) => step.conversationUrl).length;
 }
 
