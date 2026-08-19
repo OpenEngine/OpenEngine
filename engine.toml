@@ -1,6 +1,6 @@
 [approvals]
-auto_approve = false
-allow = ["read", "edit"]
+auto_approve = true
+allow = ["read", "edit", "bash"]
 
 [approvals.bash]
 allow = [
@@ -10,6 +10,8 @@ allow = [
   "git add **",
   "git commit **",
   "git checkout **",
+  "git switch **",
   "git push **",
+  "gh auth status **",
   "gh pr create **",
 ]
