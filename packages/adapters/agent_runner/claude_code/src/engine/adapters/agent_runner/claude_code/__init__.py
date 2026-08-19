@@ -462,10 +462,12 @@ class ClaudeCodeAgentRunner:
             argv += ["--model", model]
         return argv
 
-    def interactive_command_line(self, profile: AgentProfile) -> list[str]:
+    def interactive_command_line(
+        self, profile: AgentProfile, mcp_server: McpServerConfig | None = None
+    ) -> list[str]:
         """The bidirectional stream-JSON invocation used for approval turns."""
         return [
-            *self.command_line(profile),
+            *self.command_line(profile, mcp_server),
             "--input-format",
             "stream-json",
             "--permission-prompt-tool",
@@ -565,6 +567,7 @@ class ClaudeCodeAgentRunner:
         on_message: TurnObserver | None = None,
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
+        mcp_server: McpServerConfig | None = None,
     ) -> AgentTurn:
         """Run Claude Code with its Agent SDK-compatible control protocol."""
         if tools:
@@ -586,7 +589,7 @@ class ClaudeCodeAgentRunner:
             working_directory = await self._workspace_provider.root_path(workspace_id)
 
         process = await asyncio.create_subprocess_exec(
-            *self.interactive_command_line(profile),
+            *self.interactive_command_line(profile, mcp_server),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -626,6 +629,27 @@ class ClaudeCodeAgentRunner:
                 f"claude interactive stream exited {process.returncode}: {_tail(stderr)}"
             )
         return turn_from_events(events)
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run a control-protocol turn with approvals and workflow tools."""
+        return await self.run_turn_interactive(
+            agent_run_id,
+            profile,
+            messages,
+            on_approval,
+            on_message=on_message,
+            workspace_id=workspace_id,
+            mcp_server=mcp_server,
+        )
 
     async def _read_interactive_stream(
         self,

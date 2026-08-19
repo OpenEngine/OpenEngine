@@ -13,8 +13,10 @@ by its profile rather than by whichever adapter happens to be running it.
 
 Runners whose providers expose progress or pause for user approval may
 additionally implement `StreamingAgentRunner`, `StreamingMcpAgentRunner`, or
-`InteractiveAgentRunner`. The original `run_turn` method remains the fallback,
-so callers do not need to special-case runners with neither capability.
+`InteractiveAgentRunner`; workflow runners that need both MCP tools and
+approvals implement `InteractiveMcpAgentRunner`. The original `run_turn` method
+remains the fallback, so callers do not need to special-case runners with
+neither capability.
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -252,6 +254,24 @@ class InteractiveAgentRunner(AgentRunner, Protocol):
         ...
 
 
+@runtime_checkable
+class InteractiveMcpAgentRunner(McpAgentRunner, InteractiveAgentRunner, Protocol):
+    """An MCP-capable runner that can also pause for user approval."""
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run with MCP tools, awaiting approval without losing those tools."""
+        ...
+
+
 __all__ = [
     "AgentRunner",
     "AgentTurn",
@@ -261,6 +281,7 @@ __all__ = [
     "ApprovalRequest",
     "FinishReason",
     "InteractiveAgentRunner",
+    "InteractiveMcpAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
     "StreamingMcpAgentRunner",

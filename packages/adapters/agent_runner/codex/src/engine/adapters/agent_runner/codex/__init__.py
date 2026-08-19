@@ -238,6 +238,27 @@ def app_server_sandbox_policy(sandbox: str) -> dict[str, Any]:
             raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
 
 
+def _app_server_thread_params(
+    working_directory: str,
+    model: str,
+    mcp_server: McpServerConfig | None = None,
+) -> dict[str, Any]:
+    """Build the per-thread config for an interactive app-server turn."""
+    params: dict[str, Any] = {"cwd": working_directory}
+    if model:
+        params["model"] = model
+    if mcp_server is not None:
+        params["config"] = {
+            "mcp_servers": {
+                mcp_server.name: {
+                    "command": mcp_server.command,
+                    "args": list(mcp_server.args),
+                }
+            }
+        }
+    return params
+
+
 def approval_request_from_app_server(message: dict[str, Any]) -> ApprovalRequest | None:
     """Normalize one server-initiated app-server approval request.
 
@@ -724,6 +745,7 @@ class CodexAgentRunner:
         on_message: TurnObserver | None = None,
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
+        mcp_server: McpServerConfig | None = None,
     ) -> AgentTurn:
         """Run a turn over app-server's bidirectional JSON-RPC transport."""
         if tools:
@@ -762,6 +784,7 @@ class CodexAgentRunner:
                     working_directory,
                     on_approval,
                     on_message or (lambda _message: None),
+                    mcp_server,
                 ),
                 timeout=self._timeout_seconds,
             )
@@ -789,6 +812,27 @@ class CodexAgentRunner:
             )
         return turn_from_app_server_events(events)
 
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: TurnObserver | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        """Run an approval-aware app-server turn with bound workflow tools."""
+        return await self.run_turn_interactive(
+            agent_run_id,
+            profile,
+            messages,
+            on_approval,
+            on_message=on_message,
+            workspace_id=workspace_id,
+            mcp_server=mcp_server,
+        )
+
     async def _read_app_server(
         self,
         process: asyncio.subprocess.Process,
@@ -797,6 +841,7 @@ class CodexAgentRunner:
         working_directory: str,
         on_approval: ApprovalHandler,
         on_message: TurnObserver,
+        mcp_server: McpServerConfig | None,
     ) -> tuple[tuple[dict[str, Any], ...], str]:
         """Drive one app-server thread and turn over newline-delimited JSON-RPC."""
         assert process.stdin is not None
@@ -835,9 +880,9 @@ class CodexAgentRunner:
                 ) from error
             await _write_json(process.stdin, {"method": "initialized", "params": {}})
 
-            thread_params: dict[str, Any] = {"cwd": working_directory}
-            if model:
-                thread_params["model"] = model
+            thread_params = _app_server_thread_params(
+                working_directory, model, mcp_server
+            )
             await _write_json(
                 process.stdin,
                 {"method": "thread/start", "id": 1, "params": thread_params},

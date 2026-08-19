@@ -21,6 +21,7 @@ from engine.adapters.agent_runner.codex import (
     CodexAgentRunner,
     CodexExecutionError,
     CodexToolsUnsupportedError,
+    _app_server_thread_params,
     approval_request_from_app_server,
     app_server_sandbox_policy,
     parse_events,
@@ -45,6 +46,7 @@ from engine.ports import (
     ApprovalRequest,
     FinishReason,
     InteractiveAgentRunner,
+    InteractiveMcpAgentRunner,
     McpAgentRunner,
     McpServerConfig,
     StreamingMcpAgentRunner,
@@ -383,8 +385,17 @@ def test_terminal_mcp_configuration_is_passed_to_codex() -> None:
 
     assert isinstance(CodexAgentRunner(), McpAgentRunner)
     assert isinstance(CodexAgentRunner(), StreamingMcpAgentRunner)
+    assert isinstance(CodexAgentRunner(), InteractiveMcpAgentRunner)
     assert 'mcp_servers.workflow.command="/usr/bin/python3"' in argv
     assert 'mcp_servers.workflow.args=["-m", "terminal"]' in argv
+    assert _app_server_thread_params("/workspace", "", server)["config"] == {
+        "mcp_servers": {
+            "workflow": {
+                "command": "/usr/bin/python3",
+                "args": ["-m", "terminal"],
+            }
+        }
+    }
 
 
 def test_a_profile_may_choose_its_model() -> None:

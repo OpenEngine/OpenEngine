@@ -40,6 +40,7 @@ from engine.domain import (
     RunPhase,
     RunRequested,
     RunState,
+    StartAgentRun,
     StepId,
     TaskId,
     WorkflowId,
@@ -434,7 +435,11 @@ class ThreadService:
         return self._active_runs.get(instance_id)
 
     async def decide_approval(
-        self, instance_id: AgentInstanceId, approval_id: ApprovalId, decision: str
+        self,
+        instance_id: AgentInstanceId,
+        approval_id: ApprovalId,
+        decision: str,
+        agent_run_id: AgentRunId | None = None,
     ) -> ApprovalRecord:
         """Answer what this chat's current run is paused on.
 
@@ -455,7 +460,7 @@ class ThreadService:
             approval_id,
             chosen,
             instance_id=instance_id,
-            agent_run_id=run.agent_run_id if run is not None else None,
+            agent_run_id=run.agent_run_id if run is not None else agent_run_id,
         )
         if run is not None:
             await run.present_approval(record)
@@ -637,10 +642,28 @@ def create_app(
         raise ValueError("review_runners are required with workflow_runners")
     service = ThreadService(session, runners)
     run_reader = RunReader(session.state_store)
+
+    async def approval_changed(_approval: ApprovalRecord) -> None:
+        # Workflow conversation streams poll the durable approval record along
+        # with their transcript, so persistence itself is the notification.
+        return None
+
+    def workflow_approval_handler(
+        command: StartAgentRun, runner_name: str
+    ) -> ApprovalHandler:
+        return service.approvals.handler(
+            agent_run_id=command.agent_run_id,
+            instance_id=command.instance_id,
+            runner=runner_name,
+            present=approval_changed,
+            workspace_id=command.workspace_id,
+        )
+
     workflow_executor = WorkflowExecutor(
         session.capabilities,
         workflow_runners if workflow_runners is not None else runners,
         review_runners=review_runners if review_runners is not None else runners,
+        approval_handler=workflow_approval_handler,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 
@@ -701,10 +724,18 @@ def create_app(
     ) -> AsyncIterator[bytes]:
         """Poll durable workflow progress into the chat client's snapshot stream."""
         previous: list[dict[str, object]] | None = None
+        previous_approval: dict[str, object] | None = None
         while True:
             history = await service.history(instance_id)
             content = _latest_assistant_content(history)
+            approvals = await session.state_store.list_approvals(
+                instance_id=instance_id
+            )
+            approval = _approval_json(approvals[-1]) if approvals else None
             active = run_id in workflow_tasks
+            if approval is not None and approval != previous_approval:
+                previous_approval = approval
+                yield _json_line({"type": "approval", "approval": approval})
             if not active:
                 yield _json_line({"type": "done", "content": content})
                 return
@@ -993,7 +1024,8 @@ def create_app(
 
     async def decide_approval(request: Request) -> Response:
         instance_id = _thread_id(request)
-        if await service.get(instance_id) is None:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
         try:
@@ -1001,8 +1033,18 @@ def create_app(
         except ValueError as error:
             return _error(str(error), 400)
         try:
+            workflow_agent_run_id = None
+            if thread.workflow_run_id is not None:
+                workflow_state = await session.state_store.load(
+                    thread.workflow_run_id
+                )
+                if workflow_state is not None:
+                    workflow_agent_run_id = workflow_state.current_agent_run_id
             approval = await service.decide_approval(
-                instance_id, ApprovalId(request.path_params["approval_id"]), decision
+                instance_id,
+                ApprovalId(request.path_params["approval_id"]),
+                decision,
+                workflow_agent_run_id,
             )
         except UnknownApprovalError as error:
             return _error(str(error), 404)

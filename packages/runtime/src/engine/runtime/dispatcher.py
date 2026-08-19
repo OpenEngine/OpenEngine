@@ -31,6 +31,8 @@ from engine.domain.ids import ConversationId
 from engine.ports import (
     AgentRunner,
     AgentTurn,
+    ApprovalHandler,
+    InteractiveMcpAgentRunner,
     McpAgentRunner,
     StreamingAgentRunner,
     StreamingMcpAgentRunner,
@@ -117,6 +119,7 @@ class Dispatcher:
         runner: AgentRunner | None = None,
         runner_name: str = "",
         on_terminal_result: Callable[[TerminalEvent], Awaitable[None]] | None = None,
+        on_approval: ApprovalHandler | None = None,
     ) -> AgentTurn | TerminalEvent:
         """Run a workflow step, preferring a directly delivered MCP result."""
         caps = self._capabilities
@@ -166,6 +169,7 @@ class Dispatcher:
                         prompt,
                         on_terminal_result,
                         observe,
+                        on_approval,
                     )
                 elif isinstance(selected_runner, StreamingAgentRunner):
                     result = None
@@ -242,6 +246,7 @@ class Dispatcher:
         prompt: Message,
         deliver: Callable[[TerminalEvent], Awaitable[None]] | None,
         on_message: TurnObserver,
+        on_approval: ApprovalHandler | None,
     ) -> tuple[TerminalEvent | None, AgentTurn | None, tuple[Message, ...]]:
         """Run until a terminal result or clarification request is produced."""
         assert command.step is not None
@@ -257,8 +262,25 @@ class Dispatcher:
             transcript: list[Message] = []
             corrections = 0
             while True:
-                streaming = isinstance(runner, StreamingMcpAgentRunner)
-                if streaming:
+                streaming = on_approval is not None or isinstance(
+                    runner, StreamingMcpAgentRunner
+                )
+                if on_approval is not None:
+                    if not isinstance(runner, InteractiveMcpAgentRunner):
+                        raise RuntimeError(
+                            "workflow approval handling requires an interactive "
+                            "MCP runner"
+                        )
+                    turn_call = runner.run_turn_with_mcp_interactive(
+                        command.agent_run_id,
+                        command.profile,
+                        messages,
+                        broker.config,
+                        on_approval,
+                        on_message=on_message,
+                        workspace_id=command.workspace_id,
+                    )
+                elif streaming:
                     turn_call = runner.run_turn_with_mcp_streamed(
                         command.agent_run_id,
                         command.profile,
