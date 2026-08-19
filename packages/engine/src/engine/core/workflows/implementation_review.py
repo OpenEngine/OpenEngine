@@ -77,6 +77,7 @@ REVIEW_PROFILE = AgentProfile(
 IMPLEMENTATION_STEP_SPEC = StepSpec(
     step_id=IMPLEMENTATION_STEP,
     agent_id=IMPLEMENTATION_PROFILE.agent_id,
+    required_outputs=("pr_url",),
 )
 REVIEW_STEP_SPEC = StepSpec(
     step_id=REVIEW_STEP,

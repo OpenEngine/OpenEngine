@@ -323,7 +323,11 @@ class WorkflowProgressRunner(TerminalToolRunner):
     def __init__(self) -> None:
         super().__init__(
             "complete_step",
-            {"outcome": "success", "summary": "Progress streamed.", "outputs": {}},
+            {
+                "outcome": "success",
+                "summary": "Progress streamed.",
+                "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+            },
         )
         self.started = asyncio.Event()
         self.release = asyncio.Event()
@@ -436,7 +440,7 @@ def _workflow_state(phase: RunPhase) -> RunState:
         agent_run_id=AgentRunId("implementation-execution"),
         outcome="success",
         summary="Implemented the lock and regression test.",
-        outputs=(StepOutput("changed_files", "worker.py, test_worker.py"),),
+        outputs=(StepOutput("pr_url", "https://github.com/acme/api/pull/42"),),
     )
     review = StepCompleted(
         run_id=run_id,
@@ -628,7 +632,7 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
         {
             "outcome": "success",
             "summary": "Added cancellation handling.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         },
     )
     reviewer = _reviewer(
@@ -764,7 +768,7 @@ def test_the_reviewer_reads_the_task_and_the_implementation_result() -> None:
         {
             "outcome": "success",
             "summary": "Took the lock around the shared counter.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         },
     )
     reviewer = _reviewer()
@@ -879,7 +883,7 @@ def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
         {
             "outcome": "success",
             "summary": "Completed through MCP.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         },
     )
     app = _workflow_app(store, runner)
@@ -906,7 +910,9 @@ def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
     assert completed_step["status"] == "completed"
     assert completed_step["outcome"] == "success"
     assert completed_step["summary"] == "Completed through MCP."
-    assert completed_step["outputs"] == []
+    assert completed_step["outputs"] == [
+        {"name": "pr_url", "value": "https://github.com/acme/api/pull/42"}
+    ]
     assert completed_step["mcpRequestId"] == "workflow-tool-call-1"
     implementation = history[2]
     assert isinstance(implementation, StepCompleted)
@@ -929,7 +935,7 @@ def test_invalid_exit_is_retried_and_then_completes_the_active_step() -> None:
         {
             "outcome": "success",
             "summary": "Completed after correction.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         }
     )
     app = _workflow_app(store, runner)
@@ -1044,7 +1050,7 @@ def test_a_failing_reviewer_fails_the_run_after_a_successful_implementation() ->
         {
             "outcome": "success",
             "summary": "Implemented the change.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         },
     )
     reviewer = TerminalToolRunner(
@@ -1091,10 +1097,10 @@ def test_a_reviewer_that_omits_a_declared_output_fails_the_run() -> None:
         {
             "outcome": "success",
             "summary": "Implemented the change.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         },
     )
-    # Valid for the implementation step, which declares no outputs, and not for
+    # Valid for the implementation step, which declares `pr_url`, and not for
     # the review step, which declares `findings`.
     reviewer = TerminalToolRunner(
         "complete_step",
@@ -1151,7 +1157,7 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
         {
             "outcome": "success",
             "summary": "Implemented with Claude.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         },
     )
     claude_reviewer = _reviewer(summary="Reviewed with Claude.")

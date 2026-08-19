@@ -193,7 +193,7 @@ def test_implementation_review_workflow_completes_end_to_end(
         {
             "outcome": "success",
             "summary": "Implemented the requested change.",
-            "outputs": {},
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
         }
     )
     reviewer = CompletingRunner(
