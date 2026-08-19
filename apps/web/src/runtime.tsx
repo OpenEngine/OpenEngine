@@ -3,6 +3,7 @@ import {
   RuntimeAdapterProvider,
   fromThreadMessageLike,
   useAui,
+  useAuiState,
   useLocalRuntime,
   useRemoteThreadListRuntime,
   type ChatModelAdapter,
@@ -122,6 +123,46 @@ function publishHistoryApprovals(threadId: string, history: ApiHistory): void {
 async function refreshApprovals(threadId: string): Promise<void> {
   const history = await api<ApiHistory>(`/api/threads/${threadId}/messages`);
   publishHistoryApprovals(threadId, history);
+}
+
+const APPROVAL_REFRESH_INTERVAL_MS = 1_000;
+
+/** Keep the open conversation's durable approval snapshots current.
+ *
+ *  Most approvals arrive on the run stream. A conversation can also remain
+ *  mounted while a workflow or another client starts its next run, though, and
+ *  then assistant-ui has no stream to reconnect until the page is reloaded.
+ *  Poll serially so a slow history request never piles up behind another one. */
+export function keepApprovalsFresh(
+  threadId: string,
+  refresh: (threadId: string) => Promise<void> = refreshApprovals,
+): () => void {
+  let stopped = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  async function poll(): Promise<void> {
+    try {
+      await refresh(threadId);
+    } catch (error) {
+      console.error("Could not refresh conversation approvals.", error);
+    }
+    if (!stopped) timeout = setTimeout(poll, APPROVAL_REFRESH_INTERVAL_MS);
+  }
+
+  void poll();
+  return () => {
+    stopped = true;
+    if (timeout !== undefined) clearTimeout(timeout);
+  };
+}
+
+function ApprovalRefreshBridge() {
+  const threadId = useAuiState((state) => state.threadListItem.remoteId);
+  useEffect(() => {
+    if (!threadId) return;
+    return keepApprovalsFresh(threadId);
+  }, [threadId]);
+  return null;
 }
 
 /** `messageIndex` is where the assistant turn this stream is producing will sit
@@ -379,12 +420,6 @@ function EngineRuntime({
     onThreadIdChange(threadId) {
       if (threadId) {
         if (rememberActiveThread) window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
-        // A previously visited thread can keep its messages in memory, so its
-        // history adapter does not necessarily load again on traversal. The
-        // durable snapshots may have changed while another chat was open.
-        void refreshApprovals(threadId).catch((error: unknown) => {
-          console.error("Could not refresh conversation approvals.", error);
-        });
       } else if (rememberActiveThread) {
         window.localStorage.removeItem(ACTIVE_THREAD_KEY);
       }
@@ -394,6 +429,7 @@ function EngineRuntime({
   return (
     <DefaultsContext.Provider value={defaults}>
       <AssistantRuntimeProvider runtime={runtime}>
+        <ApprovalRefreshBridge />
         <ThreadInitializationBridge
           initializer={threadInitializerRef}
           reloadThreads={reloadThreadsRef}
