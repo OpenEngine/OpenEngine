@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiApproval } from "./api";
 import { readApprovals } from "./approvals";
-import { readRunResponse } from "./runtime";
+import { keepApprovalsFresh, readRunResponse } from "./runtime";
 
 const approval: ApiApproval = {
   id: "approval-1",
@@ -72,5 +72,44 @@ describe("readRunResponse", () => {
 
   it("returns no frames for a 204 response", async () => {
     await expect(readAll(new Response(null, { status: 204 }))).resolves.toEqual([]);
+  });
+});
+
+describe("keepApprovalsFresh", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("refreshes approvals while the same conversation remains open", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn(async () => {});
+    const stop = keepApprovalsFresh("thread-open", refresh);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenLastCalledWith("thread-open");
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps polling after a transient refresh failure", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const refresh = vi
+      .fn<(threadId: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(undefined);
+    const stop = keepApprovalsFresh("thread-retry", refresh);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    stop();
   });
 });
