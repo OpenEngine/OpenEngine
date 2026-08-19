@@ -785,18 +785,20 @@ def create_app(
     ) -> AsyncIterator[bytes]:
         """Poll durable workflow progress into the chat client's snapshot stream."""
         previous: list[dict[str, object]] | None = None
-        previous_approval: dict[str, object] | None = None
+        previous_approvals: dict[str, dict[str, object]] = {}
         while True:
             history = await service.history(instance_id)
             content = _latest_assistant_content(history)
             approvals = await session.state_store.list_approvals(
                 instance_id=instance_id
             )
-            approval = _approval_json(approvals[-1]) if approvals else None
             active = run_id in workflow_tasks
-            if approval is not None and approval != previous_approval:
-                previous_approval = approval
-                yield _json_line({"type": "approval", "approval": approval})
+            for record in approvals:
+                approval = _approval_json(record)
+                approval_id = str(record.approval_id)
+                if approval != previous_approvals.get(approval_id):
+                    previous_approvals[approval_id] = approval
+                    yield _json_line({"type": "approval", "approval": approval})
             if not active:
                 yield _json_line({"type": "done", "content": content})
                 return
