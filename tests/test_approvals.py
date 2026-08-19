@@ -655,6 +655,55 @@ def test_approving_resumes_the_paused_turn_and_records_the_decision() -> None:
     ] == [("user", "run the tests"), ("assistant", "All tests passed.")]
 
 
+def test_a_decision_reaches_the_client_even_when_the_turn_asks_again() -> None:
+    """Otherwise the card you just answered waits on an answer it already got.
+
+    A turn let go by a decision usually asks its next question immediately --
+    Claude Code asks before every tool call -- and does so without ever handing
+    the event loop back, so both snapshots land between two wakes of the same
+    stream. The one being replaced is the decision, which is the only thing the
+    client is waiting to hear.
+    """
+    store = InMemoryStateStore()
+    runner = ApprovalRunner([RUN_TESTS, WRITE_FILE])
+    app = _app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            thread_id = await _thread(client)
+            started = asyncio.create_task(
+                client.post(f"/api/threads/{thread_id}/runs", json={"text": "go"})
+            )
+            first = await _pending(store)
+            await client.post(
+                _approval_url(thread_id, first.approval_id),
+                json={"decision": "accept"},
+            )
+            second = await _pending(store, after=1)
+            await client.post(
+                _approval_url(thread_id, second.approval_id),
+                json={"decision": "accept"},
+            )
+            return first, second, await started
+
+    first, second, streamed = asyncio.run(scenario())
+    events = _lines(streamed)
+
+    assert [
+        (event["approval"]["id"], event["approval"]["status"])
+        for event in events
+        if event["type"] == "approval"
+    ] == [
+        (str(first.approval_id), "pending"),
+        (str(first.approval_id), "decided"),
+        (str(second.approval_id), "pending"),
+        (str(second.approval_id), "decided"),
+    ]
+    assert events[-1]["type"] == "done"
+    assert runner.executed == ["pytest", "Write"]
+
+
 def test_cancelling_a_request_ends_the_turn_without_running_the_action() -> None:
     store = InMemoryStateStore()
     runner = ApprovalRunner()
