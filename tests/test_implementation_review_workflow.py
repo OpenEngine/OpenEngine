@@ -168,6 +168,7 @@ def test_implementation_success_starts_review_with_result_context() -> None:
     assert command.agent_run_id == "run-42:review:run"
     assert command.step is not None
     assert command.step.step_id == REVIEW_STEP
+    assert command.profile.capabilities == ("add_comment",)
     assert TASK_PROMPT in command.prompt
     assert result.summary in command.prompt
     assert "https://github.com/acme/api/pull/42" in command.prompt

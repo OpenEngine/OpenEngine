@@ -453,6 +453,10 @@ class ClaudeCodeAgentRunner:
                 "AskUserQuestion",
                 f"mcp__{mcp_server.name}__complete_step",
                 f"mcp__{mcp_server.name}__fail_step",
+                *(
+                    f"mcp__{mcp_server.name}__{capability}"
+                    for capability in profile.capabilities
+                ),
             )
         if allowed_tools:
             # Variadic, and an empty list would swallow the next flag.

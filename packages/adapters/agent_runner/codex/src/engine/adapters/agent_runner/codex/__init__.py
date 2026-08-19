@@ -28,7 +28,8 @@ of which this adapter is deliberately loud about rather than papering over:
   and does it internally; there is no way to hand it our `ToolSpec`s and get
   tool calls back. So a profile with grants cannot run here -- see
   `CodexToolsUnsupportedError`. Workflow runs are the narrow exception: the
-  runtime attaches its run-bound `complete_step` and `fail_step` MCP server.
+  runtime attaches its run-bound workflow MCP server, including terminal tools
+  and any additional capability explicitly granted to that workflow profile.
 
 * **It is stateless here.** Codex can resume its own sessions by `thread_id`,
   but our conversation is the source of truth, so each turn sends the whole
