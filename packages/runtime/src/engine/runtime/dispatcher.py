@@ -257,6 +257,18 @@ class Dispatcher:
             registry=self._terminal_results,
             deliver=deliver,
         )
+        if (
+            "add_comment" in command.profile.capabilities
+            and callable(
+                getattr(self._capabilities.source_control, "add_comment", None)
+            )
+        ):
+            # Older transport fakes may model only terminal delivery. The real
+            # broker exposes this hook; keeping it optional preserves those
+            # focused tests while granting the reviewer its repository tool.
+            enable_repo_comments = getattr(broker, "enable_repo_comments", None)
+            if enable_repo_comments is not None:
+                enable_repo_comments(self._capabilities.source_control)
         async with broker:
             messages = (prompt,)
             transcript: list[Message] = []

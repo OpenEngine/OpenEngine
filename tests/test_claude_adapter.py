@@ -460,6 +460,20 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     assert json.loads(interactive[interactive.index("--mcp-config") + 1]) == config
 
 
+def test_profile_mcp_capabilities_are_allowed_for_claude() -> None:
+    server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
+    reviewer = AgentProfile(
+        agent_id=AgentId("reviewer"),
+        instructions="Review the change.",
+        capabilities=("add_comment",),
+    )
+
+    argv = ClaudeCodeAgentRunner().command_line(reviewer, mcp_server=server)
+    allowed = argv[argv.index("--allowedTools") + 1 :]
+
+    assert "mcp__workflow__add_comment" in allowed
+
+
 # --- how long a turn may take -----------------------------------------------
 
 

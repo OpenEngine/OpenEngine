@@ -61,12 +61,15 @@ REVIEW_PROFILE = AgentProfile(
         "exist but do not. Inspect the workspace only: do not edit, revert, "
         "commit, or otherwise modify anything, and do not fix what you find. "
         "Report every finding with the file it is in and why it matters, and say "
-        "so explicitly when you find nothing. Complete the step with your findings "
+        "so explicitly when you find nothing. Leave every finding on the pull "
+        "request with the add_comment MCP tool, using file and line for inline "
+        "comments when possible; if there are no findings, leave one general "
+        "comment saying so. Complete the step with your findings "
         "even when they are serious; fail it only when the review itself could not "
         "be carried out. The human reviewer decides what happens to this run -- you "
         "do not approve or reject it."
     ),
-    capabilities=(),
+    capabilities=("add_comment",),
     # Left to the runner's default on purpose. A run picks its provider, and the
     # reviewer runs on the same one, so no single model name here would be
     # correct for both Codex and Claude Code.

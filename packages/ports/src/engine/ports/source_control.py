@@ -31,5 +31,15 @@ class SourceControl(Protocol):
         """Open a review (pull request). Returns its URL."""
         ...
 
+    async def add_comment(
+        self,
+        pr_url: str,
+        comment: str,
+        file: str | None = None,
+        line: int | None = None,
+    ) -> None:
+        """Comment on a review, optionally at a line in a changed file."""
+        ...
+
 
 __all__ = ["SourceControl"]

@@ -193,6 +193,80 @@ def test_stdio_mcp_surface_lists_only_terminal_tools() -> None:
     assert all(tool["inputSchema"]["additionalProperties"] is False for tool in tools)
 
 
+def test_reviewer_mcp_surface_includes_repo_comment_tool() -> None:
+    response = asyncio.run(
+        _mcp_response(
+            "127.0.0.1",
+            1,
+            "unused",
+            {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"},
+            repo_comments=True,
+        )
+    )
+
+    assert response is not None
+    tools = response["result"]["tools"]
+    add_comment = next(tool for tool in tools if tool["name"] == "add_comment")
+    assert add_comment["inputSchema"]["required"] == ["pr_url", "comment"]
+    assert add_comment["inputSchema"]["dependentRequired"] == {
+        "file": ["line"],
+        "line": ["file"],
+    }
+
+
+def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
+    class RecordingSourceControl:
+        def __init__(self) -> None:
+            self.comments: list[tuple[object, ...]] = []
+
+        async def add_comment(self, *arguments: object) -> None:
+            self.comments.append(arguments)
+
+    async def scenario() -> None:
+        source_control = RecordingSourceControl()
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repo_comments(source_control)  # type: ignore[arg-type]
+        broker._result = asyncio.get_running_loop().create_future()
+        request = {
+            "token": broker._token,
+            "request_id": "comment-1",
+            "name": "complete_step",
+            "arguments": {
+                "outcome": "success",
+                "summary": "Done.",
+                "outputs": {"revision": "abc123"},
+            },
+        }
+
+        refused = await broker._submit(request)
+        request["name"] = "add_comment"
+        request["arguments"] = {
+            "pr_url": "https://github.com/acme/api/pull/42",
+            "comment": "This can race.",
+            "file": "src/worker.py",
+            "line": 17,
+        }
+        accepted = await broker._submit(request)
+
+        assert refused["ok"] is False
+        assert accepted == {"ok": True, "acknowledgement": "comment added"}
+        assert source_control.comments == [
+            (
+                "https://github.com/acme/api/pull/42",
+                "This can race.",
+                "src/worker.py",
+                17,
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_stdio_bridge_returns_a_small_acknowledgement() -> None:
     async def scenario() -> None:
         broker = TerminalMcpBroker(
