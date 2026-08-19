@@ -462,6 +462,29 @@ class ApprovalWorkflowRunner(TerminalToolRunner):
         )
 
 
+class RepeatedApprovalWorkflowRunner(ApprovalWorkflowRunner):
+    """Raise another request after the first one is approved."""
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_approval,
+        on_message=None,
+        workspace_id=None,
+    ) -> AgentTurn:
+        for command in ("pytest", "ruff check"):
+            decision = await on_approval(replace(self._request(), command=command))
+            self.decisions.append(decision)
+            if decision is ApprovalDecision.CANCEL:
+                return AgentTurn(Message.assistant("The command was cancelled."))
+        return await TerminalToolRunner.run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
 class InvalidThenTerminalToolRunner(TerminalToolRunner):
     """Exit once without a valid call, then complete through MCP."""
 
@@ -1191,6 +1214,67 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
     assert decided.json()["approval"]["decision"] == "accept"
     assert runner.decisions == [ApprovalDecision.ACCEPT]
     assert events[-1]["type"] == "done"
+
+
+def test_workflow_conversation_replays_every_approval_after_reconnect() -> None:
+    store = InMemoryStateStore()
+    runner = RepeatedApprovalWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Make two approved changes.",
+                    "repository": "acme/api",
+                },
+            )
+            for _ in range(100):
+                approvals = await store.list_approvals()
+                if approvals:
+                    break
+                await asyncio.sleep(0.01)
+            assert approvals
+            first = approvals[0]
+            await client.post(
+                f"/api/threads/{first.instance_id}/runs/current/approvals/"
+                f"{first.approval_id}",
+                json={"decision": "accept"},
+            )
+            for _ in range(100):
+                approvals = await store.list_approvals()
+                if len(approvals) == 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(approvals) == 2
+            second = approvals[1]
+
+            streaming = asyncio.create_task(
+                client.get(f"/api/threads/{second.instance_id}/runs/current")
+            )
+            await asyncio.sleep(0.05)
+            await client.post(
+                f"/api/threads/{second.instance_id}/runs/current/approvals/"
+                f"{second.approval_id}",
+                json={"decision": "accept"},
+            )
+            response = await asyncio.wait_for(streaming, timeout=2)
+            return approvals, [
+                json.loads(line) for line in response.text.splitlines()
+            ]
+
+    approvals, events = asyncio.run(scenario())
+    streamed = [event["approval"] for event in events if event["type"] == "approval"]
+
+    assert [approval["id"] for approval in streamed[:2]] == [
+        str(approvals[0].approval_id),
+        str(approvals[1].approval_id),
+    ]
+    assert streamed[0]["status"] == "decided"
+    assert streamed[1]["status"] == "pending"
 
 
 def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
