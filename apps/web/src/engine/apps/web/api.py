@@ -107,8 +107,15 @@ class ActiveRun:
     def __init__(self, agent_run_id: AgentRunId) -> None:
         self.agent_run_id = agent_run_id
         self.content: list[dict[str, object]] = []
-        self.approval: dict[str, object] | None = None
-        """The latest approval snapshot, pending or resolved. None until asked."""
+        self.approvals: dict[str, dict[str, object]] = {}
+        """The latest snapshot of every request this run has raised, by id.
+
+        A map rather than "the one the turn is on", because what a subscriber
+        needs is each request's *transition*: a turn let go by a decision often
+        asks its next question before anyone has been told about the answer, and
+        a single slot would hand the new question over in place of it -- leaving
+        a card waiting forever on a request that was decided.
+        """
         self.error: str | None = None
         self.done = False
         self._revision = 0
@@ -126,7 +133,7 @@ class ActiveRun:
 
     async def stream(self) -> AsyncIterator[bytes]:
         revision = 0
-        approval: dict[str, object] | None = None
+        sent: dict[str, dict[str, object]] = {}
         while True:
             async with self._changed:
                 await self._changed.wait_for(
@@ -134,18 +141,23 @@ class ActiveRun:
                 )
                 revision = self._revision
                 content = [dict(part) for part in self.content]
-                pending = dict(self.approval) if self.approval is not None else None
+                approvals = {key: dict(value) for key, value in self.approvals.items()}
                 error = self.error
                 done = self.done
 
-            if pending != approval:
-                # Whole snapshots, including the resolved one: a client that
+            for approval_id, approval in approvals.items():
+                # Whole snapshots, including the resolved ones: a client that
                 # missed the decision would otherwise go on showing a prompt
-                # for a request that has already been answered. Emitted before
-                # the terminal events so the last thing said about a request is
-                # never lost to the run ending in the same breath.
-                approval = pending
-                yield _json_line({"type": "approval", "approval": pending})
+                # for a request that has already been answered. Every one that
+                # has moved rather than only the newest, because several can
+                # move between two wakes and the one being answered is exactly
+                # the one that would be dropped. Emitted before the terminal
+                # events so the last thing said about a request is never lost to
+                # the run ending in the same breath.
+                if sent.get(approval_id) == approval:
+                    continue
+                sent[approval_id] = approval
+                yield _json_line({"type": "approval", "approval": approval})
             if error is not None:
                 yield _json_line({"type": "error", "error": error})
                 return
@@ -185,7 +197,7 @@ class ActiveRun:
         """
         snapshot = _approval_json(approval)
         async with self._changed:
-            self.approval = snapshot
+            self.approvals[str(approval.approval_id)] = snapshot
             self._revision += 1
             self._changed.notify_all()
 
@@ -196,7 +208,7 @@ class ActiveRun:
         ending sends a moment later, and awaiting a lock here would yield the
         event loop back to the very turn being torn down.
         """
-        self.approval = _approval_json(approval)
+        self.approvals[str(approval.approval_id)] = _approval_json(approval)
 
     async def _finish(self) -> None:
         async with self._changed:
@@ -413,15 +425,14 @@ class ThreadService:
                 if on_approval is not None:
                     # However this turn ended, nothing is waiting on its
                     # requests any more -- a provider that died mid-question
-                    # leaves one here. The last of them is what the run is
-                    # still showing, so it is the one that has to stop saying
-                    # "pending", whoever resolved it.
+                    # leaves one here. Every one of them, because a client is
+                    # showing whichever it was last told about, and any of those
+                    # has to stop saying "pending", whoever resolved it.
                     await self.approvals.interrupt_run(agent_run_id)
-                    asked = await self.session.state_store.list_approvals(
+                    for asked in await self.session.state_store.list_approvals(
                         agent_run_id=agent_run_id
-                    )
-                    if asked:
-                        run.note_approval(asked[-1])
+                    ):
+                        run.note_approval(asked)
 
         run.start(execute())
         # Ensure a refresh can load the submitted question before this POST
