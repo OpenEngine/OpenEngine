@@ -29,6 +29,9 @@ from engine.domain import (
     AgentProfile,
     AgentRunId,
     AgentRunStatus,
+    ApprovalDecision,
+    ApprovalKind,
+    ApprovalStatus,
     ConversationId,
     HumanReviewCompleted,
     Message,
@@ -52,6 +55,7 @@ from engine.core.workflows.implementation_review import (
 )
 from engine.ports import (
     AgentTurn,
+    ApprovalRequest,
     InteractiveAgentRunner,
     McpServerConfig,
     Workspace,
@@ -350,6 +354,63 @@ class WorkflowProgressRunner(TerminalToolRunner):
         )
         on_message(turn.message)
         return AgentTurn(turn.message, steps=(progress, *turn.steps))
+
+
+class ApprovalWorkflowRunner(TerminalToolRunner):
+    """Pause an MCP workflow turn until its conversation approves a command."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "complete_step",
+            {
+                "outcome": "success",
+                "summary": "Approved work completed.",
+                "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+            },
+        )
+        self.decisions: list[ApprovalDecision] = []
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        on_approval,
+        on_message=None,
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        decision = await on_approval(self._request())
+        self.decisions.append(decision)
+        return AgentTurn(Message.assistant("Approval answered."))
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_approval,
+        on_message=None,
+        workspace_id=None,
+    ) -> AgentTurn:
+        decision = await on_approval(self._request())
+        self.decisions.append(decision)
+        if decision is ApprovalDecision.CANCEL:
+            return AgentTurn(Message.assistant("The command was cancelled."))
+        return await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+    @staticmethod
+    def _request() -> ApprovalRequest:
+        return ApprovalRequest(
+            approval_id="provider-workflow-approval",
+            kind=ApprovalKind.COMMAND_EXECUTION,
+            reason="Run the workflow test suite",
+            command="pytest",
+            cwd="/workspace",
+        )
 
 
 class InvalidThenTerminalToolRunner(TerminalToolRunner):
@@ -874,6 +935,68 @@ def test_implementation_conversation_periodically_streams_durable_progress() -> 
         "Inspecting the implementation.",
         "Terminal result accepted.",
     ]
+
+
+def test_approval_requests_pop_in_on_workflow_conversations() -> None:
+    store = InMemoryStateStore()
+    runner = ApprovalWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Make the approved change.",
+                    "repository": "acme/api",
+                },
+            )
+            for _ in range(100):
+                pending = await store.list_approvals(status=ApprovalStatus.PENDING)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending
+            request = pending[0]
+
+            streaming = asyncio.create_task(
+                client.get(
+                    f"/api/threads/{request.instance_id}/runs/current"
+                )
+            )
+            await asyncio.sleep(0.05)
+            decided = await client.post(
+                f"/api/threads/{request.instance_id}/runs/current/approvals/"
+                f"{request.approval_id}",
+                json={"decision": "accept"},
+            )
+            response = await asyncio.wait_for(streaming, timeout=2)
+            return request, decided, [
+                json.loads(line) for line in response.text.splitlines()
+            ]
+
+    request, decided, events = asyncio.run(scenario())
+    approvals = [event["approval"] for event in events if event["type"] == "approval"]
+
+    assert approvals[0] == {
+        "id": str(request.approval_id),
+        "status": "pending",
+        "kind": "command_execution",
+        "reason": "Run the workflow test suite",
+        "command": "pytest",
+        "cwd": "/workspace",
+        "toolName": None,
+        "arguments": None,
+        "allowedDecisions": ["accept", "accept_for_session", "cancel"],
+        "decision": None,
+        "decisionSource": None,
+    }
+    assert decided.status_code == 200
+    assert decided.json()["approval"]["decision"] == "accept"
+    assert runner.decisions == [ApprovalDecision.ACCEPT]
+    assert events[-1]["type"] == "done"
 
 
 def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:

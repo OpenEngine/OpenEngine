@@ -32,6 +32,7 @@ from engine.ports import (
     ApprovalRequest,
     FinishReason,
     InteractiveAgentRunner,
+    InteractiveMcpAgentRunner,
     McpAgentRunner,
     McpServerConfig,
     StreamingMcpAgentRunner,
@@ -436,10 +437,12 @@ def test_interactive_turn_round_trips_a_control_approval(tmp_path) -> None:
 
 def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
-    argv = ClaudeCodeAgentRunner().command_line(PROFILE, mcp_server=server)
+    runner = ClaudeCodeAgentRunner()
+    argv = runner.command_line(PROFILE, mcp_server=server)
 
-    assert isinstance(ClaudeCodeAgentRunner(), McpAgentRunner)
-    assert isinstance(ClaudeCodeAgentRunner(), StreamingMcpAgentRunner)
+    assert isinstance(runner, McpAgentRunner)
+    assert isinstance(runner, StreamingMcpAgentRunner)
+    assert isinstance(runner, InteractiveMcpAgentRunner)
     config = json.loads(argv[argv.index("--mcp-config") + 1])
     assert config == {
         "mcpServers": {
@@ -453,6 +456,8 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     assert "AskUserQuestion" in allowed
     assert "mcp__workflow__complete_step" in allowed
     assert "mcp__workflow__fail_step" in allowed
+    interactive = runner.interactive_command_line(PROFILE, server)
+    assert json.loads(interactive[interactive.index("--mcp-config") + 1]) == config
 
 
 # --- how long a turn may take -----------------------------------------------

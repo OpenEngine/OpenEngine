@@ -1,7 +1,7 @@
 """Execute the locally supported portion of a workflow run."""
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from engine.core import decide
@@ -24,7 +24,7 @@ from engine.domain import (
     StepCompleted,
     WorkspaceProvisioned,
 )
-from engine.ports import AgentRunner
+from engine.ports import AgentRunner, ApprovalHandler, InteractiveMcpAgentRunner
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
 from engine.runtime.step_results import requests_clarification_or_escalation
@@ -63,6 +63,7 @@ class WorkflowExecutor:
         runners: Mapping[str, AgentRunner] | None = None,
         *,
         review_runners: Mapping[str, AgentRunner],
+        approval_handler: Callable[[StartAgentRun, str], ApprovalHandler] | None = None,
     ) -> None:
         self._capabilities = capabilities
         self._dispatcher = Dispatcher(capabilities)
@@ -71,6 +72,7 @@ class WorkflowExecutor:
         # A missing reviewer is a wiring mistake, and finding it at startup is
         # better than silently reviewing with write access.
         self._review_runners = dict(review_runners)
+        self._approval_handler = approval_handler
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
             raise WorkflowExecutionError(
@@ -245,6 +247,12 @@ class WorkflowExecutor:
             runner=runner,
             runner_name=runner_name,
             on_terminal_result=deliver_terminal,
+            on_approval=(
+                self._approval_handler(command, runner_name)
+                if self._approval_handler is not None
+                and isinstance(runner, InteractiveMcpAgentRunner)
+                else None
+            ),
         )
         if folded is not None:
             # The MCP acknowledgement was sent only after this transition
