@@ -3,6 +3,13 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { api, type ApiRunStep, type ApiWorkflowRun, type EngineConfig } from "./api";
 import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
 
+const IN_PROGRESS_PHASES = new Set([
+  "pending",
+  "preparing_workspace",
+  "implementing",
+  "reviewing",
+]);
+
 function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
 }
@@ -62,6 +69,9 @@ function RunNavigation({
                   {run.taskPrompt || run.runId}
                 </span>
                 <span className="rail-item-meta">
+                  {IN_PROGRESS_PHASES.has(run.phase) && (
+                    <span className="rail-live" aria-label="Workflow is in progress" />
+                  )}
                   {phaseLabel(run.phase)} · {run.workflowVersion || run.workflowId}
                 </span>
               </a>
@@ -445,7 +455,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           if (cancelled) return;
           setRun(value);
           setError("");
-          if (["pending", "preparing_workspace", "implementing", "reviewing"].includes(value.phase)) {
+          if (IN_PROGRESS_PHASES.has(value.phase)) {
             timer = window.setTimeout(load, 1000);
           }
         })
