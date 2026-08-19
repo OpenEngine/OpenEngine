@@ -19,6 +19,7 @@ from engine.domain.events import (
     Event,
     HumanReviewCompleted,
     RunFailed,
+    RunNamed,
     RunRequested,
     StepCompleted,
     WorkspaceProvisioned,
@@ -50,6 +51,20 @@ IMPLEMENTATION_PROFILE = AgentProfile(
     ),
     capabilities=(),
     description="Implements the requested repository change.",
+)
+
+WORKFLOW_NAMING_PROFILE = replace(
+    IMPLEMENTATION_PROFILE,
+    instructions=(
+        "Give a submitted workflow a concise display name. Do not inspect or change "
+        "the workspace and do not perform the requested task."
+    ),
+    description="Names a submitted implementation workflow.",
+)
+WORKFLOW_NAME_PROMPT = (
+    "Name this workflow based on the task above. Do not perform the task or use "
+    "tools. Reply with only a concise name of at most eight words, with no quotes "
+    "or ending punctuation."
 )
 
 REVIEW_PROFILE = AgentProfile(
@@ -242,6 +257,9 @@ def decide_implementation_review(
             )
             return next_state, (command,)
 
+        case RunNamed():
+            return replace(state, name=event.name), ()
+
         case StepCompleted() if (
             state.phase is RunPhase.IMPLEMENTING
             and _matches_expected_step(state, event)
@@ -327,6 +345,8 @@ __all__ = [
     "REVIEW_STEP",
     "REVIEW_STEP_SPEC",
     "WORKFLOW_ID",
+    "WORKFLOW_NAME_PROMPT",
+    "WORKFLOW_NAMING_PROFILE",
     "agent_instance_id",
     "agent_run_id",
     "decide_implementation_review",

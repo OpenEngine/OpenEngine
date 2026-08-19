@@ -61,6 +61,7 @@ class HumanDecisionView:
 @dataclass(frozen=True, slots=True)
 class WorkflowRunView:
     run_id: RunId
+    name: str
     workflow_id: str
     workflow_name: str
     workflow_version: str
@@ -139,6 +140,7 @@ class RunReader:
             )
         return WorkflowRunView(
             run_id=state.run_id,
+            name=state.name or state.prompt or str(state.run_id),
             workflow_id=str(state.workflow_id),
             workflow_name=(
                 "Implementation review"

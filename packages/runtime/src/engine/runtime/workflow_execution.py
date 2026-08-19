@@ -7,17 +7,22 @@ from dataclasses import dataclass
 from engine.core import decide
 from engine.core.workflows.implementation_review import (
     IMPLEMENTATION_STEP,
+    WORKFLOW_NAME_PROMPT,
+    WORKFLOW_NAMING_PROFILE,
     start_implementation_command,
     start_review_command,
 )
 from engine.domain import (
+    AgentRunId,
     Command,
     Event,
     HumanReviewCompleted,
+    Message,
     ProvisionWorkspace,
     RequestHumanReview,
     RunFailed,
     RunId,
+    RunNamed,
     RunPhase,
     RunRequested,
     RunState,
@@ -118,6 +123,7 @@ class WorkflowExecutor:
                     root_path=workspace.root_path,
                 ),
             )
+            state = await self._name_workflow(state, runner)
             implementation = await self._run_step(
                 state,
                 _only(commands, StartAgentRun),
@@ -172,6 +178,32 @@ class WorkflowExecutor:
             raise
         except Exception as error:
             await self._fail(run_id, error)
+
+    async def _name_workflow(
+        self, state: RunState, runner: AgentRunner
+    ) -> RunState:
+        """Name a submitted run without making cosmetic failure fail its work."""
+
+        try:
+            turn = await runner.run_turn(
+                AgentRunId(f"{state.run_id}:name:run"),
+                WORKFLOW_NAMING_PROFILE,
+                (Message.user(state.prompt), Message.user(WORKFLOW_NAME_PROMPT)),
+                workspace_id=state.workspace_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return state
+        name = _clean_workflow_name(turn.message.content)
+        if not name:
+            return state
+        named, commands = await self._transition(
+            state, RunNamed(run_id=state.run_id, name=name)
+        )
+        if commands:
+            raise WorkflowExecutionError("naming a workflow emitted commands")
+        return named
 
     async def _advance_after_implementation(
         self,
@@ -357,6 +389,11 @@ def _only(
             f"expected one {expected.__name__} command, got {names}"
         )
     return commands[0]
+
+
+def _clean_workflow_name(value: str) -> str:
+    first_line = value.strip().splitlines()[0] if value.strip() else ""
+    return first_line.strip(" \t\"'`).:;!?")[:80]
 
 
 __all__ = ["WorkflowExecutionError", "WorkflowExecutor"]

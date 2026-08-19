@@ -22,6 +22,7 @@ from engine.domain import (
     HumanReviewCompleted,
     Message,
     RunId,
+    RunNamed,
     RunPhase,
     RunRequested,
     StepCompleted,
@@ -138,6 +139,7 @@ class CompletingRunner:
     def __init__(self, arguments: dict[str, object]) -> None:
         self.arguments = arguments
         self.calls: list[tuple[AgentRunId, WorkspaceId | None]] = []
+        self.naming_calls: list[tuple[Message, ...]] = []
         self.cancelled = asyncio.Event()
 
     async def run_turn(
@@ -148,7 +150,8 @@ class CompletingRunner:
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
     ) -> AgentTurn:
-        raise AssertionError("workflow execution must provide the MCP server")
+        self.naming_calls.append(tuple(messages))
+        return AgentTurn(Message.assistant('"Exercise complete workflow"'))
 
     async def run_turn_with_mcp(
         self,
@@ -296,10 +299,13 @@ def test_implementation_review_workflow_completes_end_to_end(
         "summary": "Approved by the integration test.",
     }
     assert state.phase is RunPhase.SUCCEEDED
+    assert state.name == "Exercise complete workflow"
+    assert completed.json()["name"] == state.name
     assert reopened_state == state
     assert [type(event) for event in history] == [
         RunRequested,
         WorkspaceProvisioned,
+        RunNamed,
         StepCompleted,
         StepCompleted,
         HumanReviewCompleted,
@@ -316,4 +322,15 @@ def test_implementation_review_workflow_completes_end_to_end(
         run and run.status is AgentRunStatus.SUCCEEDED for run in agent_runs
     ), agent_runs
     assert implementer.calls[0][1] == reviewer.calls[0][1] == state.workspace_id
+    assert implementer.naming_calls == [
+        (
+            Message.user("Exercise the complete workflow."),
+            Message.user(
+                "Name this workflow based on the task above. Do not perform the task "
+                "or use tools. Reply with only a concise name of at most eight words, "
+                "with no quotes or ending punctuation."
+            ),
+        )
+    ]
+    assert reviewer.naming_calls == []
     assert asyncio.run(workspaces.state(state.workspace_id)).attached
