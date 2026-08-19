@@ -180,6 +180,10 @@ function Composer() {
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const canSend = useAuiState((state) => state.composer.canSend);
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const custom = useAuiState((state) => state.threadListItem.custom) as
+    | { workflowRunId?: string }
+    | undefined;
+  const workflowConversation = Boolean(custom?.workflowRunId);
   const text = useAuiState((state) => state.composer.text);
   const messages = useAuiState((state) => state.thread.messages);
   const draftKey = `${COMPOSER_DRAFT_KEY_PREFIX}${remoteId ?? NEW_CHAT_DRAFT_ID}`;
@@ -228,9 +232,27 @@ function Composer() {
     }
   }, [aui, draftKey, messages]);
 
+  const interruptAndSteer = (queuedId: string) => {
+    if (!remoteId) return;
+    void stopRun(remoteId)
+      .catch(() => {})
+      .then(() => {
+        if (aui.composer.getState().queue.some((item) => item.id === queuedId)) {
+          aui.composer.queueItem({ id: queuedId }).move({ lane: "steer" });
+        }
+      });
+  };
+
   const send = () => {
+    const queuedBefore = new Set(aui.composer.getState().queue.map((item) => item.id));
     aui.composer.send();
     window.localStorage.removeItem(draftKey);
+    if (isRunning && workflowConversation) {
+      const queued = aui.composer
+        .getState()
+        .queue.find((item) => !queuedBefore.has(item.id));
+      if (queued) interruptAndSteer(queued.id);
+    }
   };
 
   const queueOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -274,7 +296,9 @@ function Composer() {
           className="composer-input"
           placeholder={
             isRunning
-              ? "Queue a message for when the agent is done…"
+              ? workflowConversation
+                ? "Send guidance to interrupt the agent…"
+                : "Queue a message for when the agent is done…"
               : "Ask the agent about this repository…"
           }
           aria-label="Message the agent"
@@ -291,11 +315,9 @@ function Composer() {
             // same cancel the card's own button does: the server records the
             // request as cancelled and hands that to the provider, so the
             // action does not run, and only then tears the turn down.
-            const stop = () => stopRun(remoteId).catch(() => {});
-
             const queued = aui.composer.getState().queue[0];
             if (!queued) {
-              void stop();
+              void stopRun(remoteId).catch(() => {});
               return;
             }
 
@@ -303,17 +325,13 @@ function Composer() {
             // Preventing the primitive's local cancel lets the queue drain as
             // soon as the active stream closes.
             event.preventDefault();
-            void stop().then(() => {
-              if (aui.composer.getState().queue.some((item) => item.id === queued.id)) {
-                aui.composer.queueItem({ id: queued.id }).move({ lane: "steer" });
-              }
-            });
+            interruptAndSteer(queued.id);
           }}
         >
           Stop
         </ComposerPrimitive.Cancel>
         <button type="button" className="btn btn-primary" disabled={!canSend} onClick={send}>
-          {isRunning ? "Queue" : "Send"}
+          {isRunning && !workflowConversation ? "Queue" : "Send"}
         </button>
       </ComposerPrimitive.Root>
     </>

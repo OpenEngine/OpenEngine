@@ -996,6 +996,11 @@ def create_app(
         thread = await service.get(instance_id)
         if thread is None:
             return _error("thread not found", 404)
+        # Workflow instances already have a durable transcript and an active
+        # agent. Starting a separate turn just to replace "New chat" delays a
+        # human continuation and can race the step it is meant to steer.
+        if thread.workflow_run_id is not None:
+            return JSONResponse({"title": thread.title})
         body = await _json_body(request)
         opening_text = str(body["text"]).strip() if body.get("text") else None
         runner = str(body["runner"]) if body.get("runner") else None

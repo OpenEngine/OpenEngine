@@ -982,7 +982,8 @@ def test_implementation_conversation_periodically_streams_durable_progress() -> 
 def test_editable_implementation_conversation_can_interrupt_and_continue() -> None:
     store = InMemoryStateStore()
     runner = InterruptibleImplementationRunner()
-    app = _workflow_app(store, runner)
+    reviewer = _reviewer()
+    app = _workflow_app(store, runner, reviewers={"test": reviewer})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1000,6 +1001,10 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
             detail = await client.get(f"/api/runs/{run_id}")
             implementation_id = detail.json()["steps"][0]["agentInstanceId"]
             implementation = await client.get(f"/api/threads/{implementation_id}")
+            title = await client.post(
+                f"/api/threads/{implementation_id}/title",
+                json={"text": "Keep the public response shape unchanged."},
+            )
 
             stopped = await client.delete(
                 f"/api/threads/{implementation_id}/runs/current"
@@ -1019,6 +1024,7 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
             conversation = await store.load_conversation(implementation_id)
             return (
                 implementation,
+                title,
                 stopped,
                 still_implementing,
                 continued,
@@ -1030,6 +1036,7 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
 
     (
         implementation,
+        title,
         stopped,
         still_implementing,
         continued,
@@ -1040,6 +1047,7 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
     ) = asyncio.run(scenario())
 
     assert implementation.json()["editable"] is True
+    assert title.json() == {"title": "New chat"}
     assert stopped.status_code == 204
     assert still_implementing.json()["phase"] == "implementing"
     assert continued.status_code == 200
@@ -1048,6 +1056,7 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
     assert refused.status_code == 409
     assert "read-only" in refused.json()["error"]
     assert runner.cancel_calls >= 2  # interruption, then terminal MCP completion
+    assert len(reviewer.seen) == 1  # the review only, never a pre-send title turn
     assert conversation is not None
     assert [
         message.content for message in conversation.messages if message.role is Role.USER
