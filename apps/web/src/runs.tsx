@@ -22,10 +22,12 @@ function conversationCount(run: ApiWorkflowRun) {
 function RunNavigation({
   runs,
   activeRunId,
+  activeConversationUrl,
   activeView = "runs",
 }: {
   runs: ApiWorkflowRun[];
   activeRunId?: string;
+  activeConversationUrl?: string;
   activeView?: "runs" | "new";
 }) {
   return (
@@ -49,7 +51,12 @@ function RunNavigation({
       <nav className="rail-scroll" aria-label="Recent runs">
         {runs.map((run) => (
           <div key={run.runId}>
-            <div className="rail-item" data-active={activeRunId === run.runId || undefined}>
+            <div
+              className="rail-item"
+              data-active={
+                activeRunId === run.runId && !activeConversationUrl ? true : undefined
+              }
+            >
               <a className="rail-item-trigger" href={`/runs/${run.runId}`}>
                 <span className="rail-item-title" data-clamp="">
                   {run.taskPrompt || run.runId}
@@ -64,7 +71,14 @@ function RunNavigation({
                 {run.steps
                   .filter((step) => step.conversationUrl)
                   .map((step) => (
-                    <a href={step.conversationUrl!} key={step.stepId}>
+                    <a
+                      aria-current={
+                        activeConversationUrl === step.conversationUrl ? "page" : undefined
+                      }
+                      data-active={activeConversationUrl === step.conversationUrl || undefined}
+                      href={step.conversationUrl!}
+                      key={step.stepId}
+                    >
                       {step.name} conversation
                     </a>
                   ))}
@@ -92,6 +106,23 @@ function useRuns() {
       .catch((reason: Error) => setError(reason.message));
   }, []);
   return { runs, error };
+}
+
+export function RunConversationNavigation({
+  runId,
+  conversationUrl,
+}: {
+  runId: string;
+  conversationUrl: string;
+}) {
+  const { runs } = useRuns();
+  return (
+    <RunNavigation
+      runs={runs}
+      activeRunId={runId}
+      activeConversationUrl={conversationUrl}
+    />
+  );
 }
 
 export function RunsPage() {

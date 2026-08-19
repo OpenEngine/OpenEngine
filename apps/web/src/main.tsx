@@ -11,10 +11,21 @@ import {
 } from "./api";
 import { ChatSidebar, ChatThread, ConversationStats } from "./chat";
 import { EngineRuntimeProvider } from "./runtime";
-import { NewWorkflowPage, RunDetailPage, RunsPage } from "./runs";
+import {
+  NewWorkflowPage,
+  RunConversationNavigation,
+  RunDetailPage,
+  RunsPage,
+} from "./runs";
 import "./styles.css";
 
-function ChatApp({ initialThreadId }: { initialThreadId?: string }) {
+function ChatApp({
+  initialThreadId,
+  workflowRunId,
+}: {
+  initialThreadId?: string;
+  workflowRunId?: string;
+}) {
   const [config, setConfig] = useState<EngineConfig | null>(null);
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
@@ -38,7 +49,14 @@ function ChatApp({ initialThreadId }: { initialThreadId?: string }) {
   return (
     <EngineRuntimeProvider defaults={{ agentId, runner }} initialThreadId={initialThreadId}>
       <div className="app-shell">
-        <ChatSidebar />
+        {workflowRunId && initialThreadId ? (
+          <RunConversationNavigation
+            runId={workflowRunId}
+            conversationUrl={window.location.pathname.replace(/\/$/, "")}
+          />
+        ) : (
+          <ChatSidebar />
+        )}
         <main className="panel">
           <ChatHeader
             config={config}
@@ -228,6 +246,17 @@ function App() {
   const path = window.location.pathname.replace(/\/$/, "") || "/";
   if (path === "/" || path === "/runs") return <RunsPage />;
   if (path === "/runs/new") return <NewWorkflowPage />;
+  const workflowConversation = path.match(
+    /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
+  );
+  if (workflowConversation) {
+    return (
+      <ChatApp
+        workflowRunId={decodeURIComponent(workflowConversation[1])}
+        initialThreadId={decodeURIComponent(workflowConversation[2])}
+      />
+    );
+  }
   if (path.startsWith("/runs/")) {
     return <RunDetailPage runId={decodeURIComponent(path.slice("/runs/".length))} />;
   }
