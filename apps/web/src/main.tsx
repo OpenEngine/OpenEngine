@@ -73,7 +73,12 @@ function ChatApp({
   );
 }
 
-type ThreadCustom = { agentId?: string; runner?: string; workflowRunId?: string };
+type ThreadCustom = {
+  agentId?: string;
+  runner?: string;
+  workflowRunId?: string;
+  editable?: boolean;
+};
 
 /** The header speaks for whatever is on screen: the defaults the next
  *  conversation starts from, or the open conversation and who answers it. */
@@ -208,7 +213,9 @@ function ConversationHeader({
         <h1>{title}</h1>
         <p className="lede">
           {workflowConversation
-            ? "A workflow step owns this transcript; its run chose the runner."
+            ? thread?.editable
+              ? "A workflow step owns this transcript; you can interrupt or send guidance while it is active."
+              : "A workflow step owns this transcript; its run chose the runner."
             : "This runner answers here until you pick another."}
         </p>
       </div>

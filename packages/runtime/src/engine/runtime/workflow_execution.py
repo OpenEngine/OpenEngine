@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from engine.core import decide
 from engine.core.workflows.implementation_review import (
     IMPLEMENTATION_STEP,
+    start_implementation_command,
     start_review_command,
 )
 from engine.domain import (
@@ -127,32 +128,79 @@ class WorkflowExecutor:
                 # The step paused for clarification. Its conversation is
                 # durable and a later response can resume the same instance.
                 return
-            if implementation.state.phase is RunPhase.FAILED:
-                return
-            if implementation.state.phase is not RunPhase.REVIEWING:
-                raise WorkflowExecutionError(
-                    "implementation result did not advance the run to review"
-                )
-            review = await self._run_step(
-                implementation.state,
-                _only(implementation.commands, StartAgentRun),
-                runner=reviewer,
-                runner_name=selected_name,
+            await self._advance_after_implementation(
+                implementation, reviewer=reviewer, runner_name=selected_name
             )
-            if review is None or review.state.phase is RunPhase.FAILED:
-                return
-            if review.state.phase is not RunPhase.AWAITING_HUMAN_REVIEW:
-                raise WorkflowExecutionError(
-                    "review result did not advance the run to human review"
-                )
-            # Nothing to dispatch: the persisted AWAITING_HUMAN_REVIEW
-            # transition *is* the request for a human. Requiring the command
-            # keeps the executor and reducer contract explicit.
-            _only(review.commands, RequestHumanReview)
         except asyncio.CancelledError:
             raise
         except Exception as error:
             await self._fail(initial_event.run_id, error)
+
+    async def resume_implementation(
+        self, run_id: RunId, message: str, runner_name: str = ""
+    ) -> None:
+        """Continue an editable implementation step with a human message."""
+
+        state = await self._require_state(run_id)
+        if (
+            state.phase is not RunPhase.IMPLEMENTING
+            or state.current_step_id != IMPLEMENTATION_STEP
+        ):
+            raise WorkflowExecutionError("run is not implementing")
+        try:
+            selected_name = runner_name or self.default_runner
+            try:
+                runner = self._runners[selected_name]
+                reviewer = self._review_runners[selected_name]
+            except KeyError as error:
+                raise WorkflowExecutionError(
+                    f"unknown workflow runner: {selected_name}"
+                ) from error
+            implementation = await self._run_step(
+                state,
+                start_implementation_command(state),
+                runner=runner,
+                runner_name=selected_name,
+                continuation=message,
+            )
+            if implementation is None:
+                return
+            await self._advance_after_implementation(
+                implementation, reviewer=reviewer, runner_name=selected_name
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            await self._fail(run_id, error)
+
+    async def _advance_after_implementation(
+        self,
+        implementation: _StepOutcome,
+        *,
+        reviewer: AgentRunner,
+        runner_name: str,
+    ) -> None:
+        if implementation.state.phase is RunPhase.FAILED:
+            return
+        if implementation.state.phase is not RunPhase.REVIEWING:
+            raise WorkflowExecutionError(
+                "implementation result did not advance the run to review"
+            )
+        review = await self._run_step(
+            implementation.state,
+            _only(implementation.commands, StartAgentRun),
+            runner=reviewer,
+            runner_name=runner_name,
+        )
+        if review is None or review.state.phase is RunPhase.FAILED:
+            return
+        if review.state.phase is not RunPhase.AWAITING_HUMAN_REVIEW:
+            raise WorkflowExecutionError(
+                "review result did not advance the run to human review"
+            )
+        # Nothing to dispatch: the persisted AWAITING_HUMAN_REVIEW transition
+        # is the request for a human. Keep the executor/reducer contract explicit.
+        _only(review.commands, RequestHumanReview)
 
     async def resume_review(self, run_id: RunId, runner_name: str = "") -> None:
         """Resume the review command lost when its process stopped.
@@ -227,6 +275,7 @@ class WorkflowExecutor:
         *,
         runner: AgentRunner,
         runner_name: str,
+        continuation: str | None = None,
     ) -> _StepOutcome | None:
         """Run one agent-backed step and fold its terminal result into the run.
 
@@ -253,6 +302,7 @@ class WorkflowExecutor:
                 and isinstance(runner, InteractiveMcpAgentRunner)
                 else None
             ),
+            continuation=continuation,
         )
         if folded is not None:
             # The MCP acknowledgement was sent only after this transition

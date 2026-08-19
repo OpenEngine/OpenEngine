@@ -120,8 +120,9 @@ class Dispatcher:
         runner_name: str = "",
         on_terminal_result: Callable[[TerminalEvent], Awaitable[None]] | None = None,
         on_approval: ApprovalHandler | None = None,
+        continuation: str | None = None,
     ) -> AgentTurn | TerminalEvent:
-        """Run a workflow step, preferring a directly delivered MCP result."""
+        """Run or continue a workflow step, preferring a delivered MCP result."""
         caps = self._capabilities
         selected_runner = runner or caps.agent_runner
         assert command.step is not None
@@ -135,11 +136,24 @@ class Dispatcher:
             runner=runner_name,
         )
         conversation = await caps.state_store.load_conversation(instance.instance_id)
-        prompt = Message.user(
+        initial_prompt = Message.user(
             f"{command.prompt}\n\n{step_result_instructions(command.step)}"
         )
         if conversation is not None and not conversation.messages:
-            await caps.state_store.append_messages(instance.instance_id, (prompt,))
+            await caps.state_store.append_messages(
+                instance.instance_id, (initial_prompt,)
+            )
+            messages = (initial_prompt,)
+        elif conversation is not None and continuation is not None:
+            follow_up = Message.user(continuation)
+            await caps.state_store.append_messages(instance.instance_id, (follow_up,))
+            messages = (*conversation.messages, follow_up)
+        elif conversation is not None:
+            messages = conversation.messages
+        else:  # pragma: no cover - stores create the conversation with the instance
+            raise RuntimeError(
+                f"workflow instance {instance.instance_id} has no conversation"
+            )
 
         agent_run = AgentRun(
             agent_run_id=command.agent_run_id,
@@ -166,7 +180,7 @@ class Dispatcher:
                     result, turn, transcript = await self._run_with_terminal_mcp(
                         selected_runner,
                         command,
-                        prompt,
+                        messages,
                         on_terminal_result,
                         observe,
                         on_approval,
@@ -176,7 +190,7 @@ class Dispatcher:
                     turn = await selected_runner.run_turn_streamed(
                         command.agent_run_id,
                         command.profile,
-                        (prompt,),
+                        messages,
                         observe,
                         workspace_id=command.workspace_id,
                     )
@@ -186,13 +200,18 @@ class Dispatcher:
                     turn = await selected_runner.run_turn(
                         command.agent_run_id,
                         command.profile,
-                        (prompt,),
+                        messages,
                         workspace_id=command.workspace_id,
                     )
                     transcript = turn.transcript
             finally:
                 pending.put_nowait(None)
                 await progress_task
+        except asyncio.CancelledError:
+            await caps.state_store.record_agent_run(
+                replace(agent_run, status=AgentRunStatus.CANCELLED, summary="cancelled")
+            )
+            raise
         except Exception as error:
             await caps.state_store.record_agent_run(
                 replace(
@@ -243,7 +262,7 @@ class Dispatcher:
         self,
         runner: McpAgentRunner,
         command: StartAgentRun,
-        prompt: Message,
+        messages: tuple[Message, ...],
         deliver: Callable[[TerminalEvent], Awaitable[None]] | None,
         on_message: TurnObserver,
         on_approval: ApprovalHandler | None,
@@ -258,104 +277,119 @@ class Dispatcher:
             deliver=deliver,
         )
         async with broker:
-            messages = (prompt,)
             transcript: list[Message] = []
             corrections = 0
-            while True:
-                streaming = on_approval is not None or isinstance(
-                    runner, StreamingMcpAgentRunner
-                )
-                if on_approval is not None:
-                    if not isinstance(runner, InteractiveMcpAgentRunner):
-                        raise RuntimeError(
-                            "workflow approval handling requires an interactive "
-                            "MCP runner"
+            run_task: asyncio.Task[AgentTurn] | None = None
+            result_task: asyncio.Task[TerminalEvent] | None = None
+            try:
+                while True:
+                    streaming = on_approval is not None or isinstance(
+                        runner, StreamingMcpAgentRunner
+                    )
+                    if on_approval is not None:
+                        if not isinstance(runner, InteractiveMcpAgentRunner):
+                            raise RuntimeError(
+                                "workflow approval handling requires an interactive "
+                                "MCP runner"
+                            )
+                        turn_call = runner.run_turn_with_mcp_interactive(
+                            command.agent_run_id,
+                            command.profile,
+                            messages,
+                            broker.config,
+                            on_approval,
+                            on_message=on_message,
+                            workspace_id=command.workspace_id,
                         )
-                    turn_call = runner.run_turn_with_mcp_interactive(
-                        command.agent_run_id,
-                        command.profile,
-                        messages,
-                        broker.config,
-                        on_approval,
-                        on_message=on_message,
-                        workspace_id=command.workspace_id,
+                    elif streaming:
+                        turn_call = runner.run_turn_with_mcp_streamed(
+                            command.agent_run_id,
+                            command.profile,
+                            messages,
+                            broker.config,
+                            on_message,
+                            workspace_id=command.workspace_id,
+                        )
+                    else:
+                        turn_call = runner.run_turn_with_mcp(
+                            command.agent_run_id,
+                            command.profile,
+                            messages,
+                            broker.config,
+                            workspace_id=command.workspace_id,
+                        )
+                    run_task = asyncio.create_task(turn_call)
+                    result_task = asyncio.create_task(broker.result())
+                    done, _pending = await asyncio.wait(
+                        (run_task, result_task), return_when=asyncio.FIRST_COMPLETED
                     )
-                elif streaming:
-                    turn_call = runner.run_turn_with_mcp_streamed(
-                        command.agent_run_id,
-                        command.profile,
-                        messages,
-                        broker.config,
-                        on_message,
-                        workspace_id=command.workspace_id,
-                    )
-                else:
-                    turn_call = runner.run_turn_with_mcp(
-                        command.agent_run_id,
-                        command.profile,
-                        messages,
-                        broker.config,
-                        workspace_id=command.workspace_id,
-                    )
-                run_task = asyncio.create_task(turn_call)
-                result_task = asyncio.create_task(broker.result())
-                done, _pending = await asyncio.wait(
-                    (run_task, result_task), return_when=asyncio.FIRST_COMPLETED
+                    if result_task in done:
+                        result = result_task.result()
+                        try:
+                            await runner.cancel(command.agent_run_id)
+                        except Exception:
+                            # Cancellation is best-effort and cannot revoke a
+                            # result already accepted and delivered by the runtime.
+                            pass
+                        turn: AgentTurn | None = None
+                        try:
+                            turn = await asyncio.wait_for(run_task, timeout=1.0)
+                        except asyncio.TimeoutError:
+                            run_task.cancel()
+                            await asyncio.gather(run_task, return_exceptions=True)
+                        except Exception:
+                            # A terminated CLI commonly reports a nonzero exit. The
+                            # already-delivered terminal event remains authoritative.
+                            pass
+                        if turn is not None:
+                            if not streaming:
+                                for message in turn.transcript:
+                                    on_message(message)
+                            transcript.extend(turn.transcript)
+                        return result, turn, tuple(transcript)
+
+                    result_task.cancel()
+                    await asyncio.gather(result_task, return_exceptions=True)
+                    turn = await run_task
+                    if not streaming:
+                        for message in turn.transcript:
+                            on_message(message)
+                    transcript.extend(turn.transcript)
+                    if requests_clarification_or_escalation(turn):
+                        return None, turn, tuple(transcript)
+                    if corrections >= _TERMINAL_RESULT_CORRECTIONS:
+                        failure = RunFailed(
+                            run_id=command.run_id,
+                            reason=(
+                                f"the {command.step.step_id} agent ended "
+                                f"{corrections + 1} turns without reporting a valid "
+                                "terminal result"
+                            ),
+                            agent_run_id=command.agent_run_id,
+                        )
+                        # Returned rather than raised: this is the step's result,
+                        # so it is recorded and folded like any other failure, and
+                        # the transcript that led to it stays with the agent.
+                        return failure, turn, tuple(transcript)
+
+                    corrections += 1
+                    correction = Message.user(INVALID_COMPLETION_ERROR)
+                    transcript.append(correction)
+                    on_message(correction)
+                    messages = (*messages, *turn.transcript, correction)
+            except asyncio.CancelledError:
+                try:
+                    await runner.cancel(command.agent_run_id)
+                except Exception:
+                    pass
+                for task in (run_task, result_task):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    *(task for task in (run_task, result_task) if task is not None),
+                    return_exceptions=True,
                 )
-                if result_task in done:
-                    result = result_task.result()
-                    try:
-                        await runner.cancel(command.agent_run_id)
-                    except Exception:
-                        # Cancellation is best-effort and cannot revoke a
-                        # result already accepted and delivered by the runtime.
-                        pass
-                    turn: AgentTurn | None = None
-                    try:
-                        turn = await asyncio.wait_for(run_task, timeout=1.0)
-                    except asyncio.TimeoutError:
-                        run_task.cancel()
-                        await asyncio.gather(run_task, return_exceptions=True)
-                    except Exception:
-                        # A terminated CLI commonly reports a nonzero exit. The
-                        # already-delivered terminal event remains authoritative.
-                        pass
-                    if turn is not None:
-                        if not streaming:
-                            for message in turn.transcript:
-                                on_message(message)
-                        transcript.extend(turn.transcript)
-                    return result, turn, tuple(transcript)
-
-                result_task.cancel()
-                await asyncio.gather(result_task, return_exceptions=True)
-                turn = await run_task
-                if not streaming:
-                    for message in turn.transcript:
-                        on_message(message)
-                transcript.extend(turn.transcript)
-                if requests_clarification_or_escalation(turn):
-                    return None, turn, tuple(transcript)
-                if corrections >= _TERMINAL_RESULT_CORRECTIONS:
-                    failure = RunFailed(
-                        run_id=command.run_id,
-                        reason=(
-                            f"the {command.step.step_id} agent ended "
-                            f"{corrections + 1} turns without reporting a valid "
-                            "terminal result"
-                        ),
-                        agent_run_id=command.agent_run_id,
-                    )
-                    # Returned rather than raised: this is the step's result,
-                    # so it is recorded and folded like any other failure, and
-                    # the transcript that led to it stays with the agent.
-                    return failure, turn, tuple(transcript)
-
-                corrections += 1
-                correction = Message.user(INVALID_COMPLETION_ERROR)
-                transcript.append(correction)
-                on_message(correction)
-                messages = (*messages, *turn.transcript, correction)
+                raise
 
 
 __all__ = ["Dispatcher", "UnhandledCommandError"]

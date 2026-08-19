@@ -46,6 +46,7 @@ export type ApiThread = {
   workspaceAttached: boolean;
   workflowRunId?: string;
   workflowStepId?: string;
+  editable?: boolean;
 };
 
 export type ApiRunStep = {

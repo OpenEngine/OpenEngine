@@ -24,6 +24,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
+from engine.core.workflows.implementation_review import (
+    IMPLEMENTATION_STEP_SPEC,
+    REVIEW_STEP_SPEC,
+)
 from engine.domain import (
     AgentId,
     AgentInstanceId,
@@ -86,6 +90,8 @@ class ChatThread:
     """What to check out to read this chat's work, checkout or no checkout."""
     workflow_run_id: RunId | None = None
     workflow_step_id: StepId | None = None
+    editable: bool = False
+    """Whether this workflow step permits human messages and interruption."""
 
 
 class ActiveRun:
@@ -272,6 +278,7 @@ class ThreadService:
             archived=instance.archived,
             workflow_run_id=instance.workflow_run_id,
             workflow_step_id=instance.workflow_step_id,
+            editable=_workflow_step_editable(instance.workflow_step_id),
         )
         self._threads[instance.instance_id] = await self._sync_workspace(thread)
         self._locks[instance.instance_id] = asyncio.Lock()
@@ -619,6 +626,7 @@ class ThreadService:
                     archived=instance.archived,
                     workflow_run_id=instance.workflow_run_id,
                     workflow_step_id=instance.workflow_step_id,
+                    editable=_workflow_step_editable(instance.workflow_step_id),
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
@@ -669,7 +677,11 @@ def create_app(
 
     def track_workflow(run_id: RunId, task: asyncio.Task[None]) -> None:
         workflow_tasks[run_id] = task
-        task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))
+        task.add_done_callback(
+            lambda completed: workflow_tasks.pop(run_id, None)
+            if workflow_tasks.get(run_id) is completed
+            else None
+        )
 
     async def restore_reviews() -> None:
         """Restart review commands whose process-local dispatch was lost."""
@@ -718,6 +730,52 @@ def create_app(
             thread.workflow_run_id is not None
             and thread.workflow_run_id in workflow_tasks
         )
+
+    async def interrupt_workflow(thread: ChatThread) -> None:
+        """Stop the active process for an editable step without failing its run."""
+
+        if not thread.editable or thread.workflow_run_id is None:
+            raise RuntimeError("this workflow conversation is read-only")
+        state = await session.state_store.load(thread.workflow_run_id)
+        if (
+            state is None
+            or state.phase is not RunPhase.IMPLEMENTING
+            or state.current_step_id != thread.workflow_step_id
+        ):
+            raise RuntimeError("this workflow step is no longer active")
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task = workflow_tasks.get(thread.workflow_run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def continue_workflow(thread: ChatThread, text: str) -> None:
+        """Interrupt, append a human message, and resume the same workflow step."""
+
+        assert thread.workflow_run_id is not None
+        before = len(await service.history(thread.instance_id))
+        await interrupt_workflow(thread)
+        state = await session.state_store.load(thread.workflow_run_id)
+        if (
+            state is None
+            or state.phase is not RunPhase.IMPLEMENTING
+            or state.current_step_id != thread.workflow_step_id
+        ):
+            raise RuntimeError("this workflow step is no longer active")
+        task = asyncio.create_task(
+            workflow_executor.resume_implementation(
+                thread.workflow_run_id, text, thread.runner
+            )
+        )
+        track_workflow(thread.workflow_run_id, task)
+        while (
+            len(await service.history(thread.instance_id)) <= before
+            and not task.done()
+        ):
+            await asyncio.sleep(0)
+        if task.done() and not task.cancelled() and task.exception() is not None:
+            raise RuntimeError(str(task.exception()))
 
     async def stream_workflow_conversation(
         instance_id: AgentInstanceId, run_id: RunId
@@ -983,7 +1041,8 @@ def create_app(
 
     async def run_thread(request: Request) -> Response:
         instance_id = _thread_id(request)
-        if await service.get(instance_id) is None:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
         try:
@@ -993,10 +1052,18 @@ def create_app(
         runner = str(body["runner"]) if body.get("runner") else None
 
         try:
+            if thread.workflow_run_id is not None:
+                if runner is not None and runner != thread.runner:
+                    return _error("a workflow run chooses its runner", 400)
+                await continue_workflow(thread, text)
+                return StreamingResponse(
+                    stream_workflow_conversation(instance_id, thread.workflow_run_id),
+                    media_type="application/x-ndjson",
+                )
             run = await service.start_run(instance_id, text, runner)
+            return StreamingResponse(run.stream(), media_type="application/x-ndjson")
         except RuntimeError as error:
             return _error(str(error), 409)
-        return StreamingResponse(run.stream(), media_type="application/x-ndjson")
 
     async def resume_run(request: Request) -> Response:
         instance_id = _thread_id(request)
@@ -1017,9 +1084,16 @@ def create_app(
 
     async def cancel_run(request: Request) -> Response:
         instance_id = _thread_id(request)
-        if await service.get(instance_id) is None:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
-        await service.stop_run(instance_id)
+        try:
+            if thread.workflow_run_id is not None:
+                await interrupt_workflow(thread)
+            else:
+                await service.stop_run(instance_id)
+        except RuntimeError as error:
+            return _error(str(error), 409)
         return Response(status_code=204)
 
     async def decide_approval(request: Request) -> Response:
@@ -1156,7 +1230,17 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
         result["workflowRunId"] = str(thread.workflow_run_id)
     if thread.workflow_step_id is not None:
         result["workflowStepId"] = str(thread.workflow_step_id)
+        result["editable"] = thread.editable
     return result
+
+
+def _workflow_step_editable(step_id: StepId | None) -> bool:
+    """Resolve UI behavior from the built-in workflow's step configuration."""
+
+    return any(
+        step.step_id == step_id and step.editable
+        for step in (IMPLEMENTATION_STEP_SPEC, REVIEW_STEP_SPEC)
+    )
 
 
 def _run_json(run: WorkflowRunView) -> dict[str, object]:

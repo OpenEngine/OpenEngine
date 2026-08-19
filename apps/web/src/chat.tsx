@@ -326,6 +326,7 @@ type WorkspaceCustom = {
   workspaceAttached?: boolean;
   workflowRunId?: string;
   workflowStepId?: string;
+  editable?: boolean;
 };
 
 function WorkflowBacklink() {
@@ -718,24 +719,27 @@ function Dock() {
     | WorkspaceCustom
     | undefined;
   const workflowConversation = Boolean(custom?.workflowRunId);
+  const editable = !workflowConversation || Boolean(custom?.editable);
   return (
     <ThreadPrimitive.ViewportFooter className="dock">
       <ThreadPrimitive.ScrollToBottom className="btn jump-button">
         Jump to latest
       </ThreadPrimitive.ScrollToBottom>
-      {workflowConversation ? (
+      {!editable ? (
         <p className="step-note">
           This transcript belongs to a workflow step. Return to the run for status and actions.
         </p>
       ) : (
         <>
           <Composer />
-          <div className="dock-foot">
-            {/* Under the composer rather than in the heading: a detached chat
-                refuses to run, so the way to fix that cannot be somewhere you
-                have to scroll a long conversation to reach. */}
-            <WorkspaceLine />
-          </div>
+          {!workflowConversation && (
+            <div className="dock-foot">
+              {/* Under the composer rather than in the heading: a detached chat
+                  refuses to run, so the way to fix that cannot be somewhere you
+                  have to scroll a long conversation to reach. */}
+              <WorkspaceLine />
+            </div>
+          )}
         </>
       )}
     </ThreadPrimitive.ViewportFooter>
