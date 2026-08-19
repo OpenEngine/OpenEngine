@@ -1,9 +1,9 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api, type ApiRunStep, type ApiWorkflowRun, type EngineConfig } from "./api";
-import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
+import { Stat, StatStrip } from "./brand";
 
-const IN_PROGRESS_PHASES = new Set([
+export const IN_PROGRESS_PHASES = new Set([
   "pending",
   "preparing_workspace",
   "implementing",
@@ -31,88 +31,9 @@ export function conversationCount(run: ApiWorkflowRun) {
   return run.steps.filter((step) => step.conversationUrl).length;
 }
 
-function RunNavigation({
-  runs,
-  activeRunId,
-  activeConversationUrl,
-  activeView = "runs",
-}: {
-  runs: ApiWorkflowRun[];
-  activeRunId?: string;
-  activeConversationUrl?: string;
-  activeView?: "runs" | "new";
-}) {
-  return (
-    <aside className="rail">
-      <RailBrand href="/runs" />
-      <div className="rail-nav">
-        <a
-          className={`rail-button ${activeView === "runs" ? "rail-button-primary" : ""}`}
-          href="/runs"
-        >
-          Workflow runs
-        </a>
-        <a
-          className={`rail-button ${activeView === "new" ? "rail-button-primary" : ""}`}
-          href="/runs/new"
-        >
-          + New workflow
-        </a>
-      </div>
-      <p className="rail-label">Recent runs</p>
-      <nav className="rail-scroll" aria-label="Recent runs">
-        {runs.map((run) => (
-          <div key={run.runId}>
-            <div
-              className="rail-item"
-              data-active={
-                activeRunId === run.runId && !activeConversationUrl ? true : undefined
-              }
-            >
-              <a className="rail-item-trigger" href={`/runs/${run.runId}`}>
-                <span className="rail-item-title" data-clamp="">
-                  {run.name}
-                </span>
-                <span className="rail-item-meta">
-                  {IN_PROGRESS_PHASES.has(run.phase) && (
-                    <span className="rail-live" aria-label="Workflow is in progress" />
-                  )}
-                  {phaseLabel(run.phase)} · {run.workflowVersion || run.workflowId}
-                </span>
-              </a>
-            </div>
-            {conversationCount(run) > 0 && (
-              <div className="rail-sub" aria-label={`Conversations for ${run.name}`}>
-                {run.steps
-                  .filter((step) => step.conversationUrl)
-                  .map((step) => (
-                    <a
-                      aria-current={
-                        activeConversationUrl === step.conversationUrl ? "page" : undefined
-                      }
-                      data-active={activeConversationUrl === step.conversationUrl || undefined}
-                      href={step.conversationUrl!}
-                      key={step.stepId}
-                    >
-                      {step.name} conversation
-                    </a>
-                  ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </nav>
-      <div className="rail-tail">
-        <a className="rail-button" href="/conversations">
-          Standalone conversations
-        </a>
-      </div>
-      <RailFoot />
-    </aside>
-  );
-}
-
-function useRuns() {
+/** The runs behind both the workflow pages and the rail's Workflows section,
+ *  read once by the shell so every screen shows the same list. */
+export function useRuns() {
   const [runs, setRuns] = useState<ApiWorkflowRun[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -123,25 +44,7 @@ function useRuns() {
   return { runs, error };
 }
 
-export function RunConversationNavigation({
-  runId,
-  conversationUrl,
-}: {
-  runId: string;
-  conversationUrl: string;
-}) {
-  const { runs } = useRuns();
-  return (
-    <RunNavigation
-      runs={runs}
-      activeRunId={runId}
-      activeConversationUrl={conversationUrl}
-    />
-  );
-}
-
-export function RunsPage() {
-  const { runs, error } = useRuns();
+export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: string }) {
   const [filter, setFilter] = useState<string>("");
 
   // Built from the phases actually present rather than from a fixed list, so a
@@ -159,111 +62,106 @@ export function RunsPage() {
   const conversations = runs.reduce((total, run) => total + conversationCount(run), 0);
 
   return (
-    <div className="app-shell">
-      <RunNavigation runs={runs} />
-      <main className="panel-scroll">
-        <header className="hero">
-          <p className="eyebrow">OpenEngine / Work</p>
-          <h1>Workflow runs</h1>
-          <p className="lede">
-            Each run brings the task, agent steps, outputs, and human decision together.
-          </p>
-        </header>
-        <StatStrip>
-          <Stat label="Runs" value={runs.length} />
-          <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />
-          <Stat label="Failed" value={failed} tone={failed ? "alert" : undefined} />
-          <Stat label="Conversations" value={conversations} />
-        </StatStrip>
-        {runs.length > 0 && (
-          <div className="toolbar">
-            <div className="segmented" role="group" aria-label="Filter runs by phase">
-              <button type="button" aria-pressed={!filter} onClick={() => setFilter("")}>
-                All
+    <main className="panel-scroll">
+      <header className="hero">
+        <p className="eyebrow">OpenEngine / Work</p>
+        <h1>Workflow runs</h1>
+        <p className="lede">
+          Each run brings the task, agent steps, outputs, and human decision together.
+        </p>
+      </header>
+      <StatStrip>
+        <Stat label="Runs" value={runs.length} />
+        <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />
+        <Stat label="Failed" value={failed} tone={failed ? "alert" : undefined} />
+        <Stat label="Conversations" value={conversations} />
+      </StatStrip>
+      {runs.length > 0 && (
+        <div className="toolbar">
+          <div className="segmented" role="group" aria-label="Filter runs by phase">
+            <button type="button" aria-pressed={!filter} onClick={() => setFilter("")}>
+              All
+            </button>
+            {phases.map((phase) => (
+              <button
+                key={phase}
+                type="button"
+                aria-pressed={filter === phase}
+                onClick={() => setFilter(filter === phase ? "" : phase)}
+              >
+                {phaseLabel(phase)}
               </button>
-              {phases.map((phase) => (
-                <button
-                  key={phase}
-                  type="button"
-                  aria-pressed={filter === phase}
-                  onClick={() => setFilter(filter === phase ? "" : phase)}
-                >
-                  {phaseLabel(phase)}
-                </button>
-              ))}
-            </div>
-            <div className="toolbar-end">
-              <span className="micro">
-                {shown.length} of {runs.length} shown
-              </span>
-              <a className="btn" href="/runs/new">
-                Run a workflow
-              </a>
-            </div>
+            ))}
           </div>
-        )}
-        {error ? (
-          <p className="notice notice-block">
-            Could not load runs: {error}
-          </p>
-        ) : runs.length ? (
-          <div className="cards">
-            {shown.map((run) => {
-              const current = run.steps.find((step) => step.stepId === run.currentStepId);
-              return (
-                <a
-                  className="card"
-                  data-accent={phaseAccent(run.phase)}
-                  href={`/runs/${run.runId}`}
-                  key={run.runId}
-                >
-                  <div className="card-top">
-                    <span className={`chip ${run.phase === "pending" ? "chip-flame" : ""}`}>
-                      {phaseLabel(run.phase)}
-                    </span>
-                    <code className="card-id">{run.runId}</code>
+          <div className="toolbar-end">
+            <span className="micro">
+              {shown.length} of {runs.length} shown
+            </span>
+            <a className="btn" href="/runs/new">
+              Run a workflow
+            </a>
+          </div>
+        </div>
+      )}
+      {error ? (
+        <p className="notice notice-block">
+          Could not load runs: {error}
+        </p>
+      ) : runs.length ? (
+        <div className="cards">
+          {shown.map((run) => {
+            const current = run.steps.find((step) => step.stepId === run.currentStepId);
+            return (
+              <a
+                className="card"
+                data-accent={phaseAccent(run.phase)}
+                href={`/runs/${run.runId}`}
+                key={run.runId}
+              >
+                <div className="card-top">
+                  <span className={`chip ${run.phase === "pending" ? "chip-flame" : ""}`}>
+                    {phaseLabel(run.phase)}
+                  </span>
+                  <code className="card-id">{run.runId}</code>
+                </div>
+                <h2>{run.name}</h2>
+                <dl className="card-stats">
+                  <div>
+                    <dt>Steps</dt>
+                    <dd>{run.steps.length}</dd>
                   </div>
-                  <h2>{run.name}</h2>
-                  <dl className="card-stats">
-                    <div>
-                      <dt>Steps</dt>
-                      <dd>{run.steps.length}</dd>
-                    </div>
-                    <div>
-                      <dt>Chats</dt>
-                      <dd>{conversationCount(run)}</dd>
-                    </div>
-                    <div>
-                      <dt>Stage</dt>
-                      <dd>{current?.name ?? run.terminalOutcome ?? "—"}</dd>
-                    </div>
-                  </dl>
-                  <footer>
-                    {run.workflowName} · {run.workflowVersion}
-                  </footer>
-                </a>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="empty">
-            <h2>No workflow runs yet.</h2>
-            <p>Standalone conversations remain available from the sidebar.</p>
-          </div>
-        )}
-      </main>
-    </div>
+                  <div>
+                    <dt>Chats</dt>
+                    <dd>{conversationCount(run)}</dd>
+                  </div>
+                  <div>
+                    <dt>Stage</dt>
+                    <dd>{current?.name ?? run.terminalOutcome ?? "—"}</dd>
+                  </div>
+                </dl>
+                <footer>
+                  {run.workflowName} · {run.workflowVersion}
+                </footer>
+              </a>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty">
+          <h2>No workflow runs yet.</h2>
+          <p>Chats remain available from the sidebar.</p>
+        </div>
+      )}
+    </main>
   );
 }
 
-export function NewWorkflowPage() {
-  const { runs } = useRuns();
+export function NewWorkflowPage({ config }: { config: EngineConfig }) {
   const [prompt, setPrompt] = useState(
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
   );
   const [repository, setRepository] = useState(".");
-  const [runners, setRunners] = useState<string[]>([]);
-  const [runner, setRunner] = useState("");
+  const [runner, setRunner] = useState(config.defaultWorkflowRunner);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -271,15 +169,6 @@ export function NewWorkflowPage() {
     if (prompt) window.localStorage.setItem(WORKFLOW_DRAFT_KEY, prompt);
     else window.localStorage.removeItem(WORKFLOW_DRAFT_KEY);
   }, [prompt]);
-
-  useEffect(() => {
-    api<EngineConfig>("/api/config")
-      .then((config) => {
-        setRunners(config.workflowRunners);
-        setRunner(config.defaultWorkflowRunner);
-      })
-      .catch((reason: Error) => setError(reason.message));
-  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -305,77 +194,74 @@ export function NewWorkflowPage() {
   }
 
   return (
-    <div className="app-shell">
-      <RunNavigation runs={runs} activeView="new" />
-      <main className="panel-scroll">
-        <header className="hero hero-narrow">
-          <p className="eyebrow">OpenEngine / New workflow</p>
-          <h1>Start a workflow</h1>
-          <p className="lede">
-            Create one run that keeps its stages, agent conversations, outputs, and final human
-            decision together.
+    <main className="panel-scroll">
+      <header className="hero hero-narrow">
+        <p className="eyebrow">OpenEngine / New workflow</p>
+        <h1>Start a workflow</h1>
+        <p className="lede">
+          Create one run that keeps its stages, agent conversations, outputs, and final human
+          decision together.
+        </p>
+      </header>
+      <form className="form" onSubmit={submit}>
+        <label>
+          <span>Workflow definition</span>
+          <select disabled value="implementation-review-v1">
+            <option value="implementation-review-v1">Implementation review · v1</option>
+          </select>
+        </label>
+        <label>
+          <span>Repository</span>
+          <input
+            required
+            value={repository}
+            onChange={(event) => setRepository(event.target.value)}
+            placeholder="owner/repository or local path"
+          />
+        </label>
+        <label>
+          <span>Implementation runner</span>
+          <select
+            required
+            value={runner}
+            onChange={(event) => setRunner(event.target.value)}
+          >
+            {config.workflowRunners.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Task prompt</span>
+          <textarea
+            required
+            rows={9}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Describe what the implementation agent should change and what success looks like."
+          />
+        </label>
+        {error && (
+          <p className="notice" role="alert">
+            {error}
           </p>
-        </header>
-        <form className="form" onSubmit={submit}>
-          <label>
-            <span>Workflow definition</span>
-            <select disabled value="implementation-review-v1">
-              <option value="implementation-review-v1">Implementation review · v1</option>
-            </select>
-          </label>
-          <label>
-            <span>Repository</span>
-            <input
-              required
-              value={repository}
-              onChange={(event) => setRepository(event.target.value)}
-              placeholder="owner/repository or local path"
-            />
-          </label>
-          <label>
-            <span>Implementation runner</span>
-            <select
-              required
-              value={runner}
-              onChange={(event) => setRunner(event.target.value)}
-            >
-              {runners.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Task prompt</span>
-            <textarea
-              required
-              rows={9}
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Describe what the implementation agent should change and what success looks like."
-            />
-          </label>
-          {error && (
-            <p className="notice" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="form-actions">
-            <a className="back-link" href="/runs">
-              Cancel
-            </a>
-            <button className="btn btn-primary" disabled={submitting || !runner} type="submit">
-              {submitting ? "Creating…" : "Create workflow run"}
-            </button>
-          </div>
-          <p className="form-note">
-            The implementation starts after the run is created. Reviewer execution is not
-            available yet.
-          </p>
-        </form>
-      </main>
-    </div>
+        )}
+        <div className="form-actions">
+          <a className="back-link" href="/runs">
+            Cancel
+          </a>
+          <button className="btn btn-primary" disabled={submitting || !runner} type="submit">
+            {submitting ? "Creating…" : "Create workflow run"}
+          </button>
+        </div>
+        <p className="form-note">
+          The implementation starts after the run is created. Reviewer execution is not
+          available yet.
+        </p>
+      </form>
+    </main>
   );
 }
 
@@ -457,7 +343,6 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
 }
 
 export function RunDetailPage({ runId }: { runId: string }) {
-  const { runs } = useRuns();
   const [run, setRun] = useState<ApiWorkflowRun>();
   const [error, setError] = useState("");
   useEffect(() => {
@@ -485,77 +370,74 @@ export function RunDetailPage({ runId }: { runId: string }) {
   }, [runId]);
 
   return (
-    <div className="app-shell">
-      <RunNavigation runs={runs} activeRunId={runId} />
-      <main className="panel-scroll">
-        {error ? (
-          <p className="notice notice-block">
-            Could not load run: {error}
-          </p>
-        ) : !run ? (
-          <p className="state-inline">Loading workflow run…</p>
-        ) : (
-          <>
-            <header className="detail-head">
-              <a href="/runs" className="back-link">
-                ← All workflow runs
-              </a>
-              <div className="detail-title">
-                <div>
-                  <p className="eyebrow">
-                    {run.workflowName} / {run.workflowVersion}
-                  </p>
-                  <h1>{run.name}</h1>
-                  <p className="lede">{run.taskPrompt}</p>
-                </div>
-                <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
-                  {phaseLabel(run.phase)}
-                </span>
-              </div>
-            </header>
-            <StatStrip>
-              <Stat label="Run ID" value={run.runId} />
-              <Stat label="Repository" value={run.repository} />
-              <Stat label="Current step" value={run.currentStepId ?? "—"} />
-              <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
-            </StatStrip>
-            <StageProgress run={run} />
-            {run.pendingHumanReview && (
-              <section className="callout callout-action">
-                <p className="eyebrow">Action required</p>
-                <h2>{run.pendingHumanReview.title}</h2>
-                <p>
-                  The implementation and agent review are complete. A human approval or rejection
-                  is the final decision.
+    <main className="panel-scroll">
+      {error ? (
+        <p className="notice notice-block">
+          Could not load run: {error}
+        </p>
+      ) : !run ? (
+        <p className="state-inline">Loading workflow run…</p>
+      ) : (
+        <>
+          <header className="detail-head">
+            <a href="/runs" className="back-link">
+              ← All workflow runs
+            </a>
+            <div className="detail-title">
+              <div>
+                <p className="eyebrow">
+                  {run.workflowName} / {run.workflowVersion}
                 </p>
-              </section>
-            )}
-            {run.humanDecision && (
-              <section
-                className={`callout ${run.humanDecision.outcome === "rejected" ? "callout-rejected" : ""}`}
-              >
-                <p className="eyebrow">Final human decision</p>
-                <h2>{run.humanDecision.outcome}</h2>
-                <p>{run.humanDecision.summary || "No decision summary was provided."}</p>
-              </section>
-            )}
-            {run.failureReason && (
-              <p className="notice notice-block">
-                {run.failureReason}
+                <h1>{run.name}</h1>
+                <p className="lede">{run.taskPrompt}</p>
+              </div>
+              <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
+                {phaseLabel(run.phase)}
+              </span>
+            </div>
+          </header>
+          <StatStrip>
+            <Stat label="Run ID" value={run.runId} />
+            <Stat label="Repository" value={run.repository} />
+            <Stat label="Current step" value={run.currentStepId ?? "—"} />
+            <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
+          </StatStrip>
+          <StageProgress run={run} />
+          {run.pendingHumanReview && (
+            <section className="callout callout-action">
+              <p className="eyebrow">Action required</p>
+              <h2>{run.pendingHumanReview.title}</h2>
+              <p>
+                The implementation and agent review are complete. A human approval or rejection
+                is the final decision.
               </p>
-            )}
-            <section className="timeline" aria-label="Workflow steps">
-              {run.steps.map((step) => (
-                <StepCard
-                  key={step.stepId}
-                  step={step}
-                  current={run.currentStepId === step.stepId}
-                />
-              ))}
             </section>
-          </>
-        )}
-      </main>
-    </div>
+          )}
+          {run.humanDecision && (
+            <section
+              className={`callout ${run.humanDecision.outcome === "rejected" ? "callout-rejected" : ""}`}
+            >
+              <p className="eyebrow">Final human decision</p>
+              <h2>{run.humanDecision.outcome}</h2>
+              <p>{run.humanDecision.summary || "No decision summary was provided."}</p>
+            </section>
+          )}
+          {run.failureReason && (
+            <p className="notice notice-block">
+              {run.failureReason}
+            </p>
+          )}
+          <section className="timeline" aria-label="Workflow steps">
+            {run.steps.map((step) => (
+              <StepCard
+                key={step.stepId}
+                step={step}
+                current={run.currentStepId === step.stepId}
+              />
+            ))}
+          </section>
+        </>
+      )}
+    </main>
   );
 }

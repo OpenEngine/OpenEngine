@@ -1,5 +1,5 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import {
@@ -9,67 +9,37 @@ import {
   type EngineConfig,
   type RunnerOption,
 } from "./api";
-import { ChatSidebar, ChatThread, ConversationStats } from "./chat";
+import { ChatThread, ConversationStats } from "./chat";
 import { EngineRuntimeProvider } from "./runtime";
-import {
-  NewWorkflowPage,
-  RunConversationNavigation,
-  RunDetailPage,
-  RunsPage,
-} from "./runs";
+import { NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
+import { Sidebar, type RailSection } from "./sidebar";
 import "./styles.css";
 
-function ChatApp({
-  initialThreadId,
-  workflowRunId,
+function ChatPanel({
+  config,
+  agentId,
+  runner,
+  onAgentChange,
+  onRunnerChange,
 }: {
-  initialThreadId?: string;
-  workflowRunId?: string;
+  config: EngineConfig;
+  agentId: string;
+  runner: string;
+  onAgentChange: (agentId: string) => void;
+  onRunnerChange: (runner: string) => void;
 }) {
-  const [config, setConfig] = useState<EngineConfig | null>(null);
-  const [error, setError] = useState("");
-  const [agentId, setAgentId] = useState("");
-  const [runner, setRunner] = useState("");
-
-  useEffect(() => {
-    api<EngineConfig>("/api/config")
-      .then((value) => {
-        setConfig(value);
-        setAgentId(value.defaultAgent);
-        setRunner(value.defaultRunner);
-      })
-      .catch((reason: Error) => setError(reason.message));
-  }, []);
-
-  if (error)
-    return <main className="state state-fatal">Could not connect to openengine: {error}</main>;
-  if (!config || !agentId || !runner)
-    return <main className="state">Starting openengine…</main>;
-
   return (
-    <EngineRuntimeProvider defaults={{ agentId, runner }} initialThreadId={initialThreadId}>
-      <div className="app-shell">
-        {workflowRunId && initialThreadId ? (
-          <RunConversationNavigation
-            runId={workflowRunId}
-            conversationUrl={window.location.pathname.replace(/\/$/, "")}
-          />
-        ) : (
-          <ChatSidebar />
-        )}
-        <main className="panel">
-          <ChatHeader
-            config={config}
-            agentId={agentId}
-            runner={runner}
-            onAgentChange={setAgentId}
-            onRunnerChange={setRunner}
-          />
-          <ConversationStats />
-          <ChatThread />
-        </main>
-      </div>
-    </EngineRuntimeProvider>
+    <main className="panel">
+      <ChatHeader
+        config={config}
+        agentId={agentId}
+        runner={runner}
+        onAgentChange={onAgentChange}
+        onRunnerChange={onRunnerChange}
+      />
+      <ConversationStats />
+      <ChatThread />
+    </main>
   );
 }
 
@@ -249,28 +219,107 @@ function ConversationHeader({
   );
 }
 
-function App() {
+type Route =
+  | { kind: "runs" }
+  | { kind: "new-run" }
+  | { kind: "run"; runId: string }
+  | { kind: "chat"; threadId?: string; runId?: string };
+
+function currentRoute(): Route {
   const path = window.location.pathname.replace(/\/$/, "") || "/";
-  if (path === "/" || path === "/runs") return <RunsPage />;
-  if (path === "/runs/new") return <NewWorkflowPage />;
+  if (path === "/" || path === "/runs") return { kind: "runs" };
+  if (path === "/runs/new") return { kind: "new-run" };
   const workflowConversation = path.match(
     /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
   );
-  if (workflowConversation) {
-    return (
-      <ChatApp
-        workflowRunId={decodeURIComponent(workflowConversation[1])}
-        initialThreadId={decodeURIComponent(workflowConversation[2])}
-      />
-    );
-  }
-  if (path.startsWith("/runs/")) {
-    return <RunDetailPage runId={decodeURIComponent(path.slice("/runs/".length))} />;
-  }
-  if (path.startsWith("/conversations/")) {
-    return <ChatApp initialThreadId={decodeURIComponent(path.slice("/conversations/".length))} />;
-  }
-  return <ChatApp />;
+  if (workflowConversation)
+    return {
+      kind: "chat",
+      runId: decodeURIComponent(workflowConversation[1]),
+      threadId: decodeURIComponent(workflowConversation[2]),
+    };
+  if (path.startsWith("/runs/"))
+    return { kind: "run", runId: decodeURIComponent(path.slice("/runs/".length)) };
+  if (path.startsWith("/conversations/"))
+    return { kind: "chat", threadId: decodeURIComponent(path.slice("/conversations/".length)) };
+  return { kind: "chat" };
+}
+
+/** Which section of the rail the page on screen came from, so the rail opens
+ *  showing where you are. A workflow's own conversation belongs to its run. */
+function sectionFor(route: Route): RailSection {
+  if (route.kind === "chat") return route.runId ? "workflows" : "chats";
+  return "workflows";
+}
+
+/** One shell for every screen: the rail, and the page beside it.
+ *
+ *  The rail lists chats wherever it is drawn, so the chat runtime is mounted
+ *  around the workflow pages too -- reading the list is all they ask of it. */
+function App() {
+  const route = useMemo(currentRoute, []);
+  const [config, setConfig] = useState<EngineConfig | null>(null);
+  const [error, setError] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [runner, setRunner] = useState("");
+  const { runs, error: runsError } = useRuns();
+
+  useEffect(() => {
+    api<EngineConfig>("/api/config")
+      .then((value) => {
+        setConfig(value);
+        setAgentId(value.defaultAgent);
+        setRunner(value.defaultRunner);
+      })
+      .catch((reason: Error) => setError(reason.message));
+  }, []);
+
+  if (error)
+    return <main className="state state-fatal">Could not connect to openengine: {error}</main>;
+  if (!config || !agentId || !runner)
+    return <main className="state">Starting openengine…</main>;
+
+  const chat = route.kind === "chat";
+  // Switching the open conversation in place is for the rail beside a chat of
+  // its own. A workflow step's transcript is reached through its run, so
+  // leaving one is a move to another page rather than a swap under the URL.
+  const standaloneChat = chat && !route.runId;
+  const activeRunId = route.kind === "run" || route.kind === "chat" ? route.runId : undefined;
+  return (
+    <EngineRuntimeProvider
+      defaults={{ agentId, runner }}
+      initialThreadId={chat ? route.threadId : undefined}
+      rememberActiveThread={chat}
+    >
+      <div className="app-shell">
+        <Sidebar
+          runs={runs}
+          initialSection={sectionFor(route)}
+          linkChats={!standaloneChat}
+          activeRunId={activeRunId}
+          activeConversationUrl={
+            chat && route.runId ? window.location.pathname.replace(/\/$/, "") : undefined
+          }
+          activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
+        />
+        {route.kind === "runs" ? (
+          <RunsPage runs={runs} error={runsError} />
+        ) : route.kind === "new-run" ? (
+          <NewWorkflowPage config={config} />
+        ) : route.kind === "run" ? (
+          <RunDetailPage runId={route.runId} />
+        ) : (
+          <ChatPanel
+            config={config}
+            agentId={agentId}
+            runner={runner}
+            onAgentChange={setAgentId}
+            onRunnerChange={setRunner}
+          />
+        )}
+      </div>
+    </EngineRuntimeProvider>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(

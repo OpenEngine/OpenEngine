@@ -179,8 +179,65 @@ ul, ol { padding: 0; list-style: none; }
 }
 .rail-wordmark { font-size: 21px; font-weight: 800; letter-spacing: -.025em; }
 
+/* The three sections of the rail. Every header keeps its place in the column;
+   the open section takes the space nothing else claims, which is what slides
+   the headers below it to the foot of the rail. A closed section is laid out at
+   zero height rather than removed, so opening one is a movement and not a cut. */
+.rail-sections {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--night-rule);
+}
+.rail-section {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--night-rule);
+  transition: flex-grow .3s ease;
+}
+.rail-section[data-open] { flex-grow: 1; }
+.rail-section-body {
+  display: flex;
+  /* Basis zero, so a closed section measures its header and nothing else. */
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.rail-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 15px var(--rail-pad, 18px);
+  color: var(--night-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  font: 600 12px/1 var(--mono);
+  letter-spacing: .16em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.rail-head:hover { border-color: #6a6a64; }
+.rail-head:focus-visible { border-color: var(--night-ink); outline: 0; }
+.rail-section[data-open] > .rail-head { color: var(--white); }
+
+.rail-note {
+  display: grid;
+  gap: 10px;
+  padding: 4px var(--rail-pad, 18px) 16px;
+  color: var(--night-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .rail-list { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
-.rail-nav { display: grid; gap: 10px; padding: 0 var(--rail-pad, 18px) 6px; }
+.rail-nav { display: grid; gap: 10px; padding: 2px var(--rail-pad, 18px) 10px; }
 .rail-button {
   display: flex;
   align-items: center;
@@ -196,6 +253,13 @@ ul, ol { padding: 0; list-style: none; }
   cursor: pointer;
 }
 .rail-button:hover { background: var(--night-raised); border-color: #6a6a64; }
+/* The page you are already on, marked without taking the accent from the
+   button beside it -- which assistant-ui also calls active when the new chat
+   is the open one, and which stays flame either way. */
+.rail-button:not(.rail-button-primary)[data-active] {
+  background: var(--night-active);
+  border-color: #6a6a64;
+}
 .rail-button-primary {
   color: var(--white);
   background: var(--flame);
@@ -203,13 +267,6 @@ ul, ol { padding: 0; list-style: none; }
 }
 .rail-button-primary:hover { background: var(--flame-deep); border-color: var(--flame-deep); }
 
-.rail-label {
-  padding: 22px var(--rail-pad, 18px) 8px;
-  color: var(--night-muted);
-  font: 500 11px/1 var(--mono);
-  letter-spacing: .16em;
-  text-transform: uppercase;
-}
 .rail-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 
 .rail-item {
@@ -309,7 +366,6 @@ ul, ol { padding: 0; list-style: none; }
 .rail-archive .rail-item-trigger { cursor: default; }
 .rail-archive .rail-item { opacity: .7; }
 
-.rail-tail { margin-top: auto; padding: 14px var(--rail-pad, 18px) 0; }
 .rail-foot {
   display: flex;
   gap: 9px;
@@ -898,7 +954,24 @@ select:disabled { cursor: default; }
   .app-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
   .rail { --rail-pad: 12px; flex-direction: row; gap: 10px; align-items: center; padding: 10px 12px; overflow-x: auto; }
   .rail-brand { padding: 0; }
-  .rail-wordmark, .rail-label, .rail-foot, .rail-archive, .rail-sub { display: none; }
+  .rail-wordmark, .rail-foot, .rail-archive, .rail-sub, .rail-note { display: none; }
+  /* No room to stack three sections here, so the rail is one scrolling row.
+     The sections stop being boxes -- `contents` lifts their headers and bodies
+     into the row -- and `order` keeps all three headers together at the front,
+     ahead of whatever the open one is showing. */
+  .rail-sections { flex-direction: row; gap: 8px; align-items: center; min-width: 0; border: 0; }
+  .rail-section { display: contents; }
+  .rail-head { order: 0; width: auto; padding: 10px 8px; white-space: nowrap; }
+  .rail-section-body { display: none; }
+  .rail-section[data-open] > .rail-section-body {
+    display: flex;
+    order: 1;
+    flex-direction: row;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+  }
+  .rail-list { flex-direction: row; gap: 8px; align-items: center; min-width: 0; }
   .rail-nav { display: flex; gap: 8px; padding: 0; }
   .rail-button { height: 40px; padding: 0 12px; white-space: nowrap; }
   /* The runs rail nests each item in a group wrapper; size whatever the
@@ -907,7 +980,6 @@ select:disabled { cursor: default; }
   .rail-scroll > * { flex: 0 0 190px; }
   .rail-item { border: 1px solid var(--night-rule); }
   .rail-item:last-child { border-bottom: 1px solid var(--night-rule); }
-  .rail-tail { margin: 0; padding: 0; }
   .panel-head { grid-template-columns: minmax(0, 1fr); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .composer { grid-template-columns: minmax(0, 1fr); }

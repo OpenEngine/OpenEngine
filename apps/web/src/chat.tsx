@@ -3,8 +3,6 @@ import {
   MessagePartPrimitive,
   MessagePrimitive,
   QueueItemPrimitive,
-  ThreadListItemPrimitive,
-  ThreadListPrimitive,
   ThreadPrimitive,
   useAui,
   useAuiState,
@@ -25,7 +23,7 @@ import {
   type ApprovalDecision,
 } from "./api";
 import { useApprovals } from "./approvals";
-import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
+import { Stat, StatStrip } from "./brand";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
@@ -754,84 +752,3 @@ function Dock() {
   );
 }
 
-function ThreadItemMeta() {
-  const custom = useAuiState((state) => state.threadListItem.custom) as
-    | { agentId?: string; runner?: string; workspaceRoot?: string }
-    | undefined;
-  const isRunning = useAuiState((state) => state.threadListItem.isRunning);
-  return (
-    <span className="rail-item-meta">
-      {isRunning && <span className="rail-live" aria-label="Agent is running" />}
-      {[custom?.agentId, custom?.runner].filter(Boolean).join(" · ")}
-    </span>
-  );
-}
-
-function ThreadListItem({ archived = false }: { archived?: boolean }) {
-  const copy = (
-    <>
-      <span className="rail-item-title" data-clamp="">
-        <ThreadListItemPrimitive.Title fallback="New chat" />
-      </span>
-      <ThreadItemMeta />
-    </>
-  );
-  return (
-    <ThreadListItemPrimitive.Root className="rail-item">
-      {archived ? (
-        <div className="rail-item-trigger">{copy}</div>
-      ) : (
-        <ThreadListItemPrimitive.Trigger className="rail-item-trigger">
-          {copy}
-        </ThreadListItemPrimitive.Trigger>
-      )}
-      {archived ? (
-        <ThreadListItemPrimitive.Unarchive
-          className="rail-item-action"
-          aria-label="Restore chat"
-          title="Restore chat"
-        >
-          Restore
-        </ThreadListItemPrimitive.Unarchive>
-      ) : (
-        <ThreadListItemPrimitive.Archive
-          className="rail-item-action"
-          aria-label="Archive chat"
-          title="Archive chat"
-        >
-          ×
-        </ThreadListItemPrimitive.Archive>
-      )}
-    </ThreadListItemPrimitive.Root>
-  );
-}
-
-export function ChatSidebar() {
-  return (
-    <aside className="rail">
-      <RailBrand href="/conversations" />
-      <ThreadListPrimitive.Root className="rail-list">
-        <div className="rail-nav">
-          <a className="rail-button" href="/runs">
-            Workflow runs
-          </a>
-          <ThreadListPrimitive.New className="rail-button rail-button-primary">
-            + New chat
-          </ThreadListPrimitive.New>
-        </div>
-        <p className="rail-label">Conversations</p>
-        <div className="rail-scroll">
-          <ThreadListPrimitive.Items>{() => <ThreadListItem />}</ThreadListPrimitive.Items>
-          <details className="rail-archive">
-            <summary>Archived</summary>
-            <ThreadListPrimitive.Items archived>
-              {() => <ThreadListItem archived />}
-            </ThreadListPrimitive.Items>
-          </details>
-        </div>
-      </ThreadListPrimitive.Root>
-      <div className="rail-tail" />
-      <RailFoot />
-    </aside>
-  );
-}

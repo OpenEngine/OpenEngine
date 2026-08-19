@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ import {
   phaseAccent,
   phaseLabel,
   RunsPage,
+  useRuns,
 } from "./runs";
 
 const config: EngineConfig = {
@@ -83,7 +84,6 @@ function json(value: unknown, init?: ResponseInit) {
 function stubPageApi(runs: ApiWorkflowRun[] = []) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
-    if (path === "/api/config") return json(config);
     if (path === "/api/runs" && init?.method === "POST")
       return json(run({ runId: "created-run" }));
     if (path === "/api/runs") return json({ runs });
@@ -115,7 +115,7 @@ describe("NewWorkflowPage", () => {
   it("restores a prompt after unmounting and remounting", async () => {
     vi.stubGlobal("fetch", stubPageApi());
     const user = userEvent.setup();
-    const first = render(<NewWorkflowPage />);
+    const first = render(<NewWorkflowPage config={config} />);
     const prompt = screen.getByRole("textbox", { name: "Task prompt" });
 
     await user.type(prompt, "Keep this draft");
@@ -123,7 +123,7 @@ describe("NewWorkflowPage", () => {
       expect(window.localStorage.getItem("engine.workflowDraft")).toBe("Keep this draft"),
     );
     first.unmount();
-    render(<NewWorkflowPage />);
+    render(<NewWorkflowPage config={config} />);
 
     expect(screen.getByRole("textbox", { name: "Task prompt" })).toHaveValue(
       "Keep this draft",
@@ -135,7 +135,7 @@ describe("NewWorkflowPage", () => {
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const user = userEvent.setup();
-    render(<NewWorkflowPage />);
+    render(<NewWorkflowPage config={config} />);
     await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
     const submit = screen.getByRole("button", { name: "Create workflow run" });
     await waitFor(() => expect(submit).toBeEnabled());
@@ -150,12 +150,44 @@ describe("NewWorkflowPage", () => {
   });
 });
 
-describe("RunsPage", () => {
-  it("renders its empty state", async () => {
-    vi.stubGlobal("fetch", stubPageApi());
-    render(<RunsPage />);
+describe("useRuns", () => {
+  it("reads the runs the shell hands to both the page and the rail", async () => {
+    vi.stubGlobal("fetch", stubPageApi([run()]));
 
-    expect(await screen.findByRole("heading", { name: "No workflow runs yet." })).toBeVisible();
+    const { result } = renderHook(() => useRuns());
+
+    await waitFor(() => expect(result.current.runs).toHaveLength(1));
+    expect(result.current.runs[0].runId).toBe("run-1");
+    expect(result.current.error).toBe("");
+  });
+
+  it("reports a failure instead of an empty list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(json({ error: "runs unavailable" }, { status: 500 })),
+    );
+
+    const { result } = renderHook(() => useRuns());
+
+    await waitFor(() => expect(result.current.error).toBe("runs unavailable"));
+    expect(result.current.runs).toEqual([]);
+  });
+});
+
+describe("RunsPage", () => {
+  it("renders its empty state", () => {
+    render(<RunsPage runs={[]} error="" />);
+
+    expect(screen.getByRole("heading", { name: "No workflow runs yet." })).toBeVisible();
+  });
+
+  it("reports a load failure over the empty state", () => {
+    render(<RunsPage runs={[]} error="runs unavailable" />);
+
+    expect(screen.getByText(/runs unavailable/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "No workflow runs yet." }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders stage and chat counts and offers only phases that exist", async () => {
@@ -170,9 +202,8 @@ describe("RunsPage", () => {
         steps: [],
       }),
     ];
-    vi.stubGlobal("fetch", stubPageApi(runs));
     const user = userEvent.setup();
-    const { container } = render(<RunsPage />);
+    const { container } = render(<RunsPage runs={runs} error="" />);
 
     await screen.findByRole("heading", { name: "First run" });
     const firstCard = container.querySelector('.cards a[href="/runs/run-1"]');
