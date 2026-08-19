@@ -222,11 +222,20 @@ function HistoryProvider({ children }: PropsWithChildren) {
   return <RuntimeAdapterProvider adapters={{ history }}>{children}</RuntimeAdapterProvider>;
 }
 
+/** `onChatCreated` fires once a conversation has been created on the current
+ *  defaults, which is the moment a choice made *for* that conversation stops
+ *  applying. Creation is the only place that boundary is known, so it is
+ *  reported from here rather than guessed at by whoever holds the defaults. */
 export function EngineRuntimeProvider({
   defaults,
   children,
   initialThreadId,
-}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
+  onChatCreated,
+}: PropsWithChildren<{
+  defaults: NewChatDefaults;
+  initialThreadId?: string;
+  onChatCreated?: () => void;
+}>) {
   const initialThread = useInitialThreadId(initialThreadId);
   if (initialThread.loading)
     return <main className="loading">Restoring chats…</main>;
@@ -235,6 +244,7 @@ export function EngineRuntimeProvider({
     <EngineRuntime
       defaults={defaults}
       initialThreadId={initialThread.threadId}
+      onChatCreated={onChatCreated}
     >
       {children}
     </EngineRuntime>
@@ -244,12 +254,19 @@ export function EngineRuntimeProvider({
 function EngineRuntime({
   defaults,
   initialThreadId,
+  onChatCreated,
   children,
-}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
+}: PropsWithChildren<{
+  defaults: NewChatDefaults;
+  initialThreadId?: string;
+  onChatCreated?: () => void;
+}>) {
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
+  const onChatCreatedRef = useRef(onChatCreated);
   defaultsRef.current = defaults;
+  onChatCreatedRef.current = onChatCreated;
 
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
@@ -318,6 +335,9 @@ function EngineRuntime({
           method: "POST",
           body: JSON.stringify(defaultsRef.current),
         });
+        // The agent is settled here and never sent again, so this is where a
+        // choice made for one conversation has been spent.
+        onChatCreatedRef.current?.();
         return { remoteId: thread.id };
       },
       async rename(remoteId, title) {

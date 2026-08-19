@@ -806,13 +806,19 @@ function ThreadListItem({ archived = false }: { archived?: boolean }) {
   );
 }
 
-/** `onOpenProjectManager` points the next conversation at the project manager;
- *  the primitive it is composed onto then opens that conversation. Absent when
- *  the server ships no such agent, because a button that would fail on send is
- *  worse than no button. */
+/** Every way into a new conversation says which agent it wants: `onNewChat` the
+ *  page default, `onOpenProjectManager` the project manager. Both open the same
+ *  conversation the same way -- the callback rides on the primitive `+ New chat`
+ *  already used -- so saying it on both is what keeps the orange button's choice
+ *  from becoming the choice for the chat after it.
+ *
+ *  `onOpenProjectManager` is absent when the server ships no such agent, because
+ *  a button that would fail on send is worse than no button. */
 export function ChatSidebar({
+  onNewChat,
   onOpenProjectManager,
 }: {
+  onNewChat?: () => void;
   onOpenProjectManager?: () => void;
 }) {
   return (
@@ -823,7 +829,10 @@ export function ChatSidebar({
           <a className="rail-button" href="/runs">
             Workflow runs
           </a>
-          <ThreadListPrimitive.New className="rail-button rail-button-primary">
+          <ThreadListPrimitive.New
+            className="rail-button rail-button-primary"
+            onClick={onNewChat}
+          >
             + New chat
           </ThreadListPrimitive.New>
         </div>
