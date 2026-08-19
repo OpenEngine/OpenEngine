@@ -443,6 +443,10 @@ export function outcomeText(approval: ApiApproval): string {
     return "Interrupted — the agent that asked this is gone, so it can no longer be answered.";
   if (approval.decisionSource === "session_grant")
     return "Approved automatically: you allowed this exact action for this conversation earlier.";
+  if (approval.decisionSource === "policy")
+    return approval.decision === "cancel"
+      ? "Refused by the configured policy — the action did not run."
+      : "Allowed by the configured policy, without asking.";
   switch (approval.decision) {
     case "accept":
       return "Approved.";
@@ -501,6 +505,10 @@ export function summaryText(approval: ApiApproval): string {
   if (approval.status === "interrupted") return `Interrupted · ${target}`;
   if (approval.decisionSource === "session_grant")
     return `Approved automatically · ${target}`;
+  if (approval.decisionSource === "policy")
+    return approval.decision === "cancel"
+      ? `Refused by policy · ${target}`
+      : `Allowed by policy · ${target}`;
   switch (approval.decision) {
     case "accept":
       return `Approved · ${target}`;

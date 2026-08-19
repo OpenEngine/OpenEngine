@@ -66,6 +66,8 @@ from engine.ports import (
 from engine.runtime import (
     INVALID_COMPLETION_ERROR,
     AgentSession,
+    ApprovalCapability,
+    ApprovalConfig,
     Capabilities,
     EngineConfig,
 )
@@ -139,6 +141,44 @@ def test_interactive_runners_may_do_what_the_user_approves() -> None:
     assert "Bash" not in preapproved
     assert "Edit" not in preapproved
     assert claude_argv[claude_argv.index("--permission-prompt-tool") + 1] == "stdio"
+
+
+def test_the_configured_policy_builds_the_interactive_claude_runner() -> None:
+    """`engine.toml` is where chat's permissions are written down.
+
+    A preapproved tool is one whose requests never reach the callback at all,
+    which is the only thing a provider allow-list can express. Shell stays off
+    it however granted: a shell rule is written per command, and the patterns
+    live where the requests arrive.
+    """
+    granted = EngineConfig(
+        approvals=ApprovalConfig(
+            allow=(ApprovalCapability.READ, ApprovalCapability.EDIT, ApprovalCapability.BASH)
+        )
+    )
+    argv = build_runners(Settings(engine_config=granted))["claude"].command_line(
+        PROFILES[CODER]
+    )
+
+    preapproved = argv[argv.index("--allowedTools") + 1 :]
+    assert preapproved == ["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit"]
+    assert "Bash" not in preapproved
+
+
+def test_the_interactive_codex_sandbox_is_not_narrowed_by_the_policy() -> None:
+    """A sandbox is a ceiling, not a preapproval.
+
+    A capability absent from `allow` is one nobody has ruled on, so a person may
+    still allow it mid-turn -- and a sandbox narrowed before the turn started
+    would refuse the write they just approved. Codex's policy is applied to its
+    requests instead.
+    """
+    reads_only = EngineConfig(approvals=ApprovalConfig(allow=(ApprovalCapability.READ,)))
+    argv = build_runners(Settings(engine_config=reads_only))["codex"].command_line(
+        PROFILES[CODER]
+    )
+
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
 
 
 def test_engine_config_disables_attribution_for_every_workflow_runner() -> None:

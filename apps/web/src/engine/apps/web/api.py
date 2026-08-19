@@ -59,6 +59,7 @@ from engine.ports import (
 from engine.runtime import (
     AgentSession,
     ApprovalBroker,
+    ApprovalConfig,
     ApprovalDecisionNotAllowedError,
     ApprovalNotPendingError,
     RunReader,
@@ -235,10 +236,13 @@ class ThreadService:
     """Coordinates assistant-ui threads over an ``AgentSession``."""
 
     def __init__(
-        self, session: AgentSession, runners: Mapping[str, AgentRunner]
+        self,
+        session: AgentSession,
+        runners: Mapping[str, AgentRunner],
+        approval_policy: ApprovalConfig = ApprovalConfig(),
     ) -> None:
         self.session = session
-        self.approvals = ApprovalBroker(session.state_store)
+        self.approvals = ApprovalBroker(session.state_store, approval_policy)
         """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
         self._threads: dict[AgentInstanceId, ChatThread] = {}
@@ -375,7 +379,8 @@ class ThreadService:
         run = ActiveRun(agent_run_id)
         self._active_runs[instance_id] = run
         on_approval = None
-        if isinstance(self._runners.get(selected_runner), InteractiveAgentRunner):
+        selected = self._runners.get(selected_runner)
+        if isinstance(selected, InteractiveAgentRunner):
             on_approval = self.approvals.handler(
                 agent_run_id=agent_run_id,
                 instance_id=instance_id,
@@ -384,6 +389,9 @@ class ThreadService:
                 # Where this turn will actually work, so consent it collects is
                 # bounded by the same worktree the agent is standing in.
                 workspace_id=thread.workspace_id,
+                # How this provider's requests read as Engine capabilities, so
+                # the configured policy has something to evaluate them against.
+                translator=selected.permission_translator,
             )
 
         async def execute() -> str:
@@ -644,11 +652,12 @@ def create_app(
     *,
     workflow_runners: Mapping[str, AgentRunner] | None = None,
     review_runners: Mapping[str, AgentRunner] | None = None,
+    approval_policy: ApprovalConfig = ApprovalConfig(),
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
         raise ValueError("review_runners are required with workflow_runners")
-    service = ThreadService(session, runners)
+    service = ThreadService(session, runners, approval_policy)
     run_reader = RunReader(session.state_store)
 
     async def approval_changed(_approval: ApprovalRecord) -> None:
@@ -659,12 +668,21 @@ def create_app(
     def workflow_approval_handler(
         command: StartAgentRun, runner_name: str
     ) -> ApprovalHandler:
+        # A workflow step runs on the implementation or the review runner of one
+        # provider, and the two read that provider's requests the same way --
+        # so either mapping answers "what does `runner_name` speak".
+        step_runner = (workflow_runners or runners).get(runner_name) or runners.get(
+            runner_name
+        )
         return service.approvals.handler(
             agent_run_id=command.agent_run_id,
             instance_id=command.instance_id,
             runner=runner_name,
             present=approval_changed,
             workspace_id=command.workspace_id,
+            translator=(
+                step_runner.permission_translator if step_runner is not None else None
+            ),
         )
 
     workflow_executor = WorkflowExecutor(

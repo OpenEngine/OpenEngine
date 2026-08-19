@@ -31,7 +31,13 @@ class Settings:
     workspace_root: str = "/tmp/engine-workspaces"
     postgres_dsn: str = ""
     engine_config: EngineConfig = EngineConfig()
-    """Provider-neutral settings loaded from TOML; policy enforcement lands next."""
+    """Provider-neutral settings loaded from TOML.
+
+    `approvals` governs turns that can pause to ask, and this process runs none:
+    its runner is the unattended one, held to its sandbox rather than to a
+    policy. Read here so the server refuses to start on a file the interface
+    would refuse too.
+    """
     config_path: Path | None = None
 
 

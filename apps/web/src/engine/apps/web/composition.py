@@ -27,6 +27,7 @@ from engine.adapters.agent_runner.claude_code import (
     READ_ONLY_TOOLS,
     WORKSPACE_WRITE_TOOLS,
     ClaudeCodeAgentRunner,
+    allowed_tools_for,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
@@ -74,13 +75,11 @@ class Settings:
     The read-only sandbox would refuse the write after the user allowed it, and
     on-request approval is what keeps that from meaning "unattended": Codex
     stops and asks before stepping outside the worktree.
-    """
-    interactive_claude_allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS
-    """Reads are preapproved; Bash and edits reach the user as requests.
 
-    Claude Code has no OS-level sandbox to fall back on, so the allow-list is
-    the whole of the distinction: what is on it runs unattended, and everything
-    else -- shell commands included -- goes to the permission callback.
+    So this is not built from `approvals.allow`, and cannot be: a capability
+    that policy leaves unruled is one a person may still allow mid-turn, and a
+    sandbox narrowed before the turn started would refuse what they just
+    allowed. Codex's policy is applied to its requests instead.
     """
     workflow_codex_sandbox: str = "workspace-write"
     """Workflow implementation may edit only its isolated worktree."""
@@ -93,7 +92,12 @@ class Settings:
     workspace_root: str = "/tmp/engine-workspaces"
     sqlite_path: str = "conversations.sqlite3"
     engine_config: EngineConfig = EngineConfig()
-    """Provider-neutral settings loaded from TOML; policy enforcement lands next."""
+    """Provider-neutral settings loaded from TOML.
+
+    `approvals` is where chat's permissions are written down: it builds the
+    interactive Claude runner's tool list, and answers both runners' approval
+    requests. No field here holds a second copy of it.
+    """
     config_path: Path | None = None
     """The single TOML source, or ``None`` when built-in defaults are active."""
 
@@ -131,6 +135,15 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     transport it is driven over. Both pause for approval, because a runner that
     could only run unattended is not a second choice worth offering -- what it
     would do without asking, these do after asking.
+
+    What Claude may do without asking is `approvals.allow` from `engine.toml`:
+    a preapproved tool is one whose requests never reach the callback, and one
+    left off the list is still allowed if a person allows it. Codex has no such
+    list -- its pre-turn knob is a sandbox, which is a ceiling rather than a
+    preapproval -- so its whole policy is applied to its requests instead. Shell
+    is on neither list on purpose: a shell rule is written per command rather
+    than per capability, so `Bash` reaches the callback either way and
+    `approvals.bash` is applied there.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
@@ -146,7 +159,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
         "claude": ClaudeCodeAgentRunner(
             binary_path=settings.claude_binary,
             timeout_seconds=settings.claude_timeout_seconds,
-            allowed_tools=settings.interactive_claude_allowed_tools,
+            allowed_tools=allowed_tools_for(settings.engine_config.approvals.allow),
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,
@@ -156,7 +169,13 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 
 
 def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
-    """Read-only runners used only for workflow review steps."""
+    """Read-only runners used only for workflow review steps.
+
+    Not built from `approvals.allow`, and deliberately: a reviewer that cannot
+    write is a property of the step rather than a permission the deployment gets
+    to widen. A policy granting `edit` is a statement about what an agent may do
+    when somebody asks it to change something, not about the one asked to read.
+    """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
         "codex": CodexAgentRunner(
@@ -188,6 +207,11 @@ def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     then reviewed by the read-only runner of that same name. The reviewer is
     told not to modify the workspace, but what actually stops it is being run
     without the tools to.
+
+    Structural for the same reason its sibling is: an implementation step exists
+    to change the tree it was given, and a policy that had not thought about
+    workflows would otherwise silently produce one that cannot. The approvals it
+    raises are still governed -- those go through the broker like any other.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
