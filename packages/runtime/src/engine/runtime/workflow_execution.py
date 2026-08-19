@@ -5,9 +5,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from engine.core import decide
+from engine.core.workflows.implementation_review import (
+    IMPLEMENTATION_STEP,
+    start_review_command,
+)
 from engine.domain import (
     Command,
     Event,
+    HumanReviewCompleted,
     ProvisionWorkspace,
     RequestHumanReview,
     RunFailed,
@@ -41,10 +46,9 @@ class _StepOutcome:
 class WorkflowExecutor:
     """Drive request, workspace, implementation, and review.
 
-    Human-review ingress is deliberately not part of this local slice yet: the
-    run stops where a person has to decide. The reducer still owns every
-    transition, so adding that effect later does not require a second workflow
-    definition.
+    Agent execution stops where a person has to decide. Human-review ingress
+    then calls ``complete_human_review`` so the same reducer owns the terminal
+    transition too.
 
     Two runner mappings, keyed by the same provider names. `runners` may write
     inside the workspace and implements; `review_runners` may only read it and
@@ -147,6 +151,72 @@ class WorkflowExecutor:
             raise
         except Exception as error:
             await self._fail(initial_event.run_id, error)
+
+    async def resume_review(self, run_id: RunId, runner_name: str = "") -> None:
+        """Resume the review command lost when its process stopped.
+
+        A successful implementation and the resulting ``REVIEWING`` state are
+        durable, but command dispatch is process-local. Reconstructing the
+        deterministic command lets startup finish that transition without
+        rerunning the implementation.
+        """
+        try:
+            selected_name = runner_name or self.default_runner
+            try:
+                reviewer = self._review_runners[selected_name]
+            except KeyError as error:
+                raise WorkflowExecutionError(
+                    f"unknown workflow runner: {selected_name}"
+                ) from error
+            state = await self._require_state(run_id)
+            if state.phase is not RunPhase.REVIEWING:
+                return
+            implementation = next(
+                (
+                    result
+                    for result in reversed(state.step_results)
+                    if result.step_id == IMPLEMENTATION_STEP
+                ),
+                None,
+            )
+            if implementation is None:
+                raise WorkflowExecutionError(
+                    "reviewing run has no implementation result"
+                )
+            review = await self._run_step(
+                state,
+                start_review_command(state, implementation),
+                runner=reviewer,
+                runner_name=selected_name,
+            )
+            if review is None or review.state.phase is RunPhase.FAILED:
+                return
+            if review.state.phase is not RunPhase.AWAITING_HUMAN_REVIEW:
+                raise WorkflowExecutionError(
+                    "review result did not advance the run to human review"
+                )
+            _only(review.commands, RequestHumanReview)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            await self._fail(run_id, error)
+
+    async def complete_human_review(
+        self, event: HumanReviewCompleted
+    ) -> RunState:
+        """Persist the final human decision and finish the workflow run."""
+        state = await self._require_state(event.run_id)
+        if (
+            state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
+            or event.step_id != state.current_step_id
+        ):
+            raise WorkflowExecutionError("run is not awaiting human review")
+        next_state, commands = await self._transition(state, event)
+        if commands:
+            raise WorkflowExecutionError(
+                "human review unexpectedly emitted follow-up commands"
+            )
+        return next_state
 
     async def _run_step(
         self,

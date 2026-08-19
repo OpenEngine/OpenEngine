@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -41,6 +42,7 @@ from engine.domain import (
     StepOutput,
     TaskId,
     ToolCall,
+    WorkspaceId,
     WorkspaceProvisioned,
 )
 from engine.core.workflows.implementation_review import (
@@ -697,6 +699,62 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     assert all(conversation.messages for conversation in conversations.values())
     assert "`complete_step`" in implementer.seen[0][0].content
     assert "JSON" not in implementer.seen[0][0].content
+
+
+def test_startup_restarts_a_review_whose_command_was_lost() -> None:
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.REVIEWING)
+    state = replace(
+        state,
+        workspace_id=WorkspaceId("ws-1"),
+        current_agent_run_id=AgentRunId(f"{state.run_id}:review:run"),
+    )
+    reviewer = ConcurrentRunner()
+    app = _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_runners={
+            "other": ConcurrentRunner(),
+            "test": ConcurrentRunner(),
+        },
+        reviewers={"other": ConcurrentRunner(), "test": reviewer},
+    )
+
+    async def scenario():
+        await store.save(state)
+        await store.create_instance(
+            AgentId("implementation-agent"),
+            workspace_id=state.workspace_id,
+            instance_id=AgentInstanceId(f"{state.run_id}:implementation:instance"),
+            conversation_id=ConversationId(
+                f"{state.run_id}:implementation:instance:conversation"
+            ),
+            workflow_run_id=state.run_id,
+            workflow_step_id=IMPLEMENTATION_STEP,
+            runner="test",
+        )
+        async with app.router.lifespan_context(app):
+            for _ in range(200):
+                instances = await store.list_instances(workflow_run_id=state.run_id)
+                if any(
+                    instance.workflow_step_id == REVIEW_STEP
+                    for instance in instances
+                ):
+                    return instances
+                await asyncio.sleep(0.01)
+            return instances
+
+    instances = asyncio.run(scenario())
+
+    assert {instance.workflow_step_id for instance in instances} == {
+        IMPLEMENTATION_STEP,
+        REVIEW_STEP,
+    }
+    assert next(
+        instance.runner
+        for instance in instances
+        if instance.workflow_step_id == REVIEW_STEP
+    ) == "test"
 
 
 def test_the_reviewer_reads_the_task_and_the_implementation_result() -> None:

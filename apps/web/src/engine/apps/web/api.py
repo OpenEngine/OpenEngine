@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
@@ -31,10 +32,12 @@ from engine.domain import (
     ApprovalDecision,
     ApprovalId,
     ApprovalRecord,
+    HumanReviewCompleted,
     IMPLEMENTATION_REVIEW_WORKFLOW_ID,
     Message,
     Role,
     RunId,
+    RunPhase,
     RunRequested,
     RunState,
     StepId,
@@ -55,6 +58,7 @@ from engine.runtime import (
     ApprovalNotPendingError,
     RunReader,
     UnknownApprovalError,
+    WorkflowExecutionError,
     WorkflowExecutor,
     WorkflowRunView,
 )
@@ -640,6 +644,52 @@ def create_app(
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
 
+    def track_workflow(run_id: RunId, task: asyncio.Task[None]) -> None:
+        workflow_tasks[run_id] = task
+        task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))
+
+    async def restore_reviews() -> None:
+        """Restart review commands whose process-local dispatch was lost."""
+        for state in await session.state_store.list_runs():
+            if state.phase is not RunPhase.REVIEWING or state.run_id in workflow_tasks:
+                continue
+            instances = await session.state_store.list_instances(
+                workflow_run_id=state.run_id
+            )
+            implementation_step_id = (
+                state.step_results[-1].step_id if state.step_results else None
+            )
+            implementation = next(
+                (
+                    instance
+                    for instance in instances
+                    if instance.workflow_step_id == implementation_step_id
+                ),
+                None,
+            )
+            runner_name = (
+                implementation.runner
+                if implementation is not None and implementation.runner
+                else workflow_executor.default_runner
+            )
+            track_workflow(
+                state.run_id,
+                asyncio.create_task(
+                    workflow_executor.resume_review(state.run_id, runner_name)
+                ),
+            )
+
+    @asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        await restore_reviews()
+        try:
+            yield
+        finally:
+            tasks = tuple(workflow_tasks.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
             thread.workflow_run_id is not None
@@ -726,11 +776,12 @@ def create_app(
         )
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
-        task = asyncio.create_task(
-            workflow_executor.advance_through_review(event, runner_name)
+        track_workflow(
+            run_id,
+            asyncio.create_task(
+                workflow_executor.advance_through_review(event, runner_name)
+            ),
         )
-        workflow_tasks[run_id] = task
-        task.add_done_callback(lambda _task: workflow_tasks.pop(run_id, None))
         run = await run_reader.get(run_id)
         assert run is not None
         return JSONResponse(_run_json(run), status_code=201)
@@ -739,6 +790,36 @@ def create_app(
         run = await run_reader.get(RunId(request.path_params["run_id"]))
         if run is None:
             return _error("run not found", 404)
+        return JSONResponse(_run_json(run))
+
+    async def complete_human_review(request: Request) -> JSONResponse:
+        run_id = RunId(request.path_params["run_id"])
+        state = await session.state_store.load(run_id)
+        if state is None:
+            return _error("run not found", 404)
+        body = await _json_body(request)
+        approved = body.get("approved")
+        if not isinstance(approved, bool):
+            return _error("approved must be a boolean", 400)
+        if (
+            state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
+            or state.current_step_id is None
+        ):
+            return _error("run is not awaiting human review", 409)
+        summary = str(body.get("summary", "")).strip()
+        try:
+            await workflow_executor.complete_human_review(
+                HumanReviewCompleted(
+                    run_id=run_id,
+                    step_id=state.current_step_id,
+                    approved=approved,
+                    summary=summary,
+                )
+            )
+        except WorkflowExecutionError as error:
+            return _error(str(error), 409)
+        run = await run_reader.get(run_id)
+        assert run is not None
         return JSONResponse(_run_json(run))
 
     async def create_thread(request: Request) -> JSONResponse:
@@ -938,6 +1019,11 @@ def create_app(
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
+        Route(
+            "/api/runs/{run_id}/human-review",
+            complete_human_review,
+            methods=["POST"],
+        ),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}", get_thread),
@@ -995,7 +1081,7 @@ def create_app(
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
     else:
         routes.append(Route("/", _missing_frontend))
-    app = Starlette(routes=routes)
+    app = Starlette(routes=routes, lifespan=lifespan)
     app.state.thread_service = service
     return app
 
