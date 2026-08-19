@@ -73,6 +73,7 @@ RUN_TESTS = ApprovalRequest(
     reason="Run the test suite",
     command="pytest",
     cwd="/workspace",
+    tool_call_id="call-pytest",
 )
 WRITE_FILE = ApprovalRequest(
     approval_id="provider-2",
@@ -83,7 +84,11 @@ WRITE_FILE = ApprovalRequest(
     allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
 )
 RUN_LINT = replace(
-    RUN_TESTS, approval_id="provider-3", reason="Lint the tree", command="ruff check"
+    RUN_TESTS,
+    approval_id="provider-3",
+    reason="Lint the tree",
+    command="ruff check",
+    tool_call_id="call-ruff",
 )
 
 
@@ -651,6 +656,9 @@ def test_approving_resumes_the_paused_turn_and_records_the_decision() -> None:
         "command": "pytest",
         "cwd": "/workspace",
         "toolName": None,
+        # The call the provider named, so the client can show the request beside
+        # it rather than at the end of the turn.
+        "toolCallId": "call-pytest",
         "arguments": None,
         "allowedDecisions": ["accept", "accept_for_session", "cancel"],
         "decision": None,
@@ -1040,6 +1048,7 @@ def test_a_restart_interrupts_the_requests_it_cannot_resume(tmp_path) -> None:
                 kind=ApprovalKind.COMMAND_EXECUTION,
                 requested_at=datetime.now(UTC),
                 command="pytest",
+                tool_call_id="thread-1:cmd-1",
                 allowed_decisions=tuple(ApprovalDecision),
             )
         )
@@ -1068,8 +1077,11 @@ def test_a_restart_interrupts_the_requests_it_cannot_resume(tmp_path) -> None:
     assert listed.status_code == 200
     assert recovered is not None
     assert recovered.status is ApprovalStatus.INTERRUPTED
-    # The request survives the restart intact; only its answerability changes.
+    # The request survives the restart intact -- including the call it was about,
+    # which is what keeps a reloaded transcript showing it in the right place.
+    # Only its answerability changes.
     assert recovered.command == "pytest"
+    assert recovered.tool_call_id == "thread-1:cmd-1"
     assert refused.status_code == 409
     assert "interrupted" in refused.json()["error"]
 

@@ -118,6 +118,7 @@ class SQLiteStateStore:
                     command TEXT,
                     cwd TEXT,
                     tool_name TEXT,
+                    tool_call_id TEXT,
                     workspace_id TEXT,
                     arguments TEXT,
                     allowed_decisions TEXT NOT NULL,
@@ -187,6 +188,15 @@ class SQLiteStateStore:
                 # for those: unknown, and therefore matching no grant.
                 self._connection.execute(
                     "ALTER TABLE approvals ADD COLUMN workspace_id TEXT"
+                )
+            if "tool_call_id" not in approval_columns:
+                # Approvals written before the pairing existed name no call, and
+                # nothing can work out afterwards which one they were about.
+                # Null reads as "unknown", which is what a client shows by
+                # putting the request at the end of its turn rather than beside
+                # a command it has guessed at.
+                self._connection.execute(
+                    "ALTER TABLE approvals ADD COLUMN tool_call_id TEXT"
                 )
 
     # --- workflow runs ----------------------------------------------------
@@ -456,10 +466,10 @@ class SQLiteStateStore:
                 """
                 INSERT INTO approvals (
                     approval_id, agent_run_id, instance_id, runner, kind, reason,
-                    command, cwd, tool_name, workspace_id, arguments,
-                    allowed_decisions, status, decision, decision_source,
-                    requested_at, decided_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    command, cwd, tool_name, tool_call_id, workspace_id,
+                    arguments, allowed_decisions, status, decision,
+                    decision_source, requested_at, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(approval_id) DO UPDATE SET
                     status = excluded.status,
                     decision = excluded.decision,
@@ -476,6 +486,7 @@ class SQLiteStateStore:
                     approval.command,
                     approval.cwd,
                     approval.tool_name,
+                    approval.tool_call_id,
                     approval.workspace_id,
                     approval.arguments,
                     json.dumps(
@@ -625,8 +636,8 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
 
 _APPROVAL_COLUMNS = """
     approval_id, agent_run_id, instance_id, runner, kind, reason, command, cwd,
-    tool_name, workspace_id, arguments, allowed_decisions, status, decision,
-    decision_source, requested_at, decided_at
+    tool_name, tool_call_id, workspace_id, arguments, allowed_decisions, status,
+    decision, decision_source, requested_at, decided_at
 """
 
 _SESSION_GRANT_COLUMNS = """
@@ -647,6 +658,7 @@ def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
         command=row["command"],
         cwd=row["cwd"],
         tool_name=row["tool_name"],
+        tool_call_id=row["tool_call_id"],
         workspace_id=(
             WorkspaceId(row["workspace_id"]) if row["workspace_id"] is not None else None
         ),

@@ -96,6 +96,15 @@ class ApprovalRecord:
     command: str | None = None
     cwd: str | None = None
     tool_name: str | None = None
+    tool_call_id: str | None = None
+    """The call in the transcript this was asked about, when the provider says.
+
+    Durable because the pairing is not reconstructable later: a turn interleaves
+    calls that needed asking with calls that did not, so "which command was this
+    about?" can only be answered by the provider that asked, at the moment it
+    asked. A reader without it is left guessing from order, and a transcript
+    that guesses is one that eventually shows consent beside the wrong command.
+    """
     workspace_id: WorkspaceId | None = None
     """The checkout this was asked about, when the conversation has one.
 

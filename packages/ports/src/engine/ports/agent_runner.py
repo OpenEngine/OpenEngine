@@ -60,6 +60,14 @@ class ApprovalRequest:
     command: str | None = None
     cwd: str | None = None
     tool_name: str | None = None
+    tool_call_id: str | None = None
+    """The `ToolCall.call_id` this pause is about, when the provider says.
+
+    The one field that ties a request to the thing it is a request *for*.
+    Without it a reader is left inferring from order, which is wrong the moment
+    a turn runs one command it may run unasked and another it may not. Optional
+    because a provider may pause over something that is not a tool call at all.
+    """
     arguments: str | None = None
     allowed_decisions: tuple[ApprovalDecision, ...] = tuple(ApprovalDecision)
 

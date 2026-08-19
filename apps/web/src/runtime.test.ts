@@ -12,6 +12,7 @@ const approval: ApiApproval = {
   command: "git status",
   cwd: "/repo",
   toolName: null,
+  toolCallId: null,
   arguments: null,
   allowedDecisions: ["accept", "cancel"],
   decision: null,

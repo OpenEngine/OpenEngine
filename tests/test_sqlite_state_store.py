@@ -141,10 +141,13 @@ def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
 
 
 def test_approvals_written_before_grants_existed_still_load(tmp_path) -> None:
-    """A database from before approvals were bounded by a worktree.
+    """A database from before approvals were bounded by a worktree, or paired
+    with the call they were about.
 
-    Null is the honest value for one of those: nobody recorded where it
-    applied, so it matches no grant and is asked about again.
+    Null is the honest value for both: nobody recorded where one applied, so it
+    matches no grant and is asked about again; nobody recorded which call it
+    concerned, and nothing can work that out afterwards, so a client shows it at
+    the end of its turn rather than beside a command it has guessed at.
     """
     path = tmp_path / "conversations.sqlite3"
     connection = sqlite3.connect(path)
@@ -204,6 +207,7 @@ def test_approvals_written_before_grants_existed_still_load(tmp_path) -> None:
     assert loaded is not None
     assert loaded.command == "pytest"
     assert loaded.workspace_id is None
+    assert loaded.tool_call_id is None
     assert grants == ()
 
 

@@ -13,6 +13,7 @@ function approval(overrides: Partial<ApiApproval> = {}): ApiApproval {
     command: null,
     cwd: null,
     toolName: "search",
+    toolCallId: null,
     arguments: null,
     allowedDecisions: ["accept", "cancel"],
     decision: null,

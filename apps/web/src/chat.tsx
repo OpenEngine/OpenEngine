@@ -22,7 +22,7 @@ import {
   type ApiThread,
   type ApprovalDecision,
 } from "./api";
-import { useApprovals } from "./approvals";
+import { useApprovals, type InlineApproval } from "./approvals";
 import { Stat, StatStrip } from "./brand";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
@@ -112,13 +112,20 @@ function TextParts() {
         part.type === "text" ? (
           <MessagePartPrimitive.Text component="p" />
         ) : part.type === "tool-call" ? (
-          <ToolCall
-            toolName={part.toolName}
-            args={part.args}
-            argsText={part.argsText}
-            result={part.result}
-            running={part.status.type === "running"}
-          />
+          <>
+            <ToolCall
+              toolName={part.toolName}
+              args={part.args}
+              argsText={part.argsText}
+              result={part.result}
+              running={part.status.type === "running"}
+            />
+            {/* Under the call it was asked about, because that is what it is
+                about. A turn that ran three commands and stopped to ask about
+                the second one reads that way, and whatever the agent said
+                afterwards stays below the question it waited on. */}
+            <CallApprovals toolCallId={part.toolCallId} />
+          </>
         ) : null
       }
     </MessagePrimitive.Parts>
@@ -150,7 +157,7 @@ export function errorText(error: unknown): string {
   return "The agent run failed.";
 }
 
-function AssistantMessage() {
+export function AssistantMessage() {
   const error = useAuiState((state) => {
     const status = state.message.status;
     if (status?.type !== "incomplete" || status.reason !== "error") return undefined;
@@ -160,9 +167,9 @@ function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="message message-assistant">
       <TextParts />
-      {/* After the parts, which is after the command it was asked about ran:
-          reading down the turn gives you the request, then what the agent
-          did with the answer. */}
+      {/* Only what could not be placed beside a call: a request that named no
+          call, or one whose call is not in the transcript. The end of the turn
+          is where a request with nothing to sit beside belongs. */}
       <TurnApprovals />
       <MessagePrimitive.Error>
         <p className="notice message-error">
@@ -622,35 +629,100 @@ export function ApprovalEntry({
   );
 }
 
-/** Everything this assistant turn stopped to ask about, in the order it asked.
+/** Every tool call the transcript holds, by id.
  *
- *  Anchored by index rather than pinned to the newest turn, so a request stays
- *  with the turn that raised it once the conversation has moved on. An anchor
- *  past the end of the transcript belongs to the reply still being written,
- *  which is the only turn that can be paused. */
+ *  What decides where a request is shown: an approval naming a call in here has
+ *  somewhere of its own to sit, and is therefore not part of any turn's
+ *  leftovers. Computed over the whole thread rather than one message, because
+ *  a restored transcript anchors its requests to the end and the calls they
+ *  name are spread across the turns that made them. */
+function useToolCallIds(): ReadonlySet<string> {
+  const messages = useAuiState((state) => state.thread.messages);
+  return useMemo(
+    () =>
+      new Set(
+        messages.flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content
+                .filter((part) => part.type === "tool-call")
+                .map((part) => part.toolCallId)
+            : [],
+        ),
+      ),
+    [messages],
+  );
+}
+
+function ApprovalList({
+  threadId,
+  entries,
+  className,
+}: {
+  threadId: string;
+  entries: readonly InlineApproval[];
+  className: string;
+}) {
+  if (!entries.length) return null;
+  return (
+    <div className={className}>
+      {entries.map(({ approval }) => (
+        <ApprovalEntry key={approval.id} threadId={threadId} approval={approval} />
+      ))}
+    </div>
+  );
+}
+
+/** What this conversation was asked to allow before one particular call.
+ *
+ *  Matched by the call's id rather than by where the request happened to arrive
+ *  on the stream, so the pairing is the one the provider stated and survives a
+ *  reload, a reconnect, and a turn that asked about only some of its calls. */
+function CallApprovals({ toolCallId }: { toolCallId: string }) {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const approvals = useApprovals(remoteId);
+  const mine = useMemo(
+    () => approvals.filter((entry) => entry.approval.toolCallId === toolCallId),
+    [approvals, toolCallId],
+  );
+
+  if (!remoteId) return null;
+  return (
+    <ApprovalList
+      threadId={remoteId}
+      entries={mine}
+      className="approvals approvals-call"
+    />
+  );
+}
+
+/** What this assistant turn stopped to ask about and nothing else can hold.
+ *
+ *  A request that named no call, or that named one this transcript does not
+ *  contain -- a provider that paused over something other than a tool call, or
+ *  a record written before the pairing existed. Anchored by index rather than
+ *  pinned to the newest turn, so it stays with the turn that raised it once the
+ *  conversation has moved on. An anchor past the end of the transcript belongs
+ *  to the reply still being written, which is the only turn that can be
+ *  paused. */
 function TurnApprovals() {
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const index = useAuiState((state) => state.message.index);
   const isLast = useAuiState((state) => state.message.isLast);
   const total = useAuiState((state) => state.thread.messages.length);
   const approvals = useApprovals(remoteId);
+  const placed = useToolCallIds();
   const mine = useMemo(
     () =>
       approvals.filter(
         (entry) =>
-          entry.messageIndex === index || (isLast && entry.messageIndex >= total),
+          (entry.messageIndex === index || (isLast && entry.messageIndex >= total)) &&
+          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
       ),
-    [approvals, index, isLast, total],
+    [approvals, index, isLast, placed, total],
   );
 
-  if (!remoteId || !mine.length) return null;
-  return (
-    <div className="approvals">
-      {mine.map(({ approval }) => (
-        <ApprovalEntry key={approval.id} threadId={remoteId} approval={approval} />
-      ))}
-    </div>
-  );
+  if (!remoteId) return null;
+  return <ApprovalList threadId={remoteId} entries={mine} className="approvals" />;
 }
 
 /** The line of figures under the conversation heading.
