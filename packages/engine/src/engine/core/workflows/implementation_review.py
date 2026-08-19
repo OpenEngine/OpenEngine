@@ -161,6 +161,23 @@ def _start_agent(
     )
 
 
+def start_review_command(
+    state: RunState, implementation: StepCompleted
+) -> StartAgentRun:
+    """Recreate the deterministic review command from durable run state.
+
+    The runtime uses this after a process restart: the implementation result is
+    durable, while the command that was emitted from it was only ever in memory.
+    """
+
+    return _start_agent(
+        state,
+        step=REVIEW_STEP_SPEC,
+        profile=REVIEW_PROFILE,
+        prompt=review_prompt(state.prompt, implementation),
+    )
+
+
 def _matches_expected_step(state: RunState, event: StepCompleted) -> bool:
     return (
         event.step_id == state.current_step_id
@@ -229,12 +246,7 @@ def decide_implementation_review(
                 step_results=(*state.step_results, event),
                 agent_runs=(*state.agent_runs, expected_run_id),
             )
-            command = _start_agent(
-                next_state,
-                step=REVIEW_STEP_SPEC,
-                profile=REVIEW_PROFILE,
-                prompt=review_prompt(state.prompt, event),
-            )
+            command = start_review_command(next_state, event)
             return next_state, (command,)
 
         case StepCompleted() if (
@@ -305,4 +317,5 @@ __all__ = [
     "human_review_summary",
     "implementation_prompt",
     "review_prompt",
+    "start_review_command",
 ]
