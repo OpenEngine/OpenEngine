@@ -10,6 +10,11 @@ const IN_PROGRESS_PHASES = new Set([
   "reviewing",
 ]);
 
+/** Where the unsent task prompt waits between visits to the new-workflow form.
+ *  A prompt worth writing is worth several sittings, and navigating away — to
+ *  check a run, or by closing the tab — should not be what throws it out. */
+const WORKFLOW_DRAFT_KEY = "engine.workflowDraft";
+
 function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
 }
@@ -253,12 +258,19 @@ export function RunsPage() {
 
 export function NewWorkflowPage() {
   const { runs } = useRuns();
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(
+    () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
+  );
   const [repository, setRepository] = useState(".");
   const [runners, setRunners] = useState<string[]>([]);
   const [runner, setRunner] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (prompt) window.localStorage.setItem(WORKFLOW_DRAFT_KEY, prompt);
+    else window.localStorage.removeItem(WORKFLOW_DRAFT_KEY);
+  }, [prompt]);
 
   useEffect(() => {
     api<EngineConfig>("/api/config")
@@ -283,6 +295,8 @@ export function NewWorkflowPage() {
           runner,
         }),
       });
+      // The run now owns this prompt, so the draft has nothing left to keep.
+      window.localStorage.removeItem(WORKFLOW_DRAFT_KEY);
       window.location.assign(`/runs/${encodeURIComponent(run.runId)}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not create workflow run");
