@@ -111,7 +111,7 @@ function remoteMetadata(thread: ApiThread) {
  *  in the thread, which is the only moment anybody knows it: an approval
  *  belongs beside the command it is about, and by the time it is answered the
  *  turn it interrupted may no longer be the newest one. */
-async function* readRunResponse(
+export async function* readRunResponse(
   response: Response,
   threadId: string,
   messageIndex: number,

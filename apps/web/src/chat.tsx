@@ -30,7 +30,7 @@ import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
 
-function toolResultText(result: unknown): string {
+export function toolResultText(result: unknown): string {
   if (typeof result === "string") return result;
   try {
     return JSON.stringify(result, null, 2) ?? String(result);
@@ -46,7 +46,7 @@ function toolResultText(result: unknown): string {
  *  scanning for, so it goes where scanning finds it. */
 const DETAIL_KEYS = ["command", "file_path", "path", "pattern", "query", "url", "notebook_path"];
 
-function toolDetail(args: unknown): string {
+export function toolDetail(args: unknown): string {
   if (!args || typeof args !== "object" || Array.isArray(args)) return "";
   const record = args as Record<string, unknown>;
   for (const key of DETAIL_KEYS) {
@@ -142,7 +142,7 @@ function UserMessage() {
  *  and stringifying the object prints "[object Object]" over the one sentence
  *  the reader needed. Read the message wherever it ended up.
  */
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
   if (error && typeof error === "object" && "message" in error) {
@@ -438,7 +438,7 @@ const KIND_LABELS: Record<ApiApproval["kind"], string> = {
 };
 
 /** What became of a request that is no longer open, and on whose say-so. */
-function outcomeText(approval: ApiApproval): string {
+export function outcomeText(approval: ApiApproval): string {
   if (approval.status === "interrupted")
     return "Interrupted — the agent that asked this is gone, so it can no longer be answered.";
   if (approval.decisionSource === "session_grant")
@@ -494,7 +494,7 @@ function ApprovalArguments({ approval }: { approval: ApiApproval }) {
 }
 
 /** The one line a folded approval is worth: what happened, and to what. */
-function summaryText(approval: ApiApproval): string {
+export function summaryText(approval: ApiApproval): string {
   const target =
     approval.command ?? approval.toolName ?? KIND_LABELS[approval.kind].toLowerCase();
   if (approval.status === "pending") return `Approval needed · ${target}`;
@@ -523,7 +523,7 @@ function summaryText(approval: ApiApproval): string {
  *  it is pending it is the only thing worth reading and is open; once it is
  *  answered it folds down to a line in the transcript beside the command it
  *  was about, where it is a record rather than a demand. */
-function ApprovalEntry({
+export function ApprovalEntry({
   threadId,
   approval,
 }: {

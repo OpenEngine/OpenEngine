@@ -19,6 +19,30 @@ env:
   UV_VERSION: "0.9.28"
 
 jobs:
+  web:
+    name: web client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web client
+        run: npm --prefix apps/web ci
+
+      - name: Typecheck web client
+        run: npm --prefix apps/web run typecheck
+
+      - name: Test web client
+        run: npm --prefix apps/web run test
+
+      - name: Build web client
+        run: npm --prefix apps/web run build
+
   boundaries:
     # Separated from the test matrix on purpose: this job answers "did someone
     # break the architecture?", which is a different question from "did someone
