@@ -44,9 +44,9 @@ type ThreadInitializer = {
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
-function useInitialThreadId(forcedThreadId?: string) {
+function useInitialThreadId(forcedThreadId?: string, remember = true) {
   const storedThreadId = useRef(
-    forcedThreadId ?? (typeof window === "undefined"
+    forcedThreadId ?? (!remember || typeof window === "undefined"
       ? undefined
       : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined),
   ).current;
@@ -222,12 +222,21 @@ function HistoryProvider({ children }: PropsWithChildren) {
   return <RuntimeAdapterProvider adapters={{ history }}>{children}</RuntimeAdapterProvider>;
 }
 
+/** `rememberActiveThread` is what separates the rail's runtime from the chat's.
+ *  A workflow page mounts this only so the rail can list and start chats, and a
+ *  page with no transcript on it has no business restoring the last chat --
+ *  still less naming a different one as the chat to come back to. */
 export function EngineRuntimeProvider({
   defaults,
   children,
   initialThreadId,
-}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
-  const initialThread = useInitialThreadId(initialThreadId);
+  rememberActiveThread = true,
+}: PropsWithChildren<{
+  defaults: NewChatDefaults;
+  initialThreadId?: string;
+  rememberActiveThread?: boolean;
+}>) {
+  const initialThread = useInitialThreadId(initialThreadId, rememberActiveThread);
   if (initialThread.loading)
     return <main className="loading">Restoring chats…</main>;
 
@@ -235,6 +244,7 @@ export function EngineRuntimeProvider({
     <EngineRuntime
       defaults={defaults}
       initialThreadId={initialThread.threadId}
+      rememberActiveThread={rememberActiveThread}
     >
       {children}
     </EngineRuntime>
@@ -244,8 +254,13 @@ export function EngineRuntimeProvider({
 function EngineRuntime({
   defaults,
   initialThreadId,
+  rememberActiveThread,
   children,
-}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
+}: PropsWithChildren<{
+  defaults: NewChatDefaults;
+  initialThreadId?: string;
+  rememberActiveThread: boolean;
+}>) {
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
@@ -363,14 +378,14 @@ function EngineRuntime({
     initialThreadId,
     onThreadIdChange(threadId) {
       if (threadId) {
-        window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
+        if (rememberActiveThread) window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
         // A previously visited thread can keep its messages in memory, so its
         // history adapter does not necessarily load again on traversal. The
         // durable snapshots may have changed while another chat was open.
         void refreshApprovals(threadId).catch((error: unknown) => {
           console.error("Could not refresh conversation approvals.", error);
         });
-      } else {
+      } else if (rememberActiveThread) {
         window.localStorage.removeItem(ACTIVE_THREAD_KEY);
       }
     },
