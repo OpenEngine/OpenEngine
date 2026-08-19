@@ -156,6 +156,9 @@ export type ApiMessage = {
 
 export type ApiHistory = {
   messages: ApiMessage[];
+  /** Everything this conversation has been asked to allow, oldest first. Sent
+   *  with the transcript because it outlives the run that raised it. */
+  approvals: ApiApproval[];
   unstable_resume: boolean;
 };
 
