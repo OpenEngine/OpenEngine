@@ -1284,6 +1284,17 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
                     if step.agent_instance_id
                     else None
                 ),
+                "pendingApproval": (
+                    {
+                        "id": str(step.pending_approval.approval_id),
+                        "kind": step.pending_approval.kind.value,
+                        "reason": step.pending_approval.reason,
+                        "command": step.pending_approval.command,
+                        "toolName": step.pending_approval.tool_name,
+                    }
+                    if step.pending_approval is not None
+                    else None
+                ),
             }
             for step in run.steps
         ],

@@ -15,6 +15,12 @@ function phaseAccent(phase: string): "flame" | "quiet" | undefined {
   return undefined;
 }
 
+const LIVE_PHASES = new Set(["pending", "preparing_workspace", "implementing", "reviewing"]);
+
+function approvalStep(run: ApiWorkflowRun) {
+  return run.steps.find((step) => step.pendingApproval);
+}
+
 function conversationCount(run: ApiWorkflowRun) {
   return run.steps.filter((step) => step.conversationUrl).length;
 }
@@ -101,9 +107,27 @@ function useRuns() {
   const [runs, setRuns] = useState<ApiWorkflowRun[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ runs: ApiWorkflowRun[] }>("/api/runs")
-      .then((value) => setRuns(value.runs))
-      .catch((reason: Error) => setError(reason.message));
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      api<{ runs: ApiWorkflowRun[] }>("/api/runs")
+        .then((value) => {
+          if (cancelled) return;
+          setRuns(value.runs);
+          setError("");
+          if (value.runs.some((run) => LIVE_PHASES.has(run.phase))) {
+            timer = window.setTimeout(load, 1000);
+          }
+        })
+        .catch((reason: Error) => {
+          if (!cancelled) setError(reason.message);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
   return { runs, error };
 }
@@ -139,7 +163,9 @@ export function RunsPage() {
   }, [runs]);
   const shown = filter ? runs.filter((run) => run.phase === filter) : runs;
 
-  const awaiting = runs.filter((run) => run.phase === "awaiting_human_review").length;
+  const awaiting = runs.filter(
+    (run) => run.phase === "awaiting_human_review" || approvalStep(run),
+  ).length;
   const failed = runs.filter((run) => run.phase === "failed").length;
   const conversations = runs.reduce((total, run) => total + conversationCount(run), 0);
 
@@ -156,7 +182,7 @@ export function RunsPage() {
         </header>
         <StatStrip>
           <Stat label="Runs" value={runs.length} />
-          <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />
+          <Stat label="Action required" value={awaiting} tone={awaiting ? "alert" : undefined} />
           <Stat label="Failed" value={failed} tone={failed ? "alert" : undefined} />
           <Stat label="Conversations" value={conversations} />
         </StatStrip>
@@ -195,16 +221,17 @@ export function RunsPage() {
           <div className="cards">
             {shown.map((run) => {
               const current = run.steps.find((step) => step.stepId === run.currentStepId);
+              const approval = approvalStep(run);
               return (
                 <a
                   className="card"
-                  data-accent={phaseAccent(run.phase)}
+                  data-accent={approval ? "flame" : phaseAccent(run.phase)}
                   href={`/runs/${run.runId}`}
                   key={run.runId}
                 >
                   <div className="card-top">
-                    <span className={`chip ${run.phase === "pending" ? "chip-flame" : ""}`}>
-                      {phaseLabel(run.phase)}
+                    <span className={`chip ${approval || run.phase === "pending" ? "chip-flame" : ""}`}>
+                      {approval ? "approval needed" : phaseLabel(run.phase)}
                     </span>
                     <code className="card-id">{run.runId}</code>
                   </div>
@@ -420,7 +447,7 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             <span>Agent {step.agentId}</span>
             {step.conversationUrl ? (
               <a className="link-flame" href={step.conversationUrl}>
-                Open conversation →
+                {step.pendingApproval ? "Review approval →" : "Open conversation →"}
               </a>
             ) : (
               <span>Conversation not started</span>
@@ -429,6 +456,25 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
         )}
       </div>
     </article>
+  );
+}
+
+function ApprovalCallout({ run }: { run: ApiWorkflowRun }) {
+  const step = approvalStep(run);
+  if (!step?.pendingApproval || !step.conversationUrl) return null;
+  const approval = step.pendingApproval;
+  const target = approval.command ?? approval.toolName;
+
+  return (
+    <section className="callout callout-action">
+      <p className="eyebrow">Agent approval needed</p>
+      <h2>{approval.reason ?? `Review ${phaseLabel(approval.kind)}`}</h2>
+      {target && <code className="code-inline">{target}</code>}
+      <p>The {step.name.toLowerCase()} agent is paused until this request is answered.</p>
+      <a className="btn btn-primary" href={step.conversationUrl}>
+        Review approval
+      </a>
+    </section>
   );
 }
 
@@ -445,7 +491,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           if (cancelled) return;
           setRun(value);
           setError("");
-          if (["pending", "preparing_workspace", "implementing", "reviewing"].includes(value.phase)) {
+          if (LIVE_PHASES.has(value.phase)) {
             timer = window.setTimeout(load, 1000);
           }
         })
@@ -495,6 +541,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
               <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
             </StatStrip>
             <StageProgress run={run} />
+            <ApprovalCallout run={run} />
             {run.pendingHumanReview && (
               <section className="callout callout-action">
                 <p className="eyebrow">Action required</p>

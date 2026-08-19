@@ -63,6 +63,13 @@ export type ApiRunStep = {
   agentRunId: string | null;
   conversationId: string | null;
   conversationUrl: string | null;
+  pendingApproval: {
+    id: string;
+    kind: ApiApproval["kind"];
+    reason: string | null;
+    command: string | null;
+    toolName: string | null;
+  } | null;
 };
 
 export type ApiWorkflowRun = {

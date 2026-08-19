@@ -783,6 +783,8 @@ select:disabled { cursor: default; }
 }
 .callout h2 { margin: 10px 0 8px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; text-transform: capitalize; }
 .callout p { color: var(--muted); font-size: 15px; line-height: 1.55; }
+.callout .code-inline { display: block; width: fit-content; margin: 12px 0; }
+.callout .btn { display: inline-flex; margin-top: 16px; text-decoration: none; }
 .callout-action { background: var(--flame-wash); border-left-color: var(--flame); }
 .callout-action .eyebrow { color: var(--flame); }
 .callout-rejected { border-left-color: var(--flame-deep); }

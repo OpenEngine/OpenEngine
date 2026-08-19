@@ -12,6 +12,7 @@ from engine.core.workflows.implementation_review import (
     human_review_summary,
 )
 from engine.domain.agents import AgentInstance
+from engine.domain.approvals import ApprovalRecord, ApprovalStatus
 from engine.domain.events import StepCompleted
 from engine.domain.ids import (
     AgentId,
@@ -41,6 +42,7 @@ class RunStepView:
     agent_run_id: AgentRunId | None = None
     mcp_request_id: str | int | None = None
     conversation_id: ConversationId | None = None
+    pending_approval: ApprovalRecord | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,15 @@ class RunReader:
 
     async def _view(self, state: RunState) -> WorkflowRunView:
         instances = await self._store.list_instances(workflow_run_id=state.run_id)
+        pending_approvals = (
+            await self._store.list_approvals(
+                agent_run_id=state.current_agent_run_id,
+                status=ApprovalStatus.PENDING,
+            )
+            if state.current_agent_run_id is not None
+            else ()
+        )
+        pending_approval = pending_approvals[-1] if pending_approvals else None
         by_step = {
             instance.workflow_step_id: instance
             for instance in instances
@@ -105,6 +116,7 @@ class RunReader:
                 IMPLEMENTATION_PROFILE.agent_id,
                 by_step.get(IMPLEMENTATION_STEP),
                 results.get(IMPLEMENTATION_STEP),
+                pending_approval,
             ),
             _agent_step(
                 state,
@@ -113,6 +125,7 @@ class RunReader:
                 REVIEW_PROFILE.agent_id,
                 by_step.get(REVIEW_STEP),
                 results.get(REVIEW_STEP),
+                pending_approval,
             ),
             _human_step(state),
         )
@@ -166,6 +179,7 @@ def _agent_step(
     agent_id: AgentId,
     instance: AgentInstance | None,
     result: StepCompleted | None,
+    pending_approval: ApprovalRecord | None,
 ) -> RunStepView:
     status = _step_status(state, step_id, result is not None)
     return RunStepView(
@@ -192,6 +206,9 @@ def _agent_step(
         ),
         mcp_request_id=result.mcp_request_id if result is not None else None,
         conversation_id=instance.conversation_id if instance else None,
+        pending_approval=(
+            pending_approval if state.current_step_id == step_id else None
+        ),
     )
 
 

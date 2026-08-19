@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -30,7 +31,9 @@ from engine.domain import (
     AgentRunId,
     AgentRunStatus,
     ApprovalDecision,
+    ApprovalId,
     ApprovalKind,
+    ApprovalRecord,
     ApprovalStatus,
     ConversationId,
     HumanReviewCompleted,
@@ -726,6 +729,59 @@ def test_run_api_covers_workflow_lifecycle_phases(
             "summary": "The residual risk is acceptable.",
         }
         assert body["steps"][1]["outcome"] == "changes_requested"
+
+
+def test_run_api_surfaces_a_pending_agent_approval_on_its_workflow_step() -> None:
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.IMPLEMENTING)
+    assert state.current_agent_run_id is not None
+    instance_id = AgentInstanceId("implementation-instance")
+
+    async def arrange() -> None:
+        await store.save(state)
+        await store.create_instance(
+            AgentId("implementation-agent"),
+            runner="test",
+            instance_id=instance_id,
+            workflow_run_id=state.run_id,
+            workflow_step_id=IMPLEMENTATION_STEP,
+        )
+        await store.record_approval(
+            ApprovalRecord(
+                approval_id=ApprovalId("approval-1"),
+                agent_run_id=state.current_agent_run_id,
+                instance_id=instance_id,
+                runner="test",
+                kind=ApprovalKind.COMMAND_EXECUTION,
+                requested_at=datetime.now(UTC),
+                reason="Run the workflow test suite",
+                command="pytest",
+            )
+        )
+
+    asyncio.run(arrange())
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                await client.get(f"/api/runs/{state.run_id}"),
+                await client.get("/api/runs"),
+            )
+
+    detail, listed = asyncio.run(scenario())
+    expected = {
+        "id": "approval-1",
+        "kind": "command_execution",
+        "reason": "Run the workflow test suite",
+        "command": "pytest",
+        "toolName": None,
+    }
+
+    assert detail.json()["steps"][0]["pendingApproval"] == expected
+    assert listed.json()["runs"][0]["steps"][0]["pendingApproval"] == expected
+    assert detail.json()["steps"][1]["pendingApproval"] is None
 
 
 def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
