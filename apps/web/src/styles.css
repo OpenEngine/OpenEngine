@@ -291,7 +291,8 @@ ul, ol { padding: 0; list-style: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-sub a:hover { color: var(--night-ink); }
+.rail-sub a:hover, .rail-sub a[data-active] { color: var(--night-ink); }
+.rail-sub a[data-active] { font-weight: 700; }
 
 .rail-archive { border-top: 1px solid var(--night-rule); }
 .rail-archive > summary {

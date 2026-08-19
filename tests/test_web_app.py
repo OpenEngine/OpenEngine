@@ -1380,7 +1380,9 @@ def test_workflow_conversation_is_nested_under_its_run_not_standalone() -> None:
     implementation = runs.json()["steps"][0]
     assert implementation["agentInstanceId"] == "implementation-instance"
     assert implementation["conversationId"] == "implementation-conversation"
-    assert implementation["conversationUrl"] == "/conversations/implementation-instance"
+    assert implementation["conversationUrl"] == (
+        f"/runs/{state.run_id}/conversations/implementation-instance"
+    )
     assert threads.json() == {"threads": []}
     assert thread.json()["workflowRunId"] == state.run_id
     assert thread.json()["workflowStepId"] == IMPLEMENTATION_STEP
@@ -1432,6 +1434,25 @@ def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             return await client.get("/runs/run-42")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert "workflow application" in response.text
+
+
+def test_workflow_conversation_frontend_route_serves_the_application(tmp_path) -> None:
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<main>workflow application</main>")
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(
+                "/runs/run-42/conversations/implementation-instance"
+            )
 
     response = asyncio.run(scenario())
 

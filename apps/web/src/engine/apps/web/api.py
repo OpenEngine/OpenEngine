@@ -1115,6 +1115,7 @@ def create_app(
             [
                 Route("/runs", spa_page),
                 Route("/runs/new", spa_page),
+                Route("/runs/{run_id}/conversations/{thread_id}", spa_page),
                 Route("/runs/{run_id}", spa_page),
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),
@@ -1195,7 +1196,7 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
                     str(step.conversation_id) if step.conversation_id else None
                 ),
                 "conversationUrl": (
-                    f"/conversations/{step.agent_instance_id}"
+                    f"/runs/{run.run_id}/conversations/{step.agent_instance_id}"
                     if step.agent_instance_id
                     else None
                 ),
