@@ -754,15 +754,18 @@ def create_app(
         """Interrupt, append a human message, and resume the same workflow step."""
 
         assert thread.workflow_run_id is not None
+        if not thread.editable:
+            raise RuntimeError("this workflow conversation is read-only")
         before = len(await service.history(thread.instance_id))
-        await interrupt_workflow(thread)
         state = await session.state_store.load(thread.workflow_run_id)
-        if (
-            state is None
-            or state.phase is not RunPhase.IMPLEMENTING
-            or state.current_step_id != thread.workflow_step_id
-        ):
+        if state is None:
             raise RuntimeError("this workflow step is no longer active")
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task = workflow_tasks.get(thread.workflow_run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         task = asyncio.create_task(
             workflow_executor.resume_implementation(
                 thread.workflow_run_id, text, thread.runner

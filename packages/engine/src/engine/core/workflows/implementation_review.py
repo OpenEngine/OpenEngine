@@ -22,6 +22,7 @@ from engine.domain.events import (
     RunNamed,
     RunRequested,
     StepCompleted,
+    StepReactivated,
     WorkspaceProvisioned,
 )
 from engine.domain.ids import (
@@ -120,6 +121,17 @@ def agent_run_id(run_id: RunId, step_id: StepId) -> AgentRunId:
     return AgentRunId(f"{run_id}:{step_id}:run")
 
 
+def _next_agent_run_id(state: RunState, step_id: StepId) -> AgentRunId:
+    """Return a deterministic new execution id for a step being run again."""
+
+    base = agent_run_id(state.run_id, step_id)
+    attempts = sum(
+        existing == base or str(existing).startswith(f"{base}:")
+        for existing in state.agent_runs
+    )
+    return base if attempts == 0 else AgentRunId(f"{base}:{attempts + 1}")
+
+
 def implementation_prompt(task_prompt: str) -> str:
     """The implementation receives the original task without rewriting it."""
 
@@ -170,9 +182,15 @@ def _start_agent(
     profile: AgentProfile,
     prompt: str,
 ) -> StartAgentRun:
+    execution_id = (
+        state.current_agent_run_id
+        if state.current_step_id == step.step_id
+        and state.current_agent_run_id is not None
+        else agent_run_id(state.run_id, step.step_id)
+    )
     return StartAgentRun(
         run_id=state.run_id,
-        agent_run_id=agent_run_id(state.run_id, step.step_id),
+        agent_run_id=execution_id,
         instance_id=agent_instance_id(state.run_id, step.step_id),
         profile=profile,
         prompt=prompt,
@@ -260,6 +278,28 @@ def decide_implementation_review(
         case RunNamed():
             return replace(state, name=event.name), ()
 
+        case StepReactivated() if (
+            event.step_id == IMPLEMENTATION_STEP
+            and state.phase
+            in (
+                RunPhase.REVIEWING,
+                RunPhase.AWAITING_HUMAN_REVIEW,
+                RunPhase.SUCCEEDED,
+                RunPhase.FAILED,
+            )
+        ):
+            expected_run_id = _next_agent_run_id(state, IMPLEMENTATION_STEP)
+            return replace(
+                state,
+                phase=RunPhase.IMPLEMENTING,
+                current_step_id=IMPLEMENTATION_STEP,
+                current_agent_run_id=expected_run_id,
+                agent_runs=(*state.agent_runs, expected_run_id),
+                step_results=(),
+                human_review=None,
+                failure_reason="",
+            ), ()
+
         case StepCompleted() if (
             state.phase is RunPhase.IMPLEMENTING
             and _matches_expected_step(state, event)
@@ -271,7 +311,7 @@ def decide_implementation_review(
                     step_results=(*state.step_results, event),
                 ), ()
 
-            expected_run_id = agent_run_id(state.run_id, REVIEW_STEP)
+            expected_run_id = _next_agent_run_id(state, REVIEW_STEP)
             next_state = replace(
                 state,
                 phase=RunPhase.REVIEWING,

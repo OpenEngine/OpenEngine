@@ -28,6 +28,7 @@ from engine.domain import (
     RunState,
     StartAgentRun,
     StepCompleted,
+    StepReactivated,
     WorkspaceProvisioned,
 )
 from engine.ports import AgentRunner, ApprovalHandler, InteractiveMcpAgentRunner
@@ -152,7 +153,19 @@ class WorkflowExecutor:
             state.phase is not RunPhase.IMPLEMENTING
             or state.current_step_id != IMPLEMENTATION_STEP
         ):
-            raise WorkflowExecutionError("run is not implementing")
+            state, commands = await self._transition(
+                state,
+                StepReactivated(run_id=run_id, step_id=IMPLEMENTATION_STEP),
+            )
+            if commands:
+                raise WorkflowExecutionError(
+                    "reactivating implementation unexpectedly emitted commands"
+                )
+            if (
+                state.phase is not RunPhase.IMPLEMENTING
+                or state.current_step_id != IMPLEMENTATION_STEP
+            ):
+                raise WorkflowExecutionError("run is not implementing")
         try:
             selected_name = runner_name or self.default_runner
             try:
@@ -218,11 +231,16 @@ class WorkflowExecutor:
             raise WorkflowExecutionError(
                 "implementation result did not advance the run to review"
             )
+        review_command = _only(implementation.commands, StartAgentRun)
         review = await self._run_step(
             implementation.state,
-            _only(implementation.commands, StartAgentRun),
+            review_command,
             runner=reviewer,
             runner_name=runner_name,
+            # Ignored when the first review creates its conversation. On a
+            # reactivated implementation, the durable review conversation
+            # already exists and needs the new result appended as fresh context.
+            continuation=review_command.prompt,
         )
         if review is None or review.state.phase is RunPhase.FAILED:
             return

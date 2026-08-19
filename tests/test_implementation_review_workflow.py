@@ -27,6 +27,7 @@ from engine.domain import (
     RunState,
     StartAgentRun,
     StepCompleted,
+    StepReactivated,
     StepId,
     StepOutput,
     TaskId,
@@ -237,6 +238,37 @@ def test_human_decision_is_final(approved: bool, expected_phase: RunPhase) -> No
     )
 
     assert next_state.phase is expected_phase
+    assert commands == ()
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_reactivating_implementation_discards_downstream_results(
+    terminal: bool,
+) -> None:
+    state, _ = awaiting_human()
+    if terminal:
+        state, _ = decide(
+            state,
+            HumanReviewCompleted(
+                run_id=RUN_ID,
+                step_id=HUMAN_REVIEW_STEP,
+                approved=True,
+                summary="Approved before more guidance arrived.",
+            ),
+        )
+
+    next_state, commands = decide(
+        state,
+        StepReactivated(run_id=RUN_ID, step_id=IMPLEMENTATION_STEP),
+    )
+
+    assert next_state.phase is RunPhase.IMPLEMENTING
+    assert next_state.current_step_id == IMPLEMENTATION_STEP
+    assert next_state.current_agent_run_id == "run-42:implementation:run:2"
+    assert next_state.agent_runs[-1] == next_state.current_agent_run_id
+    assert next_state.step_results == ()
+    assert next_state.human_review is None
+    assert next_state.failure_reason == ""
     assert commands == ()
 
 
