@@ -138,6 +138,21 @@ jobs:
       - name: Drive the interface
         run: npm --prefix apps/web run test:e2e
 
+      # Uploaded whether the run passed or failed: the report of a green run --
+      # its screenshots of each state the specs assert on -- is how somebody
+      # answers "what does the approval card look like now?" without running
+      # the tier again.
+      - name: Upload the report (a static site -- unzip, then `npx playwright show-report <dir>`)
+        # GitHub serves the artifact as a zip and will not render the HTML, so
+        # it has to be downloaded and opened locally.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload the traces of what failed
         if: failure()
         uses: actions/upload-artifact@v4

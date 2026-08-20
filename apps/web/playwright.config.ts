@@ -16,7 +16,16 @@ export default defineConfig({
   // A flaky end-to-end test is a bug report about the product, so a failure is
   // reported rather than retried into a pass.
   retries: 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
-  use: { trace: "retain-on-failure" },
+  // The HTML report is how a run is read after the fact, so it is written
+  // whether or not anyone is watching the terminal. `open: "never"` keeps it
+  // from hijacking a browser at the end of a local run.
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never" }]]
+    : [["list"], ["html", { open: "never" }]],
+  // A trace of two passing tests costs nothing, and the run somebody asks
+  // about is more often a green one than the one that happened to fail. CI
+  // keeps only failures, because there it is an artifact somebody pays to
+  // store.
+  use: { trace: process.env.CI ? "retain-on-failure" : "on" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });
