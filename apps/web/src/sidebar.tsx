@@ -202,7 +202,7 @@ export function Sidebar({
                           key={step.stepId}
                         >
                           {step.name} conversation
-                          {step.waiting && <span aria-label="Waiting for input"> ⚠️</span>}
+                          {step.waiting && <span aria-label="Waiting for input"> ❔</span>}
                         </a>
                       ))}
                   </div>

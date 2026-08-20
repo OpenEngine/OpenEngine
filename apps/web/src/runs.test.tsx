@@ -176,23 +176,50 @@ describe("useRuns", () => {
     expect(result.current.runs).toEqual([]);
   });
 
-  it("refreshes active runs so waiting conversations appear without a reload", async () => {
+  it("refreshes terminal runs so reactivated waiting conversations appear", async () => {
     vi.useFakeTimers();
+    const terminal = run({
+      phase: "succeeded",
+      currentStepId: null,
+      terminalOutcome: "approved",
+      steps: run().steps.map((step) => ({ ...step, status: "completed" })),
+    });
     const active = run();
     const waiting = run({ steps: [{ ...active.steps[0], waiting: true }] });
     const fetch = vi
       .fn()
-      .mockResolvedValueOnce(json({ runs: [active] }))
+      .mockResolvedValueOnce(json({ runs: [terminal] }))
       .mockResolvedValue(json({ runs: [waiting] }));
     vi.stubGlobal("fetch", fetch);
 
     const { result } = renderHook(() => useRuns());
     await act(async () => {});
+    expect(result.current.runs[0].phase).toBe("succeeded");
     expect(result.current.runs[0].steps[0].waiting).toBe(false);
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
+    expect(result.current.runs[0].phase).toBe("implementing");
     expect(result.current.runs[0].steps[0].waiting).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps refreshing after a transient load failure", async () => {
+    vi.useFakeTimers();
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("runs unavailable"))
+      .mockResolvedValue(json({ runs: [run()] }));
+    vi.stubGlobal("fetch", fetch);
+
+    const { result } = renderHook(() => useRuns());
+    await act(async () => {});
+    expect(result.current.error).toBe("runs unavailable");
+
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+    expect(result.current.runs).toHaveLength(1);
+    expect(result.current.error).toBe("");
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

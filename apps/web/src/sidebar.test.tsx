@@ -181,7 +181,7 @@ describe("Sidebar", () => {
     const entry = within(body("Workflows")).getByRole("link", {
       name: "Implementation conversation Waiting for input",
     });
-    expect(entry).toHaveTextContent("Implementation conversation ⚠️");
+    expect(entry).toHaveTextContent("Implementation conversation ❔");
   });
 
   /** Switching the open conversation in place only means something beside a
