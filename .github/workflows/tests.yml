@@ -62,7 +62,8 @@ jobs:
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 
           for _ in {1..30}; do
-            if curl --fail --silent http://localhost:8000/api/config > /dev/null; then
+            if curl --fail --silent http://localhost:8000/api/config > /dev/null \
+              && curl --fail --silent http://localhost:8000/ > /dev/null; then
               cat "$RUNNER_TEMP/engine-web.log"
               exit 0
             fi
