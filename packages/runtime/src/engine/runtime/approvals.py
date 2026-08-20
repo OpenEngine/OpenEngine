@@ -131,6 +131,10 @@ class ApprovalBroker:
         self._store = store
         self._policy = policy
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
+        self._pending_requests: dict[
+            ApprovalId,
+            tuple[ApprovalRequest, PermissionTranslator | None, ApprovalPresenter],
+        ] = {}
 
     def handler(
         self,
@@ -141,6 +145,7 @@ class ApprovalBroker:
         present: ApprovalPresenter,
         workspace_id: WorkspaceId | None = None,
         translator: PermissionTranslator | None = None,
+        auto_approve: Callable[[], bool] | None = None,
     ) -> ApprovalHandler:
         """The callback one interactive turn hands to its runner.
 
@@ -178,7 +183,11 @@ class ApprovalBroker:
             # reader can ever see a pending row for a question that was never
             # going to be put. Policy first: a deployment that has ruled on
             # this has ruled on it whatever the conversation agreed to earlier.
-            configured = self._policy_decision(request, translator)
+            configured = self._policy_decision(
+                request,
+                translator,
+                auto_approve=bool(auto_approve and auto_approve()),
+            )
             if configured is not None:
                 settled = replace(
                     record,
@@ -219,7 +228,27 @@ class ApprovalBroker:
                 asyncio.get_running_loop().create_future()
             )
             self._waiting[record.approval_id] = waiting
+            self._pending_requests[record.approval_id] = (request, translator, present)
             try:
+                # The conversation setting can change while the durable row is
+                # being written. Recheck after the future exists so a toggle in
+                # that window cannot leave the turn parked on a request the
+                # system now allows.
+                configured = self._policy_decision(
+                    request,
+                    translator,
+                    auto_approve=bool(auto_approve and auto_approve()),
+                )
+                if configured is not None:
+                    settled = await self.decide(
+                        record.approval_id,
+                        configured,
+                        instance_id=instance_id,
+                        agent_run_id=agent_run_id,
+                        source=ApprovalDecisionSource.POLICY,
+                    )
+                    await present(settled)
+                    return configured
                 await present(record)
                 return await waiting
             except BaseException:
@@ -229,8 +258,46 @@ class ApprovalBroker:
                 raise
             finally:
                 self._waiting.pop(record.approval_id, None)
+                self._pending_requests.pop(record.approval_id, None)
 
         return request_approval
+
+    async def auto_approve_pending(
+        self, instance_id: AgentInstanceId
+    ) -> Sequence[ApprovalRecord]:
+        """Apply auto-approval to requests already waiting in one conversation.
+
+        Explicit ask and deny rules retain their configured precedence. This is
+        used when an implementation conversation enables auto-approval after
+        its workflow runner has already paused.
+        """
+
+        settled: list[ApprovalRecord] = []
+        for record in await self._store.list_approvals(
+            instance_id=instance_id, status=ApprovalStatus.PENDING
+        ):
+            context = self._pending_requests.get(record.approval_id)
+            if context is None:
+                continue
+            request, translator, present = context
+            decision = self._policy_decision(
+                request, translator, auto_approve=True
+            )
+            if decision is None:
+                continue
+            try:
+                decided = await self.decide(
+                    record.approval_id,
+                    decision,
+                    instance_id=instance_id,
+                    agent_run_id=record.agent_run_id,
+                    source=ApprovalDecisionSource.POLICY,
+                )
+            except ApprovalError:
+                continue
+            await present(decided)
+            settled.append(decided)
+        return tuple(settled)
 
     async def decide(
         self,
@@ -373,7 +440,11 @@ class ApprovalBroker:
         return waiting is not None and not waiting.done()
 
     def _policy_decision(
-        self, request: ApprovalRequest, translator: PermissionTranslator | None
+        self,
+        request: ApprovalRequest,
+        translator: PermissionTranslator | None,
+        *,
+        auto_approve: bool = False,
     ) -> ApprovalDecision | None:
         """The answer the configuration already gives, if it gives one.
 
@@ -384,7 +455,8 @@ class ApprovalBroker:
         it never offered would be a protocol error rather than an enforcement.
         """
         scope = translator.scope_for(request) if translator is not None else None
-        match policy_decision_for(self._policy, scope):
+        policy = replace(self._policy, auto_approve=True) if auto_approve else self._policy
+        match policy_decision_for(policy, scope):
             case PolicyDecision.ALLOW:
                 configured = ApprovalDecision.ACCEPT
             case PolicyDecision.DENY:

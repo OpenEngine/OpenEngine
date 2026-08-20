@@ -30,6 +30,7 @@ from engine.domain import (
     AgentRunId,
     AgentRunStatus,
     ApprovalDecision,
+    ApprovalDecisionSource,
     ApprovalKind,
     ApprovalStatus,
     ConversationId,
@@ -1332,6 +1333,53 @@ def test_workflow_conversation_replays_every_approval_after_reconnect() -> None:
     ]
     assert streamed[0]["status"] == "decided"
     assert streamed[1]["status"] == "pending"
+
+
+def test_implementation_conversation_can_enable_system_auto_approvals() -> None:
+    store = InMemoryStateStore()
+    runner = RepeatedApprovalWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Make two automatically approved changes.",
+                    "repository": "acme/api",
+                },
+            )
+            for _ in range(100):
+                pending = await store.list_approvals(status=ApprovalStatus.PENDING)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending
+            instance_id = pending[0].instance_id
+
+            enabled = await client.patch(
+                f"/api/threads/{instance_id}", json={"autoApprove": True}
+            )
+            completed = await _await_phase(
+                client, RunId(created.json()["runId"]), "awaiting_human_review"
+            )
+            return enabled, completed, await store.load_instance(instance_id), (
+                await store.list_approvals(instance_id=instance_id)
+            )
+
+    enabled, completed, instance, approvals = asyncio.run(scenario())
+
+    assert enabled.status_code == 200
+    assert enabled.json()["autoApprove"] is True
+    assert completed.status_code == 200
+    assert instance is not None and instance.auto_approve is True
+    assert runner.decisions == [ApprovalDecision.ACCEPT, ApprovalDecision.ACCEPT]
+    assert len(approvals) == 2
+    assert {approval.decision_source for approval in approvals} == {
+        ApprovalDecisionSource.POLICY
+    }
 
 
 def test_conversation_transcript_carries_approvals_after_its_run_ends() -> None:

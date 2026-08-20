@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api, messageText } from "./api";
+import { api, messageText, setThreadAutoApprove } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -60,5 +60,23 @@ describe("messageText", () => {
 
   it("returns an empty string for unsupported content", () => {
     expect(messageText({ content: { type: "text", text: "hidden" } })).toBe("");
+  });
+});
+
+describe("setThreadAutoApprove", () => {
+  it("updates the conversation setting", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "thread-1", autoApprove: true }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await setThreadAutoApprove("thread-1", true);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/threads/thread-1",
+      expect.objectContaining({ method: "PATCH", body: '{"autoApprove":true}' }),
+    );
   });
 });

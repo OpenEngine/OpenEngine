@@ -47,6 +47,7 @@ export type ApiThread = {
   workflowRunId?: string;
   workflowStepId?: string;
   editable?: boolean;
+  autoApprove?: boolean;
 };
 
 export type ApiRunStep = {
@@ -94,6 +95,16 @@ export function setThreadRunner(threadId: string, runner: string): Promise<ApiTh
   return api<ApiThread>(`/api/threads/${threadId}`, {
     method: "PATCH",
     body: JSON.stringify({ runner }),
+  });
+}
+
+export function setThreadAutoApprove(
+  threadId: string,
+  autoApprove: boolean,
+): Promise<ApiThread> {
+  return api<ApiThread>(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ autoApprove }),
   });
 }
 

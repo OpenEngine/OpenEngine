@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import {
   api,
+  setThreadAutoApprove,
   setThreadRunner,
   type ApiThread,
   type EngineConfig,
@@ -48,6 +49,7 @@ type ThreadCustom = {
   runner?: string;
   workflowRunId?: string;
   editable?: boolean;
+  autoApprove?: boolean;
 };
 
 /** The header speaks for whatever is on screen: the defaults the next
@@ -143,12 +145,16 @@ function ConversationHeader({
   // list is a snapshot taken whenever it was last refreshed.
   const [fetched, setFetched] = useState<ApiThread>();
   const [chosen, setChosen] = useState<string>();
+  const [chosenAutoApprove, setChosenAutoApprove] = useState<boolean>();
+  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
   const [error, setError] = useState<string>();
   const thread = fetched ?? listed;
   // A chat nothing has described yet was started on the defaults, so those are
   // the truthful thing to show while it is being read.
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
   const workflowConversation = Boolean(thread?.workflowRunId);
+  const implementationConversation = workflowConversation && Boolean(thread?.editable);
+  const autoApprove = chosenAutoApprove ?? thread?.autoApprove ?? false;
   const title = fetched?.title || listedTitle || "New chat";
 
   useEffect(() => {
@@ -176,8 +182,24 @@ function ConversationHeader({
     }
   }
 
+  async function chooseAutoApprove(next: boolean) {
+    setChosenAutoApprove(next);
+    setAutoApproveBusy(true);
+    setError(undefined);
+    try {
+      setFetched(await setThreadAutoApprove(threadId, next));
+    } catch (failure) {
+      setChosenAutoApprove(undefined);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setAutoApproveBusy(false);
+    }
+  }
+
   return (
-    <header className="panel-head">
+    <header
+      className={`panel-head ${implementationConversation ? "panel-head-implementation" : ""}`}
+    >
       <div className="panel-head-copy">
         <p className="eyebrow">This conversation</p>
         <h1>{title}</h1>
@@ -212,6 +234,21 @@ function ConversationHeader({
               </option>
             ))}
           </select>
+          {error && <span className="field-error">{error}</span>}
+        </label>
+      )}
+      {implementationConversation && (
+        <label className="field">
+          <span>Approvals</span>
+          <span className="field-box auto-approve-control">
+            <input
+              type="checkbox"
+              checked={autoApprove}
+              disabled={autoApproveBusy}
+              onChange={(event) => void chooseAutoApprove(event.target.checked)}
+            />
+            <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
+          </span>
           {error && <span className="field-error">{error}</span>}
         </label>
       )}
