@@ -4,6 +4,7 @@ Depends on `engine.ports` (and through it `engine.domain`), never on a specific
 adapter. Adapters depend on the runtime, not the other way around.
 """
 
+from engine.runtime.approval_policy import PolicyDecision, policy_decision_for
 from engine.runtime.approvals import (
     ApprovalBroker,
     ApprovalDecisionNotAllowedError,
@@ -94,6 +95,7 @@ __all__ = [
     "InvalidStepResultError",
     "LoadedEngineConfig",
     "WorkflowsConfig",
+    "PolicyDecision",
     "RunReader",
     "TerminalMcpBroker",
     "TerminalResultAlreadySubmittedError",
@@ -115,6 +117,7 @@ __all__ = [
     "fail_step_tool",
     "matching_grant",
     "normalized_scope",
+    "policy_decision_for",
     "profile_for",
     "load_engine_config",
     "load_workflow_catalog",

@@ -6,6 +6,7 @@ import pytest
 
 import openengine as oe
 from engine.adapters.state_store.sqlite import SQLiteStateStore
+from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.core import decide
 from engine.domain import (
     AgentId,
@@ -27,6 +28,8 @@ from engine.domain import (
     WorkspaceProvisioned,
 )
 from engine.runtime import (
+    RunReader,
+    WorkflowCatalog,
     WorkflowLoadError,
     load_engine_config,
     load_workflow_catalog,
@@ -62,6 +65,72 @@ def _definition():
             ),
         ],
     )
+
+
+def _multi_review_definition():
+    worker = oe.agent(id="worker", instructions="Do the task.")
+    return oe.workflow(
+        id="multi-review-v1",
+        name="Multi review",
+        version="v1",
+        steps=[
+            oe.agent_step(
+                id="work",
+                name="Work",
+                agent=worker,
+                prompt=oe.template("Work"),
+                transitions={"success": oe.goto("first-review"), "*": oe.fail()},
+            ),
+            oe.human_review_step(
+                id="first-review",
+                name="First review",
+                title=oe.template("First review"),
+                summary=oe.template("Check the work"),
+                approved=oe.goto("verify"),
+                rejected=oe.fail(),
+            ),
+            oe.agent_step(
+                id="verify",
+                name="Verify",
+                agent=worker,
+                prompt=oe.template("Verify"),
+                transitions={"success": oe.goto("second-review"), "*": oe.fail()},
+            ),
+            oe.human_review_step(
+                id="second-review",
+                name="Second review",
+                title=oe.template("Second review"),
+                summary=oe.template("Check verification"),
+                approved=oe.succeed(),
+                rejected=oe.fail(),
+            ),
+        ],
+    )
+
+
+def _start_definition(definition):
+    run_id = RunId("run-multi-review")
+    task_id = TaskId("task-multi-review")
+    state = RunState(run_id=run_id, task_id=task_id, workflow_id=definition.workflow_id)
+    state, _ = decide(
+        state,
+        RunRequested(
+            run_id=run_id,
+            task_id=task_id,
+            prompt="Ship it",
+            repository="acme/repo",
+            workflow_id=definition.workflow_id,
+        ),
+        definition,
+    )
+    return decide(
+        state,
+        WorkspaceProvisioned(
+            run_id=run_id,
+            workspace_id=WorkspaceId("workspace-multi-review"),
+            root_path="/tmp/workspace-multi-review",
+        ),
+    )[0]
 
 
 def test_generic_interpreter_drives_a_compiled_definition() -> None:
@@ -120,6 +189,92 @@ def test_generic_interpreter_drives_a_compiled_definition() -> None:
     )
     assert state.phase is RunPhase.SUCCEEDED
     assert commands == ()
+
+
+def test_generic_interpreter_retains_multiple_human_reviews() -> None:
+    definition = _multi_review_definition()
+    state = _start_definition(definition)
+    state, _ = decide(
+        state,
+        StepCompleted(
+            run_id=state.run_id,
+            step_id=StepId("work"),
+            agent_run_id=state.current_agent_run_id,
+            outcome="success",
+            summary="Done",
+        ),
+    )
+    first = HumanReviewCompleted(
+        run_id=state.run_id,
+        step_id=StepId("first-review"),
+        approved=True,
+        summary="Proceed",
+    )
+    state, _ = decide(state, first)
+    state, _ = decide(
+        state,
+        StepCompleted(
+            run_id=state.run_id,
+            step_id=StepId("verify"),
+            agent_run_id=state.current_agent_run_id,
+            outcome="success",
+            summary="Verified",
+        ),
+    )
+    second = HumanReviewCompleted(
+        run_id=state.run_id,
+        step_id=StepId("second-review"),
+        approved=True,
+        summary="Approved",
+    )
+    state, _ = decide(state, second)
+
+    assert state.phase is RunPhase.SUCCEEDED
+    assert state.human_reviews == (first, second)
+
+
+def test_failure_after_an_approved_intermediate_review_is_reported_as_failed() -> None:
+    import asyncio
+
+    definition = _multi_review_definition()
+    state = _start_definition(definition)
+    state, _ = decide(
+        state,
+        StepCompleted(
+            run_id=state.run_id,
+            step_id=StepId("work"),
+            agent_run_id=state.current_agent_run_id,
+            outcome="success",
+            summary="Done",
+        ),
+    )
+    state, _ = decide(
+        state,
+        HumanReviewCompleted(
+            run_id=state.run_id,
+            step_id=StepId("first-review"),
+            approved=True,
+        ),
+    )
+    state, _ = decide(
+        state,
+        StepCompleted(
+            run_id=state.run_id,
+            step_id=StepId("verify"),
+            agent_run_id=state.current_agent_run_id,
+            outcome="failure",
+            summary="Verification failed",
+        ),
+    )
+    store = InMemoryStateStore()
+    asyncio.run(store.save(state))
+    reader = RunReader(store, WorkflowCatalog.from_definitions((definition,)))
+    view = asyncio.run(reader.get(state.run_id))
+
+    assert view is not None
+    assert view.terminal_outcome == "failed"
+    assert view.human_decision is not None
+    assert view.human_decision.approved is True
 
 
 @pytest.mark.parametrize(
@@ -244,6 +399,8 @@ def test_sqlite_round_trips_a_workflow_definition_snapshot() -> None:
             task_id=TaskId("task-snapshot"),
             workflow_id=definition.workflow_id,
             workflow_definition=definition,
+            agent_paused=True,
+            runner_name="claude",
         )
         await store.save(state)
 

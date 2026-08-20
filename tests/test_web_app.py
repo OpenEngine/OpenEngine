@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 import httpx
+import openengine as oe
 import pytest
 
 from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
@@ -15,7 +16,7 @@ from engine.adapters.agent_runner.codex import (
 )
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
-from engine.apps.web.api import ThreadService, create_app
+from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
@@ -30,6 +31,7 @@ from engine.domain import (
     AgentRunId,
     AgentRunStatus,
     ApprovalDecision,
+    ApprovalDecisionSource,
     ApprovalKind,
     ApprovalStatus,
     ConversationId,
@@ -44,6 +46,7 @@ from engine.domain import (
     RunState,
     StepCompleted,
     StepId,
+    StepReactivated,
     StepOutput,
     TaskId,
     ToolCall,
@@ -59,7 +62,16 @@ from engine.ports import (
     Workspace,
     WorkspaceState,
 )
-from engine.runtime import AgentSession, Capabilities, INVALID_COMPLETION_ERROR
+from engine.runtime import (
+    INVALID_COMPLETION_ERROR,
+    AgentSession,
+    ApprovalBroker,
+    ApprovalCapability,
+    ApprovalConfig,
+    Capabilities,
+    EngineConfig,
+    WorkflowCatalog,
+)
 from engine.runtime.terminal_mcp import _mcp_response
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
@@ -134,6 +146,55 @@ def test_interactive_runners_may_do_what_the_user_approves() -> None:
     assert "Bash" not in preapproved
     assert "Edit" not in preapproved
     assert claude_argv[claude_argv.index("--permission-prompt-tool") + 1] == "stdio"
+
+
+def test_the_configured_policy_builds_the_interactive_claude_runner() -> None:
+    """`engine.toml` is where chat's permissions are written down.
+
+    A preapproved tool is one whose requests never reach the callback at all,
+    which is the only thing a provider allow-list can express. Shell stays off
+    it however granted: a shell rule is written per command, and the patterns
+    live where the requests arrive.
+    """
+    granted = EngineConfig(
+        approvals=ApprovalConfig(
+            allow=(ApprovalCapability.READ, ApprovalCapability.EDIT, ApprovalCapability.BASH)
+        )
+    )
+    argv = build_runners(Settings(engine_config=granted))["claude"].command_line(
+        PROFILES[CODER]
+    )
+
+    preapproved = argv[argv.index("--allowedTools") + 1 :]
+    assert preapproved == ["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit"]
+    assert "Bash" not in preapproved
+
+
+def test_the_interactive_codex_sandbox_is_not_narrowed_by_the_policy() -> None:
+    """A sandbox is a ceiling, not a preapproval.
+
+    A capability absent from `allow` is one nobody has ruled on, so a person may
+    still allow it mid-turn -- and a sandbox narrowed before the turn started
+    would refuse the write they just approved. Codex's policy is applied to its
+    requests instead.
+    """
+    reads_only = EngineConfig(approvals=ApprovalConfig(allow=(ApprovalCapability.READ,)))
+    argv = build_runners(Settings(engine_config=reads_only))["codex"].command_line(
+        PROFILES[CODER]
+    )
+
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+
+
+def test_engine_config_disables_attribution_for_every_workflow_runner() -> None:
+    runners = build_workflow_runners(Settings(engine_config=EngineConfig(attribution=False)))
+
+    codex_argv = runners["codex"].command_line(PROFILES[CODER])
+    claude_argv = runners["claude"].command_line(PROFILES[CODER])
+    assert "developer_instructions=" in codex_argv[codex_argv.index("-c") + 1]
+    assert json.loads(claude_argv[claude_argv.index("--settings") + 1])[
+        "attribution"
+    ]["commit"] == ""
 
 
 def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:
@@ -266,6 +327,60 @@ class ConcurrentRunner:
 
     async def cancel(self, agent_run_id: AgentRunId) -> None:
         pass
+
+
+class PausingWorkflowRunner(ConcurrentRunner):
+    """Pause a workflow without opening the terminal MCP test server."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.workflow_attempts = 0
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        if str(agent_run_id).endswith(":name:run"):
+            return AgentTurn(Message.assistant("Paused workflow"))
+        self.workflow_attempts += 1
+        self.seen.append(tuple(messages))
+        return AgentTurn(
+            Message.assistant(
+                tool_calls=(
+                    ToolCall("clarification", "request_user_input", "{}"),
+                )
+            )
+        )
+
+
+class BlockingWorkflowRunner(ConcurrentRunner):
+    """Hold an agent dispatch open until the web service interrupts it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.workflow_attempts = 0
+        self.started = asyncio.Event()
+        self.never = asyncio.Event()
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        if str(agent_run_id).endswith(":name:run"):
+            return AgentTurn(Message.assistant("Blocked workflow"))
+        self.workflow_attempts += 1
+        self.seen.append(tuple(messages))
+        self.started.set()
+        await self.never.wait()
+        raise AssertionError("the workflow turn should be interrupted")
 
 
 def _rejected(acknowledgement: dict[str, object] | None) -> bool:
@@ -462,6 +577,29 @@ class ApprovalWorkflowRunner(TerminalToolRunner):
         )
 
 
+class RepeatedApprovalWorkflowRunner(ApprovalWorkflowRunner):
+    """Raise another request after the first one is approved."""
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_approval,
+        on_message=None,
+        workspace_id=None,
+    ) -> AgentTurn:
+        for command in ("pytest", "ruff check"):
+            decision = await on_approval(replace(self._request(), command=command))
+            self.decisions.append(decision)
+            if decision is ApprovalDecision.CANCEL:
+                return AgentTurn(Message.assistant("The command was cancelled."))
+        return await TerminalToolRunner.run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
 class InvalidThenTerminalToolRunner(TerminalToolRunner):
     """Exit once without a valid call, then complete through MCP."""
 
@@ -643,6 +781,7 @@ def _workflow_app(
     workspaces: object | None = None,
     workflow_runners: dict[str, ConcurrentRunner] | None = None,
     reviewers: dict[str, ConcurrentRunner] | None = None,
+    workflow_catalog: WorkflowCatalog | None = None,
 ):
     """Wire the app the way the composition root does.
 
@@ -671,7 +810,37 @@ def _workflow_app(
         chat_runners,
         workflow_runners=implementers,
         review_runners=chat_runners,
+        workflow_catalog=workflow_catalog,
     )
+
+
+def _human_then_agent_catalog() -> WorkflowCatalog:
+    worker = oe.agent(id="follow-up-agent", instructions="Continue after approval.")
+    definition = oe.workflow(
+        id="human-then-agent-v1",
+        name="Human then agent",
+        version="v1",
+        steps=[
+            oe.human_review_step(
+                id="approval",
+                name="Approval",
+                title=oe.template("Approve follow-up"),
+                summary=oe.template("Choose whether to continue"),
+                approved=oe.goto("follow-up"),
+                rejected=oe.fail(),
+            ),
+            oe.agent_step(
+                id="follow-up",
+                name="Follow-up",
+                agent=worker,
+                prompt=oe.template("Continue the task"),
+                editable=True,
+                workspace_access="write",
+                transitions={"*": oe.succeed()},
+            ),
+        ],
+    )
+    return WorkflowCatalog.from_definitions((definition,))
 
 
 async def _await_phase(
@@ -1079,6 +1248,66 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
     ]
 
 
+def test_message_reactivates_a_closed_implementation_step() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Initial implementation.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    reviewer = _reviewer()
+    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement the configurable behavior.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            awaiting = await _await_phase(client, run_id, "awaiting_human_review")
+            implementation_id = awaiting.json()["steps"][0]["agentInstanceId"]
+            approved = await client.post(
+                f"/api/runs/{run_id}/human-review",
+                json={"approved": True, "summary": "Approved."},
+            )
+
+            implementer.arguments["summary"] = "Implementation updated from guidance."
+            continued = await client.post(
+                f"/api/threads/{implementation_id}/runs",
+                json={"text": "Also preserve the legacy response header."},
+            )
+            reopened = await _await_phase(client, run_id, "awaiting_human_review")
+            conversation = await store.load_conversation(implementation_id)
+            return approved, continued, reopened, conversation, await store.history(run_id)
+
+    approved, continued, reopened, conversation, history = asyncio.run(scenario())
+
+    assert approved.json()["phase"] == "succeeded"
+    assert continued.status_code == 200
+    assert reopened.json()["phase"] == "awaiting_human_review"
+    assert reopened.json()["steps"][0]["summary"] == (
+        "Implementation updated from guidance."
+    )
+    assert reopened.json()["humanDecision"] is None
+    assert sum(isinstance(event, StepReactivated) for event in history) == 1
+    assert conversation is not None
+    assert [
+        message.content for message in conversation.messages if message.role is Role.USER
+    ][-1] == "Also preserve the legacy response header."
+    # The repeated review receives the new implementation result, rather than
+    # silently replaying only its original, now-stale context.
+    assert "Implementation updated from guidance." in reviewer.seen[-1][-1].content
+
+
 def test_approval_requests_pop_in_on_workflow_conversations() -> None:
     store = InMemoryStateStore()
     runner = ApprovalWorkflowRunner()
@@ -1102,6 +1331,7 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
                 await asyncio.sleep(0.01)
             assert pending
             request = pending[0]
+            detail = await client.get(f"/api/runs/{created.json()['runId']}")
 
             streaming = asyncio.create_task(
                 client.get(
@@ -1115,11 +1345,11 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
                 json={"decision": "accept"},
             )
             response = await asyncio.wait_for(streaming, timeout=2)
-            return request, decided, [
+            return request, detail, decided, [
                 json.loads(line) for line in response.text.splitlines()
             ]
 
-    request, decided, events = asyncio.run(scenario())
+    request, detail, decided, events = asyncio.run(scenario())
     approvals = [event["approval"] for event in events if event["type"] == "approval"]
 
     assert approvals[0] == {
@@ -1130,15 +1360,219 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
         "command": "pytest",
         "cwd": "/workspace",
         "toolName": None,
+        "toolCallId": None,
         "arguments": None,
         "allowedDecisions": ["accept", "accept_for_session", "cancel"],
         "decision": None,
         "decisionSource": None,
     }
+    assert detail.json()["steps"][0]["waiting"] is True
     assert decided.status_code == 200
     assert decided.json()["approval"]["decision"] == "accept"
     assert runner.decisions == [ApprovalDecision.ACCEPT]
     assert events[-1]["type"] == "done"
+
+
+def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
+    store = InMemoryStateStore()
+    feed = ApprovalFeed(store)
+    broker = ApprovalBroker(store, observe=feed.publish)
+
+    async def scenario():
+        instance = await store.create_instance(CODER)
+        stream = feed.stream(instance.instance_id)
+        assert await anext(stream) == b": connected\n\n"
+
+        handler = broker.handler(
+            agent_run_id=AgentRunId("ar-feed"),
+            instance_id=instance.instance_id,
+            runner="test",
+            present=lambda _approval: asyncio.sleep(0),
+        )
+        waiting = asyncio.create_task(handler(ApprovalWorkflowRunner._request()))
+        pending = await asyncio.wait_for(anext(stream), timeout=1)
+        record = (await store.list_approvals())[0]
+        await broker.decide(
+            record.approval_id,
+            ApprovalDecision.ACCEPT,
+            instance_id=instance.instance_id,
+            agent_run_id=AgentRunId("ar-feed"),
+        )
+        decided = await asyncio.wait_for(anext(stream), timeout=1)
+        await waiting
+        await stream.aclose()
+        return [
+            json.loads(frame.decode().removeprefix("data:"))
+            for frame in (pending, decided)
+        ]
+
+    events = asyncio.run(scenario())
+
+    assert [event["status"] for event in events] == ["pending", "decided"]
+    assert events[0]["id"] == events[1]["id"]
+    assert events[1]["decision"] == "accept"
+
+
+def test_workflow_conversation_replays_every_approval_after_reconnect() -> None:
+    store = InMemoryStateStore()
+    runner = RepeatedApprovalWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Make two approved changes.",
+                    "repository": "acme/api",
+                },
+            )
+            for _ in range(100):
+                approvals = await store.list_approvals()
+                if approvals:
+                    break
+                await asyncio.sleep(0.01)
+            assert approvals
+            first = approvals[0]
+            await client.post(
+                f"/api/threads/{first.instance_id}/runs/current/approvals/"
+                f"{first.approval_id}",
+                json={"decision": "accept"},
+            )
+            for _ in range(100):
+                approvals = await store.list_approvals()
+                if len(approvals) == 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(approvals) == 2
+            second = approvals[1]
+
+            streaming = asyncio.create_task(
+                client.get(f"/api/threads/{second.instance_id}/runs/current")
+            )
+            await asyncio.sleep(0.05)
+            await client.post(
+                f"/api/threads/{second.instance_id}/runs/current/approvals/"
+                f"{second.approval_id}",
+                json={"decision": "accept"},
+            )
+            response = await asyncio.wait_for(streaming, timeout=2)
+            return approvals, [
+                json.loads(line) for line in response.text.splitlines()
+            ]
+
+    approvals, events = asyncio.run(scenario())
+    streamed = [event["approval"] for event in events if event["type"] == "approval"]
+
+    assert [approval["id"] for approval in streamed[:2]] == [
+        str(approvals[0].approval_id),
+        str(approvals[1].approval_id),
+    ]
+    assert streamed[0]["status"] == "decided"
+    assert streamed[1]["status"] == "pending"
+
+
+def test_implementation_conversation_can_enable_system_auto_approvals() -> None:
+    store = InMemoryStateStore()
+    runner = RepeatedApprovalWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Make two automatically approved changes.",
+                    "repository": "acme/api",
+                },
+            )
+            for _ in range(100):
+                pending = await store.list_approvals(status=ApprovalStatus.PENDING)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending
+            instance_id = pending[0].instance_id
+
+            enabled = await client.patch(
+                f"/api/threads/{instance_id}", json={"autoApprove": True}
+            )
+            completed = await _await_phase(
+                client, RunId(created.json()["runId"]), "awaiting_human_review"
+            )
+            return enabled, completed, await store.load_instance(instance_id), (
+                await store.list_approvals(instance_id=instance_id)
+            )
+
+    enabled, completed, instance, approvals = asyncio.run(scenario())
+
+    assert enabled.status_code == 200
+    assert enabled.json()["autoApprove"] is True
+    assert completed.status_code == 200
+    assert instance is not None and instance.auto_approve is True
+    assert runner.decisions == [ApprovalDecision.ACCEPT, ApprovalDecision.ACCEPT]
+    assert len(approvals) == 2
+    assert {approval.decision_source for approval in approvals} == {
+        ApprovalDecisionSource.POLICY
+    }
+
+
+def test_conversation_transcript_carries_approvals_after_its_run_ends() -> None:
+    """Reloading a finished step still shows what it was asked to allow.
+
+    The run stream replays approvals, but it is only opened for a run this
+    process is still executing. A step whose task has since finished has no
+    stream to reconnect to, so its transcript has to carry them instead.
+    """
+    store = InMemoryStateStore()
+    runner = ApprovalWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Make the approved change.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(100):
+                pending = await store.list_approvals(status=ApprovalStatus.PENDING)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending
+            request = pending[0]
+            await client.post(
+                f"/api/threads/{request.instance_id}/runs/current/approvals/"
+                f"{request.approval_id}",
+                json={"decision": "accept"},
+            )
+            await _await_phase(client, run_id, "awaiting_human_review")
+            return request, await client.get(
+                f"/api/threads/{request.instance_id}/messages"
+            )
+
+    request, loaded = asyncio.run(scenario())
+    history = loaded.json()
+
+    # Nothing is executing this run any more, so nothing will reopen the
+    # stream: the transcript is the only thing left to carry the request.
+    assert history["unstable_resume"] is False
+    assert [approval["id"] for approval in history["approvals"]] == [
+        str(request.approval_id)
+    ]
+    assert history["approvals"][0]["status"] == "decided"
+    assert history["approvals"][0]["decision"] == "accept"
+    assert history["approvals"][0]["command"] == "pytest"
 
 
 def test_complete_step_mcp_call_completes_the_active_workflow_step() -> None:
@@ -1260,8 +1694,135 @@ def test_clarification_call_leaves_the_active_step_implementing() -> None:
 
     assert reopened.json()["phase"] == "running_agent"
     assert reopened.json()["currentStepId"] == "implementation"
+    assert reopened.json()["steps"][0]["waiting"] is True
     assert runner.attempts == 1
     assert not any(isinstance(event, (StepCompleted, RunFailed)) for event in history)
+
+
+def test_clarification_pause_is_not_restarted_after_process_restart() -> None:
+    store = InMemoryStateStore()
+    runner = PausingWorkflowRunner()
+    first_app = _workflow_app(store, runner)
+
+    async def scenario() -> tuple[RunState, RunState]:
+        transport = httpx.ASGITransport(app=first_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Pause for clarification.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(100):
+                paused = await store.load(run_id)
+                if paused is not None and paused.agent_paused:
+                    break
+                await asyncio.sleep(0.01)
+            assert paused is not None
+
+        restarted = _workflow_app(store, runner)
+        async with restarted.router.lifespan_context(restarted):
+            await asyncio.sleep(0.05)
+            restored = await store.load(run_id)
+            assert restored is not None
+            return paused, restored
+
+    paused, restored = asyncio.run(scenario())
+
+    assert paused.agent_paused is True
+    assert restored.agent_paused is True
+    assert runner.workflow_attempts == 1
+
+
+def test_manually_interrupted_step_is_not_restarted_after_process_restart() -> None:
+    store = InMemoryStateStore()
+    runner = BlockingWorkflowRunner()
+    first_app = _workflow_app(store, runner)
+
+    async def scenario() -> RunState:
+        transport = httpx.ASGITransport(app=first_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Interrupt this step.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(runner.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+            stopped = await client.delete(
+                f"/api/threads/{instance_id}/runs/current"
+            )
+            assert stopped.status_code == 204
+
+        restarted = _workflow_app(store, runner)
+        async with restarted.router.lifespan_context(restarted):
+            await asyncio.sleep(0.05)
+            state = await store.load(run_id)
+            assert state is not None
+            return state
+
+    state = asyncio.run(scenario())
+
+    assert state.agent_paused is True
+    assert runner.workflow_attempts == 1
+
+
+def test_human_to_agent_branch_keeps_the_selected_runner_and_is_cancellable() -> None:
+    store = InMemoryStateStore()
+    default = BlockingWorkflowRunner()
+    selected = BlockingWorkflowRunner()
+    app = _workflow_app(
+        store,
+        default,
+        workflow_runners={"codex": default, "claude": selected},
+        reviewers={"codex": default, "claude": selected},
+        workflow_catalog=_human_then_agent_catalog(),
+    )
+
+    async def scenario() -> RunState:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "human-then-agent-v1",
+                    "prompt": "Continue with the selected provider.",
+                    "repository": "acme/api",
+                    "runner": "claude",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            awaiting = await _await_phase(client, run_id, "awaiting_human_review")
+            approved = await client.post(
+                f"/api/runs/{run_id}/human-review",
+                json={"approved": True},
+            )
+            assert approved.status_code == 200
+            await asyncio.wait_for(selected.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][1]["agentInstanceId"]
+            stopped = await client.delete(
+                f"/api/threads/{instance_id}/runs/current"
+            )
+            assert stopped.status_code == 204
+            state = await store.load(RunId(awaiting.json()["runId"]))
+            assert state is not None
+            return state
+
+    state = asyncio.run(scenario())
+
+    assert state.runner_name == "claude"
+    assert state.agent_paused is True
+    assert selected.workflow_attempts == 1
+    assert default.workflow_attempts == 0
 
 
 def test_fail_step_mcp_call_fails_the_active_workflow() -> None:
@@ -1284,9 +1845,15 @@ def test_fail_step_mcp_call_fails_the_active_workflow() -> None:
                 },
             )
             run_id = RunId(created.json()["runId"])
-            for _ in range(20):
+            for _ in range(100):
                 reopened = await client.get(f"/api/runs/{run_id}")
-                if reopened.json()["phase"] == "failed":
+                # Answering the tool call and failing the run are separate
+                # tasks, so the run can read as failed while the answer is
+                # still on its way back to the agent that asked.
+                if (
+                    reopened.json()["phase"] == "failed"
+                    and runner.acknowledgement is not None
+                ):
                     break
                 await asyncio.sleep(0.01)
             return reopened, await store.history(run_id)

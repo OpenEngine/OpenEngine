@@ -48,6 +48,7 @@ export type ApiThread = {
   workflowRunId?: string;
   workflowStepId?: string;
   editable?: boolean;
+  autoApprove?: boolean;
 };
 
 export type ApiRunStep = {
@@ -64,6 +65,7 @@ export type ApiRunStep = {
   agentRunId: string | null;
   conversationId: string | null;
   conversationUrl: string | null;
+  waiting: boolean;
 };
 
 export type ApiWorkflowRun = {
@@ -98,6 +100,16 @@ export function setThreadRunner(threadId: string, runner: string): Promise<ApiTh
   });
 }
 
+export function setThreadAutoApprove(
+  threadId: string,
+  autoApprove: boolean,
+): Promise<ApiThread> {
+  return api<ApiThread>(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ autoApprove }),
+  });
+}
+
 export function attachWorkspace(threadId: string): Promise<ApiThread> {
   return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "POST" });
 }
@@ -122,10 +134,16 @@ export type ApiApproval = {
   command: string | null;
   cwd: string | null;
   toolName: string | null;
+  /** The tool call this request is about, when the provider named one.
+   *
+   *  What lets the card sit beside the command it concerns. Null for a request
+   *  the provider tied to no call, and for anything recorded before the pairing
+   *  existed; those belong to the turn rather than to any one call in it. */
+  toolCallId: string | null;
   arguments: string | null;
   allowedDecisions: ApprovalDecision[];
   decision: ApprovalDecision | null;
-  decisionSource: "user" | "session_grant" | null;
+  decisionSource: "user" | "session_grant" | "policy" | null;
 };
 
 /** Answer the request this conversation's run is paused on.
@@ -157,6 +175,9 @@ export type ApiMessage = {
 
 export type ApiHistory = {
   messages: ApiMessage[];
+  /** Everything this conversation has been asked to allow, oldest first. Sent
+   *  with the transcript because it outlives the run that raised it. */
+  approvals: ApiApproval[];
   unstable_resume: boolean;
 };
 

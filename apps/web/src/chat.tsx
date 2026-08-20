@@ -3,14 +3,21 @@ import {
   MessagePartPrimitive,
   MessagePrimitive,
   QueueItemPrimitive,
-  ThreadListItemPrimitive,
-  ThreadListPrimitive,
   ThreadPrimitive,
   useAui,
   useAuiState,
   useToolCallElapsed,
 } from "@assistant-ui/react";
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import {
   api,
@@ -24,13 +31,13 @@ import {
   type ApiThread,
   type ApprovalDecision,
 } from "./api";
-import { useApprovals } from "./approvals";
-import { RailBrand, RailFoot, Stat, StatStrip } from "./brand";
+import { useApprovals, type InlineApproval } from "./approvals";
+import { Stat, StatStrip } from "./brand";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
 
-function toolResultText(result: unknown): string {
+export function toolResultText(result: unknown): string {
   if (typeof result === "string") return result;
   try {
     return JSON.stringify(result, null, 2) ?? String(result);
@@ -46,7 +53,7 @@ function toolResultText(result: unknown): string {
  *  scanning for, so it goes where scanning finds it. */
 const DETAIL_KEYS = ["command", "file_path", "path", "pattern", "query", "url", "notebook_path"];
 
-function toolDetail(args: unknown): string {
+export function toolDetail(args: unknown): string {
   if (!args || typeof args !== "object" || Array.isArray(args)) return "";
   const record = args as Record<string, unknown>;
   for (const key of DETAIL_KEYS) {
@@ -114,13 +121,20 @@ function TextParts() {
         part.type === "text" ? (
           <MessagePartPrimitive.Text component="p" />
         ) : part.type === "tool-call" ? (
-          <ToolCall
-            toolName={part.toolName}
-            args={part.args}
-            argsText={part.argsText}
-            result={part.result}
-            running={part.status.type === "running"}
-          />
+          <>
+            <ToolCall
+              toolName={part.toolName}
+              args={part.args}
+              argsText={part.argsText}
+              result={part.result}
+              running={part.status.type === "running"}
+            />
+            {/* Under the call it was asked about, because that is what it is
+                about. A turn that ran three commands and stopped to ask about
+                the second one reads that way, and whatever the agent said
+                afterwards stays below the question it waited on. */}
+            <CallApprovals toolCallId={part.toolCallId} />
+          </>
         ) : null
       }
     </MessagePrimitive.Parts>
@@ -142,7 +156,7 @@ function UserMessage() {
  *  and stringifying the object prints "[object Object]" over the one sentence
  *  the reader needed. Read the message wherever it ended up.
  */
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
   if (error && typeof error === "object" && "message" in error) {
@@ -152,7 +166,7 @@ function errorText(error: unknown): string {
   return "The agent run failed.";
 }
 
-function AssistantMessage() {
+export function AssistantMessage() {
   const error = useAuiState((state) => {
     const status = state.message.status;
     if (status?.type !== "incomplete" || status.reason !== "error") return undefined;
@@ -162,9 +176,9 @@ function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="message message-assistant">
       <TextParts />
-      {/* After the parts, which is after the command it was asked about ran:
-          reading down the turn gives you the request, then what the agent
-          did with the answer. */}
+      {/* Only what could not be placed beside a call: a request that named no
+          call, or one whose call is not in the transcript. The end of the turn
+          is where a request with nothing to sit beside belongs. */}
       <TurnApprovals />
       <MessagePrimitive.Error>
         <p className="notice message-error">
@@ -438,11 +452,15 @@ const KIND_LABELS: Record<ApiApproval["kind"], string> = {
 };
 
 /** What became of a request that is no longer open, and on whose say-so. */
-function outcomeText(approval: ApiApproval): string {
+export function outcomeText(approval: ApiApproval): string {
   if (approval.status === "interrupted")
     return "Interrupted — the agent that asked this is gone, so it can no longer be answered.";
   if (approval.decisionSource === "session_grant")
     return "Approved automatically: you allowed this exact action for this conversation earlier.";
+  if (approval.decisionSource === "policy")
+    return approval.decision === "cancel"
+      ? "Refused by the configured policy — the action did not run."
+      : "Allowed by the configured policy, without asking.";
   switch (approval.decision) {
     case "accept":
       return "Approved.";
@@ -494,13 +512,17 @@ function ApprovalArguments({ approval }: { approval: ApiApproval }) {
 }
 
 /** The one line a folded approval is worth: what happened, and to what. */
-function summaryText(approval: ApiApproval): string {
+export function summaryText(approval: ApiApproval): string {
   const target =
     approval.command ?? approval.toolName ?? KIND_LABELS[approval.kind].toLowerCase();
   if (approval.status === "pending") return `Approval needed · ${target}`;
   if (approval.status === "interrupted") return `Interrupted · ${target}`;
   if (approval.decisionSource === "session_grant")
     return `Approved automatically · ${target}`;
+  if (approval.decisionSource === "policy")
+    return approval.decision === "cancel"
+      ? `Refused by policy · ${target}`
+      : `Allowed by policy · ${target}`;
   switch (approval.decision) {
     case "accept":
       return `Approved · ${target}`;
@@ -523,7 +545,7 @@ function summaryText(approval: ApiApproval): string {
  *  it is pending it is the only thing worth reading and is open; once it is
  *  answered it folds down to a line in the transcript beside the command it
  *  was about, where it is a record rather than a demand. */
-function ApprovalEntry({
+export function ApprovalEntry({
   threadId,
   approval,
 }: {
@@ -616,34 +638,149 @@ function ApprovalEntry({
   );
 }
 
-/** Everything this assistant turn stopped to ask about, in the order it asked.
+/** Every tool call the transcript holds, by id.
  *
- *  Anchored by index rather than pinned to the newest turn, so a request stays
- *  with the turn that raised it once the conversation has moved on. An anchor
- *  past the end of the transcript belongs to the reply still being written,
- *  which is the only turn that can be paused. */
+ *  What decides where a request is shown: an approval naming a call in here has
+ *  somewhere of its own to sit, and is therefore not part of any turn's
+ *  leftovers. The whole thread rather than one message, because a restored
+ *  transcript anchors its requests to the end while the calls they name are
+ *  spread across the turns that made them.
+ *
+ *  A fact about the thread, so it is derived once above the turns rather than
+ *  by each of them. The thread store hands out a new `messages` array on every
+ *  streamed chunk, and a turn that read it would rescan every part in the
+ *  conversation each time a token landed -- once per turn on screen, over
+ *  transcripts that routinely carry hundreds of calls. */
+const ToolCallIds = createContext<ReadonlySet<string>>(new Set<string>());
+
+export function useToolCallIds(): ReadonlySet<string> {
+  return useContext(ToolCallIds);
+}
+
+/** Derive it, and keep the same set while the ids in it are the same.
+ *
+ *  Identity is the whole point: a new set on every chunk would re-render every
+ *  turn that reads one, which is the cost this exists to avoid. Tokens arrive
+ *  far more often than tool calls do, so most rescans find nothing new. */
+export function ToolCallIndex({ children }: { children: ReactNode }) {
+  const messages = useAuiState((state) => state.thread.messages);
+  const held = useRef<ReadonlySet<string>>(new Set<string>());
+  const ids = useMemo(() => {
+    const found = new Set<string>();
+    for (const message of messages) {
+      if (!Array.isArray(message.content)) continue;
+      for (const part of message.content) {
+        if (part.type === "tool-call") found.add(part.toolCallId);
+      }
+    }
+    const previous = held.current;
+    if (previous.size === found.size && [...found].every((id) => previous.has(id))) {
+      return previous;
+    }
+    held.current = found;
+    return found;
+  }, [messages]);
+
+  return <ToolCallIds.Provider value={ids}>{children}</ToolCallIds.Provider>;
+}
+
+function ApprovalList({
+  threadId,
+  entries,
+  className,
+}: {
+  threadId: string;
+  entries: readonly InlineApproval[];
+  className: string;
+}) {
+  if (!entries.length) return null;
+  return (
+    <div className={className}>
+      {entries.map(({ approval }) => (
+        <ApprovalEntry key={approval.id} threadId={threadId} approval={approval} />
+      ))}
+    </div>
+  );
+}
+
+/** What this conversation was asked to allow before one particular call.
+ *
+ *  Matched by the call's id rather than by where the request happened to arrive
+ *  on the stream, so the pairing is the one the provider stated and survives a
+ *  reload, a reconnect, and a turn that asked about only some of its calls. */
+function CallApprovals({ toolCallId }: { toolCallId: string }) {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const approvals = useApprovals(remoteId);
+  const mine = useMemo(
+    () => approvals.filter((entry) => entry.approval.toolCallId === toolCallId),
+    [approvals, toolCallId],
+  );
+
+  if (!remoteId) return null;
+  return (
+    <ApprovalList
+      threadId={remoteId}
+      entries={mine}
+      className="approvals approvals-call"
+    />
+  );
+}
+
+/** What this assistant turn stopped to ask about and nothing else can hold.
+ *
+ *  A request that named no call, or that named one this transcript does not
+ *  contain -- a provider that paused over something other than a tool call, or
+ *  a record written before the pairing existed. Anchored by index rather than
+ *  pinned to the newest turn, so it stays with the turn that raised it once the
+ *  conversation has moved on. Requests anchored past the mounted transcript
+ *  belong exclusively to `UnanchoredApprovals` until their turn appears. */
 function TurnApprovals() {
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const index = useAuiState((state) => state.message.index);
-  const isLast = useAuiState((state) => state.message.isLast);
-  const total = useAuiState((state) => state.thread.messages.length);
   const approvals = useApprovals(remoteId);
+  const placed = useToolCallIds();
   const mine = useMemo(
     () =>
       approvals.filter(
         (entry) =>
-          entry.messageIndex === index || (isLast && entry.messageIndex >= total),
+          entry.messageIndex === index &&
+          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
       ),
-    [approvals, index, isLast, total],
+    [approvals, index, placed],
   );
 
-  if (!remoteId || !mine.length) return null;
+  if (!remoteId) return null;
+  return <ApprovalList threadId={remoteId} entries={mine} className="approvals" />;
+}
+
+/** Requests for a reply assistant-ui has not mounted yet.
+ *
+ *  Workflow runs can begin outside this browser. Their approval feed must be
+ *  visible immediately, before transcript streaming creates the assistant
+ *  message that will ultimately own the card. Once that message appears the
+ *  normal turn placement takes over and this slot empties itself. */
+export function UnanchoredApprovals() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const total = useAuiState((state) => state.thread.messages.length);
+  const approvals = useApprovals(remoteId);
+  const placed = useToolCallIds();
+  const unanchored = useMemo(
+    () =>
+      approvals.filter(
+        (entry) =>
+          entry.messageIndex >= total &&
+          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
+      ),
+    [approvals, placed, total],
+  );
+
+  if (!remoteId) return null;
   return (
-    <div className="approvals">
-      {mine.map(({ approval }) => (
-        <ApprovalEntry key={approval.id} threadId={remoteId} approval={approval} />
-      ))}
-    </div>
+    <ApprovalList
+      threadId={remoteId}
+      entries={unanchored}
+      className="approvals approvals-live"
+    />
   );
 }
 
@@ -703,11 +840,17 @@ export function ChatThread() {
             </div>
           </div>
         </ThreadPrimitive.Empty>
-        <ThreadPrimitive.Messages>
-          {({ message }) =>
-            message.role === "user" ? <UserMessage /> : <AssistantMessage />
-          }
-        </ThreadPrimitive.Messages>
+        {/* Renders no element of its own, so the viewport's children are still
+            the messages. Held above them so the rescan happens once per chunk
+            rather than once per turn per chunk. */}
+        <ToolCallIndex>
+          <ThreadPrimitive.Messages>
+            {({ message }) =>
+              message.role === "user" ? <UserMessage /> : <AssistantMessage />
+            }
+          </ThreadPrimitive.Messages>
+          <UnanchoredApprovals />
+        </ToolCallIndex>
         <Dock />
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -743,87 +886,5 @@ function Dock() {
         </>
       )}
     </ThreadPrimitive.ViewportFooter>
-  );
-}
-
-function ThreadItemMeta() {
-  const custom = useAuiState((state) => state.threadListItem.custom) as
-    | { agentId?: string; runner?: string; workspaceRoot?: string }
-    | undefined;
-  const isRunning = useAuiState((state) => state.threadListItem.isRunning);
-  return (
-    <span className="rail-item-meta">
-      {isRunning && <span className="rail-live" aria-label="Agent is running" />}
-      {[custom?.agentId, custom?.runner].filter(Boolean).join(" · ")}
-    </span>
-  );
-}
-
-function ThreadListItem({ archived = false }: { archived?: boolean }) {
-  const copy = (
-    <>
-      <span className="rail-item-title" data-clamp="">
-        <ThreadListItemPrimitive.Title fallback="New chat" />
-      </span>
-      <ThreadItemMeta />
-    </>
-  );
-  return (
-    <ThreadListItemPrimitive.Root className="rail-item">
-      {archived ? (
-        <div className="rail-item-trigger">{copy}</div>
-      ) : (
-        <ThreadListItemPrimitive.Trigger className="rail-item-trigger">
-          {copy}
-        </ThreadListItemPrimitive.Trigger>
-      )}
-      {archived ? (
-        <ThreadListItemPrimitive.Unarchive
-          className="rail-item-action"
-          aria-label="Restore chat"
-          title="Restore chat"
-        >
-          Restore
-        </ThreadListItemPrimitive.Unarchive>
-      ) : (
-        <ThreadListItemPrimitive.Archive
-          className="rail-item-action"
-          aria-label="Archive chat"
-          title="Archive chat"
-        >
-          ×
-        </ThreadListItemPrimitive.Archive>
-      )}
-    </ThreadListItemPrimitive.Root>
-  );
-}
-
-export function ChatSidebar() {
-  return (
-    <aside className="rail">
-      <RailBrand href="/conversations" />
-      <ThreadListPrimitive.Root className="rail-list">
-        <div className="rail-nav">
-          <a className="rail-button" href="/runs">
-            Workflow runs
-          </a>
-          <ThreadListPrimitive.New className="rail-button rail-button-primary">
-            + New chat
-          </ThreadListPrimitive.New>
-        </div>
-        <p className="rail-label">Conversations</p>
-        <div className="rail-scroll">
-          <ThreadListPrimitive.Items>{() => <ThreadListItem />}</ThreadListPrimitive.Items>
-          <details className="rail-archive">
-            <summary>Archived</summary>
-            <ThreadListPrimitive.Items archived>
-              {() => <ThreadListItem archived />}
-            </ThreadListPrimitive.Items>
-          </details>
-        </div>
-      </ThreadListPrimitive.Root>
-      <div className="rail-tail" />
-      <RailFoot />
-    </aside>
   );
 }

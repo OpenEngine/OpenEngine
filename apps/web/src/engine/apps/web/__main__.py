@@ -100,6 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         workflow_runners=workflow_runners,
         review_runners=review_runners,
         workflow_catalog=workflow_catalog,
+        approval_policy=loaded.config.approvals,
     )
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)

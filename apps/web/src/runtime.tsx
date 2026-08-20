@@ -3,6 +3,7 @@ import {
   RuntimeAdapterProvider,
   fromThreadMessageLike,
   useAui,
+  useAuiState,
   useLocalRuntime,
   useRemoteThreadListRuntime,
   type ChatModelAdapter,
@@ -44,9 +45,9 @@ type ThreadInitializer = {
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
-function useInitialThreadId(forcedThreadId?: string) {
+function useInitialThreadId(forcedThreadId?: string, remember = true) {
   const storedThreadId = useRef(
-    forcedThreadId ?? (typeof window === "undefined"
+    forcedThreadId ?? (!remember || typeof window === "undefined"
       ? undefined
       : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined),
   ).current;
@@ -103,15 +104,96 @@ function remoteMetadata(thread: ApiThread) {
       workflowRunId: thread.workflowRunId,
       workflowStepId: thread.workflowStepId,
       editable: thread.editable,
+      autoApprove: thread.autoApprove,
     },
   };
+}
+
+/** Publish the durable approval snapshots returned beside a transcript.
+ *
+ *  Nothing durable ties a request to the turn that raised it, so restored
+ *  requests collect on the turn at the end of the transcript. */
+function publishHistoryApprovals(threadId: string, history: ApiHistory): void {
+  const anchor =
+    history.messages.length -
+    (history.messages.at(-1)?.role === "assistant" ? 1 : 0);
+  for (const approval of history.approvals)
+    publishApproval(threadId, approval, anchor);
+}
+
+type ApprovalEventConnection = {
+  onmessage: ((event: MessageEvent<string>) => void) | null;
+  close(): void;
+};
+
+/** Subscribe to the durable approval feed for as long as a conversation is open.
+ *
+ *  EventSource reconnects on transport failure. Each connection first replays
+ *  the server's durable snapshots, so reconnecting does not require cursors and
+ *  cannot leave a transition behind. */
+export function watchApprovalEvents(
+  threadId: string,
+  messageIndex: () => number,
+  open: (url: string) => ApprovalEventConnection = (url) => new EventSource(url),
+): () => void {
+  const connection = open(
+    `/api/threads/${encodeURIComponent(threadId)}/approval-events`,
+  );
+  connection.onmessage = (event) => {
+    try {
+      publishApproval(
+        threadId,
+        JSON.parse(event.data) as ApiApproval,
+        messageIndex(),
+      );
+    } catch (error) {
+      console.error("Could not read a conversation approval event.", error);
+    }
+  };
+  return () => connection.close();
+}
+
+export function ApprovalEventSubscription({
+  threadId,
+  messageCount,
+  historyLoading,
+  open,
+}: {
+  threadId: string | null | undefined;
+  messageCount: number;
+  historyLoading: boolean;
+  open?: (url: string) => ApprovalEventConnection;
+}) {
+  const messageCountRef = useRef(messageCount);
+  messageCountRef.current = messageCount;
+  useEffect(() => {
+    // History publishes durable approvals before assistant-ui imports its
+    // messages. Waiting for that load gives the feed's replay a stable anchor;
+    // the feed itself replays again on connect, so no transition is lost.
+    if (!threadId || historyLoading) return;
+    return watchApprovalEvents(threadId, () => messageCountRef.current, open);
+  }, [historyLoading, open, threadId]);
+  return null;
+}
+
+function ApprovalEventBridge() {
+  const threadId = useAuiState((state) => state.threadListItem.remoteId);
+  const messageCount = useAuiState((state) => state.thread.messages.length);
+  const historyLoading = useAuiState((state) => state.thread.isLoading);
+  return (
+    <ApprovalEventSubscription
+      threadId={threadId}
+      messageCount={messageCount}
+      historyLoading={historyLoading}
+    />
+  );
 }
 
 /** `messageIndex` is where the assistant turn this stream is producing will sit
  *  in the thread, which is the only moment anybody knows it: an approval
  *  belongs beside the command it is about, and by the time it is answered the
  *  turn it interrupted may no longer be the newest one. */
-async function* readRunResponse(
+export async function* readRunResponse(
   response: Response,
   threadId: string,
   messageIndex: number,
@@ -160,6 +242,16 @@ function HistoryProvider({ children }: PropsWithChildren) {
         const rows = await api<ApiHistory>(
           `/api/threads/${remoteId}/messages`,
         );
+        // Restoring the transcript restores what it was asked to allow. Only a
+        // run this process is still executing has a stream to replay these on,
+        // so a step that has finished -- or a browser that arrives after one
+        // did -- would otherwise show a conversation that had never paused.
+        //
+        // The end is the reply being resumed when the transcript stops at a
+        // user message and the last reply otherwise, which is the anchor
+        // `resume` would publish under, so the two paths land one card rather
+        // than two.
+        publishHistoryApprovals(remoteId, rows);
         let parentId: string | null = null;
         return {
           unstable_resume: rows.unstable_resume,
@@ -195,12 +287,21 @@ function HistoryProvider({ children }: PropsWithChildren) {
   return <RuntimeAdapterProvider adapters={{ history }}>{children}</RuntimeAdapterProvider>;
 }
 
+/** `rememberActiveThread` is what separates the rail's runtime from the chat's.
+ *  A workflow page mounts this only so the rail can list and start chats, and a
+ *  page with no transcript on it has no business restoring the last chat --
+ *  still less naming a different one as the chat to come back to. */
 export function EngineRuntimeProvider({
   defaults,
   children,
   initialThreadId,
-}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
-  const initialThread = useInitialThreadId(initialThreadId);
+  rememberActiveThread = true,
+}: PropsWithChildren<{
+  defaults: NewChatDefaults;
+  initialThreadId?: string;
+  rememberActiveThread?: boolean;
+}>) {
+  const initialThread = useInitialThreadId(initialThreadId, rememberActiveThread);
   if (initialThread.loading)
     return <main className="loading">Restoring chats…</main>;
 
@@ -208,6 +309,7 @@ export function EngineRuntimeProvider({
     <EngineRuntime
       defaults={defaults}
       initialThreadId={initialThread.threadId}
+      rememberActiveThread={rememberActiveThread}
     >
       {children}
     </EngineRuntime>
@@ -217,8 +319,13 @@ export function EngineRuntimeProvider({
 function EngineRuntime({
   defaults,
   initialThreadId,
+  rememberActiveThread,
   children,
-}: PropsWithChildren<{ defaults: NewChatDefaults; initialThreadId?: string }>) {
+}: PropsWithChildren<{
+  defaults: NewChatDefaults;
+  initialThreadId?: string;
+  rememberActiveThread: boolean;
+}>) {
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
@@ -335,14 +442,18 @@ function EngineRuntime({
     adapter: threadAdapter,
     initialThreadId,
     onThreadIdChange(threadId) {
-      if (threadId) window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
-      else window.localStorage.removeItem(ACTIVE_THREAD_KEY);
+      if (threadId) {
+        if (rememberActiveThread) window.localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
+      } else if (rememberActiveThread) {
+        window.localStorage.removeItem(ACTIVE_THREAD_KEY);
+      }
     },
   });
 
   return (
     <DefaultsContext.Provider value={defaults}>
       <AssistantRuntimeProvider runtime={runtime}>
+        <ApprovalEventBridge />
         <ThreadInitializationBridge
           initializer={threadInitializerRef}
           reloadThreads={reloadThreadsRef}

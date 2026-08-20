@@ -76,6 +76,21 @@ class StepCompleted(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class AgentStepPaused(Event):
+    """An agent step stopped intentionally and must wait for a human message."""
+
+    step_id: StepId
+    agent_run_id: AgentRunId
+
+
+@dataclass(frozen=True, slots=True)
+class StepReactivated(Event):
+    """A human message reopened a previously closed workflow step."""
+
+    step_id: StepId
+
+
+@dataclass(frozen=True, slots=True)
 class HumanReviewCompleted(Event):
     """A human made the final decision for a workflow review step."""
 
@@ -103,6 +118,7 @@ class RunFailed(Event):
 
 
 __all__ = [
+    "AgentStepPaused",
     "AgentRunCompleted",
     "ChangesPublished",
     "Event",
@@ -111,5 +127,6 @@ __all__ = [
     "RunNamed",
     "RunRequested",
     "StepCompleted",
+    "StepReactivated",
     "WorkspaceProvisioned",
 ]

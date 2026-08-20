@@ -64,12 +64,16 @@ class ApprovalDecisionSource(Enum):
     """Who produced the decision.
 
     A session grant is a decision the user made earlier, applied again without
-    asking. Recording the difference is what keeps an audit trail able to answer
-    "who allowed this?" once such grants exist.
+    asking. A policy decision was never any one person's: it is the deployment's
+    configuration, applied to a request nobody was shown. Recording the
+    difference is what keeps an audit trail able to answer "who allowed this?"
+    -- and "nobody, the config did" is an answer that has to be tellable from
+    "somebody clicked approve".
     """
 
     USER = "user"
     SESSION_GRANT = "session_grant"
+    POLICY = "policy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +96,15 @@ class ApprovalRecord:
     command: str | None = None
     cwd: str | None = None
     tool_name: str | None = None
+    tool_call_id: str | None = None
+    """The call in the transcript this was asked about, when the provider says.
+
+    Durable because the pairing is not reconstructable later: a turn interleaves
+    calls that needed asking with calls that did not, so "which command was this
+    about?" can only be answered by the provider that asked, at the moment it
+    asked. A reader without it is left guessing from order, and a transcript
+    that guesses is one that eventually shows consent beside the wrong command.
+    """
     workspace_id: WorkspaceId | None = None
     """The checkout this was asked about, when the conversation has one.
 

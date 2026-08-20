@@ -8,6 +8,7 @@ from engine.domain import (
     AgentRunCompleted,
     AgentRunId,
     AgentStep,
+    AgentStepPaused,
     Command,
     Event,
     HumanReviewCompleted,
@@ -22,6 +23,7 @@ from engine.domain import (
     StartAgentRun,
     StepCompleted,
     StepId,
+    StepReactivated,
     TerminalOutcome,
     Transition,
     ValueReference,
@@ -53,7 +55,12 @@ def start_agent_command(
 ) -> StartAgentRun:
     return StartAgentRun(
         run_id=state.run_id,
-        agent_run_id=agent_run_id(state.run_id, step.step_id),
+        agent_run_id=(
+            state.current_agent_run_id
+            if state.current_step_id == step.step_id
+            and state.current_agent_run_id is not None
+            else agent_run_id(state.run_id, step.step_id)
+        ),
         instance_id=agent_instance_id(state.run_id, step.step_id),
         profile=step.profile,
         prompt=render_template(step.prompt, state),
@@ -102,8 +109,43 @@ def decide_workflow(
         case RunNamed():
             return replace(state, name=event.name), ()
 
+        case AgentStepPaused() if (
+            state.phase is RunPhase.RUNNING_AGENT
+            and event.step_id == state.current_step_id
+            and event.agent_run_id == state.current_agent_run_id
+        ):
+            return replace(state, agent_paused=True), ()
+
+        case StepReactivated():
+            step = definition.step(event.step_id)
+            if (
+                not isinstance(step, AgentStep)
+                or not step.editable
+                or state.workspace_id is None
+            ):
+                return state, ()
+            if (
+                state.phase is RunPhase.RUNNING_AGENT
+                and state.current_step_id == event.step_id
+            ):
+                return replace(state, agent_paused=False), ()
+            expected_run_id = _next_agent_run_id(state, event.step_id)
+            return replace(
+                state,
+                phase=RunPhase.RUNNING_AGENT,
+                current_step_id=event.step_id,
+                current_agent_run_id=expected_run_id,
+                agent_paused=False,
+                agent_runs=(*state.agent_runs, expected_run_id),
+                step_results=(),
+                human_review=None,
+                human_reviews=(),
+                failure_reason="",
+            ), ()
+
         case StepCompleted() if (
             state.phase is RunPhase.RUNNING_AGENT
+            and not state.agent_paused
             and event.step_id == state.current_step_id
             and event.agent_run_id == state.current_agent_run_id
         ):
@@ -146,7 +188,14 @@ def decide_workflow(
             step = definition.step(event.step_id)
             if not isinstance(step, HumanReviewStep):
                 return state, ()
-            reviewed = replace(state, human_review=event)
+            prior_reviews = state.human_reviews or (
+                (state.human_review,) if state.human_review is not None else ()
+            )
+            reviewed = replace(
+                state,
+                human_review=event,
+                human_reviews=(*prior_reviews, event),
+            )
             return _follow(
                 definition, reviewed, step.approved if event.approved else step.rejected
             )
@@ -182,6 +231,7 @@ def _follow(
             state,
             phase=phase,
             current_agent_run_id=None,
+            agent_paused=False,
         ), ()
     assert transition.step_id is not None
     return _enter_step(definition, state, transition.step_id)
@@ -192,12 +242,13 @@ def _enter_step(
 ) -> tuple[RunState, tuple[Command, ...]]:
     step = definition.step(step_id)
     if isinstance(step, AgentStep):
-        expected_run_id = agent_run_id(state.run_id, step.step_id)
+        expected_run_id = _next_agent_run_id(state, step.step_id)
         next_state = replace(
             state,
             phase=RunPhase.RUNNING_AGENT,
             current_step_id=step.step_id,
             current_agent_run_id=expected_run_id,
+            agent_paused=False,
             agent_runs=(*state.agent_runs, expected_run_id),
         )
         return next_state, (start_agent_command(definition, next_state, step),)
@@ -207,6 +258,7 @@ def _enter_step(
             phase=RunPhase.AWAITING_HUMAN_REVIEW,
             current_step_id=step.step_id,
             current_agent_run_id=None,
+            agent_paused=False,
         )
         return next_state, (
             RequestHumanReview(
@@ -221,6 +273,15 @@ def _enter_step(
         phase=RunPhase.FAILED,
         failure_reason=f"workflow step not found: {step_id}",
     ), ()
+
+
+def _next_agent_run_id(state: RunState, step_id: StepId) -> AgentRunId:
+    base = agent_run_id(state.run_id, step_id)
+    attempts = sum(
+        value == base or str(value).startswith(f"{base}:")
+        for value in state.agent_runs
+    )
+    return base if attempts == 0 else AgentRunId(f"{base}:{attempts + 1}")
 
 
 def _reference_value(reference: ValueReference, state: RunState) -> str:

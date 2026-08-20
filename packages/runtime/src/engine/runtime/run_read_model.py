@@ -10,6 +10,7 @@ from engine.domain import (
     AgentRunId,
     AgentStep,
     ConversationId,
+    HumanReviewCompleted,
     HumanReviewStep,
     RunId,
     RunPhase,
@@ -19,7 +20,9 @@ from engine.domain import (
     StepOutput,
     WorkflowDefinition,
 )
+from engine.domain.approvals import ApprovalStatus
 from engine.ports.state_store import StateStore
+from engine.runtime.step_results import latest_turn_requests_clarification_or_escalation
 from engine.runtime.workflows import WorkflowCatalog
 
 
@@ -38,6 +41,7 @@ class RunStepView:
     agent_run_id: AgentRunId | None = None
     mcp_request_id: str | int | None = None
     conversation_id: ConversationId | None = None
+    waiting: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,9 +105,16 @@ class RunReader:
             if instance.workflow_step_id is not None
         }
         results = {result.step_id: result for result in state.step_results}
+        waiting_step = await self._waiting_step(state, by_step)
         steps = (
             tuple(
-                _step_view(state, step, by_step.get(step.step_id), results.get(step.step_id))
+                _step_view(
+                    state,
+                    step,
+                    by_step.get(step.step_id),
+                    results.get(step.step_id),
+                    waiting=waiting_step == step.step_id,
+                )
                 for step in definition.steps
             )
             if definition is not None
@@ -122,7 +133,9 @@ class RunReader:
             run_id=state.run_id,
             name=state.name or state.prompt or str(state.run_id),
             workflow_id=str(state.workflow_id),
-            workflow_name=definition.name if definition is not None else str(state.workflow_id),
+            workflow_name=(
+                definition.name if definition is not None else str(state.workflow_id)
+            ),
             workflow_version=definition.version if definition is not None else "",
             task_id=str(state.task_id),
             task_prompt=state.prompt,
@@ -136,19 +149,52 @@ class RunReader:
             failure_reason=state.failure_reason,
         )
 
+    async def _waiting_step(
+        self,
+        state: RunState,
+        instances: dict[StepId, AgentInstance],
+    ) -> StepId | None:
+        step_id = state.current_step_id
+        if step_id is None:
+            return None
+        instance = instances.get(step_id)
+        if instance is None:
+            return None
+        if state.agent_paused:
+            return step_id
+        if state.current_agent_run_id is not None:
+            approvals = await self._store.list_approvals(
+                agent_run_id=state.current_agent_run_id,
+                status=ApprovalStatus.PENDING,
+            )
+            if approvals:
+                return step_id
+        conversation = await self._store.load_conversation(instance.instance_id)
+        if conversation is not None and latest_turn_requests_clarification_or_escalation(
+            conversation.messages
+        ):
+            return step_id
+        return None
+
 
 def _step_view(
     state: RunState,
     step: AgentStep | HumanReviewStep,
     instance: AgentInstance | None,
     result: StepCompleted | None,
+    *,
+    waiting: bool = False,
 ) -> RunStepView:
     if isinstance(step, HumanReviewStep):
-        if state.human_review is not None and state.human_review.step_id == step.step_id:
+        review = _review_for(state, step.step_id)
+        if review is not None:
             status = "completed"
-            outcome = "approved" if state.human_review.approved else "rejected"
-            summary = state.human_review.summary
-        elif state.phase is RunPhase.AWAITING_HUMAN_REVIEW and state.current_step_id == step.step_id:
+            outcome = "approved" if review.approved else "rejected"
+            summary = review.summary
+        elif (
+            state.phase is RunPhase.AWAITING_HUMAN_REVIEW
+            and state.current_step_id == step.step_id
+        ):
             status, outcome, summary = "action_required", None, "Human decision required."
         else:
             status, outcome, summary = _step_status(state, step.step_id, False), None, ""
@@ -183,6 +229,7 @@ def _step_view(
         ),
         mcp_request_id=result.mcp_request_id if result is not None else None,
         conversation_id=instance.conversation_id if instance else None,
+        waiting=waiting,
     )
 
 
@@ -216,13 +263,34 @@ def _step_status(state: RunState, step_id: StepId, completed: bool) -> str:
 
 
 def _terminal_outcome(state: RunState) -> str | None:
+    if state.phase is RunPhase.FAILED:
+        if (
+            state.human_review is not None
+            and not state.human_review.approved
+            and state.current_step_id == state.human_review.step_id
+        ):
+            return "rejected"
+        return "failed"
+    if state.phase is not RunPhase.SUCCEEDED:
+        return None
     if state.human_review is not None:
         return "approved" if state.human_review.approved else "rejected"
-    if state.phase is RunPhase.SUCCEEDED:
-        return "succeeded"
-    if state.phase is RunPhase.FAILED:
-        return "failed"
-    return None
+    return "succeeded"
+
+
+def _review_for(
+    state: RunState, step_id: StepId
+) -> HumanReviewCompleted | None:
+    return next(
+        (
+            review
+            for review in reversed(state.human_reviews)
+            if review.step_id == step_id
+        ),
+        state.human_review
+        if state.human_review is not None and state.human_review.step_id == step_id
+        else None,
+    )
 
 
 __all__ = [

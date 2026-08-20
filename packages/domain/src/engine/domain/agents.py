@@ -86,6 +86,8 @@ class AgentInstance:
     title: str = "New chat"
     archived: bool = False
     runner: str = ""
+    auto_approve: bool = False
+    """Whether this conversation applies the system auto-approval policy."""
     workflow_run_id: RunId | None = None
     """Owning workflow run, absent for a standalone interactive conversation."""
     workflow_step_id: StepId | None = None

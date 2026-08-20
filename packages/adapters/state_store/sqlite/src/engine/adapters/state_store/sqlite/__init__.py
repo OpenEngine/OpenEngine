@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 from threading import RLock
 from uuid import uuid4
+import warnings
 
 from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRunStatus
 from engine.domain.approvals import (
@@ -20,6 +21,7 @@ from engine.domain.approvals import (
 from engine.domain.chat import Conversation, Message, Role, ToolCall
 from engine.domain.events import (
     AgentRunCompleted,
+    AgentStepPaused,
     ChangesPublished,
     Event,
     HumanReviewCompleted,
@@ -27,6 +29,7 @@ from engine.domain.events import (
     RunNamed,
     RunRequested,
     StepCompleted,
+    StepReactivated,
     WorkspaceProvisioned,
 )
 from engine.domain.ids import (
@@ -85,6 +88,7 @@ class SQLiteStateStore:
                     title TEXT NOT NULL DEFAULT 'New chat',
                     archived INTEGER NOT NULL DEFAULT 0,
                     runner TEXT NOT NULL DEFAULT '',
+                    auto_approve INTEGER NOT NULL DEFAULT 0,
                     workflow_run_id TEXT,
                     workflow_step_id TEXT
                 );
@@ -130,6 +134,7 @@ class SQLiteStateStore:
                     command TEXT,
                     cwd TEXT,
                     tool_name TEXT,
+                    tool_call_id TEXT,
                     workspace_id TEXT,
                     arguments TEXT,
                     allowed_decisions TEXT NOT NULL,
@@ -181,6 +186,11 @@ class SQLiteStateStore:
                     "ALTER TABLE agent_instances "
                     "ADD COLUMN runner TEXT NOT NULL DEFAULT ''"
                 )
+            if "auto_approve" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_instances "
+                    "ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0"
+                )
             if "workflow_run_id" not in columns:
                 self._connection.execute(
                     "ALTER TABLE agent_instances ADD COLUMN workflow_run_id TEXT"
@@ -199,6 +209,15 @@ class SQLiteStateStore:
                 # for those: unknown, and therefore matching no grant.
                 self._connection.execute(
                     "ALTER TABLE approvals ADD COLUMN workspace_id TEXT"
+                )
+            if "tool_call_id" not in approval_columns:
+                # Approvals written before the pairing existed name no call, and
+                # nothing can work out afterwards which one they were about.
+                # Null reads as "unknown", which is what a client shows by
+                # putting the request at the end of its turn rather than beside
+                # a command it has guessed at.
+                self._connection.execute(
+                    "ALTER TABLE approvals ADD COLUMN tool_call_id TEXT"
                 )
 
     # --- workflow runs ----------------------------------------------------
@@ -223,9 +242,19 @@ class SQLiteStateStore:
     async def list_runs(self) -> Sequence[RunState]:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT state_json FROM run_states ORDER BY sequence DESC"
+                "SELECT run_id, state_json FROM run_states ORDER BY sequence DESC"
             ).fetchall()
-        return tuple(_state_from_dict(json.loads(row["state_json"])) for row in rows)
+        runs: list[RunState] = []
+        for row in rows:
+            try:
+                runs.append(_state_from_dict(json.loads(row["state_json"])))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                warnings.warn(
+                    f"skipping incompatible workflow run {row['run_id']}: {error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        return tuple(runs)
 
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         with self._lock, self._connection:
@@ -300,15 +329,16 @@ class SQLiteStateStore:
         title: str,
         archived: bool,
         runner: str,
+        auto_approve: bool = False,
     ) -> AgentInstance:
         with self._lock, self._connection:
             updated = self._connection.execute(
                 """
                 UPDATE agent_instances
-                SET title = ?, archived = ?, runner = ?
+                SET title = ?, archived = ?, runner = ?, auto_approve = ?
                 WHERE instance_id = ?
                 """,
-                (title, archived, runner, instance_id),
+                (title, archived, runner, auto_approve, instance_id),
             ).rowcount
             if not updated:
                 raise KeyError(f"no agent instance {instance_id!r}")
@@ -321,7 +351,8 @@ class SQLiteStateStore:
             row = self._connection.execute(
                 """
                 SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                       title, archived, runner, workflow_run_id, workflow_step_id
+                       title, archived, runner, auto_approve,
+                       workflow_run_id, workflow_step_id
                 FROM agent_instances WHERE instance_id = ?
                 """,
                 (instance_id,),
@@ -350,7 +381,8 @@ class SQLiteStateStore:
     ) -> Sequence[AgentInstance]:
         query = """
             SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                   title, archived, runner, workflow_run_id, workflow_step_id
+                   title, archived, runner, auto_approve,
+                   workflow_run_id, workflow_step_id
             FROM agent_instances
         """
         filters: list[str] = []
@@ -468,10 +500,10 @@ class SQLiteStateStore:
                 """
                 INSERT INTO approvals (
                     approval_id, agent_run_id, instance_id, runner, kind, reason,
-                    command, cwd, tool_name, workspace_id, arguments,
-                    allowed_decisions, status, decision, decision_source,
-                    requested_at, decided_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    command, cwd, tool_name, tool_call_id, workspace_id,
+                    arguments, allowed_decisions, status, decision,
+                    decision_source, requested_at, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(approval_id) DO UPDATE SET
                     status = excluded.status,
                     decision = excluded.decision,
@@ -488,6 +520,7 @@ class SQLiteStateStore:
                     approval.command,
                     approval.cwd,
                     approval.tool_name,
+                    approval.tool_call_id,
                     approval.workspace_id,
                     approval.arguments,
                     json.dumps(
@@ -622,6 +655,7 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
         title=row["title"],
         archived=bool(row["archived"]),
         runner=row["runner"],
+        auto_approve=bool(row["auto_approve"]),
         workflow_run_id=(
             RunId(row["workflow_run_id"])
             if row["workflow_run_id"] is not None
@@ -637,8 +671,8 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
 
 _APPROVAL_COLUMNS = """
     approval_id, agent_run_id, instance_id, runner, kind, reason, command, cwd,
-    tool_name, workspace_id, arguments, allowed_decisions, status, decision,
-    decision_source, requested_at, decided_at
+    tool_name, tool_call_id, workspace_id, arguments, allowed_decisions, status,
+    decision, decision_source, requested_at, decided_at
 """
 
 _SESSION_GRANT_COLUMNS = """
@@ -659,6 +693,7 @@ def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
         command=row["command"],
         cwd=row["cwd"],
         tool_name=row["tool_name"],
+        tool_call_id=row["tool_call_id"],
         workspace_id=(
             WorkspaceId(row["workspace_id"]) if row["workspace_id"] is not None else None
         ),
@@ -778,10 +813,15 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "max_agent_runs": state.max_agent_runs,
         "current_step_id": state.current_step_id,
         "current_agent_run_id": state.current_agent_run_id,
+        "agent_paused": state.agent_paused,
+        "runner_name": state.runner_name,
         "step_results": [_step_to_dict(step) for step in state.step_results],
         "human_review": (
             _review_to_dict(state.human_review) if state.human_review else None
         ),
+        "human_reviews": [
+            _review_to_dict(review) for review in state.human_reviews
+        ],
         "failure_reason": state.failure_reason,
         "workflow_definition": (
             _workflow_to_dict(state.workflow_definition)
@@ -793,6 +833,18 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
 
 def _state_from_dict(value: dict[str, object]) -> RunState:
     review = value.get("human_review")
+    raw_reviews = value.get("human_reviews")
+    reviews = (
+        tuple(
+            _review_from_dict(item)
+            for item in raw_reviews
+            if isinstance(item, dict)
+        )
+        if isinstance(raw_reviews, list)
+        else (_review_from_dict(review),)
+        if isinstance(review, dict)
+        else ()
+    )
     return RunState(
         run_id=RunId(str(value["run_id"])),
         task_id=TaskId(str(value["task_id"])),
@@ -821,6 +873,8 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
             if value.get("current_agent_run_id") is not None
             else None
         ),
+        agent_paused=bool(value.get("agent_paused", False)),
+        runner_name=str(value.get("runner_name", "")),
         step_results=tuple(
             _step_from_dict(step)
             for step in value.get("step_results", [])
@@ -829,6 +883,7 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         human_review=(
             _review_from_dict(review) if isinstance(review, dict) else None
         ),
+        human_reviews=reviews,
         failure_reason=str(value.get("failure_reason", "")),
         workflow_definition=(
             _workflow_from_dict(value["workflow_definition"])
@@ -1025,6 +1080,19 @@ def _workflow_from_dict(value: dict[str, object]) -> WorkflowDefinition:
 def _event_to_dict(event: Event) -> dict[str, object]:
     if isinstance(event, StepCompleted):
         return {"type": "StepCompleted", **_step_to_dict(event)}
+    if isinstance(event, AgentStepPaused):
+        return {
+            "type": "AgentStepPaused",
+            "run_id": event.run_id,
+            "step_id": event.step_id,
+            "agent_run_id": event.agent_run_id,
+        }
+    if isinstance(event, StepReactivated):
+        return {
+            "type": "StepReactivated",
+            "run_id": event.run_id,
+            "step_id": event.step_id,
+        }
     if isinstance(event, HumanReviewCompleted):
         return {"type": "HumanReviewCompleted", **_review_to_dict(event)}
     if isinstance(event, RunRequested):
@@ -1079,6 +1147,17 @@ def _event_from_dict(value: dict[str, object]) -> Event:
     kind = value["type"]
     if kind == "StepCompleted":
         return _step_from_dict(value)
+    if kind == "AgentStepPaused":
+        return AgentStepPaused(
+            run_id=RunId(str(value["run_id"])),
+            step_id=StepId(str(value["step_id"])),
+            agent_run_id=AgentRunId(str(value["agent_run_id"])),
+        )
+    if kind == "StepReactivated":
+        return StepReactivated(
+            run_id=RunId(str(value["run_id"])),
+            step_id=StepId(str(value["step_id"])),
+        )
     if kind == "HumanReviewCompleted":
         return _review_from_dict(value)
     if kind == "RunRequested":

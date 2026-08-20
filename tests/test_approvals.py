@@ -41,15 +41,26 @@ from engine.domain import (
     SessionGrantId,
     WorkspaceId,
 )
-from engine.ports import AgentTurn, ApprovalRequest, FinishReason, StateStore
+from engine.ports import (
+    AgentTurn,
+    ApprovalCapability,
+    ApprovalRequest,
+    FinishReason,
+    StateStore,
+)
 from engine.runtime import (
     AgentSession,
     ApprovalBroker,
+    ApprovalConfig,
     ApprovalsUnsupportedError,
+    BashApprovalConfig,
     Capabilities,
     normalized_scope,
 )
-from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
+from permission_fakes import (
+    KIND_PERMISSION_TRANSLATOR,
+    UNCLASSIFIED_PERMISSION_TRANSLATOR,
+)
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -62,6 +73,7 @@ RUN_TESTS = ApprovalRequest(
     reason="Run the test suite",
     command="pytest",
     cwd="/workspace",
+    tool_call_id="call-pytest",
 )
 WRITE_FILE = ApprovalRequest(
     approval_id="provider-2",
@@ -72,7 +84,11 @@ WRITE_FILE = ApprovalRequest(
     allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
 )
 RUN_LINT = replace(
-    RUN_TESTS, approval_id="provider-3", reason="Lint the tree", command="ruff check"
+    RUN_TESTS,
+    approval_id="provider-3",
+    reason="Lint the tree",
+    command="ruff check",
+    tool_call_id="call-ruff",
 )
 
 
@@ -230,6 +246,7 @@ async def _ask(
     runner: str = "test",
     workspace_id: WorkspaceId | None = None,
     answer: ApprovalDecision | None = None,
+    translator: object = UNCLASSIFIED_PERMISSION_TRANSLATOR,
 ) -> tuple[ApprovalDecision, list[ApprovalRecord]]:
     """Put one request to the broker as a turn would, and see what happened.
 
@@ -258,6 +275,7 @@ async def _ask(
         runner=runner,
         present=present,
         workspace_id=workspace_id,
+        translator=translator,
     )
     return await handler(request), presented
 
@@ -638,6 +656,9 @@ def test_approving_resumes_the_paused_turn_and_records_the_decision() -> None:
         "command": "pytest",
         "cwd": "/workspace",
         "toolName": None,
+        # The call the provider named, so the client can show the request beside
+        # it rather than at the end of the turn.
+        "toolCallId": "call-pytest",
         "arguments": None,
         "allowedDecisions": ["accept", "accept_for_session", "cancel"],
         "decision": None,
@@ -653,6 +674,55 @@ def test_approving_resumes_the_paused_turn_and_records_the_decision() -> None:
         (message["role"], message["content"][0]["text"])
         for message in history.json()["messages"]
     ] == [("user", "run the tests"), ("assistant", "All tests passed.")]
+
+
+def test_a_decision_reaches_the_client_even_when_the_turn_asks_again() -> None:
+    """Otherwise the card you just answered waits on an answer it already got.
+
+    A turn let go by a decision usually asks its next question immediately --
+    Claude Code asks before every tool call -- and does so without ever handing
+    the event loop back, so both snapshots land between two wakes of the same
+    stream. The one being replaced is the decision, which is the only thing the
+    client is waiting to hear.
+    """
+    store = InMemoryStateStore()
+    runner = ApprovalRunner([RUN_TESTS, WRITE_FILE])
+    app = _app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            thread_id = await _thread(client)
+            started = asyncio.create_task(
+                client.post(f"/api/threads/{thread_id}/runs", json={"text": "go"})
+            )
+            first = await _pending(store)
+            await client.post(
+                _approval_url(thread_id, first.approval_id),
+                json={"decision": "accept"},
+            )
+            second = await _pending(store, after=1)
+            await client.post(
+                _approval_url(thread_id, second.approval_id),
+                json={"decision": "accept"},
+            )
+            return first, second, await started
+
+    first, second, streamed = asyncio.run(scenario())
+    events = _lines(streamed)
+
+    assert [
+        (event["approval"]["id"], event["approval"]["status"])
+        for event in events
+        if event["type"] == "approval"
+    ] == [
+        (str(first.approval_id), "pending"),
+        (str(first.approval_id), "decided"),
+        (str(second.approval_id), "pending"),
+        (str(second.approval_id), "decided"),
+    ]
+    assert events[-1]["type"] == "done"
+    assert runner.executed == ["pytest", "Write"]
 
 
 def test_cancelling_a_request_ends_the_turn_without_running_the_action() -> None:
@@ -978,6 +1048,7 @@ def test_a_restart_interrupts_the_requests_it_cannot_resume(tmp_path) -> None:
                 kind=ApprovalKind.COMMAND_EXECUTION,
                 requested_at=datetime.now(UTC),
                 command="pytest",
+                tool_call_id="thread-1:cmd-1",
                 allowed_decisions=tuple(ApprovalDecision),
             )
         )
@@ -1006,8 +1077,11 @@ def test_a_restart_interrupts_the_requests_it_cannot_resume(tmp_path) -> None:
     assert listed.status_code == 200
     assert recovered is not None
     assert recovered.status is ApprovalStatus.INTERRUPTED
-    # The request survives the restart intact; only its answerability changes.
+    # The request survives the restart intact -- including the call it was about,
+    # which is what keeps a reloaded transcript showing it in the right place.
+    # Only its answerability changes.
     assert recovered.command == "pytest"
+    assert recovered.tool_call_id == "thread-1:cmd-1"
     assert refused.status_code == 409
     assert "interrupted" in refused.json()["error"]
 
@@ -1438,3 +1512,198 @@ def test_a_runner_that_cannot_pause_runs_exactly_as_before() -> None:
     assert _lines(streamed)[-1]["type"] == "done"
     assert approvals == ()
     assert [message.content for message in runner.seen[0]] == ["no approvals here"]
+
+
+# --- the configured policy --------------------------------------------------
+
+
+class PolicyRunner(ApprovalRunner):
+    """An interactive runner whose requests the policy can actually read."""
+
+    permission_translator = KIND_PERMISSION_TRANSLATOR
+
+
+def test_a_policy_that_allows_it_answers_without_asking_anybody() -> None:
+    """The point of writing one down: the question is not put at all.
+
+    Still a persisted request, and still auditable as one -- what distinguishes
+    it from a decision somebody made is `decision_source`, exactly as it is for
+    a session grant.
+    """
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(
+        store,
+        ApprovalConfig(bash=BashApprovalConfig(allow=("pytest **",))),
+    )
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            translator=KIND_PERMISSION_TRANSLATOR,
+        )
+        return decision, presented, await store.list_approvals()
+
+    decision, presented, approvals = asyncio.run(scenario())
+
+    assert decision is ApprovalDecision.ACCEPT
+    # Presented already decided: something to show, nothing to answer.
+    assert [record.status for record in presented] == [ApprovalStatus.DECIDED]
+    assert len(approvals) == 1
+    assert approvals[0].command == "pytest"
+    assert approvals[0].decision is ApprovalDecision.ACCEPT
+    assert approvals[0].decision_source is ApprovalDecisionSource.POLICY
+    assert approvals[0].decided_at is not None
+
+
+def test_a_policy_that_denies_it_refuses_without_asking_anybody() -> None:
+    """A request that was always going to be refused is not a question."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(
+        store,
+        ApprovalConfig(
+            auto_approve=True, bash=BashApprovalConfig(deny=("pytest **",))
+        ),
+    )
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            translator=KIND_PERMISSION_TRANSLATOR,
+        )
+        return decision, presented, await store.list_approvals()
+
+    decision, presented, approvals = asyncio.run(scenario())
+
+    assert decision is ApprovalDecision.CANCEL
+    assert [record.status for record in presented] == [ApprovalStatus.DECIDED]
+    assert approvals[0].decision is ApprovalDecision.CANCEL
+    assert approvals[0].decision_source is ApprovalDecisionSource.POLICY
+
+
+def test_a_capability_the_policy_has_not_ruled_on_is_still_put_to_a_person() -> None:
+    """Absence from `allow` is silence, and the pause is what silence means."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(store, ApprovalConfig(allow=(ApprovalCapability.READ,)))
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            WRITE_FILE,
+            agent_run_id=AgentRunId("ar-1"),
+            answer=ApprovalDecision.ACCEPT,
+            translator=KIND_PERMISSION_TRANSLATOR,
+        )
+        return decision, presented, await store.list_approvals()
+
+    decision, presented, approvals = asyncio.run(scenario())
+
+    assert decision is ApprovalDecision.ACCEPT
+    assert presented[0].is_pending  # a card, answered by a person
+    assert approvals[0].decision_source is ApprovalDecisionSource.USER
+
+
+def test_a_decision_the_provider_never_offered_is_put_to_a_person_instead() -> None:
+    """Enforcement stops at the protocol: a provider not offering a cancellation
+    has no way to honour one, and inventing the message would not refuse
+    anything -- so the request goes to somebody who can answer it."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(
+        store, ApprovalConfig(bash=BashApprovalConfig(deny=("pytest **",)))
+    )
+    uncancellable = replace(RUN_TESTS, allowed_decisions=(ApprovalDecision.ACCEPT,))
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            uncancellable,
+            agent_run_id=AgentRunId("ar-1"),
+            answer=ApprovalDecision.ACCEPT,
+            translator=KIND_PERMISSION_TRANSLATOR,
+        )
+        return decision, presented
+
+    decision, presented = asyncio.run(scenario())
+
+    assert decision is ApprovalDecision.ACCEPT
+    assert presented[0].is_pending
+
+
+def test_a_runner_whose_requests_nobody_can_read_is_asked_about_regardless() -> None:
+    """Fail closed. A policy that allowed the unclassifiable would be allowing
+    whatever a provider release invents next."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(
+        store, ApprovalConfig(allow=tuple(ApprovalCapability))
+    )
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            RUN_TESTS,
+            agent_run_id=AgentRunId("ar-1"),
+            answer=ApprovalDecision.ACCEPT,
+        )
+        return decision, presented
+
+    decision, presented = asyncio.run(scenario())
+
+    assert decision is ApprovalDecision.ACCEPT
+    assert presented[0].is_pending
+
+
+def test_a_turn_the_policy_covers_runs_start_to_finish_without_a_prompt() -> None:
+    """The whole of it, over HTTP: nothing pending, and the action happened."""
+    store = InMemoryStateStore()
+    runner = PolicyRunner(requests=(RUN_TESTS, RUN_LINT))
+    app = create_app(
+        _session(store, runner),
+        {"test": runner},
+        approval_policy=ApprovalConfig(
+            bash=BashApprovalConfig(allow=("pytest **", "ruff check **"))
+        ),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            thread_id = await _thread(client)
+            streamed = await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "run the tests"}
+            )
+            return streamed, await store.list_approvals()
+
+    streamed, approvals = asyncio.run(scenario())
+
+    assert streamed.status_code == 200
+    assert _lines(streamed)[-1]["type"] == "done"
+    assert runner.executed == ["pytest", "ruff check"]
+    assert [record.status for record in approvals] == [
+        ApprovalStatus.DECIDED,
+        ApprovalStatus.DECIDED,
+    ]
+    assert {record.decision_source for record in approvals} == {
+        ApprovalDecisionSource.POLICY
+    }
+    # Shown to the client all the same, so it can say what ran on its behalf.
+    # The stream is a snapshot poll rather than an event log, so two requests
+    # settled between ticks arrive as the later one; both are in the store.
+    streamed_sources = [
+        line["approval"]["decisionSource"]
+        for line in _lines(streamed)
+        if line["type"] == "approval"
+    ]
+    assert streamed_sources and set(streamed_sources) == {"policy"}

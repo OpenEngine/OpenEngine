@@ -83,6 +83,7 @@ class StateStore(Protocol):
         title: str,
         archived: bool,
         runner: str,
+        auto_approve: bool = False,
     ) -> AgentInstance:
         """Persist the user-facing state of an interactive instance."""
         ...

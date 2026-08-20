@@ -125,13 +125,18 @@ class InMemoryStateStore:
         title: str,
         archived: bool,
         runner: str,
+        auto_approve: bool = False,
     ) -> AgentInstance:
         with self._lock:
             instance = self._instances.get(instance_id)
             if instance is None:
                 raise KeyError(f"no agent instance {instance_id!r}")
             updated = replace(
-                instance, title=title, archived=archived, runner=runner
+                instance,
+                title=title,
+                archived=archived,
+                runner=runner,
+                auto_approve=auto_approve,
             )
             self._instances[instance_id] = updated
         return updated
