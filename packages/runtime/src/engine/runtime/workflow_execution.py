@@ -148,15 +148,17 @@ class WorkflowExecutor:
     ) -> None:
         """Continue an editable implementation step with a human message."""
 
-        state = await self._require_state(run_id)
+        durable_state = await self._require_state(run_id)
+        state = durable_state
+        deferred_event: StepReactivated | None = None
         if (
             state.phase is not RunPhase.IMPLEMENTING
             or state.current_step_id != IMPLEMENTATION_STEP
         ):
-            state, commands = await self._transition(
-                state,
-                StepReactivated(run_id=run_id, step_id=IMPLEMENTATION_STEP),
+            deferred_event = StepReactivated(
+                run_id=run_id, step_id=IMPLEMENTATION_STEP
             )
+            state, commands = decide(state, deferred_event)
             if commands:
                 raise WorkflowExecutionError(
                     "reactivating implementation unexpectedly emitted commands"
@@ -181,6 +183,9 @@ class WorkflowExecutor:
                 runner=runner,
                 runner_name=selected_name,
                 continuation=message,
+                deferred_state=(durable_state, deferred_event)
+                if deferred_event is not None
+                else None,
             )
             if implementation is None:
                 return
@@ -326,6 +331,7 @@ class WorkflowExecutor:
         runner: AgentRunner,
         runner_name: str,
         continuation: str | None = None,
+        deferred_state: tuple[RunState, Event] | None = None,
     ) -> _StepOutcome | None:
         """Run one agent-backed step and fold its terminal result into the run.
 
@@ -336,10 +342,23 @@ class WorkflowExecutor:
         assert command.step is not None
         folded: _StepOutcome | None = None
 
+        async def fold(event: Event) -> _StepOutcome:
+            transition_state = state
+            if deferred_state is not None:
+                durable_state, deferred_event = deferred_state
+                transition_state, commands = await self._transition(
+                    durable_state, deferred_event
+                )
+                if commands or transition_state != state:
+                    raise WorkflowExecutionError(
+                        "deferred step reactivation did not produce the expected state"
+                    )
+            next_state, commands = await self._transition(transition_state, event)
+            return _StepOutcome(event, next_state, commands)
+
         async def deliver_terminal(event: Event) -> None:
             nonlocal folded
-            next_state, commands = await self._transition(state, event)
-            folded = _StepOutcome(event, next_state, commands)
+            folded = await fold(event)
 
         terminal = await self._dispatcher.run_workflow_agent(
             command,
@@ -360,8 +379,7 @@ class WorkflowExecutor:
             assert terminal == folded.event
             return folded
         if isinstance(terminal, (StepCompleted, RunFailed)):
-            next_state, commands = await self._transition(state, terminal)
-            return _StepOutcome(terminal, next_state, commands)
+            return await fold(terminal)
         if requests_clarification_or_escalation(terminal):
             return None
         raise WorkflowExecutionError(
