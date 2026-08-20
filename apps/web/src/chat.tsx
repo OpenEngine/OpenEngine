@@ -21,6 +21,7 @@ import {
 
 import {
   api,
+  answerQuestion,
   attachWorkspace,
   decideApproval,
   detachWorkspace,
@@ -449,6 +450,8 @@ const KIND_LABELS: Record<ApiApproval["kind"], string> = {
   command_execution: "Wants to run a command",
   file_change: "Wants to change files",
   tool_use: "Wants to use a tool",
+  plan_approval: "Wants approval for a plan",
+  user_input: "Has a question",
 };
 
 /** What became of a request that is no longer open, and on whose say-so. */
@@ -461,6 +464,10 @@ export function outcomeText(approval: ApiApproval): string {
     return approval.decision === "cancel"
       ? "Refused by the configured policy — the action did not run."
       : "Allowed by the configured policy, without asking.";
+  if (approval.kind === "user_input" && approval.answers)
+    return "Answered.";
+  if (approval.kind === "user_input" && approval.decision === "cancel")
+    return "Cancelled — no answer was sent.";
   switch (approval.decision) {
     case "accept":
       return "Approved.";
@@ -513,6 +520,13 @@ function ApprovalArguments({ approval }: { approval: ApiApproval }) {
 
 /** The one line a folded approval is worth: what happened, and to what. */
 export function summaryText(approval: ApiApproval): string {
+  if (approval.kind === "user_input") {
+    const question = approval.questions?.[0]?.question ?? "Question";
+    if (approval.status === "pending") return `Answer needed · ${question}`;
+    return approval.decision === "cancel"
+      ? `Cancelled · ${question}`
+      : `Answered · ${question}`;
+  }
   const target =
     approval.command ?? approval.toolName ?? KIND_LABELS[approval.kind].toLowerCase();
   if (approval.status === "pending") return `Approval needed · ${target}`;
@@ -533,6 +547,152 @@ export function summaryText(approval: ApiApproval): string {
     default:
       return `Closed · ${target}`;
   }
+}
+
+function QuestionForm({
+  threadId,
+  approval,
+}: {
+  threadId: string;
+  approval: ApiApproval;
+}) {
+  const questions = approval.questions ?? [];
+  const [selected, setSelected] = useState<Record<string, string[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  function choose(questionId: string, label: string, multiSelect: boolean) {
+    setSelected((current) => {
+      const existing = current[questionId] ?? [];
+      return {
+        ...current,
+        [questionId]: multiSelect
+          ? existing.includes(label)
+            ? existing.filter((value) => value !== label)
+            : [...existing, label]
+          : [label],
+      };
+    });
+  }
+
+  async function submit() {
+    const answers: Record<string, string[]> = {};
+    for (const question of questions) {
+      const typed = (other[question.id] ?? "").trim();
+      const choices = selected[question.id] ?? [];
+      answers[question.id] = question.multiSelect
+        ? [...choices, ...(typed ? [typed] : [])]
+        : typed
+          ? [typed]
+          : choices;
+      if (!answers[question.id].length) {
+        setError(`Answer “${question.header}” before continuing.`);
+        return;
+      }
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      await answerQuestion(threadId, approval.id, answers);
+    } catch (failure) {
+      setBusy(false);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
+  async function cancel() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await decideApproval(threadId, approval.id, "cancel");
+    } catch (failure) {
+      setBusy(false);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
+  return (
+    <div className="question-backdrop">
+      <section
+        className="question-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Agent question"
+      >
+        <header>
+          <span className="approval-kind">The agent needs your input</span>
+        </header>
+        {questions.map((question) => (
+          <fieldset className="question-field" key={question.id}>
+            <legend>{question.header}</legend>
+            <p>{question.question}</p>
+            <div className="question-options">
+              {question.options.map((option) => {
+                const checked = (selected[question.id] ?? []).includes(option.label);
+                return (
+                  <label
+                    className="question-option"
+                    key={option.label}
+                    data-selected={checked || undefined}
+                  >
+                    <input
+                      type={question.multiSelect ? "checkbox" : "radio"}
+                      name={question.id}
+                      checked={checked}
+                      onChange={() =>
+                        choose(question.id, option.label, question.multiSelect)
+                      }
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      {option.description && <small>{option.description}</small>}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {question.allowsOther && (
+              <label className="question-other">
+                Other
+                <input
+                  value={other[question.id] ?? ""}
+                  onChange={(event) =>
+                    setOther((current) => ({
+                      ...current,
+                      [question.id]: event.target.value,
+                    }))
+                  }
+                  placeholder="Type your answer…"
+                />
+              </label>
+            )}
+          </fieldset>
+        ))}
+        {error && <p className="notice">{error}</p>}
+        <div className="approval-actions">
+          {approval.allowedDecisions.includes("cancel") && (
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => void cancel()}
+            >
+              {busy ? "Sending…" : "Cancel"}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy || !questions.length}
+            onClick={() => void submit()}
+          >
+            {busy ? "Sending…" : "Continue"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 /** What the turn is asking, and the answers this request permits.
@@ -608,7 +768,10 @@ export function ApprovalEntry({
           </dl>
         )}
         <ApprovalArguments approval={approval} />
-        {pending ? (
+        {pending && approval.kind === "user_input" && (
+          <QuestionForm threadId={threadId} approval={approval} />
+        )}
+        {pending && approval.kind !== "user_input" ? (
           <div className="approval-actions">
             {approval.allowedDecisions.map((decision) => (
               <button
@@ -625,9 +788,9 @@ export function ApprovalEntry({
               </button>
             ))}
           </div>
-        ) : (
+        ) : !pending ? (
           <p className="approval-outcome">{outcomeText(approval)}</p>
-        )}
+        ) : null}
         {error && (
           <p className="notice">
             <Ticked text={error} />
