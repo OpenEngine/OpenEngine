@@ -1174,8 +1174,13 @@ def create_app(
 
     async def detach_workspace(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
-        if await service.get(instance_id) is None:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
+        # Workflow steps share one checkout. An earlier conversation may be
+        # idle while a later step is still using that same directory.
+        if workflow_is_active(thread):
+            return _error("this workflow has a run in progress", 409)
         try:
             thread = await service.detach_workspace(instance_id)
         except RuntimeError as error:

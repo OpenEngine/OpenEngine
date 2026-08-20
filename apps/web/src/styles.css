@@ -672,7 +672,7 @@ select:disabled { cursor: default; }
   padding: 14px 0 16px;
 }
 .dock-foot:empty { display: none; }
-.dock-workspace { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.workspace-control { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .dock-path {
   padding: 8px 11px;
   background: var(--white);
@@ -681,6 +681,11 @@ select:disabled { cursor: default; }
   user-select: all;
 }
 .dock-error { flex-basis: 100%; }
+
+.run-workspace {
+  padding: 14px var(--gutter);
+  border-bottom: 1px solid var(--rule);
+}
 
 .backlink {
   display: block;

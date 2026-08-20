@@ -2152,6 +2152,61 @@ def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back() -> 
     assert workspaces.count == 1
 
 
+def test_workflow_checkout_cannot_detach_while_any_shared_step_is_running() -> None:
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implementation complete.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    reviewer = WorkflowProgressRunner()
+    reviewer.arguments["outputs"] = {"findings": "No blocking findings."}
+    app = _workflow_app(
+        InMemoryStateStore(), implementer, reviewers={"test": reviewer}
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Keep the checkout safe.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(200):
+                detail = await client.get(f"/api/runs/{run_id}")
+                assert detail.json()["phase"] != "failed", detail.json()[
+                    "failureReason"
+                ]
+                if reviewer.started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert reviewer.started.is_set()
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+            refused = await client.delete(
+                f"/api/threads/{instance_id}/workspace"
+            )
+            reviewer.release.set()
+            await _await_phase(client, run_id, "awaiting_human_review")
+            detached = await client.delete(
+                f"/api/threads/{instance_id}/workspace"
+            )
+            return refused, detached
+
+    refused, detached = asyncio.run(scenario())
+
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "this workflow has a run in progress"
+    assert detached.status_code == 200
+    assert detached.json()["workspaceAttached"] is False
+
+
 def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path() -> None:
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
