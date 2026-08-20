@@ -1,9 +1,17 @@
 # Portable OpenEngine distribution
 
-Status: proposed
+Status: in progress -- slice 1 has landed, and slice 2 for one platform
 
 This plan turns the current source-checkout experience into an installable
 product without creating a second way to build OpenEngine.
+
+What exists today is one archive for linux-x86_64, built by
+`packaging/build-archive.sh` and proved on a clean machine by
+`.github/workflows/release-archive.yml`. `openengine doctor`, the remaining
+platforms, the shell installer, Homebrew, and upgrades are all still ahead:
+they consume this archive rather than change how it is made, which is the
+sequencing this plan exists to keep. See "Delivery slices" below for what each
+one still owes.
 
 ## User experience
 
@@ -52,7 +60,9 @@ CLIs or their credentials.
 The release archive is the boundary all installers consume:
 
 1. CI builds the web client once and embeds it as package data beside the web
-   server module instead of relying on `apps/web/dist` in a checkout.
+   server module instead of relying on `apps/web/dist` in a checkout. Vite
+   writes it to `apps/web/src/engine/apps/web/client`, and hatchling lists it
+   as a build artifact so the wheel carries it despite it being git-ignored.
 2. CI freezes the Python application and interpreter into a versioned archive.
 3. CI runs the archive in a clean machine, calls `openengine doctor`, starts the
    server, and requests `/api/config`.
@@ -145,9 +155,10 @@ update, so a broken formula cannot silently become the only installation path.
 
 Each slice is independently releasable and has a focused acceptance test.
 
-### 1. Define the installed application
+### 1. Define the installed application -- done, less `doctor`
 
 - Add the `openengine` CLI with `web`, `doctor`, and `--version`.
+  `doctor` is outstanding; `web` and `--version` are in.
 - Move the built frontend under the Python package and include it in wheels.
 - Resolve configuration and mutable data outside the installation directory.
 - Build a wheel, install it into a clean environment, start it outside the
@@ -155,12 +166,23 @@ Each slice is independently releasable and has a focused acceptance test.
 
 Done means a source tree and Node.js are no longer runtime requirements.
 
-### 2. Produce portable release archives
+### 2. Produce portable release archives -- done for linux-x86_64
 
 - Choose and pin the freezing tool and standalone Python version.
+  A standalone CPython from `uv python install`, with the application
+  installed into it and a launcher that runs it by relative path. Both the
+  interpreter version and uv are pinned.
 - Build the initial platform matrix from tags after the existing release gate.
+  One platform so far. `packaging/build-archive.sh` detects the host, so the
+  remaining targets are runners rather than new code -- but each one still
+  owes a clean-machine test on its *minimum* platform, which is the part that
+  needs thought rather than a matrix entry.
 - Generate checksums, software-bill-of-materials metadata, and attestations.
+  Checksums and signed provenance are published; an SBOM is not
+  (`uv export --format cyclonedx1.5` is the obvious source).
 - Smoke-test each final archive on its minimum supported platform.
+  Tested on Debian 12, which is newer than the glibc the build actually
+  requires. The minimum is not yet pinned or tested.
 
 Done means a downloaded archive can run on a clean supported host with no
 system Python.

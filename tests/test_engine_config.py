@@ -6,6 +6,7 @@ import pytest
 
 import engine.apps.control_server.__main__ as control_server_main
 import engine.apps.web.__main__ as web_main
+import engine.apps.web.cli as web_cli
 import engine.apps.worker.__main__ as worker_main
 from engine.runtime import (
     ApprovalCapability,
@@ -17,7 +18,10 @@ from engine.runtime import (
 
 
 def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
-    loaded = load_engine_config(environ={}, cwd=tmp_path)
+    # `HOME` is pinned because the last place selection looks is the user's
+    # configuration directory: without this the answer would depend on whether
+    # whoever is running the suite has installed OpenEngine for themselves.
+    loaded = load_engine_config(environ={"HOME": str(tmp_path)}, cwd=tmp_path)
 
     assert loaded.path is None
     assert loaded.config.attribution is True
@@ -159,7 +163,7 @@ def test_web_entrypoint_puts_explicit_config_in_composition_settings(
     path = tmp_path / "permissions.toml"
     path.write_text('[approvals]\nauto_approve = true\nallow = ["read", "bash"]\n')
     seen = []
-    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+    monkeypatch.setattr(web_cli, "report_wiring", seen.append)
 
     assert web_main.main(["--check", "--config", str(path)]) == 0
 

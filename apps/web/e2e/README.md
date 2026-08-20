@@ -11,13 +11,14 @@ npm --prefix apps/web run test:e2e
 ```
 
 The client is built for you before the run (`e2e/build-client.ts`), because the
-Python process serves Vite's output and a stale `dist/` would mean testing the
-previous commit's interface.
+Python process serves Vite's output from inside its own package and a stale
+`src/engine/apps/web/client` would mean testing the previous commit's
+interface.
 
 ## How it is put together
 
 Each test gets its own application, composed by `harness/server.py` exactly the
-way `engine.apps.web.__main__` composes the real one -- same capabilities, same
+way `engine.apps.web.cli` composes the real one -- same capabilities, same
 runner mapping, same approval policy plumbing. Only three things are the test's:
 
 | what | why |

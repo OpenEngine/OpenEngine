@@ -2525,6 +2525,29 @@ def test_one_chat_serializes_its_own_turns() -> None:
     ]
 
 
+def test_health_answers_without_touching_anything() -> None:
+    """What an installer polls to find out whether the server came up.
+
+    Deliberately the one route that asks nothing of the store, a runner, or a
+    CLI: "did it start" has to be answerable before any of those are reachable,
+    and it reports the build so the answer also says *which* OpenEngine
+    started.
+    """
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/api/health")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert set(response.json()) == {"status", "version", "commit"}
+
+
 def test_http_api_creates_lists_and_streams_threads() -> None:
     runner = ConcurrentRunner(("hello",))
     app = create_app(_session(runner), {"test": runner})

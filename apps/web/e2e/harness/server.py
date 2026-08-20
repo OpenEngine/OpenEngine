@@ -2,7 +2,7 @@
 
 The browser tier's whole point is that nothing between the click and the
 subprocess is a stand-in, so this composes the application exactly as
-`engine.apps.web.__main__` does -- same capabilities, same runner mapping, same
+`engine.apps.web.cli` does -- same capabilities, same runner mapping, same
 approval policy plumbing -- and changes only what a test must own:
 
     where it works        a fixture repository, so worktrees are disposable
@@ -32,8 +32,8 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import uvicorn  # noqa: E402
 
-from engine.apps.web.__main__ import STATIC_DIRECTORY  # noqa: E402
 from engine.apps.web.api import create_app  # noqa: E402
+from engine.apps.web.cli import STATIC_DIRECTORY  # noqa: E402
 from engine.apps.web.composition import (  # noqa: E402
     Settings,
     build_capabilities,

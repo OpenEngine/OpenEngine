@@ -28,6 +28,14 @@ from engine.runtime.config import (
     parse_engine_config,
 )
 from engine.runtime.dispatcher import Dispatcher, UnhandledCommandError
+from engine.runtime.paths import (
+    DATABASE_NAME,
+    DATA_DIRECTORY_ENVIRONMENT_VARIABLE,
+    default_database_path,
+    ensure_parent_directory,
+    user_config_directory,
+    user_data_directory,
+)
 from engine.runtime.profiles import BUILT_IN, CODER, FOREMAN, UnknownAgentError, profile_for
 from engine.runtime.run_read_model import RunReader, WorkflowRunView
 from engine.runtime.session import (
@@ -66,6 +74,8 @@ from engine.runtime.terminal_mcp import (
 from engine.runtime.workflow_execution import WorkflowExecutionError, WorkflowExecutor
 
 __all__ = [
+    "DATABASE_NAME",
+    "DATA_DIRECTORY_ENVIRONMENT_VARIABLE",
     "INTERRUPTED_TOOL_RESULT",
     "INTERRUPTED_TURN_NOTE",
     "INVALID_COMPLETION_ERROR",
@@ -106,7 +116,9 @@ __all__ = [
     "WorkflowExecutionError",
     "WorkflowExecutor",
     "complete_step_tool",
+    "default_database_path",
     "describe_loaded_config",
+    "ensure_parent_directory",
     "fail_step_tool",
     "matching_grant",
     "normalized_scope",
@@ -122,4 +134,6 @@ __all__ = [
     "step_completed_from_arguments",
     "step_result_instructions",
     "step_result_from_tool_call",
+    "user_config_directory",
+    "user_data_directory",
 ]

@@ -3,6 +3,13 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Beside the Python module that serves it, so the client is package data
+    // rather than a sibling directory the server has to go looking for. A
+    // release archive has no repository to find `apps/web/dist` in.
+    outDir: "src/engine/apps/web/client",
+    emptyOutDir: true,
+  },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test-setup.ts",

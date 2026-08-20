@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engine.ports.permissions import ApprovalCapability
+from engine.runtime.paths import user_config_directory
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
@@ -62,13 +63,21 @@ def load_engine_config(
     *,
     environ: Mapping[str, str] | None = None,
     cwd: str | os.PathLike[str] | None = None,
+    platform: str | None = None,
 ) -> LoadedEngineConfig:
     """Load the selected TOML file, or return defaults when none is selected.
 
     Selection is intentionally singular: an explicit path wins over
-    ``ENGINE_CONFIG``, which wins over ``engine.toml`` in the current directory.
+    ``ENGINE_CONFIG``, which wins over ``engine.toml`` in the current directory,
+    which wins over ``engine.toml`` in the user's configuration directory.
     Files are not merged, so the effective permission policy always has one
     inspectable source.
+
+    The user directory is last rather than first so that a checkout keeps
+    behaving like a checkout: the file beside the tree you are working in is
+    still the one that wins. It exists because an installed command has no such
+    tree, and a user who wants one policy for the machine should not have to
+    put it in every directory they might launch from.
     """
 
     environment = os.environ if environ is None else environ
@@ -80,8 +89,11 @@ def load_engine_config(
     elif configured := environment.get(CONFIG_ENVIRONMENT_VARIABLE):
         selected = _relative_to(Path(configured), directory)
     else:
-        default = directory / DEFAULT_CONFIG_NAME
-        selected = default if default.is_file() else None
+        selected = _first_existing(
+            directory / DEFAULT_CONFIG_NAME,
+            user_config_directory(environ=environment, platform=platform)
+            / DEFAULT_CONFIG_NAME,
+        )
 
     if selected is None:
         return LoadedEngineConfig()
@@ -163,6 +175,10 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
 
 def _relative_to(path: Path, directory: Path) -> Path:
     return path if path.is_absolute() else directory / path
+
+
+def _first_existing(*candidates: Path) -> Path | None:
+    return next((path for path in candidates if path.is_file()), None)
 
 
 def _table(value: object, location: str) -> Mapping[str, object]:

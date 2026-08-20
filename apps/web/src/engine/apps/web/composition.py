@@ -20,7 +20,7 @@ restart without requiring an external database service.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from engine.adapters.agent_runner.claude_code import (
@@ -36,7 +36,13 @@ from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 from engine.ports import AgentRunner
-from engine.runtime import AgentSession, Capabilities, EngineConfig
+from engine.runtime import (
+    AgentSession,
+    Capabilities,
+    EngineConfig,
+    default_database_path,
+    ensure_parent_directory,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +96,15 @@ class Settings:
     buzz_base_url: str = ""
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
-    sqlite_path: str = "conversations.sqlite3"
+    sqlite_path: str = field(default_factory=lambda: str(default_database_path()))
+    """The conversation database, under the user's data directory by default.
+
+    A default rather than a constant because the answer depends on the platform
+    and the environment, and because a process that is told where its database
+    lives should not have to be told twice. Resolved per instance so a test --
+    or a deployment setting ``ENGINE_DATA_DIR`` -- gets the directory that is
+    live when it composes, not the one that was live at import.
+    """
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.
 
@@ -104,6 +118,9 @@ class Settings:
 
 def build_capabilities(settings: Settings) -> Capabilities:
     """Wire every port to its concrete implementation."""
+    # SQLite makes the database but not the directory above it, and on a fresh
+    # install nothing has created the data directory yet.
+    ensure_parent_directory(settings.sqlite_path)
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
