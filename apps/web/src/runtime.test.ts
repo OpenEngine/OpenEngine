@@ -1,8 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { render } from "@testing-library/react";
+import { createElement } from "react";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ApiApproval } from "./api";
 import { readApprovals } from "./approvals";
-import { keepApprovalsFresh, readRunResponse } from "./runtime";
+import {
+  ApprovalEventSubscription,
+  readRunResponse,
+  watchApprovalEvents,
+} from "./runtime";
 
 const approval: ApiApproval = {
   id: "approval-1",
@@ -76,41 +82,95 @@ describe("readRunResponse", () => {
   });
 });
 
-describe("keepApprovalsFresh", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+describe("watchApprovalEvents", () => {
+  it("publishes pushed snapshots at the current end of the open conversation", () => {
+    const threadId = "thread:open";
+    let messageIndex = 2;
+    let closed = false;
+    let opened = "";
+    const connection = {
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      close() {
+        closed = true;
+      },
+    };
+    const stop = watchApprovalEvents(
+      threadId,
+      () => messageIndex,
+      (url) => {
+        opened = url;
+        return connection;
+      },
+    );
 
-  it("refreshes approvals while the same conversation remains open", async () => {
-    vi.useFakeTimers();
-    const refresh = vi.fn(async () => {});
-    const stop = keepApprovalsFresh("thread-open", refresh);
+    messageIndex = 4;
+    connection.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify(approval) }),
+    );
 
-    await vi.advanceTimersByTimeAsync(0);
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(refresh).toHaveBeenLastCalledWith("thread-open");
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(refresh).toHaveBeenCalledTimes(3);
-
-    stop();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(refresh).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps polling after a transient refresh failure", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const refresh = vi
-      .fn<(threadId: string) => Promise<void>>()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValue(undefined);
-    const stop = keepApprovalsFresh("thread-retry", refresh);
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(opened).toBe("/api/threads/thread%3Aopen/approval-events");
+    expect(readApprovals(threadId)).toEqual([{ approval, messageIndex: 4 }]);
+    expect(closed).toBe(false);
 
     stop();
+    expect(closed).toBe(true);
+  });
+
+  it("waits for history before accepting the feed's durable replay", () => {
+    const threadId = "thread-history-race";
+    let connection:
+      | {
+          onmessage: ((event: MessageEvent<string>) => void) | null;
+          close(): void;
+        }
+      | undefined;
+    const open = vi.fn(() => {
+      connection = { onmessage: null, close: vi.fn() };
+      return connection;
+    });
+    const view = render(
+      createElement(ApprovalEventSubscription, {
+        threadId,
+        messageCount: 0,
+        historyLoading: true,
+        open,
+      }),
+    );
+
+    expect(open).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(ApprovalEventSubscription, {
+        threadId,
+        messageCount: 3,
+        historyLoading: false,
+        open,
+      }),
+    );
+    connection?.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify(approval) }),
+    );
+
+    expect(open).toHaveBeenCalledOnce();
+    expect(readApprovals(threadId)).toEqual([{ approval, messageIndex: 3 }]);
+  });
+
+  it("leaves the feed connected after a malformed event", () => {
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    let closed = false;
+    const connection = {
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      close() {
+        closed = true;
+      },
+    };
+    const stop = watchApprovalEvents("thread-errors", () => 0, () => connection);
+
+    connection.onmessage?.(new MessageEvent("message", { data: "{" }));
+
+    expect(report).toHaveBeenCalledOnce();
+    expect(closed).toBe(false);
+    stop();
+    report.mockRestore();
   });
 });

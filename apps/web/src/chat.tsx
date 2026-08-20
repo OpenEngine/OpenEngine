@@ -732,28 +732,56 @@ function CallApprovals({ toolCallId }: { toolCallId: string }) {
  *  contain -- a provider that paused over something other than a tool call, or
  *  a record written before the pairing existed. Anchored by index rather than
  *  pinned to the newest turn, so it stays with the turn that raised it once the
- *  conversation has moved on. An anchor past the end of the transcript belongs
- *  to the reply still being written, which is the only turn that can be
- *  paused. */
+ *  conversation has moved on. Requests anchored past the mounted transcript
+ *  belong exclusively to `UnanchoredApprovals` until their turn appears. */
 function TurnApprovals() {
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const index = useAuiState((state) => state.message.index);
-  const isLast = useAuiState((state) => state.message.isLast);
-  const total = useAuiState((state) => state.thread.messages.length);
   const approvals = useApprovals(remoteId);
   const placed = useToolCallIds();
   const mine = useMemo(
     () =>
       approvals.filter(
         (entry) =>
-          (entry.messageIndex === index || (isLast && entry.messageIndex >= total)) &&
+          entry.messageIndex === index &&
           !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
       ),
-    [approvals, index, isLast, placed, total],
+    [approvals, index, placed],
   );
 
   if (!remoteId) return null;
   return <ApprovalList threadId={remoteId} entries={mine} className="approvals" />;
+}
+
+/** Requests for a reply assistant-ui has not mounted yet.
+ *
+ *  Workflow runs can begin outside this browser. Their approval feed must be
+ *  visible immediately, before transcript streaming creates the assistant
+ *  message that will ultimately own the card. Once that message appears the
+ *  normal turn placement takes over and this slot empties itself. */
+export function UnanchoredApprovals() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const total = useAuiState((state) => state.thread.messages.length);
+  const approvals = useApprovals(remoteId);
+  const placed = useToolCallIds();
+  const unanchored = useMemo(
+    () =>
+      approvals.filter(
+        (entry) =>
+          entry.messageIndex >= total &&
+          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
+      ),
+    [approvals, placed, total],
+  );
+
+  if (!remoteId) return null;
+  return (
+    <ApprovalList
+      threadId={remoteId}
+      entries={unanchored}
+      className="approvals approvals-live"
+    />
+  );
 }
 
 /** The line of figures under the conversation heading.
@@ -821,6 +849,7 @@ export function ChatThread() {
               message.role === "user" ? <UserMessage /> : <AssistantMessage />
             }
           </ThreadPrimitive.Messages>
+          <UnanchoredApprovals />
         </ToolCallIndex>
         <Dock />
       </ThreadPrimitive.Viewport>
@@ -859,4 +888,3 @@ function Dock() {
     </ThreadPrimitive.ViewportFooter>
   );
 }
-

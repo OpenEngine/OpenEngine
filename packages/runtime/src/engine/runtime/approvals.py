@@ -126,15 +126,26 @@ class ApprovalBroker:
     """
 
     def __init__(
-        self, store: StateStore, policy: ApprovalConfig = ApprovalConfig()
+        self,
+        store: StateStore,
+        policy: ApprovalConfig = ApprovalConfig(),
+        *,
+        observe: ApprovalPresenter | None = None,
     ) -> None:
         self._store = store
         self._policy = policy
+        self._observe = observe
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
         self._pending_requests: dict[
             ApprovalId,
             tuple[ApprovalRequest, PermissionTranslator | None, ApprovalPresenter],
         ] = {}
+
+    async def _record(self, approval: ApprovalRecord) -> None:
+        """Persist one whole snapshot, then notify process-local subscribers."""
+        await self._store.record_approval(approval)
+        if self._observe is not None:
+            await self._observe(approval)
 
     def handler(
         self,
@@ -196,7 +207,7 @@ class ApprovalBroker:
                     decision_source=ApprovalDecisionSource.POLICY,
                     decided_at=datetime.now(UTC),
                 )
-                await self._store.record_approval(settled)
+                await self._record(settled)
                 # Presented for the same reason a grant's is: the client says
                 # what ran on its behalf, and nothing waits on it.
                 await present(settled)
@@ -216,14 +227,14 @@ class ApprovalBroker:
                     decision_source=ApprovalDecisionSource.SESSION_GRANT,
                     decided_at=datetime.now(UTC),
                 )
-                await self._store.record_approval(decided)
+                await self._record(decided)
                 # Presented so the client can say what was allowed on its
                 # behalf. Nothing waits on it: a resolved request is not a
                 # prompt, and there is no card to answer.
                 await present(decided)
                 return ApprovalDecision.ACCEPT_FOR_SESSION
 
-            await self._store.record_approval(record)
+            await self._record(record)
             waiting: asyncio.Future[ApprovalDecision] = (
                 asyncio.get_running_loop().create_future()
             )
@@ -362,7 +373,7 @@ class ApprovalBroker:
                 # grant is only reachable through a later request, and there
                 # cannot be one until this turn is let go again.
                 await self._store.record_session_grant(grant)
-            await self._store.record_approval(decided)
+            await self._record(decided)
         except Exception:
             # The turn is still paused and the decision never happened, so put
             # the request back rather than stranding it.
@@ -490,7 +501,7 @@ class ApprovalBroker:
         if record is None or not record.is_pending:
             return record
         interrupted = replace(record, status=ApprovalStatus.INTERRUPTED)
-        await self._store.record_approval(interrupted)
+        await self._record(interrupted)
         if waiting is not None and not waiting.done():
             # Whoever is still parked on this learns the same way a cancelled
             # turn does, rather than waiting for an answer that cannot come.

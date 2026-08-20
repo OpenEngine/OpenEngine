@@ -8,9 +8,9 @@ Runs are streamed as newline-delimited JSON.  Their tasks are owned by the
 service rather than by one response, so a refreshed browser can reconnect.
 A lock per thread prevents two turns from reading the same stale transcript.
 
-A run that pauses for approval keeps that pause in the same place: the request
-is a snapshot on the `ActiveRun`, replayed to whoever reconnects, and the
-decision arrives as its own request rather than on the stream that showed it.
+Approvals have their own replayable event feed. Their durable record is loaded
+when a browser subscribes, while process-local notifications wake that feed for
+later transitions without polling the transcript.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -54,6 +54,7 @@ from engine.ports import (
     AgentRunner,
     ApprovalHandler,
     InteractiveAgentRunner,
+    StateStore,
     WorkspaceState,
 )
 from engine.runtime import (
@@ -220,6 +221,51 @@ class ActiveRun:
             self._changed.notify_all()
 
 
+class ApprovalFeed:
+    """Replay durable approval snapshots, then push each later transition.
+
+    Persistence remains the source of truth. The condition is only a wake-up
+    signal, so reconnecting after a lost HTTP connection cannot lose an event.
+    """
+
+    def __init__(self, store: StateStore) -> None:
+        self._store = store
+        self._revisions: dict[AgentInstanceId, int] = {}
+        self._changed: dict[AgentInstanceId, asyncio.Condition] = {}
+
+    async def publish(self, approval: ApprovalRecord) -> None:
+        condition = self._changed.setdefault(
+            approval.instance_id, asyncio.Condition()
+        )
+        async with condition:
+            self._revisions[approval.instance_id] = (
+                self._revisions.get(approval.instance_id, 0) + 1
+            )
+            condition.notify_all()
+
+    async def stream(self, instance_id: AgentInstanceId) -> AsyncIterator[bytes]:
+        condition = self._changed.setdefault(instance_id, asyncio.Condition())
+        sent: dict[str, dict[str, object]] = {}
+        # Flush the response immediately even when this conversation has never
+        # asked for approval. EventSource ignores comment frames.
+        yield b": connected\n\n"
+        while True:
+            revision = self._revisions.get(instance_id, 0)
+            approvals = await self._store.list_approvals(instance_id=instance_id)
+            for record in approvals:
+                approval = _approval_json(record)
+                approval_id = str(record.approval_id)
+                if sent.get(approval_id) == approval:
+                    continue
+                sent[approval_id] = approval
+                yield _server_event(approval)
+
+            async with condition:
+                await condition.wait_for(
+                    lambda: self._revisions.get(instance_id, 0) > revision
+                )
+
+
 class BuiltClient(StaticFiles):
     """The Vite build, cached the way its filenames say it should be.
 
@@ -254,9 +300,13 @@ class ThreadService:
         session: AgentSession,
         runners: Mapping[str, AgentRunner],
         approval_policy: ApprovalConfig = ApprovalConfig(),
+        *,
+        approval_observer: Callable[[ApprovalRecord], Awaitable[None]] | None = None,
     ) -> None:
         self.session = session
-        self.approvals = ApprovalBroker(session.state_store, approval_policy)
+        self.approvals = ApprovalBroker(
+            session.state_store, approval_policy, observe=approval_observer
+        )
         """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
         self._threads: dict[AgentInstanceId, ChatThread] = {}
@@ -691,12 +741,19 @@ def create_app(
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
         raise ValueError("review_runners are required with workflow_runners")
-    service = ThreadService(session, runners, approval_policy)
+    approval_feed = ApprovalFeed(session.state_store)
+    service = ThreadService(
+        session,
+        runners,
+        approval_policy,
+        approval_observer=approval_feed.publish,
+    )
     run_reader = RunReader(session.state_store)
 
-    async def approval_changed(_approval: ApprovalRecord) -> None:
-        # Workflow conversation streams poll the durable approval record along
-        # with their transcript, so persistence itself is the notification.
+    async def approval_presented(_approval: ApprovalRecord) -> None:
+        # The broker's observer publishes every persisted transition. This
+        # presenter exists because the runner callback also supports run-local
+        # presentation, which workflow runs do not need.
         return None
 
     def workflow_approval_handler(
@@ -712,7 +769,7 @@ def create_app(
             agent_run_id=command.agent_run_id,
             instance_id=command.instance_id,
             runner=runner_name,
-            present=approval_changed,
+            present=approval_presented,
             workspace_id=command.workspace_id,
             translator=(
                 step_runner.permission_translator if step_runner is not None else None
@@ -1064,6 +1121,19 @@ def create_app(
             }
         )
 
+    async def approval_events(request: Request) -> Response:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+        return StreamingResponse(
+            approval_feed.stream(instance_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     async def title_thread(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
         thread = await service.get(instance_id)
@@ -1231,6 +1301,7 @@ def create_app(
             name="unarchive",
         ),
         Route("/api/threads/{thread_id}/messages", messages),
+        Route("/api/threads/{thread_id}/approval-events", approval_events),
         Route(
             "/api/threads/{thread_id}/workspace",
             attach_workspace,
@@ -1541,6 +1612,10 @@ def _new_agent_run_id() -> AgentRunId:
 
 def _json_line(value: dict[str, object]) -> bytes:
     return (json.dumps(value, separators=(",", ":")) + "\n").encode()
+
+
+def _server_event(value: dict[str, object]) -> bytes:
+    return f"data:{json.dumps(value, separators=(',', ':'))}\n\n".encode()
 
 
 def _error(message: str, status_code: int) -> JSONResponse:

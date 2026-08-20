@@ -15,7 +15,7 @@ from engine.adapters.agent_runner.codex import (
 )
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
-from engine.apps.web.api import ThreadService, create_app
+from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
@@ -67,6 +67,7 @@ from engine.ports import (
 from engine.runtime import (
     INVALID_COMPLETION_ERROR,
     AgentSession,
+    ApprovalBroker,
     ApprovalCapability,
     ApprovalConfig,
     Capabilities,
@@ -1272,6 +1273,46 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
     assert decided.json()["approval"]["decision"] == "accept"
     assert runner.decisions == [ApprovalDecision.ACCEPT]
     assert events[-1]["type"] == "done"
+
+
+def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
+    store = InMemoryStateStore()
+    feed = ApprovalFeed(store)
+    broker = ApprovalBroker(store, observe=feed.publish)
+
+    async def scenario():
+        instance = await store.create_instance(CODER)
+        stream = feed.stream(instance.instance_id)
+        assert await anext(stream) == b": connected\n\n"
+
+        handler = broker.handler(
+            agent_run_id=AgentRunId("ar-feed"),
+            instance_id=instance.instance_id,
+            runner="test",
+            present=lambda _approval: asyncio.sleep(0),
+        )
+        waiting = asyncio.create_task(handler(ApprovalWorkflowRunner._request()))
+        pending = await asyncio.wait_for(anext(stream), timeout=1)
+        record = (await store.list_approvals())[0]
+        await broker.decide(
+            record.approval_id,
+            ApprovalDecision.ACCEPT,
+            instance_id=instance.instance_id,
+            agent_run_id=AgentRunId("ar-feed"),
+        )
+        decided = await asyncio.wait_for(anext(stream), timeout=1)
+        await waiting
+        await stream.aclose()
+        return [
+            json.loads(frame.decode().removeprefix("data:"))
+            for frame in (pending, decided)
+        ]
+
+    events = asyncio.run(scenario())
+
+    assert [event["status"] for event in events] == ["pending", "decided"]
+    assert events[0]["id"] == events[1]["id"]
+    assert events[1]["decision"] == "accept"
 
 
 def test_workflow_conversation_replays_every_approval_after_reconnect() -> None:

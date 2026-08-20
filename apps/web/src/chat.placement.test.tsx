@@ -13,7 +13,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiApproval } from "./api";
 import { publishApproval } from "./approvals";
-import { AssistantMessage, ToolCallIndex, useToolCallIds } from "./chat";
+import {
+  AssistantMessage,
+  ToolCallIndex,
+  UnanchoredApprovals,
+  useToolCallIds,
+} from "./chat";
 
 type Part =
   | { type: "text"; text: string }
@@ -172,6 +177,35 @@ describe("where a turn shows what it was asked to allow", () => {
       "Approved · rm -rf build",
       "Approved · git push",
     ]);
+  });
+
+  it("shows a pushed request before its assistant turn has mounted", () => {
+    const threadId = turn.threadListItem.remoteId;
+    turn.thread.messages = [{ content: [] }];
+    turn.message = { index: 0, isLast: true, status: { type: "complete" } };
+    publishApproval(threadId, approval({ status: "pending", decision: null }), 1);
+
+    const view = render(
+      <ToolCallIndex>
+        <AssistantMessage />
+        <UnanchoredApprovals />
+      </ToolCallIndex>,
+    );
+
+    // The mounted last turn and the live slot must not both claim the request.
+    expect(rendered()).toEqual(["Approval needed · rm -rf build"]);
+
+    // Streaming mounted the reply at the index recorded by the event. The
+    // card now belongs to that assistant turn instead of the live slot.
+    turn.thread.messages = [{ content: [] }, { content: [] }];
+    turn.message = { index: 1, isLast: true, status: { type: "complete" } };
+    view.rerender(
+      <ToolCallIndex>
+        <AssistantMessage />
+        <UnanchoredApprovals />
+      </ToolCallIndex>,
+    );
+    expect(rendered()).toEqual(["Approval needed · rm -rf build"]);
   });
 });
 
