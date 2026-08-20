@@ -756,6 +756,37 @@ function TurnApprovals() {
   return <ApprovalList threadId={remoteId} entries={mine} className="approvals" />;
 }
 
+/** Requests for a reply assistant-ui has not mounted yet.
+ *
+ *  Workflow runs can begin outside this browser. Their approval feed must be
+ *  visible immediately, before transcript streaming creates the assistant
+ *  message that will ultimately own the card. Once that message appears the
+ *  normal turn placement takes over and this slot empties itself. */
+export function UnanchoredApprovals() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const total = useAuiState((state) => state.thread.messages.length);
+  const approvals = useApprovals(remoteId);
+  const placed = useToolCallIds();
+  const unanchored = useMemo(
+    () =>
+      approvals.filter(
+        (entry) =>
+          entry.messageIndex >= total &&
+          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
+      ),
+    [approvals, placed, total],
+  );
+
+  if (!remoteId) return null;
+  return (
+    <ApprovalList
+      threadId={remoteId}
+      entries={unanchored}
+      className="approvals approvals-live"
+    />
+  );
+}
+
 /** The line of figures under the conversation heading.
  *
  *  Every cell is counted from the transcript this browser is holding, so each
@@ -821,6 +852,7 @@ export function ChatThread() {
               message.role === "user" ? <UserMessage /> : <AssistantMessage />
             }
           </ThreadPrimitive.Messages>
+          <UnanchoredApprovals />
         </ToolCallIndex>
         <Dock />
       </ThreadPrimitive.Viewport>
@@ -859,4 +891,3 @@ function Dock() {
     </ThreadPrimitive.ViewportFooter>
   );
 }
-

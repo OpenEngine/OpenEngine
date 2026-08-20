@@ -120,47 +120,46 @@ function publishHistoryApprovals(threadId: string, history: ApiHistory): void {
     publishApproval(threadId, approval, anchor);
 }
 
-async function refreshApprovals(threadId: string): Promise<void> {
-  const history = await api<ApiHistory>(`/api/threads/${threadId}/messages`);
-  publishHistoryApprovals(threadId, history);
-}
+type ApprovalEventConnection = {
+  onmessage: ((event: MessageEvent<string>) => void) | null;
+  close(): void;
+};
 
-const APPROVAL_REFRESH_INTERVAL_MS = 1_000;
-
-/** Keep the open conversation's durable approval snapshots current.
+/** Subscribe to the durable approval feed for as long as a conversation is open.
  *
- *  Most approvals arrive on the run stream. A conversation can also remain
- *  mounted while a workflow or another client starts its next run, though, and
- *  then assistant-ui has no stream to reconnect until the page is reloaded.
- *  Poll serially so a slow history request never piles up behind another one. */
-export function keepApprovalsFresh(
+ *  EventSource reconnects on transport failure. Each connection first replays
+ *  the server's durable snapshots, so reconnecting does not require cursors and
+ *  cannot leave a transition behind. */
+export function watchApprovalEvents(
   threadId: string,
-  refresh: (threadId: string) => Promise<void> = refreshApprovals,
+  messageIndex: () => number,
+  open: (url: string) => ApprovalEventConnection = (url) => new EventSource(url),
 ): () => void {
-  let stopped = false;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-
-  async function poll(): Promise<void> {
+  const connection = open(
+    `/api/threads/${encodeURIComponent(threadId)}/approval-events`,
+  );
+  connection.onmessage = (event) => {
     try {
-      await refresh(threadId);
+      publishApproval(
+        threadId,
+        JSON.parse(event.data) as ApiApproval,
+        messageIndex(),
+      );
     } catch (error) {
-      console.error("Could not refresh conversation approvals.", error);
+      console.error("Could not read a conversation approval event.", error);
     }
-    if (!stopped) timeout = setTimeout(poll, APPROVAL_REFRESH_INTERVAL_MS);
-  }
-
-  void poll();
-  return () => {
-    stopped = true;
-    if (timeout !== undefined) clearTimeout(timeout);
   };
+  return () => connection.close();
 }
 
-function ApprovalRefreshBridge() {
+function ApprovalEventBridge() {
   const threadId = useAuiState((state) => state.threadListItem.remoteId);
+  const messageCount = useAuiState((state) => state.thread.messages.length);
+  const messageCountRef = useRef(messageCount);
+  messageCountRef.current = messageCount;
   useEffect(() => {
     if (!threadId) return;
-    return keepApprovalsFresh(threadId);
+    return watchApprovalEvents(threadId, () => messageCountRef.current);
   }, [threadId]);
   return null;
 }
@@ -429,7 +428,7 @@ function EngineRuntime({
   return (
     <DefaultsContext.Provider value={defaults}>
       <AssistantRuntimeProvider runtime={runtime}>
-        <ApprovalRefreshBridge />
+        <ApprovalEventBridge />
         <ThreadInitializationBridge
           initializer={threadInitializerRef}
           reloadThreads={reloadThreadsRef}
