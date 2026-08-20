@@ -1,4 +1,4 @@
-import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -51,6 +51,7 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
         agentRunId: "agent-run",
         conversationId: "conversation",
         conversationUrl: "/conversations/conversation",
+        waiting: false,
       },
       {
         stepId: "review",
@@ -66,6 +67,7 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
         agentRunId: null,
         conversationId: null,
         conversationUrl: null,
+        waiting: false,
       },
     ],
     pendingHumanReview: null,
@@ -92,6 +94,7 @@ function stubPageApi(runs: ApiWorkflowRun[] = []) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -171,6 +174,26 @@ describe("useRuns", () => {
 
     await waitFor(() => expect(result.current.error).toBe("runs unavailable"));
     expect(result.current.runs).toEqual([]);
+  });
+
+  it("refreshes active runs so waiting conversations appear without a reload", async () => {
+    vi.useFakeTimers();
+    const active = run();
+    const waiting = run({ steps: [{ ...active.steps[0], waiting: true }] });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json({ runs: [active] }))
+      .mockResolvedValue(json({ runs: [waiting] }));
+    vi.stubGlobal("fetch", fetch);
+
+    const { result } = renderHook(() => useRuns());
+    await act(async () => {});
+    expect(result.current.runs[0].steps[0].waiting).toBe(false);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+    expect(result.current.runs[0].steps[0].waiting).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
 

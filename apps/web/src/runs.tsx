@@ -37,9 +37,27 @@ export function useRuns() {
   const [runs, setRuns] = useState<ApiWorkflowRun[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ runs: ApiWorkflowRun[] }>("/api/runs")
-      .then((value) => setRuns(value.runs))
-      .catch((reason: Error) => setError(reason.message));
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      api<{ runs: ApiWorkflowRun[] }>("/api/runs")
+        .then((value) => {
+          if (cancelled) return;
+          setRuns(value.runs);
+          setError("");
+          if (value.runs.some((run) => IN_PROGRESS_PHASES.has(run.phase))) {
+            timer = window.setTimeout(load, 1000);
+          }
+        })
+        .catch((reason: Error) => {
+          if (!cancelled) setError(reason.message);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
   return { runs, error };
 }

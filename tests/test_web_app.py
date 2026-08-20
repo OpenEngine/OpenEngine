@@ -1233,6 +1233,7 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
                 await asyncio.sleep(0.01)
             assert pending
             request = pending[0]
+            detail = await client.get(f"/api/runs/{created.json()['runId']}")
 
             streaming = asyncio.create_task(
                 client.get(
@@ -1246,11 +1247,11 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
                 json={"decision": "accept"},
             )
             response = await asyncio.wait_for(streaming, timeout=2)
-            return request, decided, [
+            return request, detail, decided, [
                 json.loads(line) for line in response.text.splitlines()
             ]
 
-    request, decided, events = asyncio.run(scenario())
+    request, detail, decided, events = asyncio.run(scenario())
     approvals = [event["approval"] for event in events if event["type"] == "approval"]
 
     assert approvals[0] == {
@@ -1267,6 +1268,7 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
         "decision": None,
         "decisionSource": None,
     }
+    assert detail.json()["steps"][0]["waiting"] is True
     assert decided.status_code == 200
     assert decided.json()["approval"]["decision"] == "accept"
     assert runner.decisions == [ApprovalDecision.ACCEPT]
@@ -1507,6 +1509,7 @@ def test_clarification_call_leaves_the_active_step_implementing() -> None:
 
     assert reopened.json()["phase"] == "implementing"
     assert reopened.json()["currentStepId"] == "implementation"
+    assert reopened.json()["steps"][0]["waiting"] is True
     assert runner.attempts == 1
     assert not any(isinstance(event, (StepCompleted, RunFailed)) for event in history)
 

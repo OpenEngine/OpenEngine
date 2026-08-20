@@ -1326,6 +1326,7 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
                     if step.agent_instance_id
                     else None
                 ),
+                "waiting": step.waiting,
             }
             for step in run.steps
         ],
