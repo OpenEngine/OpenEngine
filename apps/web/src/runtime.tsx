@@ -152,16 +152,40 @@ export function watchApprovalEvents(
   return () => connection.close();
 }
 
-function ApprovalEventBridge() {
-  const threadId = useAuiState((state) => state.threadListItem.remoteId);
-  const messageCount = useAuiState((state) => state.thread.messages.length);
+export function ApprovalEventSubscription({
+  threadId,
+  messageCount,
+  historyLoading,
+  open,
+}: {
+  threadId: string | null | undefined;
+  messageCount: number;
+  historyLoading: boolean;
+  open?: (url: string) => ApprovalEventConnection;
+}) {
   const messageCountRef = useRef(messageCount);
   messageCountRef.current = messageCount;
   useEffect(() => {
-    if (!threadId) return;
-    return watchApprovalEvents(threadId, () => messageCountRef.current);
-  }, [threadId]);
+    // History publishes durable approvals before assistant-ui imports its
+    // messages. Waiting for that load gives the feed's replay a stable anchor;
+    // the feed itself replays again on connect, so no transition is lost.
+    if (!threadId || historyLoading) return;
+    return watchApprovalEvents(threadId, () => messageCountRef.current, open);
+  }, [historyLoading, open, threadId]);
   return null;
+}
+
+function ApprovalEventBridge() {
+  const threadId = useAuiState((state) => state.threadListItem.remoteId);
+  const messageCount = useAuiState((state) => state.thread.messages.length);
+  const historyLoading = useAuiState((state) => state.thread.isLoading);
+  return (
+    <ApprovalEventSubscription
+      threadId={threadId}
+      messageCount={messageCount}
+      historyLoading={historyLoading}
+    />
+  );
 }
 
 /** `messageIndex` is where the assistant turn this stream is producing will sit

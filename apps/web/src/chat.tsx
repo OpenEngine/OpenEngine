@@ -732,24 +732,21 @@ function CallApprovals({ toolCallId }: { toolCallId: string }) {
  *  contain -- a provider that paused over something other than a tool call, or
  *  a record written before the pairing existed. Anchored by index rather than
  *  pinned to the newest turn, so it stays with the turn that raised it once the
- *  conversation has moved on. An anchor past the end of the transcript belongs
- *  to the reply still being written, which is the only turn that can be
- *  paused. */
+ *  conversation has moved on. Requests anchored past the mounted transcript
+ *  belong exclusively to `UnanchoredApprovals` until their turn appears. */
 function TurnApprovals() {
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const index = useAuiState((state) => state.message.index);
-  const isLast = useAuiState((state) => state.message.isLast);
-  const total = useAuiState((state) => state.thread.messages.length);
   const approvals = useApprovals(remoteId);
   const placed = useToolCallIds();
   const mine = useMemo(
     () =>
       approvals.filter(
         (entry) =>
-          (entry.messageIndex === index || (isLast && entry.messageIndex >= total)) &&
+          entry.messageIndex === index &&
           !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
       ),
-    [approvals, index, isLast, placed, total],
+    [approvals, index, placed],
   );
 
   if (!remoteId) return null;

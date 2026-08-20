@@ -1,8 +1,14 @@
+import { render } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ApiApproval } from "./api";
 import { readApprovals } from "./approvals";
-import { readRunResponse, watchApprovalEvents } from "./runtime";
+import {
+  ApprovalEventSubscription,
+  readRunResponse,
+  watchApprovalEvents,
+} from "./runtime";
 
 const approval: ApiApproval = {
   id: "approval-1",
@@ -108,6 +114,45 @@ describe("watchApprovalEvents", () => {
 
     stop();
     expect(closed).toBe(true);
+  });
+
+  it("waits for history before accepting the feed's durable replay", () => {
+    const threadId = "thread-history-race";
+    let connection:
+      | {
+          onmessage: ((event: MessageEvent<string>) => void) | null;
+          close(): void;
+        }
+      | undefined;
+    const open = vi.fn(() => {
+      connection = { onmessage: null, close: vi.fn() };
+      return connection;
+    });
+    const view = render(
+      createElement(ApprovalEventSubscription, {
+        threadId,
+        messageCount: 0,
+        historyLoading: true,
+        open,
+      }),
+    );
+
+    expect(open).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(ApprovalEventSubscription, {
+        threadId,
+        messageCount: 3,
+        historyLoading: false,
+        open,
+      }),
+    );
+    connection?.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify(approval) }),
+    );
+
+    expect(open).toHaveBeenCalledOnce();
+    expect(readApprovals(threadId)).toEqual([{ approval, messageIndex: 3 }]);
   });
 
   it("leaves the feed connected after a malformed event", () => {
