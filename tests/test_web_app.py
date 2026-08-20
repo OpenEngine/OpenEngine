@@ -383,6 +383,16 @@ class TerminalToolRunner(ConcurrentRunner):
             # the way any provider would. Only an accepted result is followed
             # by the runtime cancelling the process.
             return AgentTurn(Message.assistant("The terminal call was refused."))
+        if self.tool_name == "clarify":
+            call = ToolCall(
+                "workflow-tool-call-1",
+                "mcp__workflow__clarify",
+                json.dumps(self.arguments),
+            )
+            return AgentTurn(
+                Message.assistant("The existing behavior is intentional."),
+                steps=(Message.assistant(tool_calls=(call,)),),
+            )
         await self.cancelled.wait()
         return AgentTurn(Message.assistant("Terminal result accepted."))
 
@@ -1258,6 +1268,73 @@ def test_message_reactivates_a_closed_implementation_step() -> None:
     # The repeated review receives the new implementation result, rather than
     # silently replaying only its original, now-stale context.
     assert "Implementation updated from guidance." in reviewer.seen[-1][-1].content
+
+
+def test_clarifying_a_closed_implementation_does_not_reactivate_the_run() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Initial implementation.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    app = _workflow_app(store, implementer, reviewers={"test": _reviewer()})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement the configurable behavior.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            awaiting = await _await_phase(client, run_id, "awaiting_human_review")
+            implementation_id = awaiting.json()["steps"][0]["agentInstanceId"]
+            approved = await client.post(
+                f"/api/runs/{run_id}/human-review",
+                json={"approved": True, "summary": "Approved."},
+            )
+            before = await store.load(run_id)
+            history_before = await store.history(run_id)
+
+            implementer.tool_name = "clarify"
+            implementer.arguments = {}
+            answered = await client.post(
+                f"/api/threads/{implementation_id}/runs",
+                json={"text": "Why does the legacy response header remain?"},
+            )
+            after = await store.load(run_id)
+            history_after = await store.history(run_id)
+            conversation = await store.load_conversation(implementation_id)
+            return (
+                approved,
+                answered,
+                before,
+                after,
+                history_before,
+                history_after,
+                conversation,
+            )
+
+    approved, answered, before, after, history_before, history_after, conversation = (
+        asyncio.run(scenario())
+    )
+
+    assert approved.json()["phase"] == "succeeded"
+    assert answered.status_code == 200
+    assert after == before
+    assert history_after == history_before
+    assert not any(isinstance(event, StepReactivated) for event in history_after)
+    assert conversation is not None
+    assert conversation.messages[-1].content == "The existing behavior is intentional."
 
 
 def test_approval_requests_pop_in_on_workflow_conversations() -> None:

@@ -583,6 +583,7 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     # This must reach the control callback; putting it in --allowedTools would
     # auto-approve it before Engine could collect the answers.
     assert "AskUserQuestion" not in allowed
+    assert "mcp__workflow__clarify" in allowed
     assert "mcp__workflow__complete_step" in allowed
     assert "mcp__workflow__fail_step" in allowed
     interactive = runner.interactive_command_line(PROFILE, server)

@@ -177,7 +177,7 @@ def test_fail_step_is_bound_and_auditable() -> None:
     asyncio.run(scenario())
 
 
-def test_stdio_mcp_surface_lists_only_terminal_tools() -> None:
+def test_stdio_mcp_surface_includes_non_terminal_clarify_tool() -> None:
     response = asyncio.run(
         _mcp_response(
             "127.0.0.1",
@@ -189,8 +189,45 @@ def test_stdio_mcp_surface_lists_only_terminal_tools() -> None:
 
     assert response is not None
     tools = response["result"]["tools"]
-    assert [tool["name"] for tool in tools] == ["complete_step", "fail_step"]
+    assert [tool["name"] for tool in tools] == [
+        "complete_step",
+        "fail_step",
+        "clarify",
+    ]
     assert all(tool["inputSchema"]["additionalProperties"] is False for tool in tools)
+
+
+def test_clarify_acknowledges_without_submitting_a_terminal_result() -> None:
+    async def scenario() -> None:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        async with broker:
+            clarified = await broker._submit(
+                _request(broker, "clarify-1", "clarify", {})
+            )
+            assert broker._result is not None
+            assert not broker._result.done()
+            completed = await broker._submit(
+                _request(
+                    broker,
+                    "complete-1",
+                    "complete_step",
+                    {
+                        "outcome": "success",
+                        "summary": "Done after clarifying.",
+                        "outputs": {"revision": "abc123"},
+                    },
+                )
+            )
+
+        assert clarified == {"ok": True, "acknowledgement": "clarified"}
+        assert completed == {"ok": True, "acknowledgement": "accepted"}
+
+    asyncio.run(scenario())
 
 
 def test_reviewer_mcp_surface_includes_repo_comment_tool() -> None:
