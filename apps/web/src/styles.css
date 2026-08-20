@@ -544,6 +544,9 @@ select:disabled { cursor: default; }
 /* --- approvals ----------------------------------------------------------- */
 
 .approvals { display: grid; gap: 8px; margin: 14px 0 4px; }
+/* Under the call it belongs to: spaced like the calls around it, and stepped in
+   so it reads as part of that row rather than as the next thing that happened. */
+.approvals-call { margin: 0 0 8px 16px; }
 .approval { background: var(--fill); border: 1px solid var(--rule); }
 .approval-pending { background: var(--white); border-color: var(--flame); border-left: 4px solid var(--flame); }
 .approval-summary {

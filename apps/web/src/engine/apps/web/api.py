@@ -1365,6 +1365,9 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
         "command": approval.command,
         "cwd": approval.cwd,
         "toolName": approval.tool_name,
+        # The call this was asked about, so the client can show the request
+        # beside it rather than collecting every request at the end of a turn.
+        "toolCallId": approval.tool_call_id,
         "arguments": approval.arguments,
         "allowedDecisions": [
             decision.value for decision in approval.allowed_decisions

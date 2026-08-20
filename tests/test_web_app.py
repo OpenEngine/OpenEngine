@@ -1261,6 +1261,7 @@ def test_approval_requests_pop_in_on_workflow_conversations() -> None:
         "command": "pytest",
         "cwd": "/workspace",
         "toolName": None,
+        "toolCallId": None,
         "arguments": None,
         "allowedDecisions": ["accept", "accept_for_session", "cancel"],
         "decision": None,

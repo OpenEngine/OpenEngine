@@ -21,6 +21,7 @@ function approval(overrides: Partial<ApiApproval> = {}): ApiApproval {
     command: "git status",
     cwd: "/repo",
     toolName: null,
+    toolCallId: null,
     arguments: null,
     allowedDecisions: ["accept", "accept_for_session", "cancel"],
     decision: null,

@@ -375,6 +375,37 @@ def test_control_permission_is_normalized_without_a_decline_choice() -> None:
     )
 
 
+def test_control_permission_names_the_call_the_transcript_records() -> None:
+    """What lets a client show the request beside the command it is about.
+
+    Asserted as one identity rather than as a literal, because the id being
+    right is not the property that matters: both halves have to spell the same
+    `tool_use` block the same way, or the pairing silently finds nothing.
+    """
+    transcript = (
+        '{"type":"assistant","message":{"content":[{"type":"tool_use",'
+        '"id":"toolu_1","name":"Bash","input":{"command":"touch output.txt"}}]}}\n'
+        '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
+    )
+    call = turn_from_events(parse_events(transcript)).steps[0]
+    request = approval_request_from_control(CONTROL_APPROVAL)
+
+    assert request is not None
+    assert request.tool_call_id == call.tool_calls[0].call_id == "toolu_1"
+
+
+def test_control_permission_without_a_tool_use_id_names_no_call() -> None:
+    """Nothing to pair it with, and nothing invented: it belongs to the turn."""
+    message = {**CONTROL_APPROVAL, "request": dict(CONTROL_APPROVAL["request"])}
+    del message["request"]["tool_use_id"]
+
+    request = approval_request_from_control(message)
+
+    assert request is not None
+    assert request.approval_id == "permission-1"
+    assert request.tool_call_id is None
+
+
 def test_control_cancel_denies_and_interrupts_the_whole_turn() -> None:
     response = control_response_for(CONTROL_APPROVAL, ApprovalDecision.CANCEL)
 

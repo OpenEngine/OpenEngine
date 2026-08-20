@@ -121,6 +121,12 @@ export type ApiApproval = {
   command: string | null;
   cwd: string | null;
   toolName: string | null;
+  /** The tool call this request is about, when the provider named one.
+   *
+   *  What lets the card sit beside the command it concerns. Null for a request
+   *  the provider tied to no call, and for anything recorded before the pairing
+   *  existed; those belong to the turn rather than to any one call in it. */
+  toolCallId: string | null;
   arguments: string | null;
   allowedDecisions: ApprovalDecision[];
   decision: ApprovalDecision | null;

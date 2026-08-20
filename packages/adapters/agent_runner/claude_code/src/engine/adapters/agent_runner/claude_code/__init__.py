@@ -161,12 +161,18 @@ def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | 
         None,
     )
     command = tool_input.get("command") if tool_name == "Bash" else None
+    # `tool_use_id` is the id of the `tool_use` block this run already recorded
+    # as a `ToolCall`, so the pause names the call in the transcript rather than
+    # merely describing it. A control request without one is a request about
+    # nothing we stored, and says so.
+    tool_use_id = request.get("tool_use_id")
     return ApprovalRequest(
-        approval_id=str(request.get("tool_use_id") or message["request_id"]),
+        approval_id=str(tool_use_id or message["request_id"]),
         kind=kind,
         reason=reason,
         command=str(command) if command is not None else None,
         tool_name=tool_name,
+        tool_call_id=str(tool_use_id) if tool_use_id else None,
         arguments=json.dumps(tool_input, sort_keys=True),
         allowed_decisions=tuple(allowed),
     )

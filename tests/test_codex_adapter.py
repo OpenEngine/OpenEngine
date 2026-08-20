@@ -460,6 +460,20 @@ def test_app_server_approval_exposes_only_the_three_engine_decisions() -> None:
     )
 
 
+def test_app_server_approval_without_an_item_names_no_call() -> None:
+    """Nothing to pair it with, and nothing invented: it belongs to the turn."""
+    request = approval_request_from_app_server(
+        {
+            "id": 18,
+            "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": "thread-1", "turnId": "turn-1", "command": "ls"},
+        }
+    )
+
+    assert request is not None
+    assert request.tool_call_id is None
+
+
 def _fake_app_server(tmp_path) -> str:
     binary = tmp_path / "codex"
     binary.write_text(
@@ -540,6 +554,14 @@ def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:
     )
 
     assert [request.command for request in approvals] == ["touch output.txt"]
+    # The pause names the call this turn recorded, spelled the way the
+    # transcript spells it. That identity is what lets a reader see the request
+    # beside the command it was about rather than at the end of the turn.
+    assert (
+        approvals[0].tool_call_id
+        == turn.steps[0].tool_calls[0].call_id
+        == "thread-1:cmd-1"
+    )
     assert turn.message.content == "done"
     assert turn.steps[1].content == "acceptForSession\n(exit 0)"
     assert turn.usage is not None and turn.usage.cached_prompt_tokens == 4

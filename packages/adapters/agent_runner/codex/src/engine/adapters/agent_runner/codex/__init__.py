@@ -302,6 +302,10 @@ def approval_request_from_app_server(message: dict[str, Any]) -> ApprovalRequest
         for key, value in params.items()
         if key not in APP_SERVER_APPROVAL_ENVELOPE
     }
+    # `itemId` is the item this turn already reported as started, so spelling it
+    # the way `action_messages` spells its call id is what lets a reader put the
+    # pause beside the command it is about.
+    item_id = str(params.get("itemId", ""))
     return ApprovalRequest(
         approval_id=":".join(part for part in (thread_id, turn_id, request_id) if part),
         kind=kind,
@@ -311,6 +315,7 @@ def approval_request_from_app_server(message: dict[str, Any]) -> ApprovalRequest
         tool_name=(
             "command_execution" if kind is ApprovalKind.COMMAND_EXECUTION else "file_change"
         ),
+        tool_call_id=f"{thread_id}:{item_id}" if item_id else None,
         arguments=json.dumps(details, sort_keys=True) if details else None,
         allowed_decisions=allowed,
     )
