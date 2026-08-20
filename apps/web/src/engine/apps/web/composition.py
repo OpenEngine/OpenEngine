@@ -87,6 +87,15 @@ class Settings:
     """Claude workflows may read and edit files, but not run unrestricted Bash."""
     temporal_host: str = "localhost:7233"
     github_token: str = ""
+    github_binary: str = "gh"
+    """The GitHub CLI review comments are left with.
+
+    A field for the same reason `codex_binary` and `claude_binary` are: which
+    executable a capability shells out to is the deployment's to state, and
+    stating it here keeps it readable in the one file allowed to name adapters.
+    A `PATH` shim would do the same job invisibly, and would take the next thing
+    in the process that wanted the real `gh` with it.
+    """
     buzz_base_url: str = ""
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
@@ -107,7 +116,9 @@ def build_capabilities(settings: Settings) -> Capabilities:
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
-        source_control=GitHubSourceControl(settings.github_token),
+        source_control=GitHubSourceControl(
+            settings.github_token, binary_path=settings.github_binary
+        ),
         agent_runner=CodexAgentRunner(
             binary_path=settings.codex_binary,
             timeout_seconds=settings.codex_timeout_seconds,

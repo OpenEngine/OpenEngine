@@ -29,7 +29,11 @@ const STARTUP_TIMEOUT_MS = 90_000;
 
 export type ScriptStep =
   | { type: "say"; text: string }
-  | { type: "run"; command: string; approval?: boolean };
+  | { type: "run"; command: string; approval?: boolean }
+  /** A call on the run-bound MCP server the runtime attached to this turn.
+   *  `complete_step` and `fail_step` are what end a workflow step; a reviewer
+   *  additionally has `add_comment`. */
+  | { type: "tool"; name: string; arguments: Record<string, unknown> };
 
 export type Scenario = {
   /** Matched as a substring of the prompt. Absent, it matches any turn. */
@@ -48,6 +52,10 @@ export class Engine {
     readonly url: string,
     /** The git repository conversations and workflow runs work in. */
     readonly repository: string,
+    /** The bare repository it pushes to, which workflow runs base themselves on. */
+    readonly origin: string,
+    /** Every `gh` invocation the server made, one `{argv, stdin}` per line. */
+    readonly ghLog: string,
     private readonly scriptPath: string,
   ) {}
 
@@ -65,9 +73,15 @@ export const test = base.extend<{ engine: Engine }>({
     const root = mkdtempSync(path.join(tmpdir(), "engine-e2e-"));
     const state = path.join(root, "state");
     mkdirSync(state);
-    const repository = fixtureRepository(root);
+    const { repository, origin } = fixtureRepository(root);
     const scriptPath = path.join(root, "script.json");
-    const engine = new Engine(`http://127.0.0.1:${await freePort()}`, repository, scriptPath);
+    const engine = new Engine(
+      `http://127.0.0.1:${await freePort()}`,
+      repository,
+      origin,
+      path.join(state, "gh.jsonl"),
+      scriptPath,
+    );
     engine.script({
       scenarios: [{ steps: [{ type: "say", text: "This turn was not scripted." }] }],
     });
@@ -112,9 +126,16 @@ export async function shot(page: Page, testInfo: TestInfo, name: string): Promis
   });
 }
 
-/** A repository with one commit, for chats and runs to make worktrees of. */
-function fixtureRepository(root: string): string {
+/** A repository with one commit and an origin, for chats and runs to work in.
+ *
+ *  The bare origin is what makes this repository something a *workflow* can run
+ *  in: a run bases its worktree on `origin/main`, which the provider resolves by
+ *  fetching from the remote of that name. A chat needs none of this -- it is
+ *  provisioned from the configured repository directly -- so before there was an
+ *  origin, provisioning failed before a run ever reached its first agent. */
+function fixtureRepository(root: string): { repository: string; origin: string } {
   const repository = path.join(root, "repository");
+  const origin = path.join(root, "origin.git");
   mkdirSync(repository);
   execFileSync("git", ["init", "--initial-branch=main", repository], { stdio: "pipe" });
   writeFileSync(path.join(repository, "README.md"), "# fixture\n", "utf-8");
@@ -131,7 +152,12 @@ function fixtureRepository(root: string): string {
     "--message",
     "fixture repository",
   );
-  return repository;
+  execFileSync("git", ["init", "--bare", "--initial-branch=main", origin], {
+    stdio: "pipe",
+  });
+  git("remote", "add", "origin", origin);
+  git("push", "origin", "main");
+  return { repository, origin };
 }
 
 /** A composed application, and everything it said while it was running. */

@@ -22,12 +22,25 @@ talking to:
     {"title": "Adding a greeting",
      "scenarios": [{"when": "greeting",
                     "steps": [{"type": "say", "text": "Reading the tree."},
-                              {"type": "run", "command": "echo hi > hi.txt"}]}]}
+                              {"type": "run", "command": "echo hi > hi.txt"},
+                              {"type": "tool", "name": "complete_step",
+                               "arguments": {"outcome": "success",
+                                             "summary": "Added the greeting.",
+                                             "outputs": {"pr_url": "..."}}}]}]}
 
 `when` is matched as a substring of the prompt, and a scenario without one
 matches anything -- so a conversation is scripted turn by turn by what each
 turn is asked, rather than by a counter that a retry or a title would knock out
-of step.
+of step. The first matching scenario wins, so a reviewer's scenario -- whose
+prompt quotes the task the implementation was given -- has to be listed before
+the implementation's.
+
+A `tool` step calls the run-bound MCP server the runtime attached to this
+invocation, which is the only thing that ends a workflow step: an agent that
+merely stops is corrected and asked again, and fails the run on the third pass.
+The server is read off argv the way each provider encodes it and spawned as
+given, credential and all, because the broker refuses a session it did not
+issue.
 
 Only turns that can pause are scripted. A turn run without the approval
 transport is the runtime naming a chat or a workflow, and is answered with the
@@ -43,6 +56,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 #: What an unscripted run reads as the instruction to run one command. The
@@ -61,6 +75,14 @@ DIRECTIVE_SCRIPT: Mapping[str, object] = {
 
 #: What a non-interactive turn answers when the script does not name a title.
 UNSCRIPTED_TITLE = "Scripted conversation"
+
+#: The MCP revision this client speaks, which is the one the bound server does.
+MCP_PROTOCOL_VERSION = "2025-06-18"
+
+#: How long the MCP server gets to exit once its input has been closed. A call
+#: itself is bounded by whatever is driving the turn, which has more to say
+#: about a hang than this does.
+MCP_TIMEOUT_SECONDS = 30.0
 
 _THREAD_ID = "thread-1"
 _TURN_ID = "turn-1"
@@ -166,12 +188,187 @@ def _send(message: Mapping[str, object]) -> None:
     print(json.dumps(message), flush=True)
 
 
+# --- calling the run-bound MCP server ---------------------------------------
+#
+# The runtime hands each provider the same three fields -- a name, a command,
+# and its arguments -- and each encodes them its own way, so there is one reader
+# per encoding and one client for all of them. No SDK: a fake whose whole point
+# is that it speaks the wire protocol should speak this one by hand too.
+
+
+@dataclass(frozen=True, slots=True)
+class McpServer:
+    """The stdio MCP server this invocation was told to talk to."""
+
+    name: str
+    command: str
+    args: tuple[str, ...]
+
+
+def _server_from_mapping(servers: object) -> McpServer | None:
+    """One `{name: {command, args}}` entry, whichever transport carried it."""
+
+    if not isinstance(servers, Mapping):
+        return None
+    for name, server in servers.items():
+        if not isinstance(server, Mapping) or not server.get("command"):
+            continue
+        return McpServer(
+            name=str(name),
+            command=str(server["command"]),
+            args=tuple(str(argument) for argument in server.get("args") or ()),
+        )
+    return None
+
+
+def _claude_mcp_server(arguments: Sequence[str]) -> McpServer | None:
+    """`--mcp-config '{"mcpServers": {"workflow": {...}}}'`, off argv."""
+
+    for flag, value in zip(arguments, arguments[1:]):
+        if flag != "--mcp-config":
+            continue
+        try:
+            configured = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise SystemExit(f"--mcp-config is not valid JSON: {error}") from error
+        server = _server_from_mapping(
+            configured.get("mcpServers") if isinstance(configured, dict) else None
+        )
+        if server is not None:
+            return server
+    return None
+
+
+def _codex_mcp_server(arguments: Sequence[str]) -> McpServer | None:
+    """`-c mcp_servers.<name>.command=<json>` and its `.args` sibling, off argv."""
+
+    servers: dict[str, dict[str, object]] = {}
+    for flag, value in zip(arguments, arguments[1:]):
+        if flag != "-c" or not value.startswith("mcp_servers."):
+            continue
+        setting, _, encoded = value.partition("=")
+        parts = setting.split(".")
+        if len(parts) != 3:
+            continue
+        try:
+            servers.setdefault(parts[1], {})[parts[2]] = json.loads(encoded)
+        except json.JSONDecodeError as error:
+            raise SystemExit(f"{setting} is not valid JSON: {error}") from error
+    return _server_from_mapping(servers)
+
+
+def _codex_thread_mcp_server(params: object) -> McpServer | None:
+    """The same three fields, as `thread/start` carries them on app-server."""
+
+    config = params.get("config") if isinstance(params, Mapping) else None
+    return _server_from_mapping(
+        config.get("mcp_servers") if isinstance(config, Mapping) else None
+    )
+
+
+def _require(server: McpServer | None, provider: str) -> McpServer:
+    if server is None:
+        raise SystemExit(
+            f"this {provider} turn was given no MCP server, so a 'tool' step "
+            "has nothing to call"
+        )
+    return server
+
+
+def _call_tool(
+    server: McpServer, name: str, arguments: object
+) -> tuple[str, bool]:
+    """Call one tool over stdio MCP, and report what the server answered.
+
+    The command is spawned exactly as it was handed over, credential included:
+    the token is issued per agent run and the broker refuses a session it did
+    not issue, so a reconstructed argv would be turned away.
+    """
+
+    process = subprocess.Popen(
+        [server.command, *server.args],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _mcp_request(
+            process,
+            1,
+            "initialize",
+            {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "provider-fake", "version": "1"},
+            },
+        )
+        _mcp_notify(process, "notifications/initialized")
+        result = _mcp_request(
+            process, 2, "tools/call", {"name": name, "arguments": arguments}
+        )
+    finally:
+        _close(process)
+    text = "\n".join(
+        str(block.get("text", ""))
+        for block in result.get("content") or ()
+        if isinstance(block, Mapping)
+    )
+    return text or "(no content)", bool(result.get("isError"))
+
+
+def _mcp_request(
+    process: "subprocess.Popen[str]",
+    request_id: int,
+    method: str,
+    params: Mapping[str, object],
+) -> Mapping[str, object]:
+    _mcp_write(process, {"id": request_id, "method": method, "params": params})
+    assert process.stdout is not None
+    while True:
+        line = process.stdout.readline()
+        if not line:
+            raise SystemExit(f"the MCP server closed before answering {method}")
+        message = json.loads(line)
+        if message.get("id") != request_id:
+            continue
+        if message.get("error"):
+            raise SystemExit(f"MCP {method} failed: {message['error']}")
+        result = message.get("result")
+        return result if isinstance(result, dict) else {}
+
+
+def _mcp_notify(process: "subprocess.Popen[str]", method: str) -> None:
+    """A notification carries no id, and is answered by nothing."""
+
+    _mcp_write(process, {"method": method, "params": {}})
+
+
+def _mcp_write(
+    process: "subprocess.Popen[str]", message: Mapping[str, object]
+) -> None:
+    assert process.stdin is not None
+    process.stdin.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    process.stdin.flush()
+
+
+def _close(process: "subprocess.Popen[str]") -> None:
+    """Let the server end on its own closed input, and insist if it does not."""
+
+    if process.stdin is not None:
+        process.stdin.close()
+    try:
+        process.wait(timeout=MCP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 # --- codex ------------------------------------------------------------------
 
 
 def _codex(arguments: Sequence[str]) -> int:
     if "app-server" in arguments:
-        return _codex_app_server()
+        return _codex_app_server(arguments)
     return _codex_exec()
 
 
@@ -191,7 +388,7 @@ def _codex_exec() -> int:
     return 0
 
 
-def _codex_app_server() -> int:
+def _codex_app_server(arguments: Sequence[str]) -> int:
     """The stdio JSON-RPC transport an approval-bearing turn is driven over."""
 
     initialize = _receive()
@@ -200,6 +397,11 @@ def _codex_app_server() -> int:
 
     start = _receive()
     assert start["method"] == "thread/start"
+    # App-server takes its MCP servers in the thread's config rather than on
+    # argv, which is where `codex exec` takes them. Either may carry one.
+    server = _codex_thread_mcp_server(start.get("params")) or _codex_mcp_server(
+        arguments
+    )
     _send({"id": start["id"], "result": {"thread": {"id": _THREAD_ID}}})
 
     turn = _receive()
@@ -215,6 +417,29 @@ def _codex_app_server() -> int:
             _codex_item(
                 "item/completed",
                 {"id": f"msg-{index}", "type": "agentMessage", "text": step["text"]},
+            )
+            continue
+        if kind == "tool":
+            called = _require(server, "codex")
+            name = str(step["name"])
+            call_arguments = step.get("arguments") or {}
+            call = {
+                "id": f"tool-{index}",
+                "type": "mcpToolCall",
+                "server": called.name,
+                "tool": name,
+                "arguments": json.dumps(call_arguments),
+                "status": "inProgress",
+            }
+            _codex_item("item/started", call)
+            output, failed = _call_tool(called, name, call_arguments)
+            _codex_item(
+                "item/completed",
+                {
+                    **call,
+                    "status": "failed" if failed else "completed",
+                    "result": output,
+                },
             )
             continue
         if kind != "run":
@@ -317,7 +542,7 @@ def _codex_item(method: str, item: Mapping[str, object]) -> None:
 
 def _claude(arguments: Sequence[str]) -> int:
     if "--input-format" in arguments:
-        return _claude_interactive()
+        return _claude_interactive(arguments)
     return _claude_print()
 
 
@@ -340,9 +565,10 @@ def _claude_print() -> int:
     return 0
 
 
-def _claude_interactive() -> int:
+def _claude_interactive(arguments: Sequence[str]) -> int:
     """The same, plus stream-JSON input and the permission control protocol."""
 
+    server = _claude_mcp_server(arguments)
     initialize = _receive()
     _send(
         {
@@ -370,6 +596,45 @@ def _claude_interactive() -> int:
                 {
                     "type": "assistant",
                     "message": {"content": [{"type": "text", "text": answer}]},
+                }
+            )
+            continue
+        if kind == "tool":
+            called = _require(server, "claude")
+            name = str(step["name"])
+            call_arguments = step.get("arguments") or {}
+            tool_use_id = f"toolu_{index}"
+            # Claude names an MCP tool `mcp__<server>__<tool>`, which is also
+            # the name it has to have been allowed under to be callable at all.
+            _send(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": tool_use_id,
+                                "name": f"mcp__{called.name}__{name}",
+                                "input": call_arguments,
+                            }
+                        ]
+                    },
+                }
+            )
+            output, failed = _call_tool(called, name, call_arguments)
+            _send(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": output,
+                                "is_error": failed,
+                            }
+                        ]
+                    },
                 }
             )
             continue
