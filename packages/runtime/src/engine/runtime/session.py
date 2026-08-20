@@ -225,22 +225,33 @@ class AgentSession:
             return None
         return await self._capabilities.workspace_provider.state(instance.workspace_id)
 
-    async def attach_workspace(self, instance_id: AgentInstanceId) -> WorkspaceState:
+    async def attach_workspace(
+        self,
+        instance_id: AgentInstanceId,
+        *,
+        repository: str | None = None,
+        base_ref: str | None = None,
+    ) -> WorkspaceState:
         """Give this conversation a checkout to work in, and keep the pairing.
 
         Works from any starting point: a conversation that never had a
         workspace is given one, and one whose checkout was detached or deleted
         gets it back, carrying in whatever work its previous checkout left
         behind.
+
+        Workflow conversations override the session defaults with the
+        repository that originally provisioned their shared workspace.
         """
         instance = await self._require_instance(instance_id)
-        if self._workspace_repository is None:
+        selected_repository = repository or self._workspace_repository
+        selected_base_ref = base_ref or self._workspace_base_ref
+        if selected_repository is None:
             raise WorkspacesUnavailableError()
         provider = self._capabilities.workspace_provider
 
         if instance.workspace_id is None:
             workspace = await provider.provision(
-                self._workspace_repository, self._workspace_base_ref
+                selected_repository, selected_base_ref
             )
             try:
                 await self._capabilities.state_store.attach_workspace(
@@ -252,8 +263,8 @@ class AgentSession:
         else:
             workspace = await provider.attach(
                 instance.workspace_id,
-                self._workspace_repository,
-                self._workspace_base_ref,
+                selected_repository,
+                selected_base_ref,
             )
         return WorkspaceState(
             workspace_id=workspace.workspace_id,

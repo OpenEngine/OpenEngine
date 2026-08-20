@@ -22,9 +22,7 @@ import {
 import {
   api,
   answerQuestion,
-  attachWorkspace,
   decideApproval,
-  detachWorkspace,
   messageText,
   RUN_NOT_STARTED_ERROR_CODE,
   stopRun,
@@ -34,6 +32,7 @@ import {
 } from "./api";
 import { useApprovals, type InlineApproval } from "./approvals";
 import { Stat, StatStrip } from "./brand";
+import { WorkspaceControl } from "./workspace";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
@@ -369,75 +368,14 @@ function Ticked({ text }: { text: string }) {
   );
 }
 
-/** This chat's worktree: where it is, how to read its work, and a way to
- *  hand the directory back or ask for it again. */
+/** Adapt the open assistant-ui conversation to the shared checkout control. */
 function WorkspaceLine() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
     | undefined;
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const [fetched, setFetched] = useState<ApiThread>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    setFetched(undefined);
-    setError(undefined);
-    if (!remoteId) return;
-    let current = true;
-    void api<ApiThread>(`/api/threads/${remoteId}`)
-      .then((thread) => {
-        if (current) setFetched(thread);
-      })
-      .catch(() => {});
-    return () => {
-      current = false;
-    };
-  }, [remoteId]);
-
   if (!remoteId) return null;
-
-  const workspace: WorkspaceCustom = fetched ?? custom ?? {};
-  const attached = workspace.workspaceAttached ?? Boolean(workspace.workspaceRoot);
-
-  async function toggle() {
-    if (!remoteId) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      setFetched(await (attached ? detachWorkspace : attachWorkspace)(remoteId));
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="dock-workspace">
-      {attached ? (
-        <>
-          <span className="micro">Working in</span>
-          <code className="dock-path">cd {workspace.workspaceRoot}</code>
-        </>
-      ) : workspace.workspaceRef ? (
-        <>
-          <span className="micro">Detached — the work is on</span>
-          <code className="dock-path">git checkout {workspace.workspaceRef}</code>
-        </>
-      ) : (
-        <span className="micro">No worktree — attach one to give this chat somewhere to work</span>
-      )}
-      <button type="button" className="link-flame" onClick={() => void toggle()} disabled={busy}>
-        {busy ? "Working…" : attached ? "Detach" : workspace.workspaceRef ? "Reattach" : "Attach"}
-      </button>
-      {error && (
-        <p className="notice dock-error">
-          <Ticked text={error} />
-        </p>
-      )}
-    </div>
-  );
+  return <WorkspaceControl threadId={remoteId} initial={custom} />;
 }
 
 const DECISION_LABELS: Record<ApprovalDecision, string> = {
@@ -1036,18 +974,14 @@ function Dock() {
           This transcript belongs to a workflow step. Return to the run for status and actions.
         </p>
       ) : (
-        <>
-          <Composer />
-          {!workflowConversation && (
-            <div className="dock-foot">
-              {/* Under the composer rather than in the heading: a detached chat
-                  refuses to run, so the way to fix that cannot be somewhere you
-                  have to scroll a long conversation to reach. */}
-              <WorkspaceLine />
-            </div>
-          )}
-        </>
+        <Composer />
       )}
+      <div className="dock-foot">
+        {/* Under the composer or workflow note rather than in the heading: a
+            detached conversation refuses to run, so the way to fix that cannot
+            be somewhere you have to scroll a long transcript to reach. */}
+        <WorkspaceLine />
+      </div>
     </ThreadPrimitive.ViewportFooter>
   );
 }
