@@ -40,6 +40,8 @@ from engine.ports import (
     StreamingMcpAgentRunner,
     PermissionScope,
     PermissionTranslator,
+    UserInputAnswer,
+    UserInputResponse,
 )
 
 #: Captured from `claude -p --output-format stream-json --verbose --allowedTools
@@ -423,6 +425,68 @@ def test_control_session_approval_never_writes_provider_settings() -> None:
     assert permission["destination"] == "session"
 
 
+def test_control_question_is_structured_and_returns_human_answers() -> None:
+    message = {
+        "type": "control_request",
+        "request_id": "question-1",
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "AskUserQuestion",
+            "tool_use_id": "toolu-question",
+            "input": {
+                "questions": [{
+                    "header": "API",
+                    "question": "Which API should remain stable?",
+                    "options": [
+                        {"label": "Public", "description": "Keep the public API"},
+                        {"label": "Internal", "description": "Keep the internal API"},
+                    ],
+                    "multiSelect": False,
+                }]
+            },
+        },
+    }
+
+    request = approval_request_from_control(message)
+
+    assert request is not None
+    assert request.kind is ApprovalKind.USER_INPUT
+    assert request.requires_human is True
+    assert request.questions[0].question_id == "Which API should remain stable?"
+    assert [option.label for option in request.questions[0].options] == [
+        "Public", "Internal"
+    ]
+    response = control_response_for(
+        message,
+        UserInputResponse((UserInputAnswer(request.questions[0].question_id, ("Public",)),)),
+    )
+    assert response["response"]["response"]["updatedInput"]["answers"] == {
+        "Which API should remain stable?": "Public"
+    }
+
+
+def test_exit_plan_mode_always_requires_a_human_decision() -> None:
+    message = {
+        "type": "control_request",
+        "request_id": "plan-1",
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "ExitPlanMode",
+            "input": {"plan": "1. Add the endpoint\n2. Test it"},
+        },
+    }
+
+    request = approval_request_from_control(message)
+
+    assert request is not None
+    assert request.kind is ApprovalKind.PLAN_APPROVAL
+    assert request.requires_human is True
+    assert request.allowed_decisions == (
+        ApprovalDecision.ACCEPT,
+        ApprovalDecision.CANCEL,
+    )
+
+
 def _fake_interactive_claude(tmp_path) -> str:
     binary = tmp_path / "claude"
     binary.write_text(
@@ -516,7 +580,9 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
         }
     }
     allowed = argv[argv.index("--allowedTools") + 1 :]
-    assert "AskUserQuestion" in allowed
+    # This must reach the control callback; putting it in --allowedTools would
+    # auto-approve it before Engine could collect the answers.
+    assert "AskUserQuestion" not in allowed
     assert "mcp__workflow__complete_step" in allowed
     assert "mcp__workflow__fail_step" in allowed
     interactive = runner.interactive_command_line(PROFILE, server)

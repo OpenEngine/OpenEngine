@@ -100,6 +100,9 @@ from engine.ports.agent_runner import (
     McpServerConfig,
     TokenUsage,
     TurnObserver,
+    UserInputOption,
+    UserInputQuestion,
+    UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.streams import read_lines
@@ -318,6 +321,70 @@ def approval_request_from_app_server(message: dict[str, Any]) -> ApprovalRequest
         tool_call_id=f"{thread_id}:{item_id}" if item_id else None,
         arguments=json.dumps(details, sort_keys=True) if details else None,
         allowed_decisions=allowed,
+    )
+
+
+def user_input_request_from_app_server(
+    message: dict[str, Any],
+) -> ApprovalRequest | None:
+    """Normalize Codex app-server's structured user-input request."""
+
+    if message.get("method") != "item/tool/requestUserInput" or "id" not in message:
+        return None
+    params = message.get("params") or {}
+    if not isinstance(params, dict):
+        return None
+    raw_questions = params.get("questions")
+    if not isinstance(raw_questions, list):
+        return None
+    questions: list[UserInputQuestion] = []
+    for index, raw in enumerate(raw_questions):
+        if not isinstance(raw, dict):
+            continue
+        question_id = str(raw.get("id", f"question-{index + 1}"))
+        question = str(raw.get("question", "")).strip()
+        if not question:
+            continue
+        options = raw.get("options")
+        normalized_options = (
+            tuple(
+                UserInputOption(
+                    label=str(option.get("label", "")),
+                    description=str(option.get("description", "")),
+                )
+                for option in options
+                if isinstance(option, dict)
+                and str(option.get("label", "")).strip()
+            )
+            if isinstance(options, list)
+            else ()
+        )
+        questions.append(
+            UserInputQuestion(
+                question_id=question_id,
+                header=str(raw.get("header", f"Question {index + 1}")),
+                question=question,
+                options=normalized_options,
+                allows_other=bool(raw.get("isOther", True)),
+            )
+        )
+    if not questions:
+        return None
+    thread_id = str(params.get("threadId", ""))
+    turn_id = str(params.get("turnId", ""))
+    item_id = str(params.get("itemId", ""))
+    return ApprovalRequest(
+        approval_id=":".join(
+            part for part in (thread_id, turn_id, str(message["id"])) if part
+        ),
+        kind=ApprovalKind.USER_INPUT,
+        reason=questions[0].question,
+        tool_name="request_user_input",
+        tool_call_id=f"{thread_id}:{item_id}" if item_id else None,
+        arguments=json.dumps(params, sort_keys=True),
+        allowed_decisions=(ApprovalDecision.CANCEL,),
+        questions=tuple(questions),
+        requires_human=True,
     )
 
 
@@ -954,19 +1021,31 @@ class CodexAgentRunner:
                     continue
 
                 request = approval_request_from_app_server(message)
+                if request is None:
+                    request = user_input_request_from_app_server(message)
                 if request is not None:
                     decision = await on_approval(request)
-                    if decision not in request.allowed_decisions:
+                    if (
+                        isinstance(decision, ApprovalDecision)
+                        and decision not in request.allowed_decisions
+                    ):
                         raise CodexExecutionError(
                             f"approval decision {decision.value!r} is not allowed for "
                             f"{request.approval_id}"
                         )
+                    result = (
+                        {
+                            "answers": {
+                                answer.question_id: {"answers": list(answer.answers)}
+                                for answer in decision.answers
+                            }
+                        }
+                        if isinstance(decision, UserInputResponse)
+                        else {"decision": APP_SERVER_DECISIONS[decision]}
+                    )
                     await _write_json(
                         process.stdin,
-                        {
-                            "id": message["id"],
-                            "result": {"decision": APP_SERVER_DECISIONS[decision]},
-                        },
+                        {"id": message["id"], "result": result},
                     )
                     continue
 
@@ -1154,6 +1233,7 @@ __all__ = [
     "action_messages",
     "app_server_sandbox_policy",
     "approval_request_from_app_server",
+    "user_input_request_from_app_server",
     "failure_message_of",
     "messages_from_app_server_event",
     "messages_from_event",

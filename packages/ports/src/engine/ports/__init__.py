@@ -15,6 +15,7 @@ from engine.ports.agent_runner import (
     ApprovalHandler,
     ApprovalKind,
     ApprovalRequest,
+    ApprovalResponse,
     FinishReason,
     InteractiveAgentRunner,
     InteractiveMcpAgentRunner,
@@ -24,6 +25,10 @@ from engine.ports.agent_runner import (
     StreamingMcpAgentRunner,
     TokenUsage,
     TurnObserver,
+    UserInputAnswer,
+    UserInputOption,
+    UserInputQuestion,
+    UserInputResponse,
 )
 from engine.ports.communications import Communications
 from engine.ports.permissions import (
@@ -43,6 +48,7 @@ __all__ = [
     "ApprovalHandler",
     "ApprovalKind",
     "ApprovalRequest",
+    "ApprovalResponse",
     "ApprovalCapability",
     "Communications",
     "FinishReason",
@@ -58,6 +64,10 @@ __all__ = [
     "StreamingMcpAgentRunner",
     "TokenUsage",
     "TurnObserver",
+    "UserInputAnswer",
+    "UserInputOption",
+    "UserInputQuestion",
+    "UserInputResponse",
     "Workspace",
     "WorkflowRuntime",
     "WorkspaceProvider",

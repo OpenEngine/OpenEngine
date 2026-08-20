@@ -47,6 +47,10 @@ from engine.ports import (
     ApprovalRequest,
     FinishReason,
     StateStore,
+    UserInputAnswer,
+    UserInputOption,
+    UserInputQuestion,
+    UserInputResponse,
 )
 from engine.runtime import (
     AgentSession,
@@ -278,6 +282,95 @@ async def _ask(
         translator=translator,
     )
     return await handler(request), presented
+
+
+def test_plan_approval_ignores_system_and_conversation_auto_approve() -> None:
+    async def scenario() -> tuple[object, list[ApprovalRecord]]:
+        store = InMemoryStateStore()
+        instance = await store.create_instance(CODER)
+        broker = ApprovalBroker(store, ApprovalConfig(auto_approve=True))
+        presented: list[ApprovalRecord] = []
+
+        async def present(record: ApprovalRecord) -> None:
+            presented.append(record)
+            if record.is_pending:
+                await broker.decide(
+                    record.approval_id,
+                    ApprovalDecision.ACCEPT,
+                    instance_id=instance.instance_id,
+                    agent_run_id=AgentRunId("run-plan"),
+                )
+
+        response = await broker.handler(
+            agent_run_id=AgentRunId("run-plan"),
+            instance_id=instance.instance_id,
+            runner="claude",
+            present=present,
+            auto_approve=lambda: True,
+        )(
+            ApprovalRequest(
+                approval_id="provider-plan",
+                kind=ApprovalKind.PLAN_APPROVAL,
+                tool_name="ExitPlanMode",
+                allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+                requires_human=True,
+            )
+        )
+        return response, presented
+
+    response, presented = asyncio.run(scenario())
+
+    assert response is ApprovalDecision.ACCEPT
+    assert presented[0].status is ApprovalStatus.PENDING
+    assert presented[0].decision_source is None
+
+
+def test_structured_question_returns_and_persists_human_answers() -> None:
+    async def scenario() -> tuple[object, ApprovalRecord]:
+        store = InMemoryStateStore()
+        instance = await store.create_instance(CODER)
+        broker = ApprovalBroker(store, ApprovalConfig(auto_approve=True))
+        run_id = AgentRunId("run-question")
+
+        async def present(record: ApprovalRecord) -> None:
+            if record.is_pending:
+                await broker.answer(
+                    record.approval_id,
+                    (UserInputAnswer("api", ("Public",)),),
+                    instance_id=instance.instance_id,
+                    agent_run_id=run_id,
+                )
+
+        response = await broker.handler(
+            agent_run_id=run_id,
+            instance_id=instance.instance_id,
+            runner="codex",
+            present=present,
+            auto_approve=lambda: True,
+        )(
+            ApprovalRequest(
+                approval_id="provider-question",
+                kind=ApprovalKind.USER_INPUT,
+                tool_name="request_user_input",
+                allowed_decisions=(ApprovalDecision.CANCEL,),
+                questions=(UserInputQuestion(
+                    question_id="api",
+                    header="API",
+                    question="Which API?",
+                    options=(UserInputOption("Public"), UserInputOption("Internal")),
+                ),),
+                requires_human=True,
+            )
+        )
+        records = await store.list_approvals()
+        return response, records[0]
+
+    response, record = asyncio.run(scenario())
+
+    assert response == UserInputResponse((UserInputAnswer("api", ("Public",)),))
+    assert record.status is ApprovalStatus.DECIDED
+    assert json.loads(record.answers or "{}") == {"api": ["Public"]}
+    assert record.decision_source is ApprovalDecisionSource.USER
 
 
 def _approval_url(thread_id: str, approval_id: str) -> str:
