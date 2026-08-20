@@ -32,14 +32,32 @@ export function conversationCount(run: ApiWorkflowRun) {
 }
 
 /** The runs behind both the workflow pages and the rail's Workflows section,
- *  read once by the shell so every screen shows the same list. */
+ *  kept current by the shell so every screen shows the same list. */
 export function useRuns() {
   const [runs, setRuns] = useState<ApiWorkflowRun[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ runs: ApiWorkflowRun[] }>("/api/runs")
-      .then((value) => setRuns(value.runs))
-      .catch((reason: Error) => setError(reason.message));
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      api<{ runs: ApiWorkflowRun[] }>("/api/runs")
+        .then((value) => {
+          if (cancelled) return;
+          setRuns(value.runs);
+          setError("");
+        })
+        .catch((reason: Error) => {
+          if (!cancelled) setError(reason.message);
+        })
+        .finally(() => {
+          if (!cancelled) timer = window.setTimeout(load, 1000);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
   return { runs, error };
 }

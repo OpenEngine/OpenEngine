@@ -70,6 +70,7 @@ const run: ApiWorkflowRun = {
       agentRunId: "agent-run",
       conversationId: "conversation",
       conversationUrl: "/runs/run-1/conversations/conversation",
+      waiting: false,
     },
   ],
   pendingHumanReview: null,
@@ -168,6 +169,19 @@ describe("Sidebar", () => {
     expect(
       within(body("Workflows")).getByRole("link", { name: "Implementation conversation" }),
     ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("marks a workflow conversation that is waiting for input", () => {
+    const waiting = {
+      ...run,
+      steps: [{ ...run.steps[0], waiting: true }],
+    };
+    render(<Sidebar runs={[waiting]} initialSection="workflows" />);
+
+    const entry = within(body("Workflows")).getByRole("link", {
+      name: "Implementation conversation Waiting for input",
+    });
+    expect(entry).toHaveTextContent("Implementation conversation ❔");
   });
 
   /** Switching the open conversation in place only means something beside a

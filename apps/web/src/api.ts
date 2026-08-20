@@ -64,6 +64,7 @@ export type ApiRunStep = {
   agentRunId: string | null;
   conversationId: string | null;
   conversationUrl: string | null;
+  waiting: boolean;
 };
 
 export type ApiWorkflowRun = {

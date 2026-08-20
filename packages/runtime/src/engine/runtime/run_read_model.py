@@ -12,6 +12,7 @@ from engine.core.workflows.implementation_review import (
     human_review_summary,
 )
 from engine.domain.agents import AgentInstance
+from engine.domain.approvals import ApprovalStatus
 from engine.domain.events import StepCompleted
 from engine.domain.ids import (
     AgentId,
@@ -24,6 +25,7 @@ from engine.domain.ids import (
 from engine.domain.state import RunPhase, RunState
 from engine.domain.workflow import StepOutput
 from engine.ports.state_store import StateStore
+from engine.runtime.step_results import latest_turn_requests_clarification_or_escalation
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +43,7 @@ class RunStepView:
     agent_run_id: AgentRunId | None = None
     mcp_request_id: str | int | None = None
     conversation_id: ConversationId | None = None
+    waiting: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +101,7 @@ class RunReader:
             if instance.workflow_step_id is not None
         }
         results = {result.step_id: result for result in state.step_results}
+        waiting_step = await self._waiting_step(state, by_step)
         steps = (
             _agent_step(
                 state,
@@ -106,6 +110,7 @@ class RunReader:
                 IMPLEMENTATION_PROFILE.agent_id,
                 by_step.get(IMPLEMENTATION_STEP),
                 results.get(IMPLEMENTATION_STEP),
+                waiting=waiting_step == IMPLEMENTATION_STEP,
             ),
             _agent_step(
                 state,
@@ -114,6 +119,7 @@ class RunReader:
                 REVIEW_PROFILE.agent_id,
                 by_step.get(REVIEW_STEP),
                 results.get(REVIEW_STEP),
+                waiting=waiting_step == REVIEW_STEP,
             ),
             _human_step(state),
         )
@@ -160,6 +166,31 @@ class RunReader:
             failure_reason=state.failure_reason,
         )
 
+    async def _waiting_step(
+        self,
+        state: RunState,
+        instances: dict[StepId, AgentInstance],
+    ) -> StepId | None:
+        step_id = state.current_step_id
+        if step_id not in (IMPLEMENTATION_STEP, REVIEW_STEP):
+            return None
+        instance = instances.get(step_id)
+        if instance is None:
+            return None
+        if state.current_agent_run_id is not None:
+            approvals = await self._store.list_approvals(
+                agent_run_id=state.current_agent_run_id,
+                status=ApprovalStatus.PENDING,
+            )
+            if approvals:
+                return step_id
+        conversation = await self._store.load_conversation(instance.instance_id)
+        if conversation is not None and latest_turn_requests_clarification_or_escalation(
+            conversation.messages
+        ):
+            return step_id
+        return None
+
 
 def _agent_step(
     state: RunState,
@@ -168,6 +199,8 @@ def _agent_step(
     agent_id: AgentId,
     instance: AgentInstance | None,
     result: StepCompleted | None,
+    *,
+    waiting: bool = False,
 ) -> RunStepView:
     status = _step_status(state, step_id, result is not None)
     return RunStepView(
@@ -194,6 +227,7 @@ def _agent_step(
         ),
         mcp_request_id=result.mcp_request_id if result is not None else None,
         conversation_id=instance.conversation_id if instance else None,
+        waiting=waiting,
     )
 
 
