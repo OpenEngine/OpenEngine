@@ -37,7 +37,6 @@ import json
 import os
 import shutil
 import subprocess
-import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -74,6 +73,7 @@ from engine.domain import (
 )
 from engine.ports import AgentRunner
 from engine.runtime import AgentSession, Capabilities, normalized_scope
+from provider_fakes import DIRECTIVE, fake_claude, fake_codex
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -485,151 +485,10 @@ SCENARIOS: dict[str, Callable] = {
 
 # --- fake CLIs that speak the real protocols --------------------------------
 #
-# Not mocks of our adapters: real subprocesses, real newline-delimited JSON,
-# real approval round trip, and a real `subprocess.run` of the command they are
-# allowed to run. What they do not have is a model, so the action comes from a
-# directive in the prompt.
-
-DIRECTIVE = "run:"
-
-_DIRECTIVE_READER = '''
-def command_from(prompt):
-    """The last directive in the transcript is the newest instruction."""
-    for line in reversed(prompt.splitlines()):
-        if DIRECTIVE in line:
-            return line.split(DIRECTIVE, 1)[1].strip()
-    raise SystemExit(f"no {DIRECTIVE!r} directive in the prompt")
-
-
-def execute(command, cwd):
-    done = subprocess.run(
-        command, shell=True, cwd=cwd, capture_output=True, text=True
-    )
-    return done.returncode, (done.stdout + done.stderr)
-'''
-
-
-def _write_fake(path: Path, body: str) -> str:
-    path.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json\nimport os\nimport subprocess\nimport sys\n\n"
-        f"DIRECTIVE = {DIRECTIVE!r}\n\n"
-        "def receive():\n    return json.loads(sys.stdin.readline())\n\n"
-        "def send(message):\n    print(json.dumps(message), flush=True)\n\n"
-        + textwrap.dedent(_DIRECTIVE_READER)
-        + "\n"
-        + textwrap.dedent(body)
-    )
-    path.chmod(0o755)
-    return str(path)
-
-
-def fake_codex(directory: Path) -> str:
-    """`codex app-server`, as far as one approval and one command go."""
-    return _write_fake(
-        directory / "codex",
-        '''
-        initialize = receive()
-        send({"id": initialize["id"], "result": {"userAgent": "fake-codex"}})
-        assert receive()["method"] == "initialized"
-
-        start = receive()
-        assert start["method"] == "thread/start"
-        send({"id": start["id"], "result": {"thread": {"id": "thread-1"}}})
-
-        turn = receive()
-        assert turn["method"] == "turn/start"
-        params = turn["params"]
-        cwd = params.get("cwd") or os.getcwd()
-        command = command_from(params["input"][0]["text"])
-        send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
-
-        send({"method": "item/started", "params": {
-            "threadId": "thread-1", "turnId": "turn-1",
-            "item": {"id": "cmd-1", "type": "commandExecution", "command": command,
-                     "cwd": cwd, "commandActions": [], "status": "inProgress"}}})
-        send({"id": "approval-1", "method": "item/commandExecution/requestApproval",
-              "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "cmd-1",
-                         "reason": "the command would write outside the sandbox",
-                         "command": command, "cwd": cwd, "commandActions": [],
-                         "availableDecisions":
-                             ["accept", "acceptForSession", "decline", "cancel"]}})
-        decision = receive()["result"]["decision"]
-
-        if decision == "cancel":
-            # What the real app-server does with a cancelled turn: it ends,
-            # and the command never runs.
-            send({"method": "turn/completed", "params": {
-                "threadId": "thread-1",
-                "turn": {"id": "turn-1", "items": [], "status": "interrupted"}}})
-            raise SystemExit(0)
-
-        exit_code, output = execute(command, cwd)
-        send({"method": "item/completed", "params": {
-            "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 1,
-            "item": {"id": "cmd-1", "type": "commandExecution", "command": command,
-                     "cwd": cwd, "commandActions": [], "status": "completed",
-                     "exitCode": exit_code, "aggregatedOutput": output}}})
-        send({"method": "item/completed", "params": {
-            "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 2,
-            "item": {"id": "msg-1", "type": "agentMessage",
-                     "text": "Ran it, with decision " + decision + "."}}})
-        send({"method": "thread/tokenUsage/updated", "params": {
-            "threadId": "thread-1", "turnId": "turn-1", "tokenUsage": {
-                "last": {"inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2},
-                "total": {"inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2}}}})
-        send({"method": "turn/completed", "params": {
-            "threadId": "thread-1",
-            "turn": {"id": "turn-1", "items": [], "status": "completed"}}})
-        ''',
-    )
-
-
-def fake_claude(directory: Path) -> str:
-    """`claude --input-format stream-json`, with the control protocol."""
-    return _write_fake(
-        directory / "claude",
-        '''
-        initialize = receive()
-        send({"type": "control_response", "response": {
-            "subtype": "success", "request_id": initialize["request_id"],
-            "response": {"commands": []}}})
-
-        user = receive()
-        assert user["type"] == "user"
-        command = command_from(user["message"]["content"])
-        cwd = os.getcwd()
-
-        send({"type": "system", "subtype": "init", "session_id": "session-1"})
-        send({"type": "assistant", "message": {"content": [{
-            "type": "tool_use", "id": "toolu_1", "name": "Bash",
-            "input": {"command": command}}]}})
-        send({"type": "control_request", "request_id": "permission-1", "request": {
-            "subtype": "can_use_tool", "tool_name": "Bash",
-            "input": {"command": command}, "tool_use_id": "toolu_1",
-            "title": "Claude wants to run a command",
-            "permission_suggestions": [{"type": "addRules", "rules": [{
-                "toolName": "Bash", "ruleContent": command}],
-                "behavior": "allow", "destination": "localSettings"}]}})
-        answer = receive()["response"]["response"]
-
-        if answer["behavior"] == "deny":
-            # deny + interrupt ends the turn, and the command never runs.
-            send({"type": "result", "subtype": "error_during_execution",
-                  "is_error": True, "result": answer.get("message", "denied"),
-                  "usage": {}})
-            raise SystemExit(0)
-
-        exit_code, output = execute(command, cwd)
-        send({"type": "user", "message": {"content": [{
-            "type": "tool_result", "tool_use_id": "toolu_1",
-            "content": output or "(no output)", "is_error": exit_code != 0}]}})
-        send({"type": "assistant", "message": {"content": [{
-            "type": "text", "text": "Ran it."}]}})
-        send({"type": "result", "subtype": "success", "is_error": False,
-              "result": "Ran it.", "usage": {}})
-        ''',
-    )
+# `tests/provider_fakes.py`, unscripted: the command comes from a `run:`
+# directive in the prompt, which is the one channel a fake and a live model
+# both read. Shared with the browser end-to-end harness, which scripts the same
+# executables instead of directing them.
 
 
 FAKES = {

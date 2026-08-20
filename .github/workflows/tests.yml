@@ -43,6 +43,51 @@ jobs:
       - name: Build web client
         run: npm --prefix apps/web run build
 
+  browser:
+    # The browser tier: a real server, both provider protocols, real worktrees,
+    # and a scripted CLI in place of a model. Its own job because it needs both
+    # toolchains and a browser, and because a failure here means something a
+    # user would have seen -- which should not be reported as a component test
+    # or a Python test going red.
+    name: browser end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --locked
+
+      - name: Install web client
+        run: npm --prefix apps/web ci
+
+      - name: Install the browser
+        run: npm --prefix apps/web exec -- playwright install --with-deps chromium
+
+      - name: Drive the interface
+        run: npm --prefix apps/web run test:e2e
+
+      - name: Upload the traces of what failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          if-no-files-found: ignore
+          # Diagnostics, not archives.
+          retention-days: 14
+
   boundaries:
     # Separated from the test matrix on purpose: this job answers "did someone
     # break the architecture?", which is a different question from "did someone
