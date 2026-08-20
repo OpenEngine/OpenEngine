@@ -11,6 +11,10 @@ build/
 .DS_Store
 node_modules/
 *.tsbuildinfo
+# Vite's output, and the build stamp beside it: both land inside the Python
+# package so they ship in the wheel, and neither is committed.
+/apps/web/src/engine/apps/web/client/
+/apps/web/src/engine/apps/web/build.json
 /conversations.sqlite3
 .claude/settings.local.json
 test-results/

@@ -6,8 +6,9 @@ const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Build the client every server in this run will serve.
  *
- *  The Python process serves Vite's output, so a stale `dist/` would mean the
- *  browser tier silently testing the previous commit's interface. Built once
+ *  The Python process serves Vite's output from inside its own package, so a
+ *  stale `src/engine/apps/web/client` would mean the browser tier silently
+ *  testing the previous commit's interface. Built once
  *  here rather than by each test, and unconditionally rather than by comparing
  *  timestamps: "did I need to rebuild?" is exactly the question this exists to
  *  stop anybody having to ask. */

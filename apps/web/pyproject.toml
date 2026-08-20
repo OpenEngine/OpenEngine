@@ -25,11 +25,20 @@ dependencies = [
 ]
 
 [project.scripts]
+# The installed product, and the operator-facing name it wraps.
+openengine = "engine.apps.web.cli:main"
 engine-web = "engine.apps.web.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+# Vite's output is a build artifact, so it is git-ignored, so hatchling would
+# leave it out of the wheel -- which is precisely the file set that has to be
+# in it. `artifacts` is the exception list for exactly this case: generated,
+# not committed, still shipped.
+artifacts = ["src/engine/apps/web/client/**"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/engine"]

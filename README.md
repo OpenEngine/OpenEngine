@@ -23,6 +23,34 @@ All three entrypoints run today and report their wiring:
 uv run engine-web
 ```
 
+`openengine` is the same web interface under the name an installed OpenEngine
+answers to. Bare `openengine` is `openengine web`, and both accept `--config`,
+`--host`, and `--port`:
+
+```bash
+uv run openengine --version     # version and the commit it was built from
+uv run openengine --port 8931
+```
+
+## Release archive
+
+A release archive is one self-contained directory: a standalone CPython, the
+application, the built web client as package data, and a launcher. It needs no
+Python, Node, uv, or checkout on the machine that runs it.
+
+```bash
+packaging/build-archive.sh      # -> dist/openengine-<version>-<platform>.tar.gz
+```
+
+The archive is the boundary Homebrew and the shell installer will consume once
+they exist -- neither will rebuild the application. `release-archive.yml` builds
+it for linux-x86_64, verifies its checksum and unpacks it on a Debian image with
+no interpreter installed, starts it, and requests `/api/health`, `/api/config`,
+and the client. Tagged builds carry signed provenance and are attached to the
+GitHub release. The remaining platforms, the installers, upgrades, and
+`openengine doctor` are still ahead; see the
+[portable distribution plan](docs/portability.md).
+
 ## Configuration
 
 Each entrypoint accepts one provider-neutral TOML configuration file:
@@ -34,8 +62,24 @@ uv run engine-control-server --config ./engine.toml
 ```
 
 `--config` takes precedence over the `ENGINE_CONFIG` environment variable. If
-neither is set, Engine reads `./engine.toml` when it exists, otherwise it uses
-built-in defaults. Configurations are not merged.
+neither is set, Engine reads `./engine.toml` when it exists, then `engine.toml`
+in the user's configuration directory, otherwise it uses built-in defaults.
+Configurations are not merged.
+
+The user directory is last so that a checkout keeps behaving like a checkout:
+the file beside the tree you are working in still wins. It exists because an
+installed command has no such tree.
+
+| | macOS | Linux |
+| --- | --- | --- |
+| configuration | `~/Library/Application Support/OpenEngine` | `$XDG_CONFIG_HOME/openengine`, else `~/.config/openengine` |
+| state | `~/Library/Application Support/OpenEngine` | `$XDG_DATA_HOME/openengine`, else `~/.local/share/openengine` |
+
+`conversations.sqlite3` lives in the state directory rather than the directory
+OpenEngine was launched from, so the same command run from two places is the
+same install. `ENGINE_DATA_DIR` relocates it. A checkout that already has a
+`conversations.sqlite3` beside it keeps its conversations by moving that file
+into the state directory, or by pointing `ENGINE_DATA_DIR` at the checkout.
 
 Engine supports agent attribution and provider-neutral approval policy:
 

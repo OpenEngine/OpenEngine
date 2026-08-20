@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
+from engine.apps.web.build import build_info
 from engine.core.workflows.implementation_review import (
     IMPLEMENTATION_STEP_SPEC,
     REVIEW_STEP_SPEC,
@@ -963,6 +964,16 @@ def create_app(
                 yield _json_line({"type": "content", "content": content})
             await asyncio.sleep(0.25)
 
+    async def health(_request: Request) -> JSONResponse:
+        # Deliberately the cheapest route in the application: an installer
+        # asking "did it come up" should get an answer that does not depend on
+        # a store, a runner, or a CLI being reachable. It reports the build so
+        # the answer also settles *which* OpenEngine came up.
+        info = build_info()
+        return JSONResponse(
+            {"status": "ok", "version": info.version, "commit": info.commit}
+        )
+
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
             {
@@ -1344,6 +1355,7 @@ def create_app(
         return JSONResponse({"approval": _approval_json(approval)})
 
     routes = [
+        Route("/api/health", health),
         Route("/api/config", config),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
@@ -1708,6 +1720,8 @@ def _error(message: str, status_code: int) -> JSONResponse:
 
 
 async def _missing_frontend(_request: Request) -> Response:
+    # Reachable from a checkout that has not built the client yet. A release
+    # archive always carries one, so this text names the checkout's remedy.
     return Response(
         "The assistant-ui client has not been built. Run `npm --prefix apps/web run build`.",
         status_code=503,

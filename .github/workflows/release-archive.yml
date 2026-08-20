@@ -1,0 +1,238 @@
+name: release archive
+
+# The packaging boundary, tested. Every installer this project will grow --
+# the shell script, the Homebrew formula -- is going to consume this archive
+# rather than rebuild the application, so the question that matters is not
+# "does it build" but "does the built thing run somewhere that has never seen
+# this repository". That is what the second job is: a Debian image with no
+# Python, no Node, and no uv, handed nothing but the archive and its checksum.
+#
+# One platform for now, on purpose. linux-x86_64 is the target whose clean
+# machine can actually be produced in CI, and the matrix is only worth adding
+# once the single-platform path is known to hold.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a uv release cannot change what CI means without a commit saying so.
+  UV_VERSION: "0.9.28"
+  ARTIFACT: openengine-linux-x86_64
+
+jobs:
+  build:
+    name: build the archive
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Provenance is signed with a short-lived OIDC identity rather than a
+      # stored key, so the archive can be traced to this workflow and this
+      # commit by anyone who downloads it.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git describe` needs the tags, and the build stamps the commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+
+      - name: Build the release archive
+        env:
+          # A tag names the release; anything else is described from git.
+          OPENENGINE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: packaging/build-archive.sh
+
+      - name: Sign provenance for the archive
+        # Attestation needs a token a fork's pull request does not get. The
+        # archive is still built and smoke-tested there; only the signature
+        # waits for a branch this repository owns.
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: dist/
+          if-no-files-found: error
+
+  clean-machine:
+    name: a clean machine can run it
+    needs: build
+    runs-on: ubuntu-latest
+    # No checkout, and an image chosen for what it lacks: this job may only
+    # ever touch the archive.
+    container:
+      image: debian:12-slim
+    steps:
+      - name: This machine has no Python and no build tooling
+        # POSIX sh, and the one step that says so: a container job runs steps
+        # under `sh` unless they ask otherwise, and this one runs before there
+        # is anything to ask with. It installs the shell the later steps
+        # declare, along with the two things fetching an archive takes.
+        shell: sh -e {0}
+        run: |
+          set -eu
+          apt-get update
+          apt-get install -y --no-install-recommends bash ca-certificates curl
+          for tool in python python3 uv npm; do
+            if command -v "$tool" > /dev/null; then
+              echo "::error::$tool is installed, so this is not a clean machine"
+              exit 1
+            fi
+          done
+          echo "no interpreter and no build tooling present"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: /release
+
+      - name: The checksum matches
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /release
+          sha256sum -c ./*.tar.gz.sha256
+
+      - name: Extract, and run it from somewhere else entirely
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /opt/openengine /elsewhere
+          tar -xzf /release/*.tar.gz -C /opt/openengine
+          installed=$(find /opt/openengine -maxdepth 1 -mindepth 1 -type d)
+
+          # Nothing may name a path from the machine that built this. The build
+          # drops the console scripts uv generates for exactly this reason, and
+          # this is the assertion that notices if it ever stops.
+          for script in "$installed"/python/bin/*; do
+            [ -f "$script" ] || continue
+            case "$(head -n 1 "$script" 2> /dev/null)" in
+              '#!/bin/'* | '#!/usr/'* | '#!'"$installed"/*) ;;
+              '#!'*)
+                echo "::error::$script has an unrelocatable shebang: $(head -n 1 "$script")"
+                exit 1
+                ;;
+            esac
+          done
+
+          # As an installer will: one link on PATH into a versioned directory.
+          ln -s "$installed/bin/openengine" /usr/local/bin/openengine
+
+          # The launch directory is deliberately not the install directory and
+          # not a checkout: anything written here is a bug this job exists for.
+          cd /elsewhere
+
+          version=$(openengine --version)
+          echo "$version"
+          case "$version" in
+            "openengine "*" ("*")") ;;
+            *) echo "::error::--version did not report a version and a commit"; exit 1 ;;
+          esac
+
+          # An explicit loopback address rather than the default `localhost`,
+          # so this job never turns on which family the container resolves
+          # first. What the default binding is has its own unit test.
+          openengine --host 127.0.0.1 --port 8931 > /elsewhere/server.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2> /dev/null || true' EXIT
+
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8931/api/health > /dev/null; then
+              break
+            fi
+            if ! kill -0 "$server" 2> /dev/null; then
+              cat /elsewhere/server.log
+              echo "::error::openengine exited before it accepted a request"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          health=$(curl --fail --silent http://127.0.0.1:8931/api/health) || {
+            cat /elsewhere/server.log
+            echo "::error::openengine did not answer within 60 seconds"
+            exit 1
+          }
+          echo "health: $health"
+
+          # The API, and the client the archive carries rather than builds --
+          # including the hashed bundle the page names, because an index.html
+          # whose assets 404 is a blank screen that answers 200.
+          curl --fail --silent http://127.0.0.1:8931/api/config > /dev/null
+          page=$(curl --fail --silent http://127.0.0.1:8931/)
+          grep -q '<div id="root">' <<< "$page"
+          bundle=$(grep -o '/assets/index-[^"]*\.js' <<< "$page" | head -n 1)
+          [ -n "$bundle" ] || { echo "::error::the page names no bundle"; exit 1; }
+          curl --fail --silent "http://127.0.0.1:8931$bundle" > /dev/null
+
+          # The commit the server reports is the commit the archive claims.
+          grep -q "$(sed -n 's/.*"commit": "\([^"]*\)".*/\1/p' "$installed/RELEASE.json")" \
+            <<< "$health"
+
+          kill "$server" 2> /dev/null || true
+          cat /elsewhere/server.log
+
+      - name: State went to the user's data directory, not the launch directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e /elsewhere/conversations.sqlite3 ]; then
+            echo "::error::the database was written into the launch directory"
+            exit 1
+          fi
+          test -f "$HOME/.local/share/openengine/conversations.sqlite3"
+          echo "state is in $HOME/.local/share/openengine"
+
+  publish:
+    name: publish the archive
+    needs: [build, clean-machine]
+    # Only a tag publishes, and only after a clean machine has run the thing
+    # being published. A release whose archive was never started is worse than
+    # no release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: dist
+
+      - name: Attach the archive and its checksum to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # A release that does not exist yet is created as a draft. Attaching
+          # artifacts is this workflow's job; deciding that a version is
+          # released is a person's, and a draft keeps that decision theirs.
+          gh release view "$TAG" > /dev/null 2>&1 \
+            || gh release create "$TAG" --draft --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/* --clobber
