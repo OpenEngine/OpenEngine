@@ -685,9 +685,12 @@ class ThreadService:
         if archived is not None:
             thread.archived = archived
         if auto_approve is not None:
-            if not thread.editable:
+            if thread.workflow_step_id not in {
+                IMPLEMENTATION_STEP_SPEC.step_id,
+                REVIEW_STEP_SPEC.step_id,
+            }:
                 raise ValueError(
-                    "auto-approval is only available for implementation conversations"
+                    "auto-approval is only available for workflow conversations"
                 )
             thread.auto_approve = auto_approve
         await self._persist_metadata(thread)
@@ -1445,7 +1448,10 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
     if thread.workflow_step_id is not None:
         result["workflowStepId"] = str(thread.workflow_step_id)
         result["editable"] = thread.editable
-        if thread.editable:
+        if thread.workflow_step_id in {
+            IMPLEMENTATION_STEP_SPEC.step_id,
+            REVIEW_STEP_SPEC.step_id,
+        }:
             result["autoApprove"] = thread.auto_approve
     return result
 

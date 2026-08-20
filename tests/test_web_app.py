@@ -1594,6 +1594,37 @@ def test_implementation_conversation_can_enable_system_auto_approvals() -> None:
     }
 
 
+def test_review_conversation_can_enable_system_auto_approvals() -> None:
+    store = InMemoryStateStore()
+    instance = asyncio.run(
+        store.create_instance(
+            AgentId("review-agent"),
+            runner="test",
+            workflow_run_id=RunId("run-review-auto-approve"),
+            workflow_step_id=REVIEW_STEP,
+        )
+    )
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            before = await client.get(f"/api/threads/{instance.instance_id}")
+            enabled = await client.patch(
+                f"/api/threads/{instance.instance_id}", json={"autoApprove": True}
+            )
+            return before, enabled, await store.load_instance(instance.instance_id)
+
+    before, enabled, stored = asyncio.run(scenario())
+
+    assert before.json()["editable"] is False
+    assert before.json()["autoApprove"] is False
+    assert enabled.status_code == 200
+    assert enabled.json()["editable"] is False
+    assert enabled.json()["autoApprove"] is True
+    assert stored is not None and stored.auto_approve is True
+
+
 def test_conversation_transcript_carries_approvals_after_its_run_ends() -> None:
     """Reloading a finished step still shows what it was asked to allow.
 
