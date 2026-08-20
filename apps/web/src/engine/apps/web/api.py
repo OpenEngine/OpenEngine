@@ -56,6 +56,7 @@ from engine.ports import (
     ApprovalHandler,
     InteractiveAgentRunner,
     StateStore,
+    UserInputAnswer,
     WorkspaceState,
 )
 from engine.runtime import (
@@ -66,6 +67,7 @@ from engine.runtime import (
     ApprovalNotPendingError,
     RunReader,
     UnknownApprovalError,
+    UserInputNotAllowedError,
     WorkflowExecutionError,
     WorkflowExecutor,
     WorkflowRunView,
@@ -566,6 +568,27 @@ class ThreadService:
         record = await self.approvals.decide(
             approval_id,
             chosen,
+            instance_id=instance_id,
+            agent_run_id=run.agent_run_id if run is not None else agent_run_id,
+        )
+        if run is not None:
+            await run.present_approval(record)
+        return record
+
+    async def answer_question(
+        self,
+        instance_id: AgentInstanceId,
+        approval_id: ApprovalId,
+        answers: tuple[UserInputAnswer, ...],
+        agent_run_id: AgentRunId | None = None,
+    ) -> ApprovalRecord:
+        """Answer a structured prompt from this chat's current run."""
+
+        await self._require(instance_id)
+        run = self.active_run(instance_id)
+        record = await self.approvals.answer(
+            approval_id,
+            answers,
             instance_id=instance_id,
             agent_run_id=run.agent_run_id if run is not None else agent_run_id,
         )
@@ -1274,10 +1297,6 @@ def create_app(
             return _error("thread not found", 404)
         body = await _json_body(request)
         try:
-            decision = _required_string(body, "decision")
-        except ValueError as error:
-            return _error(str(error), 400)
-        try:
             workflow_agent_run_id = None
             if thread.workflow_run_id is not None:
                 workflow_state = await session.state_store.load(
@@ -1285,15 +1304,38 @@ def create_app(
                 )
                 if workflow_state is not None:
                     workflow_agent_run_id = workflow_state.current_agent_run_id
-            approval = await service.decide_approval(
-                instance_id,
-                ApprovalId(request.path_params["approval_id"]),
-                decision,
-                workflow_agent_run_id,
-            )
+            approval_id = ApprovalId(request.path_params["approval_id"])
+            if "answers" in body:
+                raw_answers = body["answers"]
+                if not isinstance(raw_answers, dict):
+                    raise ValueError("answers must be an object")
+                answers = tuple(
+                    UserInputAnswer(
+                        question_id=str(question_id),
+                        answers=tuple(values) if isinstance(values, list) else (),
+                    )
+                    for question_id, values in raw_answers.items()
+                    if isinstance(question_id, str)
+                    and isinstance(values, list)
+                    and all(isinstance(value, str) for value in values)
+                )
+                if len(answers) != len(raw_answers):
+                    raise ValueError("each answer must be an array of strings")
+                approval = await service.answer_question(
+                    instance_id, approval_id, answers, workflow_agent_run_id
+                )
+            else:
+                decision = _required_string(body, "decision")
+                approval = await service.decide_approval(
+                    instance_id, approval_id, decision, workflow_agent_run_id
+                )
+        except ValueError as error:
+            return _error(str(error), 400)
         except UnknownApprovalError as error:
             return _error(str(error), 404)
         except ApprovalDecisionNotAllowedError as error:
+            return _error(str(error), 400)
+        except UserInputNotAllowedError as error:
             return _error(str(error), 400)
         except ApprovalNotPendingError as error:
             # The request outlived whatever was waiting for it. Not the
@@ -1491,7 +1533,7 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
     client that reconnected mid-pause has no way to reconstruct a request from
     the parts of it that were emitted before it arrived.
     """
-    return {
+    result = {
         "id": str(approval.approval_id),
         "status": approval.status.value,
         "kind": approval.kind.value,
@@ -1514,6 +1556,20 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
             approval.decision_source.value if approval.decision_source else None
         ),
     }
+    if approval.questions is not None:
+        result["questions"] = _json_value(approval.questions, [])
+    if approval.answers is not None:
+        result["answers"] = _json_value(approval.answers, None)
+    return result
+
+
+def _json_value(value: str | None, default: object) -> object:
+    if value is None:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
 
 
 def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:

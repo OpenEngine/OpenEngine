@@ -36,6 +36,8 @@ class ApprovalKind(Enum):
     COMMAND_EXECUTION = "command_execution"
     FILE_CHANGE = "file_change"
     TOOL_USE = "tool_use"
+    PLAN_APPROVAL = "plan_approval"
+    USER_INPUT = "user_input"
 
 
 class ApprovalDecision(Enum):
@@ -131,6 +133,10 @@ class ApprovalRecord:
     decision: ApprovalDecision | None = None
     decision_source: ApprovalDecisionSource | None = None
     decided_at: datetime | None = None
+    questions: str | None = None
+    """Normalized question definitions as JSON for a structured user prompt."""
+    answers: str | None = None
+    """The submitted structured answers as JSON, once the prompt is answered."""
 
     @property
     def is_pending(self) -> bool:

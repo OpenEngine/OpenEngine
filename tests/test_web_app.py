@@ -61,6 +61,10 @@ from engine.ports import (
     ApprovalRequest,
     InteractiveAgentRunner,
     McpServerConfig,
+    UserInputAnswer,
+    UserInputOption,
+    UserInputQuestion,
+    UserInputResponse,
     Workspace,
     WorkspaceState,
 )
@@ -538,6 +542,48 @@ class RepeatedApprovalWorkflowRunner(ApprovalWorkflowRunner):
             self.decisions.append(decision)
             if decision is ApprovalDecision.CANCEL:
                 return AgentTurn(Message.assistant("The command was cancelled."))
+        return await TerminalToolRunner.run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
+class QuestionWorkflowRunner(ApprovalWorkflowRunner):
+    """Pause an MCP workflow turn for structured human input."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.response: UserInputResponse | None = None
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_approval,
+        on_message=None,
+        workspace_id=None,
+    ) -> AgentTurn:
+        response = await on_approval(
+            ApprovalRequest(
+                approval_id="provider-question",
+                kind=ApprovalKind.USER_INPUT,
+                tool_name="AskUserQuestion",
+                allowed_decisions=(ApprovalDecision.CANCEL,),
+                questions=(UserInputQuestion(
+                    question_id="api",
+                    header="API",
+                    question="Which API should remain stable?",
+                    options=(
+                        UserInputOption("Public", "Preserve the public API"),
+                        UserInputOption("Internal", "Preserve the internal API"),
+                    ),
+                ),),
+                requires_human=True,
+            )
+        )
+        assert isinstance(response, UserInputResponse)
+        self.response = response
         return await TerminalToolRunner.run_turn_with_mcp(
             self, agent_run_id, profile, messages, mcp_server, workspace_id
         )
@@ -1378,6 +1424,50 @@ def test_workflow_conversation_replays_every_approval_after_reconnect() -> None:
     ]
     assert streamed[0]["status"] == "decided"
     assert streamed[1]["status"] == "pending"
+
+
+def test_workflow_question_choices_resume_the_same_model_turn() -> None:
+    store = InMemoryStateStore()
+    runner = QuestionWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Ask which API to preserve.",
+                    "repository": "acme/api",
+                },
+            )
+            for _ in range(100):
+                pending = await store.list_approvals(status=ApprovalStatus.PENDING)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending
+            request = pending[0]
+            answered = await client.post(
+                f"/api/threads/{request.instance_id}/runs/current/approvals/"
+                f"{request.approval_id}",
+                json={"answers": {"api": ["Public"]}},
+            )
+            completed = await _await_phase(
+                client, RunId(created.json()["runId"]), "awaiting_human_review"
+            )
+            return request, answered, completed
+
+    request, answered, completed = asyncio.run(scenario())
+
+    assert request.kind is ApprovalKind.USER_INPUT
+    assert answered.status_code == 200
+    assert answered.json()["approval"]["answers"] == {"api": ["Public"]}
+    assert completed.status_code == 200
+    # The response goes back through the provider callback without ending and
+    # restarting the turn.
+    assert runner.response == UserInputResponse((UserInputAnswer("api", ("Public",)),))
 
 
 def test_implementation_conversation_can_enable_system_auto_approvals() -> None:

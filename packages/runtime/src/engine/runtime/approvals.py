@@ -39,6 +39,7 @@ for the requests nobody was shown.
 """
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -52,7 +53,13 @@ from engine.domain.approvals import (
     SessionGrant,
 )
 from engine.domain.ids import AgentInstanceId, AgentRunId, ApprovalId, WorkspaceId
-from engine.ports.agent_runner import ApprovalHandler, ApprovalRequest
+from engine.ports.agent_runner import (
+    ApprovalHandler,
+    ApprovalRequest,
+    ApprovalResponse,
+    UserInputAnswer,
+    UserInputResponse,
+)
 from engine.ports.permissions import PermissionTranslator
 from engine.ports.state_store import StateStore
 from engine.runtime.approval_policy import PolicyDecision, policy_decision_for
@@ -98,6 +105,10 @@ class ApprovalDecisionNotAllowedError(ApprovalError):
     """
 
 
+class UserInputNotAllowedError(ApprovalError):
+    """Structured answers do not match the questions the provider asked."""
+
+
 class ApprovalsUnsupportedError(ApprovalError):
     """An approval callback was wired to a runner that cannot pause.
 
@@ -135,7 +146,7 @@ class ApprovalBroker:
         self._store = store
         self._policy = policy
         self._observe = observe
-        self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
+        self._waiting: dict[ApprovalId, asyncio.Future[ApprovalResponse]] = {}
         self._pending_requests: dict[
             ApprovalId,
             tuple[ApprovalRequest, PermissionTranslator | None, ApprovalPresenter],
@@ -172,7 +183,7 @@ class ApprovalBroker:
         unclassified, and every request is put to a person.
         """
 
-        async def request_approval(request: ApprovalRequest) -> ApprovalDecision:
+        async def request_approval(request: ApprovalRequest) -> ApprovalResponse:
             record = ApprovalRecord(
                 approval_id=_new_approval_id(),
                 agent_run_id=agent_run_id,
@@ -188,6 +199,7 @@ class ApprovalBroker:
                 workspace_id=workspace_id,
                 arguments=request.arguments,
                 allowed_decisions=tuple(request.allowed_decisions),
+                questions=_questions_json(request) if request.questions else None,
             )
 
             # Both of these are looked up before the request is written, so no
@@ -213,7 +225,11 @@ class ApprovalBroker:
                 await present(settled)
                 return configured
 
-            granted = await self._matching_grant(record)
+            granted = (
+                await self._matching_grant(record)
+                if not request.requires_human
+                else None
+            )
             if granted is not None:
                 # Answered by something the user already said. It is still a
                 # request and still recorded as one -- with the decision, and
@@ -235,7 +251,7 @@ class ApprovalBroker:
                 return ApprovalDecision.ACCEPT_FOR_SESSION
 
             await self._record(record)
-            waiting: asyncio.Future[ApprovalDecision] = (
+            waiting: asyncio.Future[ApprovalResponse] = (
                 asyncio.get_running_loop().create_future()
             )
             self._waiting[record.approval_id] = waiting
@@ -291,6 +307,8 @@ class ApprovalBroker:
             if context is None:
                 continue
             request, translator, present = context
+            if request.requires_human:
+                continue
             decision = self._policy_decision(
                 request, translator, auto_approve=True
             )
@@ -386,6 +404,84 @@ class ApprovalBroker:
             waiting.set_result(decision)
         return decided
 
+    async def answer(
+        self,
+        approval_id: ApprovalId,
+        answers: Sequence[UserInputAnswer],
+        *,
+        instance_id: AgentInstanceId,
+        agent_run_id: AgentRunId | None,
+    ) -> ApprovalRecord:
+        """Persist structured answers and resume the provider turn waiting on them."""
+
+        record = await self._store.load_approval(approval_id)
+        if record is None or record.instance_id != instance_id:
+            raise UnknownApprovalError(f"no approval {approval_id} in this conversation")
+        if not record.is_pending:
+            raise ApprovalNotPendingError(
+                f"approval {approval_id} is already {record.status.value}"
+            )
+        if agent_run_id is None or record.agent_run_id != agent_run_id:
+            raise ApprovalNotPendingError(
+                f"approval {approval_id} belongs to a run that is no longer active"
+            )
+        context = self._pending_requests.get(approval_id)
+        if context is None or not context[0].questions:
+            raise UserInputNotAllowedError(
+                f"approval {approval_id} is not a structured question"
+            )
+        questions = {
+            question.question_id: question for question in context[0].questions
+        }
+        supplied = {answer.question_id: answer for answer in answers}
+        if set(supplied) != set(questions):
+            raise UserInputNotAllowedError(
+                "answers must be provided for exactly the questions that were asked"
+            )
+        for question_id, answer in supplied.items():
+            values = answer.answers
+            if not values or any(not value.strip() for value in values):
+                raise UserInputNotAllowedError(
+                    f"question {question_id!r} requires a non-empty answer"
+                )
+            question = questions[question_id]
+            if not question.multi_select and len(values) != 1:
+                raise UserInputNotAllowedError(
+                    f"question {question_id!r} accepts one answer"
+                )
+            offered = {option.label for option in question.options}
+            if not question.allows_other and any(
+                value not in offered for value in values
+            ):
+                raise UserInputNotAllowedError(
+                    f"question {question_id!r} only accepts an offered choice"
+                )
+
+        waiting = self._waiting.pop(approval_id, None)
+        if waiting is None or waiting.done():
+            raise ApprovalNotPendingError(
+                f"nothing is waiting for approval {approval_id}"
+            )
+        response = UserInputResponse(tuple(supplied[key] for key in questions))
+        decided = replace(
+            record,
+            status=ApprovalStatus.DECIDED,
+            decision_source=ApprovalDecisionSource.USER,
+            decided_at=datetime.now(UTC),
+            answers=json.dumps(
+                {answer.question_id: list(answer.answers) for answer in response.answers},
+                sort_keys=True,
+            ),
+        )
+        try:
+            await self._record(decided)
+        except Exception:
+            self._waiting[approval_id] = waiting
+            raise
+        if not waiting.done():
+            waiting.set_result(response)
+        return decided
+
     async def cancel_run(self, agent_run_id: AgentRunId) -> Sequence[ApprovalRecord]:
         """Resolve everything this run is waiting on, because it is being stopped.
 
@@ -465,8 +561,14 @@ class ApprovalBroker:
         a cancellation has no way to honour one, and answering with a decision
         it never offered would be a protocol error rather than an enforcement.
         """
+        if request.requires_human:
+            return None
         scope = translator.scope_for(request) if translator is not None else None
-        policy = replace(self._policy, auto_approve=True) if auto_approve else self._policy
+        policy = (
+            replace(self._policy, auto_approve=True)
+            if auto_approve
+            else self._policy
+        )
         match policy_decision_for(policy, scope):
             case PolicyDecision.ALLOW:
                 configured = ApprovalDecision.ACCEPT
@@ -519,6 +621,26 @@ def _new_approval_id() -> ApprovalId:
     return ApprovalId(f"apv-{uuid4().hex[:12]}")
 
 
+def _questions_json(request: ApprovalRequest) -> str:
+    return json.dumps(
+        [
+            {
+                "id": question.question_id,
+                "header": question.header,
+                "question": question.question,
+                "options": [
+                    {"label": option.label, "description": option.description}
+                    for option in question.options
+                ],
+                "multiSelect": question.multi_select,
+                "allowsOther": question.allows_other,
+            }
+            for question in request.questions
+        ],
+        sort_keys=True,
+    )
+
+
 __all__ = [
     "ApprovalBroker",
     "ApprovalDecisionNotAllowedError",
@@ -527,4 +649,5 @@ __all__ = [
     "ApprovalPresenter",
     "ApprovalsUnsupportedError",
     "UnknownApprovalError",
+    "UserInputNotAllowedError",
 ]

@@ -13,6 +13,7 @@ from engine.runtime.approvals import (
     ApprovalPresenter,
     ApprovalsUnsupportedError,
     UnknownApprovalError,
+    UserInputNotAllowedError,
 )
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.config import (
@@ -96,6 +97,7 @@ __all__ = [
     "UnhandledCommandError",
     "UnknownAgentError",
     "UnknownApprovalError",
+    "UserInputNotAllowedError",
     "UnknownInstanceError",
     "UnknownRunnerError",
     "UnknownToolGrantError",

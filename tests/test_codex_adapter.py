@@ -28,6 +28,7 @@ from engine.adapters.agent_runner.codex import (
     render_prompt,
     thread_id_of,
     turn_from_events,
+    user_input_request_from_app_server,
 )
 from engine.domain import (
     AgentId,
@@ -472,6 +473,38 @@ def test_app_server_approval_without_an_item_names_no_call() -> None:
 
     assert request is not None
     assert request.tool_call_id is None
+
+
+def test_app_server_user_input_is_normalized_with_choices_and_other_input() -> None:
+    request = user_input_request_from_app_server(
+        {
+            "id": "input-1",
+            "method": "item/tool/requestUserInput",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "questions": [{
+                    "id": "api",
+                    "header": "API",
+                    "question": "Which API should remain stable?",
+                    "isOther": True,
+                    "options": [{
+                        "label": "Public",
+                        "description": "Preserve the public API",
+                    }],
+                }],
+            },
+        }
+    )
+
+    assert request is not None
+    assert request.kind is ApprovalKind.USER_INPUT
+    assert request.requires_human is True
+    assert request.tool_call_id == "thread-1:item-1"
+    assert request.questions[0].question_id == "api"
+    assert request.questions[0].options[0].label == "Public"
+    assert request.questions[0].allows_other is True
 
 
 def _fake_app_server(tmp_path) -> str:

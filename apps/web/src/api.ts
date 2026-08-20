@@ -128,7 +128,12 @@ export type ApprovalDecision = "accept" | "accept_for_session" | "cancel";
 export type ApiApproval = {
   id: string;
   status: "pending" | "decided" | "interrupted";
-  kind: "command_execution" | "file_change" | "tool_use";
+  kind:
+    | "command_execution"
+    | "file_change"
+    | "tool_use"
+    | "plan_approval"
+    | "user_input";
   reason: string | null;
   command: string | null;
   cwd: string | null;
@@ -143,6 +148,17 @@ export type ApiApproval = {
   allowedDecisions: ApprovalDecision[];
   decision: ApprovalDecision | null;
   decisionSource: "user" | "session_grant" | "policy" | null;
+  questions?: ApiQuestion[];
+  answers?: Record<string, string[]>;
+};
+
+export type ApiQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
+  allowsOther: boolean;
 };
 
 /** Answer the request this conversation's run is paused on.
@@ -157,6 +173,17 @@ export function decideApproval(
   return api<{ approval: ApiApproval }>(
     `/api/threads/${threadId}/runs/current/approvals/${approvalId}`,
     { method: "POST", body: JSON.stringify({ decision }) },
+  );
+}
+
+export function answerQuestion(
+  threadId: string,
+  approvalId: string,
+  answers: Record<string, string[]>,
+): Promise<{ approval: ApiApproval }> {
+  return api<{ approval: ApiApproval }>(
+    `/api/threads/${threadId}/runs/current/approvals/${approvalId}`,
+    { method: "POST", body: JSON.stringify({ answers }) },
   );
 }
 
