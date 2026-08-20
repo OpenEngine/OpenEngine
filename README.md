@@ -6,6 +6,9 @@ Changes -> Pool of Reviewers -> Reranking -> Impact Radius Analysis -> System Di
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
+This is currently a source installation; the agreed path to Homebrew and a
+verified shell installer is tracked in the
+[portable distribution plan](docs/portability.md).
 
 ```bash
 uv sync            # install all 16 workspace packages, editable
