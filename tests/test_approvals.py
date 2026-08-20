@@ -373,6 +373,54 @@ def test_structured_question_returns_and_persists_human_answers() -> None:
     assert record.decision_source is ApprovalDecisionSource.USER
 
 
+def test_structured_question_can_be_cancelled_without_answers() -> None:
+    async def scenario() -> tuple[object, ApprovalRecord]:
+        store = InMemoryStateStore()
+        instance = await store.create_instance(CODER)
+        broker = ApprovalBroker(store)
+        run_id = AgentRunId("run-question")
+
+        async def present(record: ApprovalRecord) -> None:
+            if record.is_pending:
+                await broker.decide(
+                    record.approval_id,
+                    ApprovalDecision.CANCEL,
+                    instance_id=instance.instance_id,
+                    agent_run_id=run_id,
+                )
+
+        response = await broker.handler(
+            agent_run_id=run_id,
+            instance_id=instance.instance_id,
+            runner="codex",
+            present=present,
+        )(
+            ApprovalRequest(
+                approval_id="provider-question",
+                kind=ApprovalKind.USER_INPUT,
+                tool_name="request_user_input",
+                allowed_decisions=(ApprovalDecision.CANCEL,),
+                questions=(
+                    UserInputQuestion(
+                        question_id="api",
+                        header="API",
+                        question="Which API?",
+                    ),
+                ),
+                requires_human=True,
+            )
+        )
+        records = await store.list_approvals()
+        return response, records[0]
+
+    response, record = asyncio.run(scenario())
+
+    assert response is ApprovalDecision.CANCEL
+    assert record.status is ApprovalStatus.DECIDED
+    assert record.decision is ApprovalDecision.CANCEL
+    assert record.answers is None
+
+
 def _approval_url(thread_id: str, approval_id: str) -> str:
     return f"/api/threads/{thread_id}/runs/current/approvals/{approval_id}"
 

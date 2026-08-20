@@ -466,6 +466,8 @@ export function outcomeText(approval: ApiApproval): string {
       : "Allowed by the configured policy, without asking.";
   if (approval.kind === "user_input" && approval.answers)
     return "Answered.";
+  if (approval.kind === "user_input" && approval.decision === "cancel")
+    return "Cancelled — no answer was sent.";
   switch (approval.decision) {
     case "accept":
       return "Approved.";
@@ -520,8 +522,9 @@ function ApprovalArguments({ approval }: { approval: ApiApproval }) {
 export function summaryText(approval: ApiApproval): string {
   if (approval.kind === "user_input") {
     const question = approval.questions?.[0]?.question ?? "Question";
-    return approval.status === "pending"
-      ? `Answer needed · ${question}`
+    if (approval.status === "pending") return `Answer needed · ${question}`;
+    return approval.decision === "cancel"
+      ? `Cancelled · ${question}`
       : `Answered · ${question}`;
   }
   const target =
@@ -598,6 +601,17 @@ function QuestionForm({
     }
   }
 
+  async function cancel() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await decideApproval(threadId, approval.id, "cancel");
+    } catch (failure) {
+      setBusy(false);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
   return (
     <div className="question-backdrop">
       <section
@@ -657,6 +671,16 @@ function QuestionForm({
         ))}
         {error && <p className="notice">{error}</p>}
         <div className="approval-actions">
+          {approval.allowedDecisions.includes("cancel") && (
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => void cancel()}
+            >
+              {busy ? "Sending…" : "Cancel"}
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-primary"

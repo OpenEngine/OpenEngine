@@ -30,6 +30,27 @@ function approval(overrides: Partial<ApiApproval> = {}): ApiApproval {
   };
 }
 
+function questionApproval(overrides: Partial<ApiApproval> = {}): ApiApproval {
+  return approval({
+    kind: "user_input",
+    command: null,
+    toolName: "AskUserQuestion",
+    allowedDecisions: ["cancel"],
+    questions: [{
+      id: "api",
+      header: "API",
+      question: "Which API should remain stable?",
+      options: [
+        { label: "Public", description: "Preserve the public API" },
+        { label: "Internal", description: "Preserve the internal API" },
+      ],
+      multiSelect: false,
+      allowsOther: true,
+    }],
+    ...overrides,
+  });
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("chat display helpers", () => {
@@ -245,23 +266,7 @@ describe("ApprovalEntry", () => {
     render(
       <ApprovalEntry
         threadId="thread-1"
-        approval={approval({
-          kind: "user_input",
-          command: null,
-          toolName: "AskUserQuestion",
-          allowedDecisions: ["cancel"],
-          questions: [{
-            id: "api",
-            header: "API",
-            question: "Which API should remain stable?",
-            options: [
-              { label: "Public", description: "Preserve the public API" },
-              { label: "Internal", description: "Preserve the internal API" },
-            ],
-            multiSelect: false,
-            allowsOther: true,
-          }],
-        })}
+        approval={questionApproval()}
       />,
     );
 
@@ -273,5 +278,39 @@ describe("ApprovalEntry", () => {
       "/api/threads/thread-1/runs/current/approvals/approval-7",
       expect.objectContaining({ body: '{"answers":{"api":["Public"]}}' }),
     );
+  });
+
+  it("cancels a structured question without requiring an answer", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ approval: { id: "approval-7" } }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ApprovalEntry threadId="thread-1" approval={questionApproval()} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/threads/thread-1/runs/current/approvals/approval-7",
+      expect.objectContaining({ body: '{"decision":"cancel"}' }),
+    );
+
+    rerender(
+      <ApprovalEntry
+        threadId="thread-1"
+        approval={questionApproval({
+          status: "decided",
+          decision: "cancel",
+          decisionSource: "user",
+        })}
+      />,
+    );
+    expect(
+      screen.getByText("Cancelled · Which API should remain stable?"),
+    ).toBeInTheDocument();
   });
 });
