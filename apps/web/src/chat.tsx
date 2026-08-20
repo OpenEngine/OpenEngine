@@ -8,7 +8,16 @@ import {
   useAuiState,
   useToolCallElapsed,
 } from "@assistant-ui/react";
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import {
   api,
@@ -633,24 +642,46 @@ export function ApprovalEntry({
  *
  *  What decides where a request is shown: an approval naming a call in here has
  *  somewhere of its own to sit, and is therefore not part of any turn's
- *  leftovers. Computed over the whole thread rather than one message, because
- *  a restored transcript anchors its requests to the end and the calls they
- *  name are spread across the turns that made them. */
-function useToolCallIds(): ReadonlySet<string> {
+ *  leftovers. The whole thread rather than one message, because a restored
+ *  transcript anchors its requests to the end while the calls they name are
+ *  spread across the turns that made them.
+ *
+ *  A fact about the thread, so it is derived once above the turns rather than
+ *  by each of them. The thread store hands out a new `messages` array on every
+ *  streamed chunk, and a turn that read it would rescan every part in the
+ *  conversation each time a token landed -- once per turn on screen, over
+ *  transcripts that routinely carry hundreds of calls. */
+const ToolCallIds = createContext<ReadonlySet<string>>(new Set<string>());
+
+export function useToolCallIds(): ReadonlySet<string> {
+  return useContext(ToolCallIds);
+}
+
+/** Derive it, and keep the same set while the ids in it are the same.
+ *
+ *  Identity is the whole point: a new set on every chunk would re-render every
+ *  turn that reads one, which is the cost this exists to avoid. Tokens arrive
+ *  far more often than tool calls do, so most rescans find nothing new. */
+export function ToolCallIndex({ children }: { children: ReactNode }) {
   const messages = useAuiState((state) => state.thread.messages);
-  return useMemo(
-    () =>
-      new Set(
-        messages.flatMap((message) =>
-          Array.isArray(message.content)
-            ? message.content
-                .filter((part) => part.type === "tool-call")
-                .map((part) => part.toolCallId)
-            : [],
-        ),
-      ),
-    [messages],
-  );
+  const held = useRef<ReadonlySet<string>>(new Set<string>());
+  const ids = useMemo(() => {
+    const found = new Set<string>();
+    for (const message of messages) {
+      if (!Array.isArray(message.content)) continue;
+      for (const part of message.content) {
+        if (part.type === "tool-call") found.add(part.toolCallId);
+      }
+    }
+    const previous = held.current;
+    if (previous.size === found.size && [...found].every((id) => previous.has(id))) {
+      return previous;
+    }
+    held.current = found;
+    return found;
+  }, [messages]);
+
+  return <ToolCallIds.Provider value={ids}>{children}</ToolCallIds.Provider>;
 }
 
 function ApprovalList({
@@ -781,11 +812,16 @@ export function ChatThread() {
             </div>
           </div>
         </ThreadPrimitive.Empty>
-        <ThreadPrimitive.Messages>
-          {({ message }) =>
-            message.role === "user" ? <UserMessage /> : <AssistantMessage />
-          }
-        </ThreadPrimitive.Messages>
+        {/* Renders no element of its own, so the viewport's children are still
+            the messages. Held above them so the rescan happens once per chunk
+            rather than once per turn per chunk. */}
+        <ToolCallIndex>
+          <ThreadPrimitive.Messages>
+            {({ message }) =>
+              message.role === "user" ? <UserMessage /> : <AssistantMessage />
+            }
+          </ThreadPrimitive.Messages>
+        </ToolCallIndex>
         <Dock />
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>

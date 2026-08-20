@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiApproval } from "./api";
 import { publishApproval } from "./approvals";
-import { AssistantMessage } from "./chat";
+import { AssistantMessage, ToolCallIndex, useToolCallIds } from "./chat";
 
 type Part =
   | { type: "text"; text: string }
@@ -92,6 +92,16 @@ function call(toolCallId: string, toolName: string, detail: string): Part {
   };
 }
 
+/** The turn under the thread's call index, which is where `ChatThread` puts it
+ *  and where the placement is decided. */
+function renderTurn() {
+  return render(
+    <ToolCallIndex>
+      <AssistantMessage />
+    </ToolCallIndex>,
+  );
+}
+
 /** One turn as the reader meets it: every folded row and paragraph, in order. */
 function rendered(): string[] {
   return Array.from(
@@ -128,7 +138,7 @@ describe("where a turn shows what it was asked to allow", () => {
       0,
     );
 
-    render(<AssistantMessage />);
+    renderTurn();
 
     expect(rendered()).toEqual([
       "ran Bash",
@@ -154,7 +164,7 @@ describe("where a turn shows what it was asked to allow", () => {
       0,
     );
 
-    render(<AssistantMessage />);
+    renderTurn();
 
     expect(rendered()).toEqual([
       "ran Bash",
@@ -162,5 +172,84 @@ describe("where a turn shows what it was asked to allow", () => {
       "Approved · rm -rf build",
       "Approved · git push",
     ]);
+  });
+});
+
+/** A transcript that reports how much of it was read.
+ *
+ *  What the cost of deciding placement looks like from the outside, and the
+ *  only way to see it: a scan run once per turn instead of once renders exactly
+ *  the same transcript, and differs only in how much of the conversation is
+ *  walked every time a token lands. */
+function countingTranscript(turns: number) {
+  const reads = { content: 0 };
+  const messages = Array.from({ length: turns }, (_, index) => ({
+    get content() {
+      reads.content += 1;
+      return [call(`call-${index}`, "Bash", "ls")];
+    },
+  }));
+  return { reads, messages };
+}
+
+describe("what deciding placement costs", () => {
+  it("walks the transcript once, however many turns are on screen", () => {
+    const alone = countingTranscript(4);
+    turn.thread.messages = alone.messages;
+    render(
+      <ToolCallIndex>
+        <AssistantMessage />
+      </ToolCallIndex>,
+    );
+
+    const crowd = countingTranscript(4);
+    turn.thread.messages = crowd.messages;
+    render(
+      <ToolCallIndex>
+        <AssistantMessage />
+        <AssistantMessage />
+        <AssistantMessage />
+        <AssistantMessage />
+      </ToolCallIndex>,
+    );
+
+    expect(alone.reads.content).toBeGreaterThan(0);
+    expect(crowd.reads.content).toBe(alone.reads.content);
+  });
+
+  it("hands back the same index when a chunk brings no new call", () => {
+    const seen: ReadonlySet<string>[] = [];
+    const Probe = () => {
+      seen.push(useToolCallIds());
+      return null;
+    };
+    const content = [call("call-1", "Bash", "ls")];
+    turn.thread.messages = [{ content }];
+    const { rerender } = render(
+      <ToolCallIndex>
+        <Probe />
+      </ToolCallIndex>,
+    );
+
+    // What a streamed chunk does: a new array over the calls already placed.
+    turn.thread.messages = [{ content }];
+    rerender(
+      <ToolCallIndex>
+        <Probe />
+      </ToolCallIndex>,
+    );
+
+    expect(seen[1]).toBe(seen[0]);
+
+    // A new call is a new index, because where a request goes has changed.
+    turn.thread.messages = [{ content: [...content, call("call-2", "Edit", "api.ts")] }];
+    rerender(
+      <ToolCallIndex>
+        <Probe />
+      </ToolCallIndex>,
+    );
+
+    expect(seen[2]).not.toBe(seen[0]);
+    expect([...seen[2]]).toEqual(["call-1", "call-2"]);
   });
 });
