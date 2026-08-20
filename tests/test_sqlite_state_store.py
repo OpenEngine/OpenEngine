@@ -87,6 +87,7 @@ def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
             title="Durable title",
             archived=True,
             runner="claude",
+            auto_approve=True,
         )
     )
     first.close()
@@ -101,6 +102,7 @@ def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
     assert loaded.title == "Durable title"
     assert loaded.archived is True
     assert loaded.runner == "claude"
+    assert loaded.auto_approve is True
 
 
 def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
@@ -138,6 +140,7 @@ def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
     assert loaded.title == "New chat"
     assert loaded.archived is False
     assert loaded.runner == ""
+    assert loaded.auto_approve is False
 
 
 def test_approvals_written_before_grants_existed_still_load(tmp_path) -> None:

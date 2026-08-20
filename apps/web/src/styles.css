@@ -391,6 +391,9 @@ ul, ol { padding: 0; list-style: none; }
   align-items: end;
   padding: 22px var(--gutter);
 }
+.panel-head-implementation {
+  grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(150px, 200px));
+}
 .panel-head-copy { display: grid; gap: 10px; min-width: 0; }
 .panel-head h1 {
   font-size: clamp(24px, 2.4vw, 33px);
@@ -430,6 +433,8 @@ select.field-box {
 select:disabled { cursor: default; }
 .field-box:focus-visible { border-color: var(--ink); outline: 0; }
 .field-error { color: var(--flame-deep); font: 400 12px/1.4 var(--mono); }
+.auto-approve-control { gap: 10px; cursor: pointer; }
+.auto-approve-control input { accent-color: var(--flame); }
 
 .stats {
   display: grid;

@@ -185,9 +185,10 @@ class AgentSession:
         title: str,
         archived: bool,
         runner: str,
+        auto_approve: bool = False,
     ) -> AgentInstance:
         return await self._capabilities.state_store.update_instance_metadata(
-            instance_id, title, archived, runner
+            instance_id, title, archived, runner, auto_approve
         )
 
     async def instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:

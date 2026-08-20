@@ -73,6 +73,7 @@ class SQLiteStateStore:
                     title TEXT NOT NULL DEFAULT 'New chat',
                     archived INTEGER NOT NULL DEFAULT 0,
                     runner TEXT NOT NULL DEFAULT '',
+                    auto_approve INTEGER NOT NULL DEFAULT 0,
                     workflow_run_id TEXT,
                     workflow_step_id TEXT
                 );
@@ -169,6 +170,11 @@ class SQLiteStateStore:
                 self._connection.execute(
                     "ALTER TABLE agent_instances "
                     "ADD COLUMN runner TEXT NOT NULL DEFAULT ''"
+                )
+            if "auto_approve" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_instances "
+                    "ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0"
                 )
             if "workflow_run_id" not in columns:
                 self._connection.execute(
@@ -298,15 +304,16 @@ class SQLiteStateStore:
         title: str,
         archived: bool,
         runner: str,
+        auto_approve: bool = False,
     ) -> AgentInstance:
         with self._lock, self._connection:
             updated = self._connection.execute(
                 """
                 UPDATE agent_instances
-                SET title = ?, archived = ?, runner = ?
+                SET title = ?, archived = ?, runner = ?, auto_approve = ?
                 WHERE instance_id = ?
                 """,
-                (title, archived, runner, instance_id),
+                (title, archived, runner, auto_approve, instance_id),
             ).rowcount
             if not updated:
                 raise KeyError(f"no agent instance {instance_id!r}")
@@ -319,7 +326,8 @@ class SQLiteStateStore:
             row = self._connection.execute(
                 """
                 SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                       title, archived, runner, workflow_run_id, workflow_step_id
+                       title, archived, runner, auto_approve,
+                       workflow_run_id, workflow_step_id
                 FROM agent_instances WHERE instance_id = ?
                 """,
                 (instance_id,),
@@ -348,7 +356,8 @@ class SQLiteStateStore:
     ) -> Sequence[AgentInstance]:
         query = """
             SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                   title, archived, runner, workflow_run_id, workflow_step_id
+                   title, archived, runner, auto_approve,
+                   workflow_run_id, workflow_step_id
             FROM agent_instances
         """
         filters: list[str] = []
@@ -621,6 +630,7 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
         title=row["title"],
         archived=bool(row["archived"]),
         runner=row["runner"],
+        auto_approve=bool(row["auto_approve"]),
         workflow_run_id=(
             RunId(row["workflow_run_id"])
             if row["workflow_run_id"] is not None

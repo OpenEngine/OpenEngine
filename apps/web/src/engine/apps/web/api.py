@@ -93,6 +93,8 @@ class ChatThread:
     workflow_step_id: StepId | None = None
     editable: bool = False
     """Whether this workflow step permits human messages and interruption."""
+    auto_approve: bool = False
+    """Whether system auto-approvals are enabled for this conversation."""
 
 
 class ActiveRun:
@@ -295,6 +297,7 @@ class ThreadService:
             workflow_run_id=instance.workflow_run_id,
             workflow_step_id=instance.workflow_step_id,
             editable=_workflow_step_editable(instance.workflow_step_id),
+            auto_approve=instance.auto_approve,
         )
         self._threads[instance.instance_id] = await self._sync_workspace(thread)
         self._locks[instance.instance_id] = asyncio.Lock()
@@ -460,6 +463,12 @@ class ThreadService:
         """The latest run, including a just-finished run needed by a racing resume."""
         return self._active_runs.get(instance_id)
 
+    def auto_approve_enabled(self, instance_id: AgentInstanceId) -> bool:
+        """The live per-conversation override read by workflow approval handlers."""
+
+        thread = self._threads.get(instance_id)
+        return bool(thread and thread.auto_approve)
+
     async def decide_approval(
         self,
         instance_id: AgentInstanceId,
@@ -569,6 +578,7 @@ class ThreadService:
         title: str | None = None,
         runner: str | None = None,
         archived: bool | None = None,
+        auto_approve: bool | None = None,
     ) -> ChatThread:
         thread = await self._require(instance_id)
         if runner is not None and runner not in self.session.runners:
@@ -579,12 +589,24 @@ class ThreadService:
             thread.runner = runner
         if archived is not None:
             thread.archived = archived
+        if auto_approve is not None:
+            if not thread.editable:
+                raise ValueError(
+                    "auto-approval is only available for implementation conversations"
+                )
+            thread.auto_approve = auto_approve
         await self._persist_metadata(thread)
+        if auto_approve:
+            await self.approvals.auto_approve_pending(instance_id)
         return thread
 
     async def _persist_metadata(self, thread: ChatThread) -> None:
         await self.session.update_instance_metadata(
-            thread.instance_id, thread.title, thread.archived, thread.runner
+            thread.instance_id,
+            thread.title,
+            thread.archived,
+            thread.runner,
+            thread.auto_approve,
         )
 
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -646,6 +668,7 @@ class ThreadService:
                     workflow_run_id=instance.workflow_run_id,
                     workflow_step_id=instance.workflow_step_id,
                     editable=_workflow_step_editable(instance.workflow_step_id),
+                    auto_approve=instance.auto_approve,
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
@@ -694,6 +717,7 @@ def create_app(
             translator=(
                 step_runner.permission_translator if step_runner is not None else None
             ),
+            auto_approve=lambda: service.auto_approve_enabled(command.instance_id),
         )
 
     workflow_executor = WorkflowExecutor(
@@ -976,9 +1000,17 @@ def create_app(
             else:
                 title = None
         runner = str(body["runner"]) if "runner" in body else None
+        auto_approve = None
+        if "autoApprove" in body:
+            if not isinstance(body["autoApprove"], bool):
+                return _error("autoApprove must be a boolean", 400)
+            auto_approve = body["autoApprove"]
         try:
             thread = await service.update_metadata(
-                instance_id, title=title, runner=runner
+                instance_id,
+                title=title,
+                runner=runner,
+                auto_approve=auto_approve,
             )
         except ValueError as error:
             return _error(str(error), 400)
@@ -1272,6 +1304,8 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
     if thread.workflow_step_id is not None:
         result["workflowStepId"] = str(thread.workflow_step_id)
         result["editable"] = thread.editable
+        if thread.editable:
+            result["autoApprove"] = thread.auto_approve
     return result
 
 
