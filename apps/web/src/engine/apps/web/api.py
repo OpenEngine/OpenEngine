@@ -27,6 +27,7 @@ from uuid import uuid4
 from engine.core.workflows.implementation_review import (
     IMPLEMENTATION_STEP_SPEC,
     REVIEW_STEP_SPEC,
+    WORKFLOW_BASE_REF,
 )
 from engine.domain import (
     AgentId,
@@ -367,15 +368,36 @@ class ThreadService:
     async def attach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
         """Give this chat a checkout again -- or a first one."""
         thread = await self._require_idle(instance_id)
+        repository = None
+        base_ref = None
+        if thread.workflow_run_id is not None:
+            run = await self.session.state_store.load(thread.workflow_run_id)
+            if run is None:
+                raise RuntimeError("workflow run not found")
+            repository = run.repository
+            base_ref = WORKFLOW_BASE_REF
         async with self._locks[instance_id]:
-            state = await self.session.attach_workspace(instance_id)
-        return _with_workspace(thread, state)
+            state = await self.session.attach_workspace(
+                instance_id, repository=repository, base_ref=base_ref
+            )
+        return self._apply_workspace_state(thread, state)
 
     async def detach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
         """Release this chat's checkout, keeping its work on the branch."""
         thread = await self._require_idle(instance_id)
         async with self._locks[instance_id]:
             state = await self.session.detach_workspace(instance_id)
+        return self._apply_workspace_state(thread, state)
+
+    def _apply_workspace_state(
+        self, thread: ChatThread, state: WorkspaceState | None
+    ) -> ChatThread:
+        """Refresh every loaded conversation sharing the changed workspace."""
+        workspace_id = state.workspace_id if state is not None else thread.workspace_id
+        if workspace_id is not None:
+            for cached in self._threads.values():
+                if cached.workspace_id == workspace_id:
+                    _with_workspace(cached, state)
         return _with_workspace(thread, state)
 
     async def _require_idle(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -430,7 +452,7 @@ class ThreadService:
         self, instance_id: AgentInstanceId, text: str, runner: str | None
     ) -> ActiveRun:
         thread = await self._require(instance_id)
-        await self._require_somewhere_to_run(instance_id)
+        await self.require_somewhere_to_run(instance_id)
         initial_message_count = len(await self.session.history(instance_id))
         current = self.active_run(instance_id)
         if current is not None:
@@ -665,7 +687,7 @@ class ThreadService:
             raise KeyError(f"no chat thread {instance_id!r}")
         return thread
 
-    async def _require_somewhere_to_run(self, instance_id: AgentInstanceId) -> None:
+    async def require_somewhere_to_run(self, instance_id: AgentInstanceId) -> None:
         """Refuse a turn a detached chat cannot run, in words the UI can act on.
 
         The runner would fail on the missing directory anyway, several layers
@@ -866,6 +888,7 @@ def create_app(
         assert thread.workflow_run_id is not None
         if not thread.editable:
             raise RuntimeError("this workflow conversation is read-only")
+        await service.require_somewhere_to_run(thread.instance_id)
         before = len(await service.history(thread.instance_id))
         state = await session.state_store.load(thread.workflow_run_id)
         if state is None:

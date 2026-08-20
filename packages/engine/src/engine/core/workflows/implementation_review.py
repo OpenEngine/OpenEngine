@@ -37,6 +37,7 @@ from engine.domain.state import RunPhase, RunState
 from engine.domain.workflow import StepOutput, StepSpec
 
 WORKFLOW_ID = IMPLEMENTATION_REVIEW_WORKFLOW_ID
+WORKFLOW_BASE_REF = "origin/main"
 
 IMPLEMENTATION_STEP = StepId("implementation")
 REVIEW_STEP = StepId("review")
@@ -253,7 +254,7 @@ def decide_implementation_review(
             command = ProvisionWorkspace(
                 run_id=event.run_id,
                 repository=event.repository,
-                base_ref="origin/main",
+                base_ref=WORKFLOW_BASE_REF,
             )
             return next_state, (command,)
 
@@ -385,6 +386,7 @@ __all__ = [
     "REVIEW_STEP",
     "REVIEW_STEP_SPEC",
     "WORKFLOW_ID",
+    "WORKFLOW_BASE_REF",
     "WORKFLOW_NAME_PROMPT",
     "WORKFLOW_NAMING_PROFILE",
     "agent_instance_id",
