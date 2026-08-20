@@ -58,6 +58,28 @@ A failing test keeps its directory and prints the path, and attaches whatever
 the server said to the report. `npx playwright show-trace test-results/…` opens
 the trace.
 
+## Reading a run afterwards
+
+Every run writes `playwright-report/`, pass or fail, and each spec attaches a
+full-page still at every state it asserts on:
+
+```ts
+await shot(page, testInfo, "2 the approval, pending");
+```
+
+Numbered so the report reads as a sequence. They are documentation as much as
+diagnostics -- what the approval card actually looked like on that commit, for
+someone who is not going to run the tier -- so every spec added here should
+attach the same kind of still at its own decisive moment.
+
+```
+npx playwright show-report apps/web/playwright-report
+```
+
+In CI the report is uploaded from the `browser` job whether or not the run went
+green. It is a static site and GitHub will not serve it: download the artifact,
+unzip it, and point `show-report` at the directory.
+
 ## What is covered
 
 * `chat-approvals.spec.ts` -- a new chat on each runner: the turn streams while
@@ -143,8 +165,9 @@ credential today.
 ## Tooling worth knowing
 
 * `npx playwright test --ui` -- the run, the DOM, and the network at each step.
-* `npx playwright show-trace test-results/…/trace.zip` -- the same, after a CI
-  failure. Traces are kept on failure only.
+* `npx playwright show-trace test-results/…/trace.zip` -- the same, after the
+  run. Locally every test keeps a trace, passing ones included, so the click
+  that approved something can be replayed later; CI keeps failures only.
 * `npx playwright codegen <url>` -- point it at a harness server you started by
   hand (`uv run python apps/web/e2e/harness/server.py --port 8123 --repository
   … --state …`) and click through it to author selectors.

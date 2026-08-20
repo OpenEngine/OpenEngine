@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base } from "@playwright/test";
+import { test as base, type Page, type TestInfo } from "@playwright/test";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
@@ -97,6 +97,20 @@ export const test = base.extend<{ engine: Engine }>({
 });
 
 export { expect } from "@playwright/test";
+
+/** Attach a full-page still to the report, under `name`.
+ *
+ *  Documentation as much as diagnostics: a passing run's report is where
+ *  somebody goes to see what the interface does at a moment they cannot
+ *  reproduce on demand, and a screenshot is readable without replaying a
+ *  trace. Every spec should attach one at each state it asserts on, named so
+ *  the report reads as a sequence. */
+export async function shot(page: Page, testInfo: TestInfo, name: string): Promise<void> {
+  await testInfo.attach(name, {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+}
 
 /** A repository with one commit, for chats and runs to make worktrees of. */
 function fixtureRepository(root: string): string {
