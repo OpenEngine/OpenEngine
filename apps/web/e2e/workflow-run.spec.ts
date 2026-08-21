@@ -70,7 +70,8 @@ const SCRIPT: Script = {
         // agent's answer. The runtime usually cancels the CLI the moment it
         // accepts a terminal result, so this is often never reached -- but a
         // turn that does finish first is only assembled in the order it was
-        // streamed when its last item is a message. See `e2e/README.md`.
+        // streamed when its last item is a message. Workaround for #105; see
+        // `e2e/README.md` before removing it.
         { type: "say", text: "Wrote greeting.txt." },
       ],
     },

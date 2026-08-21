@@ -84,6 +84,10 @@ it (`streamed workflow transcript does not match completed turn`) even though
 the result was accepted. A closing message is what a real CLI sends anyway, and
 it keeps that race off these tests.
 
+That is a workaround, and it is only here until #105 is fixed -- which is also
+where the deterministic reproduction lives, since the race itself has never been
+observed end to end. Take the closing `say` out with that ticket, not before.
+
 A failing test keeps its directory and prints the path, and attaches whatever
 the server said to the report. `npx playwright show-trace test-results/…` opens
 the trace.

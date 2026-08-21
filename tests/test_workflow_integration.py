@@ -415,7 +415,8 @@ SCRIPTED_RUN = {
                 },
                 # A turn ends in the agent's answer, and a turn that finishes
                 # before the runtime cancels it is only assembled in the order
-                # it was streamed when its last item is a message.
+                # it was streamed when its last item is a message. Workaround
+                # for #105, which carries the reproduction.
                 {"type": "say", "text": "Wrote greeting.txt."},
             ],
         },
