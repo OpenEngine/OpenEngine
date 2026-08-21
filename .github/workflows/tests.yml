@@ -19,6 +19,30 @@ env:
   UV_VERSION: "0.9.28"
 
 jobs:
+  web:
+    name: web client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web client
+        run: npm --prefix apps/web ci
+
+      - name: Typecheck web client
+        run: npm --prefix apps/web run typecheck
+
+      - name: Test web client
+        run: npm --prefix apps/web run test
+
+      - name: Build web client
+        run: npm --prefix apps/web run build
+
   boundaries:
     # Separated from the test matrix on purpose: this job answers "did someone
     # break the architecture?", which is a different question from "did someone
@@ -63,12 +87,26 @@ jobs:
             exit 1
           fi
           /tmp/bare/bin/python -c "
+          import openengine as oe
           from engine.core import decide
           from engine.domain import RunId, RunRequested, RunState, TaskId
+          worker = oe.agent(id='worker', instructions='work')
+          workflow = oe.workflow(
+              id='test-v1', name='Test', version='v1',
+              steps=[oe.agent_step(
+                  id='work', name='Work', agent=worker,
+                  prompt=oe.template('work'),
+                  transitions={'*': oe.succeed()},
+              )],
+          )
           run, task = RunId('r'), TaskId('t')
           _, commands = decide(
-              RunState(run_id=run, task_id=task),
-              RunRequested(run_id=run, task_id=task, prompt='p', repository='acme/api'),
+              RunState(run_id=run, task_id=task, workflow_id=workflow.workflow_id),
+              RunRequested(
+                  run_id=run, task_id=task, prompt='p', repository='acme/api',
+                  workflow_id=workflow.workflow_id,
+              ),
+              workflow,
           )
           assert commands, 'engine emitted no command'
           print('core decided:', commands[0].__class__.__name__)

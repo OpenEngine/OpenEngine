@@ -215,14 +215,19 @@ class Turn:
     def paused_for(self) -> tuple[ApprovalRecord, ...]:
         """The requests that were actually put to a person.
 
-        Everything a grant answered is excluded, and nothing else is: a request
-        decided by the user was a card they were shown, and one left undecided
-        was a card nobody got to.
+        Everything answered without one is excluded -- a grant, or the
+        configured policy -- and nothing else is: a request decided by the user
+        was a card they were shown, and one left undecided was a card nobody got
+        to.
         """
+        answered_for_them = {
+            ApprovalDecisionSource.SESSION_GRANT,
+            ApprovalDecisionSource.POLICY,
+        }
         return tuple(
             record
             for record in self.approvals
-            if record.decision_source is not ApprovalDecisionSource.SESSION_GRANT
+            if record.decision_source not in answered_for_them
         )
 
 

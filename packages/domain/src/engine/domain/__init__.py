@@ -26,6 +26,7 @@ from engine.domain.commands import (
 )
 from engine.domain.events import (
     AgentRunCompleted,
+    AgentStepPaused,
     ChangesPublished,
     Event,
     HumanReviewCompleted,
@@ -33,6 +34,7 @@ from engine.domain.events import (
     RunNamed,
     RunRequested,
     StepCompleted,
+    StepReactivated,
     WorkspaceProvisioned,
 )
 from engine.domain.ids import (
@@ -77,6 +79,7 @@ __all__ = [
     "AgentRunCompleted",
     "AgentRunId",
     "AgentRunStatus",
+    "AgentStepPaused",
     "AgentStep",
     "ApprovalDecision",
     "ApprovalDecisionSource",
@@ -111,6 +114,7 @@ __all__ = [
     "SessionGrantId",
     "StartAgentRun",
     "StepCompleted",
+    "StepReactivated",
     "StepId",
     "StepOutput",
     "StepSpec",

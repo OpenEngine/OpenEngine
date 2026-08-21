@@ -15,7 +15,7 @@ machine follows in a later ticket.
 
 from engine.core.workflow_interpreter import decide_workflow
 from engine.domain.commands import Command
-from engine.domain.events import Event, RunRequested
+from engine.domain.events import Event, RunRequested, StepReactivated
 from engine.domain.state import RunState
 from engine.domain.workflow import WorkflowDefinition
 
@@ -52,7 +52,9 @@ def decide(
     Total by construction: an unrecognised event is a no-op rather than an
     error, so an adapter emitting something new can never wedge a live run.
     """
-    if state.is_terminal:
+    # A human can reopen an editable step after the workflow itself reached a
+    # terminal state. Every other late event remains a no-op.
+    if state.is_terminal and not isinstance(event, StepReactivated):
         return Decision(state, ())
 
     if event.run_id != state.run_id:

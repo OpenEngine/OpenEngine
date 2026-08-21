@@ -48,6 +48,7 @@ from typing import Any
 from engine.adapters.agent_runner.claude_code.permissions import (
     CLAUDE_PERMISSION_TRANSLATOR,
     ClaudePermissionTranslator,
+    allowed_tools_for,
 )
 from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
@@ -160,12 +161,18 @@ def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | 
         None,
     )
     command = tool_input.get("command") if tool_name == "Bash" else None
+    # `tool_use_id` is the id of the `tool_use` block this run already recorded
+    # as a `ToolCall`, so the pause names the call in the transcript rather than
+    # merely describing it. A control request without one is a request about
+    # nothing we stored, and says so.
+    tool_use_id = request.get("tool_use_id")
     return ApprovalRequest(
-        approval_id=str(request.get("tool_use_id") or message["request_id"]),
+        approval_id=str(tool_use_id or message["request_id"]),
         kind=kind,
         reason=reason,
         command=str(command) if command is not None else None,
         tool_name=tool_name,
+        tool_call_id=str(tool_use_id) if tool_use_id else None,
         arguments=json.dumps(tool_input, sort_keys=True),
         allowed_decisions=tuple(allowed),
     )
@@ -411,6 +418,7 @@ class ClaudeCodeAgentRunner:
         working_directory: str = ".",
         model: str = "",
         workspace_provider: WorkspaceProvider | None = None,
+        attribution: bool = True,
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
@@ -418,6 +426,7 @@ class ClaudeCodeAgentRunner:
         self._allowed_tools = tuple(allowed_tools)
         self._working_directory = working_directory
         self._model = model
+        self._attribution = attribution
         self._workspace_provider = workspace_provider
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
@@ -427,6 +436,20 @@ class ClaudeCodeAgentRunner:
         """The argv this runner would use. Public so the wiring is inspectable
         without running anything."""
         argv = [self._binary_path, "-p", "--output-format", "stream-json", "--verbose"]
+        if not self._attribution:
+            argv += [
+                "--settings",
+                json.dumps(
+                    {
+                        "attribution": {
+                            "commit": "",
+                            "pr": "",
+                            "sessionUrl": False,
+                        }
+                    },
+                    separators=(",", ":"),
+                ),
+            ]
         if profile.instructions.strip():
             # A real system-prompt channel, unlike `codex exec` -- so the
             # instructions never enter the conversation text.
@@ -856,6 +879,7 @@ __all__ = [
     "ClaudePermissionTranslator",
     "ClaudeToolsUnsupportedError",
     "ClaudeUnavailableError",
+    "allowed_tools_for",
     "approval_request_from_control",
     "control_response_for",
     "messages_from_event",

@@ -47,8 +47,14 @@ class RunState:
     max_agent_runs: int = 3
     current_step_id: StepId | None = None
     current_agent_run_id: AgentRunId | None = None
+    agent_paused: bool = False
+    """Whether the current agent step intentionally awaits a human continuation."""
+    runner_name: str = ""
+    """The provider selected for every agent step in this workflow run."""
     step_results: tuple[StepCompleted, ...] = field(default=())
     human_review: HumanReviewCompleted | None = None
+    human_reviews: tuple[HumanReviewCompleted, ...] = field(default=())
+    """Every human decision, retained for workflows with more than one review."""
     failure_reason: str = ""
     workflow_definition: WorkflowDefinition | None = None
     """The compiled definition snapshot used by this run."""

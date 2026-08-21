@@ -25,7 +25,11 @@ export type InlineApproval = {
    *
    *  Recorded when the request first arrives and never moved afterwards: the
    *  same request is republished as it is decided, and by then the turn it
-   *  interrupted may no longer be the last one. */
+   *  interrupted may no longer be the last one.
+   *
+   *  The fallback rather than the placement: a request that names a tool call
+   *  is shown beside that call, wherever in the transcript it turns out to be.
+   *  This is what is left for the ones that name none. */
   messageIndex: number;
   approval: ApiApproval;
 };

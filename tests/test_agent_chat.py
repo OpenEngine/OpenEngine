@@ -163,13 +163,14 @@ def test_instance_metadata_is_updated_together() -> None:
 
     updated = asyncio.run(
         store.update_instance_metadata(
-            instance.instance_id, "Named chat", True, "claude"
+            instance.instance_id, "Named chat", True, "claude", True
         )
     )
 
     assert updated.title == "Named chat"
     assert updated.archived is True
     assert updated.runner == "claude"
+    assert updated.auto_approve is True
     assert asyncio.run(store.load_instance(instance.instance_id)) == updated
 
 

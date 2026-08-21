@@ -16,7 +16,9 @@ from engine.adapters.agent_runner.claude_code import (
     ClaudeCodeAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
+    READ_ONLY_TOOLS,
     WORKSPACE_WRITE_TOOLS,
+    allowed_tools_for,
     approval_request_from_control,
     control_response_for,
     parse_events,
@@ -76,6 +78,13 @@ def test_runner_satisfies_the_port() -> None:
     assert isinstance(runner.permission_translator, PermissionTranslator)
 
 
+def test_attribution_can_be_disabled_for_commits_and_pull_requests() -> None:
+    argv = ClaudeCodeAgentRunner(attribution=False).command_line(PROFILE)
+
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings == {"attribution": {"commit": "", "pr": "", "sessionUrl": False}}
+
+
 @pytest.mark.parametrize(
     ("kind", "tool_name", "command", "expected"),
     [
@@ -115,6 +124,29 @@ def test_permission_translator_maps_claude_tools_to_engine_capabilities(
     )
 
     assert CLAUDE_PERMISSION_TRANSLATOR.scope_for(request) == expected
+
+
+def test_capabilities_preapprove_the_tools_that_are_only_tools() -> None:
+    """The other direction: a policy, as the CLI's own allow-list."""
+    assert allowed_tools_for(()) == ()
+    assert allowed_tools_for((ApprovalCapability.READ,)) == READ_ONLY_TOOLS
+    assert allowed_tools_for(
+        (ApprovalCapability.EDIT, ApprovalCapability.READ)
+    ) == ("Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit")
+    assert allowed_tools_for((ApprovalCapability.WEB,)) == ("WebFetch", "WebSearch")
+
+
+def test_shell_and_mcp_are_never_preapproved_to_the_provider() -> None:
+    """Both are still allowable -- one request at a time, through the callback.
+
+    Preapproving `Bash` would run the commands `approvals.bash.deny` names
+    before anything could consult the patterns, and an MCP grant names a server
+    this list is built before knowing.
+    """
+    everything = allowed_tools_for(tuple(ApprovalCapability))
+
+    assert "Bash" not in everything
+    assert not any(tool.startswith("mcp__") for tool in everything)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -341,6 +373,37 @@ def test_control_permission_is_normalized_without_a_decline_choice() -> None:
         ApprovalDecision.ACCEPT_FOR_SESSION,
         ApprovalDecision.CANCEL,
     )
+
+
+def test_control_permission_names_the_call_the_transcript_records() -> None:
+    """What lets a client show the request beside the command it is about.
+
+    Asserted as one identity rather than as a literal, because the id being
+    right is not the property that matters: both halves have to spell the same
+    `tool_use` block the same way, or the pairing silently finds nothing.
+    """
+    transcript = (
+        '{"type":"assistant","message":{"content":[{"type":"tool_use",'
+        '"id":"toolu_1","name":"Bash","input":{"command":"touch output.txt"}}]}}\n'
+        '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
+    )
+    call = turn_from_events(parse_events(transcript)).steps[0]
+    request = approval_request_from_control(CONTROL_APPROVAL)
+
+    assert request is not None
+    assert request.tool_call_id == call.tool_calls[0].call_id == "toolu_1"
+
+
+def test_control_permission_without_a_tool_use_id_names_no_call() -> None:
+    """Nothing to pair it with, and nothing invented: it belongs to the turn."""
+    message = {**CONTROL_APPROVAL, "request": dict(CONTROL_APPROVAL["request"])}
+    del message["request"]["tool_use_id"]
+
+    request = approval_request_from_control(message)
+
+    assert request is not None
+    assert request.approval_id == "permission-1"
+    assert request.tool_call_id is None
 
 
 def test_control_cancel_denies_and_interrupts_the_whole_turn() -> None:

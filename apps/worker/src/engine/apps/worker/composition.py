@@ -31,7 +31,13 @@ class Settings:
     workspace_root: str = "/tmp/engine-workspaces"
     postgres_dsn: str = ""
     engine_config: EngineConfig = EngineConfig()
-    """Provider-neutral settings loaded from TOML; policy enforcement lands next."""
+    """Provider-neutral settings loaded from TOML.
+
+    `approvals` governs turns that can pause to ask, and this process runs none:
+    its runner is the unattended one, held to its sandbox rather than to a
+    policy. Read here so the worker refuses to start on a file the interface
+    would refuse too.
+    """
     config_path: Path | None = None
 
 
@@ -40,7 +46,7 @@ def build_capabilities(settings: Settings) -> Capabilities:
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host, task_queue=settings.task_queue),
         source_control=GitHubSourceControl(settings.github_token),
-        agent_runner=CodexAgentRunner(),
+        agent_runner=CodexAgentRunner(attribution=settings.engine_config.attribution),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
         workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
         state_store=PostgresStateStore(settings.postgres_dsn),

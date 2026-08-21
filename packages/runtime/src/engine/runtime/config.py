@@ -54,6 +54,7 @@ class EngineConfig:
 
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
+    attribution: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +119,10 @@ def load_engine_config(
 def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     """Validate a decoded TOML document and return immutable settings."""
 
-    _reject_unknown(document, {"approvals", "workflows"}, "configuration")
+    _reject_unknown(document, {"attribution", "approvals", "workflows"}, "configuration")
+    attribution = document.get("attribution", True)
+    if not isinstance(attribution, bool):
+        raise EngineConfigError("attribution must be a boolean")
     approvals = _table(document.get("approvals", {}), "approvals")
     _reject_unknown(approvals, {"auto_approve", "allow", "bash"}, "approvals")
 
@@ -149,6 +153,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         raise EngineConfigError("workflows.directory must not be blank")
 
     return EngineConfig(
+        attribution=attribution,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -163,7 +168,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
 
 def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
-    """A compact startup description that does not imply policy is enforced."""
+    """A compact startup description of the policy this process will apply."""
 
     source = str(loaded.path) if loaded.path is not None else "defaults (no engine.toml)"
     approvals = loaded.config.approvals
@@ -178,10 +183,11 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
         if loaded.workflows_directory is not None
         else "disabled"
     )
+    attribution = "on" if loaded.config.attribution else "off"
     return (
-        f"configuration: {source}; approvals loaded "
-        f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}; "
-        f"policy enforcement not enabled); workflows={workflows}"
+        f"configuration: {source}; attribution={attribution}; approvals enforced "
+        f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
+        f"workflows={workflows}"
     )
 
 

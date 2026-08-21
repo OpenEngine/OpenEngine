@@ -5,10 +5,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from engine.core import decide
-from engine.core.workflow_interpreter import current_agent_command
+from engine.core.workflow_interpreter import agent_run_id, current_agent_command
 from engine.domain import (
     AgentRunId,
     AgentStep,
+    AgentStepPaused,
     Command,
     Event,
     HumanReviewCompleted,
@@ -23,6 +24,8 @@ from engine.domain import (
     RunState,
     StartAgentRun,
     StepCompleted,
+    StepId,
+    StepReactivated,
     WorkflowDefinition,
     WorkspaceAccess,
     WorkspaceProvisioned,
@@ -91,11 +94,15 @@ class WorkflowExecutor:
         """Start and drive any configured workflow."""
 
         try:
-            selected_name = self._runner_name(runner_name)
             state = await self._require_state(initial_event.run_id)
+            selected_name = self._runner_name(runner_name, state)
             definition = self._definition_for(state, initial_event.workflow_id)
-            if state.workflow_definition is None:
-                state = replace(state, workflow_definition=definition)
+            if state.workflow_definition is None or state.runner_name != selected_name:
+                state = replace(
+                    state,
+                    workflow_definition=definition,
+                    runner_name=selected_name,
+                )
                 await self._capabilities.state_store.save(state)
             state, commands = await self._transition(
                 state, initial_event, definition, append_event=False
@@ -125,20 +132,36 @@ class WorkflowExecutor:
         run_id: RunId,
         message: str | None = None,
         runner_name: str = "",
+        *,
+        step_id: StepId | None = None,
     ) -> None:
         """Reconstruct and run the current agent command after a pause/restart."""
 
-        try:
-            selected_name = self._runner_name(runner_name)
-            state = await self._require_state(run_id)
-            definition = self._definition_for(state)
-            if state.phase is not RunPhase.RUNNING_AGENT:
-                raise WorkflowExecutionError("run is not executing an agent step")
-            step = definition.step(state.current_step_id) if state.current_step_id else None
-            if not isinstance(step, AgentStep):
-                raise WorkflowExecutionError("current workflow step is not an agent step")
-            if message is not None and not step.editable:
+        state = await self._require_state(run_id)
+        definition = self._definition_for(state)
+        target_step_id = step_id or state.current_step_id
+        target_step = definition.step(target_step_id) if target_step_id else None
+        if message is not None:
+            if not isinstance(target_step, AgentStep) or not target_step.editable:
                 raise WorkflowExecutionError("workflow step is read-only")
+            state, commands = await self._transition(
+                state,
+                StepReactivated(run_id=run_id, step_id=target_step.step_id),
+                definition,
+            )
+            if commands:
+                raise WorkflowExecutionError(
+                    "reactivating an agent step unexpectedly emitted commands"
+                )
+        if state.phase is not RunPhase.RUNNING_AGENT:
+            raise WorkflowExecutionError("run is not executing an agent step")
+        step = definition.step(state.current_step_id) if state.current_step_id else None
+        if not isinstance(step, AgentStep):
+            raise WorkflowExecutionError("current workflow step is not an agent step")
+        if message is None and state.agent_paused:
+            return
+        selected_name = self._runner_name(runner_name, state)
+        try:
             command = current_agent_command(definition, state)
             runner = self._runner_for(step, selected_name)
             outcome = await self._run_step(
@@ -161,6 +184,30 @@ class WorkflowExecutor:
         except Exception as error:
             await self._fail(run_id, error)
 
+    async def pause_agent_step(self, run_id: RunId, step_id: StepId) -> RunState:
+        """Durably mark an interrupted agent step as waiting for continuation."""
+
+        state = await self._require_state(run_id)
+        if (
+            state.phase is not RunPhase.RUNNING_AGENT
+            or state.current_step_id != step_id
+            or state.current_agent_run_id is None
+        ):
+            raise WorkflowExecutionError("workflow step is no longer active")
+        definition = self._definition_for(state)
+        next_state, commands = await self._transition(
+            state,
+            AgentStepPaused(
+                run_id=run_id,
+                step_id=step_id,
+                agent_run_id=state.current_agent_run_id,
+            ),
+            definition,
+        )
+        if commands:
+            raise WorkflowExecutionError("pausing an agent step emitted commands")
+        return next_state
+
     async def complete_human_review(
         self, event: HumanReviewCompleted
     ) -> RunState:
@@ -172,13 +219,10 @@ class WorkflowExecutor:
             raise WorkflowExecutionError("run is not awaiting human review")
         definition = self._definition_for(state)
         next_state, commands = await self._transition(state, event, definition)
-        if commands:
-            # v1 permits a human branch to another sequential step. Run it in
-            # the background caller's selected/default provider.
-            await self._drive(
-                next_state, commands, definition, self.default_runner
+        if len(commands) > 1:
+            raise WorkflowExecutionError(
+                "parallel workflow commands are not supported in v1"
             )
-            return await self._require_state(event.run_id)
         return next_state
 
     async def _drive(
@@ -190,7 +234,9 @@ class WorkflowExecutor:
     ) -> RunState:
         while commands:
             if len(commands) != 1:
-                raise WorkflowExecutionError("parallel workflow commands are not supported in v1")
+                raise WorkflowExecutionError(
+                    "parallel workflow commands are not supported in v1"
+                )
             command = commands[0]
             if isinstance(command, RequestHumanReview):
                 return state
@@ -200,13 +246,21 @@ class WorkflowExecutor:
                 )
             step = definition.step(command.step.step_id)
             if not isinstance(step, AgentStep):
-                raise WorkflowExecutionError(f"agent step not found: {command.step.step_id}")
+                raise WorkflowExecutionError(
+                    f"agent step not found: {command.step.step_id}"
+                )
             outcome = await self._run_step(
                 state,
                 command,
                 definition=definition,
                 runner=self._runner_for(step, runner_name),
                 runner_name=runner_name,
+                continuation=(
+                    command.prompt
+                    if command.agent_run_id
+                    != agent_run_id(state.run_id, step.step_id)
+                    else None
+                ),
             )
             if outcome is None:
                 return state
@@ -280,6 +334,15 @@ class WorkflowExecutor:
             next_state, commands = await self._transition(state, terminal, definition)
             return _StepOutcome(terminal, next_state, commands)
         if requests_clarification_or_escalation(terminal):
+            await self._transition(
+                state,
+                AgentStepPaused(
+                    run_id=state.run_id,
+                    step_id=command.step.step_id,
+                    agent_run_id=command.agent_run_id,
+                ),
+                definition,
+            )
             return None
         raise WorkflowExecutionError(
             f"{command.step.step_id} runner exited without a valid completion state"
@@ -310,8 +373,9 @@ class WorkflowExecutor:
         except ValueError as error:
             raise WorkflowExecutionError(str(error)) from error
 
-    def _runner_name(self, runner_name: str) -> str:
-        selected = runner_name or self.default_runner
+    def _runner_name(self, runner_name: str, state: RunState | None = None) -> str:
+        selected = runner_name or (state.runner_name if state is not None else "")
+        selected = selected or self.default_runner
         if selected not in self._runners:
             raise WorkflowExecutionError(f"unknown workflow runner: {selected}")
         return selected

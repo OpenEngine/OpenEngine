@@ -12,6 +12,7 @@ from engine.domain import (
     AgentRun,
     AgentRunId,
     AgentRunStatus,
+    AgentStepPaused,
     ApprovalId,
     ConversationId,
     HumanReviewCompleted,
@@ -22,6 +23,7 @@ from engine.domain import (
     RunPhase,
     RunState,
     StepCompleted,
+    StepReactivated,
     StepId,
     StepOutput,
     TaskId,
@@ -87,6 +89,7 @@ def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
             title="Durable title",
             archived=True,
             runner="claude",
+            auto_approve=True,
         )
     )
     first.close()
@@ -101,6 +104,7 @@ def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
     assert loaded.title == "Durable title"
     assert loaded.archived is True
     assert loaded.runner == "claude"
+    assert loaded.auto_approve is True
 
 
 def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
@@ -138,13 +142,17 @@ def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
     assert loaded.title == "New chat"
     assert loaded.archived is False
     assert loaded.runner == ""
+    assert loaded.auto_approve is False
 
 
 def test_approvals_written_before_grants_existed_still_load(tmp_path) -> None:
-    """A database from before approvals were bounded by a worktree.
+    """A database from before approvals were bounded by a worktree, or paired
+    with the call they were about.
 
-    Null is the honest value for one of those: nobody recorded where it
-    applied, so it matches no grant and is asked about again.
+    Null is the honest value for both: nobody recorded where one applied, so it
+    matches no grant and is asked about again; nobody recorded which call it
+    concerned, and nothing can work that out afterwards, so a client shows it at
+    the end of its turn rather than beside a command it has guessed at.
     """
     path = tmp_path / "conversations.sqlite3"
     connection = sqlite3.connect(path)
@@ -204,6 +212,7 @@ def test_approvals_written_before_grants_existed_still_load(tmp_path) -> None:
     assert loaded is not None
     assert loaded.command == "pytest"
     assert loaded.workspace_id is None
+    assert loaded.tool_call_id is None
     assert grants == ()
 
 
@@ -297,7 +306,13 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
     first = SQLiteStateStore(path)
     asyncio.run(first.save(state))
     named = RunNamed(run_id=run_id, name=state.name)
-    asyncio.run(first.append_events(run_id, (named,)))
+    paused = AgentStepPaused(
+        run_id=run_id,
+        step_id=StepId("implementation"),
+        agent_run_id=AgentRunId("implementation-execution"),
+    )
+    reactivated = StepReactivated(run_id=run_id, step_id=StepId("implementation"))
+    asyncio.run(first.append_events(run_id, (named, paused, reactivated)))
     asyncio.run(
         first.create_instance(
             AgentId("review-agent"),
@@ -320,7 +335,7 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
 
     assert loaded == state
     assert runs == (state,)
-    assert history == (named,)
+    assert history == (named, paused, reactivated)
     assert instances[0].instance_id == "review-instance"
     assert instances[0].conversation_id == "review-conversation"
     assert instances[0].workflow_run_id == run_id

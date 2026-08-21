@@ -28,6 +28,9 @@ from engine.runtime import (
     step_result_instructions,
     step_result_from_tool_call,
 )
+from engine.runtime.step_results import (
+    latest_turn_requests_clarification_or_escalation,
+)
 
 
 RUN_ID = RunId("run-1")
@@ -81,6 +84,24 @@ def test_ordinary_tool_calls_are_not_valid_pauses() -> None:
     )
 
     assert not requests_clarification_or_escalation(turn)
+
+
+def test_only_the_latest_conversation_turn_can_still_be_waiting() -> None:
+    clarification = Message.assistant(
+        tool_calls=(ToolCall("call-1", "request_user_input", "{}"),)
+    )
+
+    assert latest_turn_requests_clarification_or_escalation(
+        (Message.user("Start"), clarification, Message.assistant("Waiting."))
+    )
+    assert not latest_turn_requests_clarification_or_escalation(
+        (
+            Message.user("Start"),
+            clarification,
+            Message.assistant("Waiting."),
+            Message.user("Here is the answer."),
+        )
+    )
 
 
 def test_complete_step_tool_describes_required_arguments_and_outputs() -> None:

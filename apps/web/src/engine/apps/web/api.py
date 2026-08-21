@@ -8,9 +8,9 @@ Runs are streamed as newline-delimited JSON.  Their tasks are owned by the
 service rather than by one response, so a refreshed browser can reconnect.
 A lock per thread prevents two turns from reading the same stale transcript.
 
-A run that pauses for approval keeps that pause in the same place: the request
-is a snapshot on the `ActiveRun`, replayed to whoever reconnects, and the
-decision arrives as its own request rather than on the stream that showed it.
+Approvals have their own replayable event feed. Their durable record is loaded
+when a browser subscribes, while process-local notifications wake that feed for
+later transitions without polling the transcript.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -52,11 +52,13 @@ from engine.ports import (
     AgentRunner,
     ApprovalHandler,
     InteractiveAgentRunner,
+    StateStore,
     WorkspaceState,
 )
 from engine.runtime import (
     AgentSession,
     ApprovalBroker,
+    ApprovalConfig,
     ApprovalDecisionNotAllowedError,
     ApprovalNotPendingError,
     RunReader,
@@ -93,6 +95,8 @@ class ChatThread:
     workflow_step_id: StepId | None = None
     editable: bool = False
     """Whether this workflow step permits human messages and interruption."""
+    auto_approve: bool = False
+    """Whether system auto-approvals are enabled for this conversation."""
 
 
 class ActiveRun:
@@ -108,8 +112,15 @@ class ActiveRun:
     def __init__(self, agent_run_id: AgentRunId) -> None:
         self.agent_run_id = agent_run_id
         self.content: list[dict[str, object]] = []
-        self.approval: dict[str, object] | None = None
-        """The latest approval snapshot, pending or resolved. None until asked."""
+        self.approvals: dict[str, dict[str, object]] = {}
+        """The latest snapshot of every request this run has raised, by id.
+
+        A map rather than "the one the turn is on", because what a subscriber
+        needs is each request's *transition*: a turn let go by a decision often
+        asks its next question before anyone has been told about the answer, and
+        a single slot would hand the new question over in place of it -- leaving
+        a card waiting forever on a request that was decided.
+        """
         self.error: str | None = None
         self.done = False
         self._revision = 0
@@ -127,7 +138,7 @@ class ActiveRun:
 
     async def stream(self) -> AsyncIterator[bytes]:
         revision = 0
-        approval: dict[str, object] | None = None
+        sent: dict[str, dict[str, object]] = {}
         while True:
             async with self._changed:
                 await self._changed.wait_for(
@@ -135,18 +146,23 @@ class ActiveRun:
                 )
                 revision = self._revision
                 content = [dict(part) for part in self.content]
-                pending = dict(self.approval) if self.approval is not None else None
+                approvals = {key: dict(value) for key, value in self.approvals.items()}
                 error = self.error
                 done = self.done
 
-            if pending != approval:
-                # Whole snapshots, including the resolved one: a client that
+            for approval_id, approval in approvals.items():
+                # Whole snapshots, including the resolved ones: a client that
                 # missed the decision would otherwise go on showing a prompt
-                # for a request that has already been answered. Emitted before
-                # the terminal events so the last thing said about a request is
-                # never lost to the run ending in the same breath.
-                approval = pending
-                yield _json_line({"type": "approval", "approval": pending})
+                # for a request that has already been answered. Every one that
+                # has moved rather than only the newest, because several can
+                # move between two wakes and the one being answered is exactly
+                # the one that would be dropped. Emitted before the terminal
+                # events so the last thing said about a request is never lost to
+                # the run ending in the same breath.
+                if sent.get(approval_id) == approval:
+                    continue
+                sent[approval_id] = approval
+                yield _json_line({"type": "approval", "approval": approval})
             if error is not None:
                 yield _json_line({"type": "error", "error": error})
                 return
@@ -186,7 +202,7 @@ class ActiveRun:
         """
         snapshot = _approval_json(approval)
         async with self._changed:
-            self.approval = snapshot
+            self.approvals[str(approval.approval_id)] = snapshot
             self._revision += 1
             self._changed.notify_all()
 
@@ -197,13 +213,58 @@ class ActiveRun:
         ending sends a moment later, and awaiting a lock here would yield the
         event loop back to the very turn being torn down.
         """
-        self.approval = _approval_json(approval)
+        self.approvals[str(approval.approval_id)] = _approval_json(approval)
 
     async def _finish(self) -> None:
         async with self._changed:
             self.done = True
             self._revision += 1
             self._changed.notify_all()
+
+
+class ApprovalFeed:
+    """Replay durable approval snapshots, then push each later transition.
+
+    Persistence remains the source of truth. The condition is only a wake-up
+    signal, so reconnecting after a lost HTTP connection cannot lose an event.
+    """
+
+    def __init__(self, store: StateStore) -> None:
+        self._store = store
+        self._revisions: dict[AgentInstanceId, int] = {}
+        self._changed: dict[AgentInstanceId, asyncio.Condition] = {}
+
+    async def publish(self, approval: ApprovalRecord) -> None:
+        condition = self._changed.setdefault(
+            approval.instance_id, asyncio.Condition()
+        )
+        async with condition:
+            self._revisions[approval.instance_id] = (
+                self._revisions.get(approval.instance_id, 0) + 1
+            )
+            condition.notify_all()
+
+    async def stream(self, instance_id: AgentInstanceId) -> AsyncIterator[bytes]:
+        condition = self._changed.setdefault(instance_id, asyncio.Condition())
+        sent: dict[str, dict[str, object]] = {}
+        # Flush the response immediately even when this conversation has never
+        # asked for approval. EventSource ignores comment frames.
+        yield b": connected\n\n"
+        while True:
+            revision = self._revisions.get(instance_id, 0)
+            approvals = await self._store.list_approvals(instance_id=instance_id)
+            for record in approvals:
+                approval = _approval_json(record)
+                approval_id = str(record.approval_id)
+                if sent.get(approval_id) == approval:
+                    continue
+                sent[approval_id] = approval
+                yield _server_event(approval)
+
+            async with condition:
+                await condition.wait_for(
+                    lambda: self._revisions.get(instance_id, 0) > revision
+                )
 
 
 class BuiltClient(StaticFiles):
@@ -240,9 +301,14 @@ class ThreadService:
         session: AgentSession,
         runners: Mapping[str, AgentRunner],
         workflow_catalog: WorkflowCatalog | None = None,
+        approval_policy: ApprovalConfig = ApprovalConfig(),
+        *,
+        approval_observer: Callable[[ApprovalRecord], Awaitable[None]] | None = None,
     ) -> None:
         self.session = session
-        self.approvals = ApprovalBroker(session.state_store)
+        self.approvals = ApprovalBroker(
+            session.state_store, approval_policy, observe=approval_observer
+        )
         """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
         self._workflow_catalog = workflow_catalog
@@ -284,6 +350,7 @@ class ThreadService:
             workflow_run_id=instance.workflow_run_id,
             workflow_step_id=instance.workflow_step_id,
             editable=await self._instance_step_editable(instance),
+            auto_approve=instance.auto_approve,
         )
         self._threads[instance.instance_id] = await self._sync_workspace(thread)
         self._locks[instance.instance_id] = asyncio.Lock()
@@ -380,7 +447,8 @@ class ThreadService:
         run = ActiveRun(agent_run_id)
         self._active_runs[instance_id] = run
         on_approval = None
-        if isinstance(self._runners.get(selected_runner), InteractiveAgentRunner):
+        selected = self._runners.get(selected_runner)
+        if isinstance(selected, InteractiveAgentRunner):
             on_approval = self.approvals.handler(
                 agent_run_id=agent_run_id,
                 instance_id=instance_id,
@@ -389,6 +457,9 @@ class ThreadService:
                 # Where this turn will actually work, so consent it collects is
                 # bounded by the same worktree the agent is standing in.
                 workspace_id=thread.workspace_id,
+                # How this provider's requests read as Engine capabilities, so
+                # the configured policy has something to evaluate them against.
+                translator=selected.permission_translator,
             )
 
         async def execute() -> str:
@@ -418,15 +489,14 @@ class ThreadService:
                 if on_approval is not None:
                     # However this turn ended, nothing is waiting on its
                     # requests any more -- a provider that died mid-question
-                    # leaves one here. The last of them is what the run is
-                    # still showing, so it is the one that has to stop saying
-                    # "pending", whoever resolved it.
+                    # leaves one here. Every one of them, because a client is
+                    # showing whichever it was last told about, and any of those
+                    # has to stop saying "pending", whoever resolved it.
                     await self.approvals.interrupt_run(agent_run_id)
-                    asked = await self.session.state_store.list_approvals(
+                    for asked in await self.session.state_store.list_approvals(
                         agent_run_id=agent_run_id
-                    )
-                    if asked:
-                        run.note_approval(asked[-1])
+                    ):
+                        run.note_approval(asked)
 
         run.start(execute())
         # Ensure a refresh can load the submitted question before this POST
@@ -445,6 +515,12 @@ class ThreadService:
     def latest_run(self, instance_id: AgentInstanceId) -> ActiveRun | None:
         """The latest run, including a just-finished run needed by a racing resume."""
         return self._active_runs.get(instance_id)
+
+    def auto_approve_enabled(self, instance_id: AgentInstanceId) -> bool:
+        """The live per-conversation override read by workflow approval handlers."""
+
+        thread = self._threads.get(instance_id)
+        return bool(thread and thread.auto_approve)
 
     async def decide_approval(
         self,
@@ -555,6 +631,7 @@ class ThreadService:
         title: str | None = None,
         runner: str | None = None,
         archived: bool | None = None,
+        auto_approve: bool | None = None,
     ) -> ChatThread:
         thread = await self._require(instance_id)
         if runner is not None and runner not in self.session.runners:
@@ -565,12 +642,24 @@ class ThreadService:
             thread.runner = runner
         if archived is not None:
             thread.archived = archived
+        if auto_approve is not None:
+            if not thread.editable:
+                raise ValueError(
+                    "auto-approval is only available for implementation conversations"
+                )
+            thread.auto_approve = auto_approve
         await self._persist_metadata(thread)
+        if auto_approve:
+            await self.approvals.auto_approve_pending(instance_id)
         return thread
 
     async def _persist_metadata(self, thread: ChatThread) -> None:
         await self.session.update_instance_metadata(
-            thread.instance_id, thread.title, thread.archived, thread.runner
+            thread.instance_id,
+            thread.title,
+            thread.archived,
+            thread.runner,
+            thread.auto_approve,
         )
 
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -632,6 +721,7 @@ class ThreadService:
                     workflow_run_id=instance.workflow_run_id,
                     workflow_step_id=instance.workflow_step_id,
                     editable=await self._instance_step_editable(instance),
+                    auto_approve=instance.auto_approve,
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
@@ -661,6 +751,7 @@ def create_app(
     workflow_runners: Mapping[str, AgentRunner] | None = None,
     review_runners: Mapping[str, AgentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
+    approval_policy: ApprovalConfig = ApprovalConfig(),
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -674,23 +765,41 @@ def create_app(
         )
     else:
         catalog = workflow_catalog
-    service = ThreadService(session, runners, catalog)
+    approval_feed = ApprovalFeed(session.state_store)
+    service = ThreadService(
+        session,
+        runners,
+        catalog,
+        approval_policy,
+        approval_observer=approval_feed.publish,
+    )
     run_reader = RunReader(session.state_store, catalog)
 
-    async def approval_changed(_approval: ApprovalRecord) -> None:
-        # Workflow conversation streams poll the durable approval record along
-        # with their transcript, so persistence itself is the notification.
+    async def approval_presented(_approval: ApprovalRecord) -> None:
+        # The broker's observer publishes every persisted transition. This
+        # presenter exists because the runner callback also supports run-local
+        # presentation, which workflow runs do not need.
         return None
 
     def workflow_approval_handler(
         command: StartAgentRun, runner_name: str
     ) -> ApprovalHandler:
+        # A workflow step runs on the implementation or the review runner of one
+        # provider, and the two read that provider's requests the same way --
+        # so either mapping answers "what does `runner_name` speak".
+        step_runner = (workflow_runners or runners).get(runner_name) or runners.get(
+            runner_name
+        )
         return service.approvals.handler(
             agent_run_id=command.agent_run_id,
             instance_id=command.instance_id,
             runner=runner_name,
-            present=approval_changed,
+            present=approval_presented,
             workspace_id=command.workspace_id,
+            translator=(
+                step_runner.permission_translator if step_runner is not None else None
+            ),
+            auto_approve=lambda: service.auto_approve_enabled(command.instance_id),
         )
 
     workflow_executor = WorkflowExecutor(
@@ -715,6 +824,7 @@ def create_app(
         for state in await session.state_store.list_runs():
             if (
                 state.phase is not RunPhase.RUNNING_AGENT
+                or state.agent_paused
                 or state.run_id in workflow_tasks
             ):
                 continue
@@ -737,13 +847,14 @@ def create_app(
                 ),
                 None,
             )
-            runner_name = (
+            fallback_runner = (
                 current.runner
                 if current is not None and current.runner
                 else previous.runner
                 if previous is not None
                 else workflow_executor.default_runner
             )
+            runner_name = state.runner_name or fallback_runner
             track_workflow(
                 state.run_id,
                 asyncio.create_task(
@@ -788,23 +899,40 @@ def create_app(
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        assert thread.workflow_step_id is not None
+        await workflow_executor.pause_agent_step(
+            thread.workflow_run_id, thread.workflow_step_id
+        )
 
     async def continue_workflow(thread: ChatThread, text: str) -> None:
         """Interrupt, append a human message, and resume the same workflow step."""
 
         assert thread.workflow_run_id is not None
+        if not thread.editable:
+            raise RuntimeError("this workflow conversation is read-only")
         before = len(await service.history(thread.instance_id))
-        await interrupt_workflow(thread)
         state = await session.state_store.load(thread.workflow_run_id)
-        if (
-            state is None
-            or state.phase is not RunPhase.RUNNING_AGENT
-            or state.current_step_id != thread.workflow_step_id
-        ):
+        if state is None:
             raise RuntimeError("this workflow step is no longer active")
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task = workflow_tasks.get(thread.workflow_run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if (
+            state.phase is RunPhase.RUNNING_AGENT
+            and state.current_step_id == thread.workflow_step_id
+        ):
+            await workflow_executor.pause_agent_step(
+                thread.workflow_run_id, thread.workflow_step_id
+            )
         task = asyncio.create_task(
             workflow_executor.resume_agent_step(
-                thread.workflow_run_id, text, thread.runner
+                thread.workflow_run_id,
+                text,
+                thread.runner,
+                step_id=thread.workflow_step_id,
             )
         )
         track_workflow(thread.workflow_run_id, task)
@@ -821,18 +949,20 @@ def create_app(
     ) -> AsyncIterator[bytes]:
         """Poll durable workflow progress into the chat client's snapshot stream."""
         previous: list[dict[str, object]] | None = None
-        previous_approval: dict[str, object] | None = None
+        previous_approvals: dict[str, dict[str, object]] = {}
         while True:
             history = await service.history(instance_id)
             content = _latest_assistant_content(history)
             approvals = await session.state_store.list_approvals(
                 instance_id=instance_id
             )
-            approval = _approval_json(approvals[-1]) if approvals else None
             active = run_id in workflow_tasks
-            if approval is not None and approval != previous_approval:
-                previous_approval = approval
-                yield _json_line({"type": "approval", "approval": approval})
+            for record in approvals:
+                approval = _approval_json(record)
+                approval_id = str(record.approval_id)
+                if approval != previous_approvals.get(approval_id):
+                    previous_approvals[approval_id] = approval
+                    yield _json_line({"type": "approval", "approval": approval})
             if not active:
                 yield _json_line({"type": "done", "content": content})
                 return
@@ -955,7 +1085,7 @@ def create_app(
             return _error("run is not awaiting human review", 409)
         summary = str(body.get("summary", "")).strip()
         try:
-            await workflow_executor.complete_human_review(
+            next_state = await workflow_executor.complete_human_review(
                 HumanReviewCompleted(
                     run_id=run_id,
                     step_id=state.current_step_id,
@@ -963,6 +1093,13 @@ def create_app(
                     summary=summary,
                 )
             )
+            if next_state.phase is RunPhase.RUNNING_AGENT:
+                track_workflow(
+                    run_id,
+                    asyncio.create_task(
+                        workflow_executor.resume_agent_step(run_id)
+                    ),
+                )
         except WorkflowExecutionError as error:
             return _error(str(error), 409)
         run = await run_reader.get(run_id)
@@ -1000,9 +1137,17 @@ def create_app(
             else:
                 title = None
         runner = str(body["runner"]) if "runner" in body else None
+        auto_approve = None
+        if "autoApprove" in body:
+            if not isinstance(body["autoApprove"], bool):
+                return _error("autoApprove must be a boolean", 400)
+            auto_approve = body["autoApprove"]
         try:
             thread = await service.update_metadata(
-                instance_id, title=title, runner=runner
+                instance_id,
+                title=title,
+                runner=runner,
+                auto_approve=auto_approve,
             )
         except ValueError as error:
             return _error(str(error), 400)
@@ -1034,9 +1179,16 @@ def create_app(
         active = service.active_run(instance_id)
         workflow_active = workflow_is_active(thread)
         visible_history = _through_latest_user(history) if workflow_active else history
+        # What a conversation was asked to allow is part of the transcript, and
+        # is loaded with it. The run stream replays these too, but it is only
+        # opened for a run this process is still executing -- so a step that has
+        # since finished, or one whose task this process no longer holds, used
+        # to come back from a page load with its approvals missing entirely.
+        approvals = await session.state_store.list_approvals(instance_id=instance_id)
         return JSONResponse(
             {
                 "messages": _messages_json(visible_history),
+                "approvals": [_approval_json(record) for record in approvals],
                 # A complete assistant transcript can become durable just
                 # before ActiveRun flips to done. In that window replaying it
                 # would duplicate the assistant message in the client.
@@ -1047,6 +1199,19 @@ def create_app(
                     and history[-1].role is Role.USER
                 ),
             }
+        )
+
+    async def approval_events(request: Request) -> Response:
+        instance_id = _thread_id(request)
+        if await service.get(instance_id) is None:
+            return _error("thread not found", 404)
+        return StreamingResponse(
+            approval_feed.stream(instance_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     async def title_thread(request: Request) -> JSONResponse:
@@ -1216,6 +1381,7 @@ def create_app(
             name="unarchive",
         ),
         Route("/api/threads/{thread_id}/messages", messages),
+        Route("/api/threads/{thread_id}/approval-events", approval_events),
         Route(
             "/api/threads/{thread_id}/workspace",
             attach_workspace,
@@ -1289,6 +1455,8 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
     if thread.workflow_step_id is not None:
         result["workflowStepId"] = str(thread.workflow_step_id)
         result["editable"] = thread.editable
+        if thread.editable:
+            result["autoApprove"] = thread.auto_approve
     return result
 
 
@@ -1345,6 +1513,7 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
                     if step.agent_instance_id
                     else None
                 ),
+                "waiting": step.waiting,
             }
             for step in run.steps
         ],
@@ -1384,6 +1553,9 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
         "command": approval.command,
         "cwd": approval.cwd,
         "toolName": approval.tool_name,
+        # The call this was asked about, so the client can show the request
+        # beside it rather than collecting every request at the end of a turn.
+        "toolCallId": approval.tool_call_id,
         "arguments": approval.arguments,
         "allowedDecisions": [
             decision.value for decision in approval.allowed_decisions
@@ -1523,6 +1695,10 @@ def _new_agent_run_id() -> AgentRunId:
 
 def _json_line(value: dict[str, object]) -> bytes:
     return (json.dumps(value, separators=(",", ":")) + "\n").encode()
+
+
+def _server_event(value: dict[str, object]) -> bytes:
+    return f"data:{json.dumps(value, separators=(',', ':'))}\n\n".encode()
 
 
 def _error(message: str, status_code: int) -> JSONResponse:

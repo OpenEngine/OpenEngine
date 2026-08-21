@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from engine.adapters.state_store.sqlite import SQLiteStateStore
-from engine.domain import RunId
+from engine.domain import RunId, RunState, TaskId, WorkflowId
 
 
 pytestmark = pytest.mark.workflow_removal_acceptance
@@ -50,3 +50,31 @@ def test_pre_dsl_running_states_are_explicitly_unsupported(tmp_path: Path) -> No
             store.close()
 
     asyncio.run(scenario())
+
+
+def test_startup_scan_quarantines_legacy_active_rows(tmp_path: Path) -> None:
+    """An incompatible legacy row must not hide current runs or abort startup."""
+
+    async def scenario() -> tuple[RunState, ...]:
+        database = tmp_path / "legacy-mixed.sqlite3"
+        shutil.copyfile(FIXTURE, database)
+        store = SQLiteStateStore(database)
+        current = RunState(
+            run_id=RunId("current-run"),
+            task_id=TaskId("current-task"),
+            workflow_id=WorkflowId("current-workflow-v1"),
+        )
+        try:
+            await store.save(current)
+            with pytest.warns(RuntimeWarning, match="skipping incompatible workflow run"):
+                return tuple(await store.list_runs())
+        finally:
+            store.close()
+
+    runs = asyncio.run(scenario())
+
+    assert RunId("current-run") in {run.run_id for run in runs}
+    assert RunId("legacy-implementation-running") not in {
+        run.run_id for run in runs
+    }
+    assert RunId("legacy-review-running") not in {run.run_id for run in runs}

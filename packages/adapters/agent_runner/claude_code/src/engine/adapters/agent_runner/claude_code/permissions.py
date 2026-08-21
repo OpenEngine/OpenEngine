@@ -1,12 +1,29 @@
-"""Translate Claude Code tool requests into Engine permissions."""
+"""Translate between Claude Code tool requests and Engine permissions.
+
+Both directions, because a policy has to reach the provider before the turn
+starts as well as after it pauses. `scope_for` reads one request Claude has
+already made; `allowed_tools_for` says which of Claude's tools a capability set
+preapproves, so the ones a policy grants never become a request at all.
+"""
+
+from collections.abc import Iterable
 
 from engine.domain.approvals import ApprovalKind
 from engine.ports.agent_runner import ApprovalRequest
 from engine.ports.permissions import ApprovalCapability, PermissionScope
 
-READ_TOOLS = frozenset({"Read", "Glob", "Grep"})
-EDIT_TOOLS = frozenset({"Edit", "Write", "NotebookEdit"})
-WEB_TOOLS = frozenset({"WebFetch", "WebSearch"})
+#: Claude's own tools, grouped by the Engine capability that covers them. One
+#: table rather than two, so a tool cannot be classified as one thing on the way
+#: in and preapproved as another on the way out.
+CAPABILITY_TOOLS: dict[ApprovalCapability, tuple[str, ...]] = {
+    ApprovalCapability.READ: ("Read", "Glob", "Grep"),
+    ApprovalCapability.EDIT: ("Edit", "Write", "NotebookEdit"),
+    ApprovalCapability.WEB: ("WebFetch", "WebSearch"),
+}
+
+READ_TOOLS = frozenset(CAPABILITY_TOOLS[ApprovalCapability.READ])
+EDIT_TOOLS = frozenset(CAPABILITY_TOOLS[ApprovalCapability.EDIT])
+WEB_TOOLS = frozenset(CAPABILITY_TOOLS[ApprovalCapability.WEB])
 
 
 class ClaudePermissionTranslator:
@@ -27,13 +44,42 @@ class ClaudePermissionTranslator:
         return None
 
 
+def allowed_tools_for(
+    capabilities: Iterable[ApprovalCapability],
+) -> tuple[str, ...]:
+    """The `--allowedTools` list a capability set preapproves.
+
+    Only the capabilities whose whole answer is a tool name, which is why
+    `bash` and `mcp` are absent and stay absent:
+
+    * A shell policy is written per command. A preapproved `Bash` would run the
+      commands `approvals.bash.deny` names before anything could consult it, so
+      shell always reaches the approval callback -- which is where the patterns
+      are evaluated.
+    * An MCP grant names a server, and this list is built before any server is
+      bound.
+
+    Neither is thereby refused. Both are decided one request at a time by the
+    policy, rather than wholesale before the turn starts.
+    """
+    granted = set(capabilities)
+    return tuple(
+        tool
+        for capability, tools in CAPABILITY_TOOLS.items()
+        if capability in granted
+        for tool in tools
+    )
+
+
 CLAUDE_PERMISSION_TRANSLATOR = ClaudePermissionTranslator()
 
 
 __all__ = [
+    "CAPABILITY_TOOLS",
     "CLAUDE_PERMISSION_TRANSLATOR",
     "ClaudePermissionTranslator",
     "EDIT_TOOLS",
     "READ_TOOLS",
     "WEB_TOOLS",
+    "allowed_tools_for",
 ]

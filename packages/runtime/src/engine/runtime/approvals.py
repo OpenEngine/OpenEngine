@@ -29,6 +29,13 @@ The rule for reusing one is in `engine.runtime.session_grants` and is
 deliberately narrow; what matters here is that a request answered from a grant
 is still a persisted request with a recorded decision, distinguished only by
 `decision_source`.
+
+The configured policy is the other way a request is answered without a person,
+and it is applied here for the same reason: this is the one place every paused
+turn passes through, whichever runner paused it. `engine.runtime.approval_policy`
+decides, this decides what to do with that -- and a policy decision is recorded
+exactly as a human one is, because "who allowed this?" has to stay answerable
+for the requests nobody was shown.
 """
 
 import asyncio
@@ -46,7 +53,10 @@ from engine.domain.approvals import (
 )
 from engine.domain.ids import AgentInstanceId, AgentRunId, ApprovalId, WorkspaceId
 from engine.ports.agent_runner import ApprovalHandler, ApprovalRequest
+from engine.ports.permissions import PermissionTranslator
 from engine.ports.state_store import StateStore
+from engine.runtime.approval_policy import PolicyDecision, policy_decision_for
+from engine.runtime.config import ApprovalConfig
 from engine.runtime.session_grants import matching_grant, session_grant_from
 
 ApprovalPresenter = Callable[[ApprovalRecord], Awaitable[None]]
@@ -109,11 +119,33 @@ class ApprovalBroker:
     One per process, shared by every conversation: the futures are what make it
     stateful, and they belong to the process running the provider subprocesses
     rather than to any one conversation.
+
+    `policy` is the deployment's configuration, and the default is the built-in
+    one: nothing is preapproved except reads, so a caller that composes a broker
+    without saying otherwise gets the behaviour of asking.
     """
 
-    def __init__(self, store: StateStore) -> None:
+    def __init__(
+        self,
+        store: StateStore,
+        policy: ApprovalConfig = ApprovalConfig(),
+        *,
+        observe: ApprovalPresenter | None = None,
+    ) -> None:
         self._store = store
+        self._policy = policy
+        self._observe = observe
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
+        self._pending_requests: dict[
+            ApprovalId,
+            tuple[ApprovalRequest, PermissionTranslator | None, ApprovalPresenter],
+        ] = {}
+
+    async def _record(self, approval: ApprovalRecord) -> None:
+        """Persist one whole snapshot, then notify process-local subscribers."""
+        await self._store.record_approval(approval)
+        if self._observe is not None:
+            await self._observe(approval)
 
     def handler(
         self,
@@ -123,6 +155,8 @@ class ApprovalBroker:
         runner: str,
         present: ApprovalPresenter,
         workspace_id: WorkspaceId | None = None,
+        translator: PermissionTranslator | None = None,
+        auto_approve: Callable[[], bool] | None = None,
     ) -> ApprovalHandler:
         """The callback one interactive turn hands to its runner.
 
@@ -132,6 +166,10 @@ class ApprovalBroker:
 
         `workspace_id` is where this turn is working, and bounds any consent it
         collects: a grant is a statement about one worktree.
+
+        `translator` is the runner's own reading of its provider's requests, and
+        without one the policy has nothing to evaluate: every request is
+        unclassified, and every request is put to a person.
         """
 
         async def request_approval(request: ApprovalRequest) -> ApprovalDecision:
@@ -146,13 +184,35 @@ class ApprovalBroker:
                 command=request.command,
                 cwd=request.cwd,
                 tool_name=request.tool_name,
+                tool_call_id=request.tool_call_id,
                 workspace_id=workspace_id,
                 arguments=request.arguments,
                 allowed_decisions=tuple(request.allowed_decisions),
             )
 
-            # Looked up before the request is written, so no reader can ever
-            # see a pending row for a question that was never going to be put.
+            # Both of these are looked up before the request is written, so no
+            # reader can ever see a pending row for a question that was never
+            # going to be put. Policy first: a deployment that has ruled on
+            # this has ruled on it whatever the conversation agreed to earlier.
+            configured = self._policy_decision(
+                request,
+                translator,
+                auto_approve=bool(auto_approve and auto_approve()),
+            )
+            if configured is not None:
+                settled = replace(
+                    record,
+                    status=ApprovalStatus.DECIDED,
+                    decision=configured,
+                    decision_source=ApprovalDecisionSource.POLICY,
+                    decided_at=datetime.now(UTC),
+                )
+                await self._record(settled)
+                # Presented for the same reason a grant's is: the client says
+                # what ran on its behalf, and nothing waits on it.
+                await present(settled)
+                return configured
+
             granted = await self._matching_grant(record)
             if granted is not None:
                 # Answered by something the user already said. It is still a
@@ -167,19 +227,39 @@ class ApprovalBroker:
                     decision_source=ApprovalDecisionSource.SESSION_GRANT,
                     decided_at=datetime.now(UTC),
                 )
-                await self._store.record_approval(decided)
+                await self._record(decided)
                 # Presented so the client can say what was allowed on its
                 # behalf. Nothing waits on it: a resolved request is not a
                 # prompt, and there is no card to answer.
                 await present(decided)
                 return ApprovalDecision.ACCEPT_FOR_SESSION
 
-            await self._store.record_approval(record)
+            await self._record(record)
             waiting: asyncio.Future[ApprovalDecision] = (
                 asyncio.get_running_loop().create_future()
             )
             self._waiting[record.approval_id] = waiting
+            self._pending_requests[record.approval_id] = (request, translator, present)
             try:
+                # The conversation setting can change while the durable row is
+                # being written. Recheck after the future exists so a toggle in
+                # that window cannot leave the turn parked on a request the
+                # system now allows.
+                configured = self._policy_decision(
+                    request,
+                    translator,
+                    auto_approve=bool(auto_approve and auto_approve()),
+                )
+                if configured is not None:
+                    settled = await self.decide(
+                        record.approval_id,
+                        configured,
+                        instance_id=instance_id,
+                        agent_run_id=agent_run_id,
+                        source=ApprovalDecisionSource.POLICY,
+                    )
+                    await present(settled)
+                    return configured
                 await present(record)
                 return await waiting
             except BaseException:
@@ -189,8 +269,46 @@ class ApprovalBroker:
                 raise
             finally:
                 self._waiting.pop(record.approval_id, None)
+                self._pending_requests.pop(record.approval_id, None)
 
         return request_approval
+
+    async def auto_approve_pending(
+        self, instance_id: AgentInstanceId
+    ) -> Sequence[ApprovalRecord]:
+        """Apply auto-approval to requests already waiting in one conversation.
+
+        Explicit ask and deny rules retain their configured precedence. This is
+        used when an implementation conversation enables auto-approval after
+        its workflow runner has already paused.
+        """
+
+        settled: list[ApprovalRecord] = []
+        for record in await self._store.list_approvals(
+            instance_id=instance_id, status=ApprovalStatus.PENDING
+        ):
+            context = self._pending_requests.get(record.approval_id)
+            if context is None:
+                continue
+            request, translator, present = context
+            decision = self._policy_decision(
+                request, translator, auto_approve=True
+            )
+            if decision is None:
+                continue
+            try:
+                decided = await self.decide(
+                    record.approval_id,
+                    decision,
+                    instance_id=instance_id,
+                    agent_run_id=record.agent_run_id,
+                    source=ApprovalDecisionSource.POLICY,
+                )
+            except ApprovalError:
+                continue
+            await present(decided)
+            settled.append(decided)
+        return tuple(settled)
 
     async def decide(
         self,
@@ -255,7 +373,7 @@ class ApprovalBroker:
                 # grant is only reachable through a later request, and there
                 # cannot be one until this turn is let go again.
                 await self._store.record_session_grant(grant)
-            await self._store.record_approval(decided)
+            await self._record(decided)
         except Exception:
             # The turn is still paused and the decision never happened, so put
             # the request back rather than stranding it.
@@ -332,6 +450,32 @@ class ApprovalBroker:
         waiting = self._waiting.get(approval_id)
         return waiting is not None and not waiting.done()
 
+    def _policy_decision(
+        self,
+        request: ApprovalRequest,
+        translator: PermissionTranslator | None,
+        *,
+        auto_approve: bool = False,
+    ) -> ApprovalDecision | None:
+        """The answer the configuration already gives, if it gives one.
+
+        `None` is "put this to a person", and covers two cases that end the same
+        way. The policy may say to ask. Or it may call for a decision this
+        particular request was never offered -- a provider that is not offering
+        a cancellation has no way to honour one, and answering with a decision
+        it never offered would be a protocol error rather than an enforcement.
+        """
+        scope = translator.scope_for(request) if translator is not None else None
+        policy = replace(self._policy, auto_approve=True) if auto_approve else self._policy
+        match policy_decision_for(policy, scope):
+            case PolicyDecision.ALLOW:
+                configured = ApprovalDecision.ACCEPT
+            case PolicyDecision.DENY:
+                configured = ApprovalDecision.CANCEL
+            case _:
+                return None
+        return configured if configured in request.allowed_decisions else None
+
     async def _matching_grant(self, record: ApprovalRecord) -> SessionGrant | None:
         """The consent this conversation already gave for exactly this action.
 
@@ -357,7 +501,7 @@ class ApprovalBroker:
         if record is None or not record.is_pending:
             return record
         interrupted = replace(record, status=ApprovalStatus.INTERRUPTED)
-        await self._store.record_approval(interrupted)
+        await self._record(interrupted)
         if waiting is not None and not waiting.done():
             # Whoever is still parked on this learns the same way a cancelled
             # turn does, rather than waiting for an answer that cannot come.

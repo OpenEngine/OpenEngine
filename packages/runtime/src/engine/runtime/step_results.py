@@ -1,6 +1,7 @@
 """Workflow terminal-tool instructions and argument validation."""
 
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -8,6 +9,8 @@ from engine.domain import (
     AgentRunId,
     RunFailed,
     RunId,
+    Message,
+    Role,
     StepCompleted,
     StepOutput,
     StepSpec,
@@ -54,7 +57,28 @@ def step_result_instructions(step: StepSpec) -> str:
 
 def requests_clarification_or_escalation(turn: AgentTurn) -> bool:
     """Whether a provider tool call validly pauses an unfinished step."""
-    for message in turn.transcript:
+    return _messages_request_clarification_or_escalation(turn.transcript)
+
+
+def latest_turn_requests_clarification_or_escalation(
+    messages: Sequence[Message],
+) -> bool:
+    """Whether the conversation's latest agent turn paused for a human."""
+    last_user = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role is Role.USER
+        ),
+        -1,
+    )
+    return _messages_request_clarification_or_escalation(messages[last_user + 1 :])
+
+
+def _messages_request_clarification_or_escalation(
+    messages: Sequence[Message],
+) -> bool:
+    for message in messages:
         for call in message.tool_calls:
             leaf_name = call.name.rsplit("__", 1)[-1].rsplit(".", 1)[-1]
             normalized = "".join(
@@ -288,6 +312,7 @@ __all__ = [
     "InvalidStepResultError",
     "complete_step_tool",
     "fail_step_tool",
+    "latest_turn_requests_clarification_or_escalation",
     "run_failed_from_tool_call",
     "run_failed_from_arguments",
     "requests_clarification_or_escalation",
