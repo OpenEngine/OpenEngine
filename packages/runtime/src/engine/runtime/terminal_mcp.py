@@ -78,7 +78,12 @@ class TerminalMcpBroker:
         self._step = step
         self._registry = registry
         self._deliver = deliver
-        self._token = secrets.token_urlsafe(32)
+        # Hex rather than URL-safe base64, because this credential is handed to
+        # the provider as an argv element: `token_urlsafe` can begin with `-`,
+        # and roughly one session in sixty-four then had its server exit on
+        # `--token: expected one argument` before answering `initialize`. Same
+        # 256 bits, out of an alphabet nothing reads as an option.
+        self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
         self._result: asyncio.Future[TerminalEvent] | None = None
         self._source_control: SourceControl | None = None

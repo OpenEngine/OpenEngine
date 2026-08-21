@@ -18,13 +18,15 @@ previous commit's interface.
 
 Each test gets its own application, composed by `harness/server.py` exactly the
 way `engine.apps.web.__main__` composes the real one -- same capabilities, same
-runner mapping, same approval policy plumbing. Only three things are the test's:
+runner mapping, same approval policy plumbing. Only four things are the test's,
+and each is something a test run must not share or send anywhere:
 
 | what | why |
 | --- | --- |
-| a fixture git repository | conversations and runs make worktrees of it, and a temporary directory is a safe thing to leave worktrees in |
+| a fixture git repository, and a bare `origin` beside it | conversations and runs make worktrees of it, and a run bases its worktree on `origin/main` |
 | a SQLite file under the test's own directory | one test's chats must not be another's |
 | scripted `codex` and `claude` executables | a model is the one part of this that cannot be asserted on |
+| a `gh` that records instead of commenting | the reviewer leaves its findings on a pull request, and that is somebody's repository |
 
 The fake CLIs are `tests/provider_fakes.py`, shared with the pytest tier that
 runs the approval contract against them. They are not mocks of our adapters:
@@ -51,8 +53,40 @@ engine.script({
 
 Scenarios are selected by what the turn was asked rather than by a counter, so
 a title turn, a retry, or a second conversation cannot knock a script out of
-step. A turn run without the approval transport -- the runtime naming a chat or
+step. The first matching scenario wins, which matters for a workflow: the
+reviewer is quoted the original task, so its prompt contains the implementation
+scenario's word too, and the one only a reviewer can match has to be listed
+first. A turn run without the approval transport -- the runtime naming a chat or
 a workflow -- is answered with `title` instead of a scenario.
+
+A workflow step ends only when the agent calls `complete_step` or `fail_step` on
+the run-bound MCP server the runtime attached to that turn, so the fakes are MCP
+*clients* too:
+
+```ts
+{ type: "tool", name: "complete_step",
+  arguments: { outcome: "success", summary: "Added the greeting.",
+               outputs: { pr_url: "https://github.com/acme/api/pull/7" } } }
+```
+
+They read the server off argv the way each provider encodes it -- `--mcp-config`
+for Claude, `-c mcp_servers.workflow.*` or the app-server thread config for
+Codex -- spawn it as given, and make a real JSON-RPC `tools/call`. A completion
+missing a declared output is refused by the runtime and the turn is corrected,
+which `tests/test_workflow_integration.py` covers at the faster tier.
+
+**End a workflow scenario with a `say`.** The runtime cancels the CLI as soon as
+it accepts a terminal result, so the step usually ends mid-turn -- but when the
+CLI finishes first, both adapters assemble the turn with its *last spoken text*
+as the answer, which moves narration to the end. A turn whose last item is a
+tool call therefore no longer matches what was streamed, and the runtime refuses
+it (`streamed workflow transcript does not match completed turn`) even though
+the result was accepted. A closing message is what a real CLI sends anyway, and
+it keeps that race off these tests.
+
+That is a workaround, and it is only here until #105 is fixed -- which is also
+where the deterministic reproduction lives, since the race itself has never been
+observed end to end. Take the closing `say` out with that ticket, not before.
 
 A failing test keeps its directory and prints the path, and attaches whatever
 the server said to the report. `npx playwright show-trace test-results/…` opens
@@ -86,6 +120,12 @@ unzip it, and point `show-report` at the directory.
   it is still running, the approval it pauses on reaches the browser, approving
   it is recorded as an approval, the turn carries on, and the file the command
   was allowed to write exists in that chat's worktree.
+* `workflow-run.spec.ts` -- a workflow run on each runner: the run is created
+  from the form, provisions a checkout that exists on disk, streams the
+  implementation's first message and its command into the step's conversation
+  *while the step is still running*, and -- once `complete_step` carries the
+  declared `pr_url` -- advances through a review that leaves its finding on
+  `gh` to "Action required".
 
 ## What the rest needs
 
@@ -93,34 +133,16 @@ The behaviours below are the ones we want next. Each names what has to exist
 before it can be written; nothing here is a change to the product, except where
 it says so.
 
-### Workflow runs (provision → implement → review)
+### Workflow runs
 
-1. **An `origin` to base a run on.** `WORKFLOW_BASE_REF` is `origin/main`, and
-   provisioning fetches `+refs/heads/main` from it. The fixture repository has
-   no remote, so the harness needs a bare origin beside it and a first push.
-   *Small; harness only.*
-2. **The fake CLIs must speak MCP as clients.** A workflow step ends by calling
-   `complete_step` (or `fail_step`) on the run-bound MCP server the runtime
-   attaches, and nothing else ends it: no `complete_step`, no review step, and
-   after two corrections the run fails. The fake therefore has to read the
-   server it was given -- `--mcp-config` for Claude, `-c mcp_servers.workflow.*`
-   for Codex -- spawn it, and make a JSON-RPC `tools/call`. This is the single
-   largest prerequisite, and it unblocks 1e, 1f, 2, 3, and 4 below.
-   *New script step: `{"type": "tool", "name": "complete_step", "arguments": …}`.*
-3. **A `gh` that is not GitHub.** The reviewer's `add_comment` goes through
-   `GitHubSourceControl`, which shells out to `gh`. The binary is not a
-   `Settings` field, so the harness puts a fake `gh` first on `PATH` for the
-   server process and asserts on what it was called with. Note the reviewer is
-   refused `complete_step` until it has left at least one comment, and that it
-   needs a `pr_url`, which is a declared output of the implementation step.
-4. **Questions.** Both providers can ask: Claude through `AskUserQuestion`,
+1. **Questions.** Both providers can ask: Claude through `AskUserQuestion`,
    Codex through `item/tool/requestUserInput`. Both already normalize to
    `user_input` approvals with a modal in the client.
    *New script step: `{"type": "ask", "questions": [...]}`.*
-5. **Plans.** Only Claude produces `plan_approval` today (`ExitPlanMode`); Codex
+2. **Plans.** Only Claude produces `plan_approval` today (`ExitPlanMode`); Codex
    has no app-server equivalent, so that test is Claude-only until it does.
    *New script step: `{"type": "plan", "plan": "…"}`.*
-6. **A human decision has no button.** `POST /api/runs/{id}/human-review` exists
+3. **A human decision has no button.** `POST /api/runs/{id}/human-review` exists
    and the run page shows "Action required", but nothing in the client calls it.
    A test that drives a run to its end through the browser needs that control to
    exist first. *A product change, not a test one.*
@@ -129,16 +151,14 @@ it says so.
 
 | behaviour | needs | notes |
 | --- | --- | --- |
-| workspace provisioned, run reaches implementation | 1 | assert the run page's stages, and that the worktree exists on disk |
-| conversation streams tool calls and messages | 1 | the workflow conversation streams by polling the durable transcript, so assert through `/runs/{run}/conversations/{instance}` |
-| approval propagates and approving executes | 1, 2 | same card as the chat test, reached from the run page |
-| agent asks for clarification | 1, 2, 4 | answering resumes the same agent run |
-| `complete_step` advances to review | 1, 2 | assert the review step starts, and on which runner |
-| reviewer adds review comments | 1, 2, 3 | assert against the fake `gh`, not GitHub |
-| talking after review reopens implementation | 1, 2 | `StepReactivated`; the composer is only offered on editable steps |
-| auto-approve runs several requests unattended | 1, 2 | toggle in the conversation header; script several `run` steps and assert `decisionSource` is not `user` |
-| a failed workflow reads as failed | 1, 2 | `fail_step`, and a CLI that exits nonzero -- they surface differently |
-| a plan reaches the operator | 1, 2, 5 | Claude only |
+| approval propagates and approving executes | — | same card as the chat test, reached from the run page |
+| agent asks for clarification | 1 | answering resumes the same agent run |
+| reviewer adds review comments | — | assert against `engine.ghLog`, not GitHub; the reviewer is refused `complete_step` until it has left at least one comment |
+| talking after review reopens implementation | — | `StepReactivated`; the composer is only offered on editable steps |
+| auto-approve runs several requests unattended | — | toggle in the conversation header; script several `run` steps and assert `decisionSource` is not `user` |
+| a failed workflow reads as failed | — | `fail_step`, and a CLI that exits nonzero -- they surface differently |
+| a plan reaches the operator | 2 | Claude only |
+| the human decision finishes the run | 3 | the last transition nothing in the browser can reach |
 
 ## Live provider CLIs
 

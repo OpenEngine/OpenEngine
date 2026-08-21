@@ -304,6 +304,41 @@ def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
     asyncio.run(scenario())
 
 
+def test_the_bridge_credential_can_never_read_as_a_command_line_flag() -> None:
+    """The token is an argv element, so its alphabet is a correctness property.
+
+    `token_urlsafe` draws from an alphabet that includes `-`, and a token that
+    began with one was read by the server's own parser as an option: it exited
+    on `--token: expected one argument` before answering `initialize`. About
+    one agent run in sixty-four, and nothing in the aftermath named the cause
+    -- the step's agent simply had no tools, and the run failed two
+    corrections later.
+
+    Sampled rather than asserted once, because a one-in-sixty-four fault is
+    not something a single draw catches.
+    """
+
+    async def scenario() -> list[str]:
+        tokens: list[str] = []
+        for index in range(200):
+            broker = TerminalMcpBroker(
+                run_id=RunId(f"run-{index}"),
+                agent_run_id=AgentRunId(f"agent-run-{index}"),
+                step=STEP,
+                registry=TerminalResultRegistry(),
+            )
+            async with broker:
+                config = broker.config
+                tokens.append(config.args[config.args.index("--token") + 1])
+        return tokens
+
+    tokens = asyncio.run(scenario())
+
+    assert all(token.isalnum() for token in tokens)
+    # And it is a credential, so no two sessions share one.
+    assert len(set(tokens)) == len(tokens)
+
+
 def test_stdio_bridge_returns_a_small_acknowledgement() -> None:
     async def scenario() -> None:
         broker = TerminalMcpBroker(

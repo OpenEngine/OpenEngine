@@ -8,6 +8,7 @@ from dataclasses import replace
 import httpx
 import pytest
 
+import github_fakes
 from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
 from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
@@ -225,6 +226,35 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
         "Read",
         "Glob",
         "Grep",
+    ]
+
+
+def test_review_comments_are_left_with_the_gh_the_composition_names(tmp_path) -> None:
+    """Which `gh` runs is the composition's to say, as the two CLIs are.
+
+    Proved by leaving a comment rather than by reading the constructor argument
+    back, because what matters is the executable the adapter actually spawns:
+    an unwired `github_binary` spawns whatever `gh` is on PATH, which for a
+    reviewer means somebody's real repository.
+    """
+    log = tmp_path / "gh.jsonl"
+    capabilities = build_capabilities(
+        Settings(
+            github_binary=github_fakes.install(tmp_path, log),
+            sqlite_path=str(tmp_path / "c.sqlite3"),
+        )
+    )
+    try:
+        asyncio.run(
+            capabilities.source_control.add_comment(
+                "https://github.com/acme/api/pull/7", "Looks right."
+            )
+        )
+    finally:
+        capabilities.state_store.close()
+
+    assert [call["argv"] for call in github_fakes.calls(log)] == [
+        ["pr", "comment", "https://github.com/acme/api/pull/7", "--body", "Looks right."]
     ]
 
 
