@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api, type ApiRunStep, type ApiWorkflowRun, type EngineConfig } from "./api";
 import { Stat, StatStrip } from "./brand";
+import { WorkspaceControl } from "./workspace";
 
 export const IN_PROGRESS_PHASES = new Set([
   "pending",
@@ -398,6 +399,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runId]);
+  const workspaceThreadId = run
+    ? (run.steps.find(
+        (step) => step.stepId === run.currentStepId && step.agentInstanceId,
+      )?.agentInstanceId ??
+      run.steps.find((step) => step.agentInstanceId)?.agentInstanceId)
+    : undefined;
 
   return (
     <main className="panel-scroll">
@@ -432,6 +439,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
           </StatStrip>
+          {workspaceThreadId && (
+            <section className="run-workspace" aria-label="Workflow checkout">
+              <WorkspaceControl threadId={workspaceThreadId} />
+            </section>
+          )}
           <StageProgress run={run} />
           {run.pendingHumanReview && (
             <section className="callout callout-action">

@@ -59,6 +59,10 @@ from engine.ports import (
     ApprovalRequest,
     InteractiveAgentRunner,
     McpServerConfig,
+    UserInputAnswer,
+    UserInputOption,
+    UserInputQuestion,
+    UserInputResponse,
     Workspace,
     WorkspaceState,
 )
@@ -600,6 +604,48 @@ class RepeatedApprovalWorkflowRunner(ApprovalWorkflowRunner):
         )
 
 
+class QuestionWorkflowRunner(ApprovalWorkflowRunner):
+    """Pause an MCP workflow turn for structured human input."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.response: UserInputResponse | None = None
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_approval,
+        on_message=None,
+        workspace_id=None,
+    ) -> AgentTurn:
+        response = await on_approval(
+            ApprovalRequest(
+                approval_id="provider-question",
+                kind=ApprovalKind.USER_INPUT,
+                tool_name="AskUserQuestion",
+                allowed_decisions=(ApprovalDecision.CANCEL,),
+                questions=(UserInputQuestion(
+                    question_id="api",
+                    header="API",
+                    question="Which API should remain stable?",
+                    options=(
+                        UserInputOption("Public", "Preserve the public API"),
+                        UserInputOption("Internal", "Preserve the internal API"),
+                    ),
+                ),),
+                requires_human=True,
+            )
+        )
+        assert isinstance(response, UserInputResponse)
+        self.response = response
+        return await TerminalToolRunner.run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
 class InvalidThenTerminalToolRunner(TerminalToolRunner):
     """Exit once without a valid call, then complete through MCP."""
 
@@ -782,6 +828,7 @@ def _workflow_app(
     workflow_runners: dict[str, ConcurrentRunner] | None = None,
     reviewers: dict[str, ConcurrentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
+    workspace_repository: str | None = None,
 ):
     """Wire the app the way the composition root does.
 
@@ -804,6 +851,7 @@ def _workflow_app(
         ),
         profiles=PROFILES,
         runners=chat_runners,
+        workspace_repository=workspace_repository,
     )
     return create_app(
         session,
@@ -1472,6 +1520,50 @@ def test_workflow_conversation_replays_every_approval_after_reconnect() -> None:
     ]
     assert streamed[0]["status"] == "decided"
     assert streamed[1]["status"] == "pending"
+
+
+def test_workflow_question_choices_resume_the_same_model_turn() -> None:
+    store = InMemoryStateStore()
+    runner = QuestionWorkflowRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Ask which API to preserve.",
+                    "repository": "acme/api",
+                },
+            )
+            for _ in range(100):
+                pending = await store.list_approvals(status=ApprovalStatus.PENDING)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending
+            request = pending[0]
+            answered = await client.post(
+                f"/api/threads/{request.instance_id}/runs/current/approvals/"
+                f"{request.approval_id}",
+                json={"answers": {"api": ["Public"]}},
+            )
+            completed = await _await_phase(
+                client, RunId(created.json()["runId"]), "awaiting_human_review"
+            )
+            return request, answered, completed
+
+    request, answered, completed = asyncio.run(scenario())
+
+    assert request.kind is ApprovalKind.USER_INPUT
+    assert answered.status_code == 200
+    assert answered.json()["approval"]["answers"] == {"api": ["Public"]}
+    assert completed.status_code == 200
+    # The response goes back through the provider callback without ending and
+    # restarting the turn.
+    assert runner.response == UserInputResponse((UserInputAnswer("api", ("Public",)),))
 
 
 def test_implementation_conversation_can_enable_system_auto_approvals() -> None:
@@ -2196,6 +2288,7 @@ class ConversationWorkspaces:
     def __init__(self) -> None:
         self.count = 0
         self.detached: set[str] = set()
+        self.attachments: list[tuple[str, str, str]] = []
 
     async def provision(self, repository: str, base_ref: str) -> Workspace:
         self.count += 1
@@ -2216,6 +2309,7 @@ class ConversationWorkspaces:
         )
 
     async def attach(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+        self.attachments.append((workspace_id, repository, base_ref))
         self.detached.discard(workspace_id)
         return self._workspace(workspace_id, repository, base_ref)
 
@@ -2372,6 +2466,173 @@ def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back() -> 
     assert reattached["workspaceRoot"] == created["workspaceRoot"]
     assert reattached["workspaceRef"] == "engine/ws-1"
     assert workspaces.count == 1
+
+
+def test_workflow_checkout_cannot_detach_while_any_shared_step_is_running() -> None:
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implementation complete.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    reviewer = WorkflowProgressRunner()
+    reviewer.arguments["outputs"] = {"findings": "No blocking findings."}
+    app = _workflow_app(
+        InMemoryStateStore(), implementer, reviewers={"test": reviewer}
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Keep the checkout safe.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            for _ in range(200):
+                detail = await client.get(f"/api/runs/{run_id}")
+                assert detail.json()["phase"] != "failed", detail.json()[
+                    "failureReason"
+                ]
+                if reviewer.started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert reviewer.started.is_set()
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+            refused = await client.delete(
+                f"/api/threads/{instance_id}/workspace"
+            )
+            reviewer.release.set()
+            await _await_phase(client, run_id, "awaiting_human_review")
+            detached = await client.delete(
+                f"/api/threads/{instance_id}/workspace"
+            )
+            return refused, detached
+
+    refused, detached = asyncio.run(scenario())
+
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "this workflow has a run in progress"
+    assert detached.status_code == 200
+    assert detached.json()["workspaceAttached"] is False
+
+
+def test_workflow_checkout_toggle_refreshes_every_shared_conversation() -> None:
+    store = InMemoryStateStore()
+    workspaces = ConversationWorkspaces()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implementation complete.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    app = _workflow_app(
+        store,
+        implementer,
+        workspaces=workspaces,
+        reviewers={"test": _reviewer()},
+        workspace_repository="/chat/repository",
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Keep shared checkout state current.",
+                    "repository": "acme/workflow-repository",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            detail = await _await_phase(client, run_id, "awaiting_human_review")
+            implementation_id = detail.json()["steps"][0]["agentInstanceId"]
+            review_id = detail.json()["steps"][1]["agentInstanceId"]
+
+            # Load both into ThreadService's cache before changing their shared
+            # workspace through only one conversation.
+            await client.get(f"/api/threads/{implementation_id}")
+            await client.get(f"/api/threads/{review_id}")
+            detached = await client.delete(
+                f"/api/threads/{implementation_id}/workspace"
+            )
+            review_after_detach = await client.get(f"/api/threads/{review_id}")
+            reattached = await client.post(f"/api/threads/{review_id}/workspace")
+            implementation_after_attach = await client.get(
+                f"/api/threads/{implementation_id}"
+            )
+            return (
+                detached,
+                review_after_detach,
+                reattached,
+                implementation_after_attach,
+            )
+
+    detached, review_after_detach, reattached, implementation_after_attach = (
+        asyncio.run(scenario())
+    )
+
+    assert detached.json()["workspaceAttached"] is False
+    assert review_after_detach.json()["workspaceAttached"] is False
+    assert reattached.json()["workspaceAttached"] is True
+    assert implementation_after_attach.json()["workspaceAttached"] is True
+    assert workspaces.attachments == [
+        ("ws-1", "acme/workflow-repository", "origin/main")
+    ]
+
+
+def test_detached_workflow_conversation_refuses_continuation_without_failing_run() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implementation complete.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    app = _workflow_app(store, implementer)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Keep detached runs recoverable.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            awaiting = await _await_phase(client, run_id, "awaiting_human_review")
+            implementation_id = awaiting.json()["steps"][0]["agentInstanceId"]
+            detached = await client.delete(
+                f"/api/threads/{implementation_id}/workspace"
+            )
+            refused = await client.post(
+                f"/api/threads/{implementation_id}/runs",
+                json={"text": "Continue from here."},
+            )
+            unchanged = await client.get(f"/api/runs/{run_id}")
+            return detached, refused, unchanged
+
+    detached, refused, unchanged = asyncio.run(scenario())
+
+    assert detached.status_code == 200
+    assert refused.status_code == 409
+    assert "reattach" in refused.json()["error"]
+    assert unchanged.json()["phase"] == "awaiting_human_review"
+    assert not unchanged.json()["failureReason"]
 
 
 def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path() -> None:

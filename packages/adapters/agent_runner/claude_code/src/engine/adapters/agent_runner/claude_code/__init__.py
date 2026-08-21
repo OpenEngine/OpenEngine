@@ -64,6 +64,9 @@ from engine.ports.agent_runner import (
     McpServerConfig,
     TokenUsage,
     TurnObserver,
+    UserInputOption,
+    UserInputQuestion,
+    UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.streams import read_lines
@@ -139,7 +142,14 @@ def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | 
     tool_input = request.get("input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {"input": tool_input}
-    if tool_name == "Bash":
+    questions: tuple[UserInputQuestion, ...] = ()
+    requires_human = tool_name in {"AskUserQuestion", "ExitPlanMode"}
+    if tool_name == "AskUserQuestion":
+        kind = ApprovalKind.USER_INPUT
+        questions = _questions_from_claude(tool_input)
+    elif tool_name == "ExitPlanMode":
+        kind = ApprovalKind.PLAN_APPROVAL
+    elif tool_name == "Bash":
         kind = ApprovalKind.COMMAND_EXECUTION
     elif tool_name in CLAUDE_FILE_TOOLS:
         kind = ApprovalKind.FILE_CHANGE
@@ -147,8 +157,8 @@ def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | 
         kind = ApprovalKind.TOOL_USE
 
     suggestions = request.get("permission_suggestions")
-    allowed = [ApprovalDecision.ACCEPT]
-    if isinstance(suggestions, list) and suggestions:
+    allowed = [] if questions else [ApprovalDecision.ACCEPT]
+    if not requires_human and isinstance(suggestions, list) and suggestions:
         allowed.append(ApprovalDecision.ACCEPT_FOR_SESSION)
     allowed.append(ApprovalDecision.CANCEL)
 
@@ -175,16 +185,32 @@ def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | 
         tool_call_id=str(tool_use_id) if tool_use_id else None,
         arguments=json.dumps(tool_input, sort_keys=True),
         allowed_decisions=tuple(allowed),
+        questions=questions,
+        requires_human=requires_human,
     )
 
 
 def control_response_for(
-    message: dict[str, Any], decision: ApprovalDecision
+    message: dict[str, Any], decision: ApprovalDecision | UserInputResponse
 ) -> dict[str, Any]:
     """Build the Claude control-protocol response for one Engine decision."""
     request = message.get("request") or {}
     tool_input = request.get("input") or {}
-    if decision is ApprovalDecision.CANCEL:
+    if isinstance(decision, UserInputResponse):
+        questions = tool_input.get("questions")
+        by_question = {
+            answer.question_id: ", ".join(answer.answers)
+            for answer in decision.answers
+        }
+        response = {
+            "behavior": "allow",
+            "updatedInput": {
+                **tool_input,
+                "questions": questions,
+                "answers": by_question,
+            },
+        }
+    elif decision is ApprovalDecision.CANCEL:
         response: dict[str, Any] = {
             "behavior": "deny",
             "message": "Cancelled by user",
@@ -207,6 +233,45 @@ def control_response_for(
             "response": response,
         },
     }
+
+
+def _questions_from_claude(tool_input: dict[str, Any]) -> tuple[UserInputQuestion, ...]:
+    raw_questions = tool_input.get("questions")
+    if not isinstance(raw_questions, list):
+        return ()
+    questions: list[UserInputQuestion] = []
+    for index, raw in enumerate(raw_questions):
+        if not isinstance(raw, dict):
+            continue
+        question = str(raw.get("question", "")).strip()
+        if not question:
+            continue
+        options = raw.get("options")
+        normalized_options = (
+            tuple(
+                UserInputOption(
+                    label=str(option.get("label", "")),
+                    description=str(option.get("description", "")),
+                )
+                for option in options
+                if isinstance(option, dict)
+                and str(option.get("label", "")).strip()
+            )
+            if isinstance(options, list)
+            else ()
+        )
+        questions.append(
+            UserInputQuestion(
+                # Claude's answers object is keyed by the full question text.
+                question_id=question,
+                header=str(raw.get("header", f"Question {index + 1}")),
+                question=question,
+                options=normalized_options,
+                multi_select=bool(raw.get("multiSelect", False)),
+                allows_other=True,
+            )
+        )
+    return tuple(questions)
 
 
 async def _write_json(stream: asyncio.StreamWriter, message: dict[str, Any]) -> None:
@@ -473,7 +538,6 @@ class ClaudeCodeAgentRunner:
         if mcp_server is not None:
             allowed_tools = (
                 *allowed_tools,
-                "AskUserQuestion",
                 f"mcp__{mcp_server.name}__complete_step",
                 f"mcp__{mcp_server.name}__fail_step",
                 *(
@@ -730,7 +794,10 @@ class ClaudeCodeAgentRunner:
                 request = approval_request_from_control(message)
                 if request is not None:
                     decision = await on_approval(request)
-                    if decision not in request.allowed_decisions:
+                    if (
+                        isinstance(decision, ApprovalDecision)
+                        and decision not in request.allowed_decisions
+                    ):
                         raise ClaudeExecutionError(
                             f"approval decision {decision.value!r} is not allowed for "
                             f"{request.approval_id}"

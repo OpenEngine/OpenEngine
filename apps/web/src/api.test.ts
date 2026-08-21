@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api, messageText, setThreadAutoApprove } from "./api";
+import { answerQuestion, api, messageText, setThreadAutoApprove } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -77,6 +77,24 @@ describe("setThreadAutoApprove", () => {
     expect(fetch).toHaveBeenCalledWith(
       "/api/threads/thread-1",
       expect.objectContaining({ method: "PATCH", body: '{"autoApprove":true}' }),
+    );
+  });
+});
+
+describe("answerQuestion", () => {
+  it("submits structured answers to the waiting interaction", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ approval: { id: "approval-1" } }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await answerQuestion("thread-1", "approval-1", { api: ["Public"] });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/threads/thread-1/runs/current/approvals/approval-1",
+      expect.objectContaining({ method: "POST", body: '{"answers":{"api":["Public"]}}' }),
     );
   });
 });

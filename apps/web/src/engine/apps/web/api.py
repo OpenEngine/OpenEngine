@@ -53,6 +53,7 @@ from engine.ports import (
     ApprovalHandler,
     InteractiveAgentRunner,
     StateStore,
+    UserInputAnswer,
     WorkspaceState,
 )
 from engine.runtime import (
@@ -63,6 +64,7 @@ from engine.runtime import (
     ApprovalNotPendingError,
     RunReader,
     UnknownApprovalError,
+    UserInputNotAllowedError,
     WorkflowExecutionError,
     WorkflowExecutor,
     WorkflowCatalog,
@@ -370,15 +372,41 @@ class ThreadService:
     async def attach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
         """Give this chat a checkout again -- or a first one."""
         thread = await self._require_idle(instance_id)
+        repository = None
+        base_ref = None
+        if thread.workflow_run_id is not None:
+            run = await self.session.state_store.load(thread.workflow_run_id)
+            if run is None:
+                raise RuntimeError("workflow run not found")
+            repository = run.repository
+            definition = run.workflow_definition
+            if definition is None and self._workflow_catalog is not None:
+                definition = self._workflow_catalog.get(run.workflow_id)
+            base_ref = (
+                definition.workspace.base_ref if definition is not None else None
+            )
         async with self._locks[instance_id]:
-            state = await self.session.attach_workspace(instance_id)
-        return _with_workspace(thread, state)
+            state = await self.session.attach_workspace(
+                instance_id, repository=repository, base_ref=base_ref
+            )
+        return self._apply_workspace_state(thread, state)
 
     async def detach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
         """Release this chat's checkout, keeping its work on the branch."""
         thread = await self._require_idle(instance_id)
         async with self._locks[instance_id]:
             state = await self.session.detach_workspace(instance_id)
+        return self._apply_workspace_state(thread, state)
+
+    def _apply_workspace_state(
+        self, thread: ChatThread, state: WorkspaceState | None
+    ) -> ChatThread:
+        """Refresh every loaded conversation sharing the changed workspace."""
+        workspace_id = state.workspace_id if state is not None else thread.workspace_id
+        if workspace_id is not None:
+            for cached in self._threads.values():
+                if cached.workspace_id == workspace_id:
+                    _with_workspace(cached, state)
         return _with_workspace(thread, state)
 
     async def _require_idle(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -433,7 +461,7 @@ class ThreadService:
         self, instance_id: AgentInstanceId, text: str, runner: str | None
     ) -> ActiveRun:
         thread = await self._require(instance_id)
-        await self._require_somewhere_to_run(instance_id)
+        await self.require_somewhere_to_run(instance_id)
         initial_message_count = len(await self.session.history(instance_id))
         current = self.active_run(instance_id)
         if current is not None:
@@ -547,6 +575,27 @@ class ThreadService:
         record = await self.approvals.decide(
             approval_id,
             chosen,
+            instance_id=instance_id,
+            agent_run_id=run.agent_run_id if run is not None else agent_run_id,
+        )
+        if run is not None:
+            await run.present_approval(record)
+        return record
+
+    async def answer_question(
+        self,
+        instance_id: AgentInstanceId,
+        approval_id: ApprovalId,
+        answers: tuple[UserInputAnswer, ...],
+        agent_run_id: AgentRunId | None = None,
+    ) -> ApprovalRecord:
+        """Answer a structured prompt from this chat's current run."""
+
+        await self._require(instance_id)
+        run = self.active_run(instance_id)
+        record = await self.approvals.answer(
+            approval_id,
+            answers,
             instance_id=instance_id,
             agent_run_id=run.agent_run_id if run is not None else agent_run_id,
         )
@@ -668,7 +717,7 @@ class ThreadService:
             raise KeyError(f"no chat thread {instance_id!r}")
         return thread
 
-    async def _require_somewhere_to_run(self, instance_id: AgentInstanceId) -> None:
+    async def require_somewhere_to_run(self, instance_id: AgentInstanceId) -> None:
         """Refuse a turn a detached chat cannot run, in words the UI can act on.
 
         The runner would fail on the missing directory anyway, several layers
@@ -910,6 +959,7 @@ def create_app(
         assert thread.workflow_run_id is not None
         if not thread.editable:
             raise RuntimeError("this workflow conversation is read-only")
+        await service.require_somewhere_to_run(thread.instance_id)
         before = len(await service.history(thread.instance_id))
         state = await session.state_store.load(thread.workflow_run_id)
         if state is None:
@@ -1254,8 +1304,16 @@ def create_app(
 
     async def detach_workspace(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
-        if await service.get(instance_id) is None:
+        thread = await service.get(instance_id)
+        if thread is None:
             return _error("thread not found", 404)
+        # Workflow steps share one checkout. An earlier conversation may be
+        # idle while a later step is still using that same directory.
+        if workflow_is_active(thread):
+            assert thread.workflow_run_id is not None
+            state = await session.state_store.load(thread.workflow_run_id)
+            if state is None or state.phase is RunPhase.RUNNING_AGENT:
+                return _error("this workflow has a run in progress", 409)
         try:
             thread = await service.detach_workspace(instance_id)
         except RuntimeError as error:
@@ -1326,10 +1384,6 @@ def create_app(
             return _error("thread not found", 404)
         body = await _json_body(request)
         try:
-            decision = _required_string(body, "decision")
-        except ValueError as error:
-            return _error(str(error), 400)
-        try:
             workflow_agent_run_id = None
             if thread.workflow_run_id is not None:
                 workflow_state = await session.state_store.load(
@@ -1337,15 +1391,38 @@ def create_app(
                 )
                 if workflow_state is not None:
                     workflow_agent_run_id = workflow_state.current_agent_run_id
-            approval = await service.decide_approval(
-                instance_id,
-                ApprovalId(request.path_params["approval_id"]),
-                decision,
-                workflow_agent_run_id,
-            )
+            approval_id = ApprovalId(request.path_params["approval_id"])
+            if "answers" in body:
+                raw_answers = body["answers"]
+                if not isinstance(raw_answers, dict):
+                    raise ValueError("answers must be an object")
+                answers = tuple(
+                    UserInputAnswer(
+                        question_id=str(question_id),
+                        answers=tuple(values) if isinstance(values, list) else (),
+                    )
+                    for question_id, values in raw_answers.items()
+                    if isinstance(question_id, str)
+                    and isinstance(values, list)
+                    and all(isinstance(value, str) for value in values)
+                )
+                if len(answers) != len(raw_answers):
+                    raise ValueError("each answer must be an array of strings")
+                approval = await service.answer_question(
+                    instance_id, approval_id, answers, workflow_agent_run_id
+                )
+            else:
+                decision = _required_string(body, "decision")
+                approval = await service.decide_approval(
+                    instance_id, approval_id, decision, workflow_agent_run_id
+                )
+        except ValueError as error:
+            return _error(str(error), 400)
         except UnknownApprovalError as error:
             return _error(str(error), 404)
         except ApprovalDecisionNotAllowedError as error:
+            return _error(str(error), 400)
+        except UserInputNotAllowedError as error:
             return _error(str(error), 400)
         except ApprovalNotPendingError as error:
             # The request outlived whatever was waiting for it. Not the
@@ -1545,7 +1622,7 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
     client that reconnected mid-pause has no way to reconstruct a request from
     the parts of it that were emitted before it arrived.
     """
-    return {
+    result = {
         "id": str(approval.approval_id),
         "status": approval.status.value,
         "kind": approval.kind.value,
@@ -1568,6 +1645,20 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
             approval.decision_source.value if approval.decision_source else None
         ),
     }
+    if approval.questions is not None:
+        result["questions"] = _json_value(approval.questions, [])
+    if approval.answers is not None:
+        result["answers"] = _json_value(approval.answers, None)
+    return result
+
+
+def _json_value(value: str | None, default: object) -> object:
+    if value is None:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
 
 
 def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:

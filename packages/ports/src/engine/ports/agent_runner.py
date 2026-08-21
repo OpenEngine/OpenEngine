@@ -70,6 +70,44 @@ class ApprovalRequest:
     """
     arguments: str | None = None
     allowed_decisions: tuple[ApprovalDecision, ...] = tuple(ApprovalDecision)
+    questions: tuple["UserInputQuestion", ...] = ()
+    requires_human: bool = False
+    """Whether configured and per-conversation auto-approval must be ignored."""
+
+
+@dataclass(frozen=True, slots=True)
+class UserInputOption:
+    """One answer offered for a structured question."""
+
+    label: str
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class UserInputQuestion:
+    """A provider-neutral question that can also accept a free-form answer."""
+
+    question_id: str
+    header: str
+    question: str
+    options: tuple[UserInputOption, ...] = ()
+    multi_select: bool = False
+    allows_other: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class UserInputAnswer:
+    """The values a person selected or entered for one question."""
+
+    question_id: str
+    answers: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class UserInputResponse:
+    """A complete structured response returned to a paused provider turn."""
+
+    answers: tuple[UserInputAnswer, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,8 +256,9 @@ class StreamingMcpAgentRunner(McpAgentRunner, Protocol):
         ...
 
 
-ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalDecision]]
-"""Presents an approval request and waits for the user's decision."""
+ApprovalResponse = ApprovalDecision | UserInputResponse
+ApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalResponse]]
+"""Presents a human interaction and waits for its decision or answers."""
 
 
 @runtime_checkable
@@ -287,6 +326,7 @@ __all__ = [
     "ApprovalHandler",
     "ApprovalKind",
     "ApprovalRequest",
+    "ApprovalResponse",
     "FinishReason",
     "InteractiveAgentRunner",
     "InteractiveMcpAgentRunner",
@@ -297,4 +337,8 @@ __all__ = [
     "StreamingAgentRunner",
     "TokenUsage",
     "TurnObserver",
+    "UserInputAnswer",
+    "UserInputOption",
+    "UserInputQuestion",
+    "UserInputResponse",
 ]

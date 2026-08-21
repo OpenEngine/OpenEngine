@@ -21,9 +21,8 @@ import {
 
 import {
   api,
-  attachWorkspace,
+  answerQuestion,
   decideApproval,
-  detachWorkspace,
   messageText,
   RUN_NOT_STARTED_ERROR_CODE,
   stopRun,
@@ -33,6 +32,7 @@ import {
 } from "./api";
 import { useApprovals, type InlineApproval } from "./approvals";
 import { Stat, StatStrip } from "./brand";
+import { WorkspaceControl } from "./workspace";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const NEW_CHAT_DRAFT_ID = "new";
@@ -368,75 +368,14 @@ function Ticked({ text }: { text: string }) {
   );
 }
 
-/** This chat's worktree: where it is, how to read its work, and a way to
- *  hand the directory back or ask for it again. */
+/** Adapt the open assistant-ui conversation to the shared checkout control. */
 function WorkspaceLine() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
     | undefined;
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const [fetched, setFetched] = useState<ApiThread>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    setFetched(undefined);
-    setError(undefined);
-    if (!remoteId) return;
-    let current = true;
-    void api<ApiThread>(`/api/threads/${remoteId}`)
-      .then((thread) => {
-        if (current) setFetched(thread);
-      })
-      .catch(() => {});
-    return () => {
-      current = false;
-    };
-  }, [remoteId]);
-
   if (!remoteId) return null;
-
-  const workspace: WorkspaceCustom = fetched ?? custom ?? {};
-  const attached = workspace.workspaceAttached ?? Boolean(workspace.workspaceRoot);
-
-  async function toggle() {
-    if (!remoteId) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      setFetched(await (attached ? detachWorkspace : attachWorkspace)(remoteId));
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="dock-workspace">
-      {attached ? (
-        <>
-          <span className="micro">Working in</span>
-          <code className="dock-path">cd {workspace.workspaceRoot}</code>
-        </>
-      ) : workspace.workspaceRef ? (
-        <>
-          <span className="micro">Detached — the work is on</span>
-          <code className="dock-path">git checkout {workspace.workspaceRef}</code>
-        </>
-      ) : (
-        <span className="micro">No worktree — attach one to give this chat somewhere to work</span>
-      )}
-      <button type="button" className="link-flame" onClick={() => void toggle()} disabled={busy}>
-        {busy ? "Working…" : attached ? "Detach" : workspace.workspaceRef ? "Reattach" : "Attach"}
-      </button>
-      {error && (
-        <p className="notice dock-error">
-          <Ticked text={error} />
-        </p>
-      )}
-    </div>
-  );
+  return <WorkspaceControl threadId={remoteId} initial={custom} />;
 }
 
 const DECISION_LABELS: Record<ApprovalDecision, string> = {
@@ -449,6 +388,8 @@ const KIND_LABELS: Record<ApiApproval["kind"], string> = {
   command_execution: "Wants to run a command",
   file_change: "Wants to change files",
   tool_use: "Wants to use a tool",
+  plan_approval: "Wants approval for a plan",
+  user_input: "Has a question",
 };
 
 /** What became of a request that is no longer open, and on whose say-so. */
@@ -461,6 +402,10 @@ export function outcomeText(approval: ApiApproval): string {
     return approval.decision === "cancel"
       ? "Refused by the configured policy — the action did not run."
       : "Allowed by the configured policy, without asking.";
+  if (approval.kind === "user_input" && approval.answers)
+    return "Answered.";
+  if (approval.kind === "user_input" && approval.decision === "cancel")
+    return "Cancelled — no answer was sent.";
   switch (approval.decision) {
     case "accept":
       return "Approved.";
@@ -513,6 +458,13 @@ function ApprovalArguments({ approval }: { approval: ApiApproval }) {
 
 /** The one line a folded approval is worth: what happened, and to what. */
 export function summaryText(approval: ApiApproval): string {
+  if (approval.kind === "user_input") {
+    const question = approval.questions?.[0]?.question ?? "Question";
+    if (approval.status === "pending") return `Answer needed · ${question}`;
+    return approval.decision === "cancel"
+      ? `Cancelled · ${question}`
+      : `Answered · ${question}`;
+  }
   const target =
     approval.command ?? approval.toolName ?? KIND_LABELS[approval.kind].toLowerCase();
   if (approval.status === "pending") return `Approval needed · ${target}`;
@@ -533,6 +485,152 @@ export function summaryText(approval: ApiApproval): string {
     default:
       return `Closed · ${target}`;
   }
+}
+
+function QuestionForm({
+  threadId,
+  approval,
+}: {
+  threadId: string;
+  approval: ApiApproval;
+}) {
+  const questions = approval.questions ?? [];
+  const [selected, setSelected] = useState<Record<string, string[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  function choose(questionId: string, label: string, multiSelect: boolean) {
+    setSelected((current) => {
+      const existing = current[questionId] ?? [];
+      return {
+        ...current,
+        [questionId]: multiSelect
+          ? existing.includes(label)
+            ? existing.filter((value) => value !== label)
+            : [...existing, label]
+          : [label],
+      };
+    });
+  }
+
+  async function submit() {
+    const answers: Record<string, string[]> = {};
+    for (const question of questions) {
+      const typed = (other[question.id] ?? "").trim();
+      const choices = selected[question.id] ?? [];
+      answers[question.id] = question.multiSelect
+        ? [...choices, ...(typed ? [typed] : [])]
+        : typed
+          ? [typed]
+          : choices;
+      if (!answers[question.id].length) {
+        setError(`Answer “${question.header}” before continuing.`);
+        return;
+      }
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      await answerQuestion(threadId, approval.id, answers);
+    } catch (failure) {
+      setBusy(false);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
+  async function cancel() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await decideApproval(threadId, approval.id, "cancel");
+    } catch (failure) {
+      setBusy(false);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
+  return (
+    <div className="question-backdrop">
+      <section
+        className="question-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Agent question"
+      >
+        <header>
+          <span className="approval-kind">The agent needs your input</span>
+        </header>
+        {questions.map((question) => (
+          <fieldset className="question-field" key={question.id}>
+            <legend>{question.header}</legend>
+            <p>{question.question}</p>
+            <div className="question-options">
+              {question.options.map((option) => {
+                const checked = (selected[question.id] ?? []).includes(option.label);
+                return (
+                  <label
+                    className="question-option"
+                    key={option.label}
+                    data-selected={checked || undefined}
+                  >
+                    <input
+                      type={question.multiSelect ? "checkbox" : "radio"}
+                      name={question.id}
+                      checked={checked}
+                      onChange={() =>
+                        choose(question.id, option.label, question.multiSelect)
+                      }
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      {option.description && <small>{option.description}</small>}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {question.allowsOther && (
+              <label className="question-other">
+                Other
+                <input
+                  value={other[question.id] ?? ""}
+                  onChange={(event) =>
+                    setOther((current) => ({
+                      ...current,
+                      [question.id]: event.target.value,
+                    }))
+                  }
+                  placeholder="Type your answer…"
+                />
+              </label>
+            )}
+          </fieldset>
+        ))}
+        {error && <p className="notice">{error}</p>}
+        <div className="approval-actions">
+          {approval.allowedDecisions.includes("cancel") && (
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => void cancel()}
+            >
+              {busy ? "Sending…" : "Cancel"}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy || !questions.length}
+            onClick={() => void submit()}
+          >
+            {busy ? "Sending…" : "Continue"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 /** What the turn is asking, and the answers this request permits.
@@ -608,7 +706,10 @@ export function ApprovalEntry({
           </dl>
         )}
         <ApprovalArguments approval={approval} />
-        {pending ? (
+        {pending && approval.kind === "user_input" && (
+          <QuestionForm threadId={threadId} approval={approval} />
+        )}
+        {pending && approval.kind !== "user_input" ? (
           <div className="approval-actions">
             {approval.allowedDecisions.map((decision) => (
               <button
@@ -625,9 +726,9 @@ export function ApprovalEntry({
               </button>
             ))}
           </div>
-        ) : (
+        ) : !pending ? (
           <p className="approval-outcome">{outcomeText(approval)}</p>
-        )}
+        ) : null}
         {error && (
           <p className="notice">
             <Ticked text={error} />
@@ -873,18 +974,14 @@ function Dock() {
           This transcript belongs to a workflow step. Return to the run for status and actions.
         </p>
       ) : (
-        <>
-          <Composer />
-          {!workflowConversation && (
-            <div className="dock-foot">
-              {/* Under the composer rather than in the heading: a detached chat
-                  refuses to run, so the way to fix that cannot be somewhere you
-                  have to scroll a long conversation to reach. */}
-              <WorkspaceLine />
-            </div>
-          )}
-        </>
+        <Composer />
       )}
+      <div className="dock-foot">
+        {/* Under the composer or workflow note rather than in the heading: a
+            detached conversation refuses to run, so the way to fix that cannot
+            be somewhere you have to scroll a long transcript to reach. */}
+        <WorkspaceLine />
+      </div>
     </ThreadPrimitive.ViewportFooter>
   );
 }

@@ -321,4 +321,48 @@ describe("RunDetailPage", () => {
     expect(screen.getByRole("heading", { name: "Publish release" })).toBeVisible();
     expect(screen.getByText("Prepared artifacts.")).toBeVisible();
   });
+
+  it("offers the workflow checkout's detach operation", async () => {
+    const terminal = run({
+      phase: "succeeded",
+      currentStepId: null,
+      terminalOutcome: "approved",
+    });
+    const attached = {
+      id: "instance",
+      title: "Implementation",
+      archived: false,
+      agentId: "agent",
+      runner: "codex",
+      workspaceRoot: "/worktrees/ws-1",
+      workspaceRef: "engine/ws-1",
+      workspaceAttached: true,
+    };
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(terminal);
+      if (path === "/api/threads/instance/workspace" && init?.method === "DELETE")
+        return json({
+          ...attached,
+          workspaceRoot: undefined,
+          workspaceAttached: false,
+        });
+      if (path === "/api/threads/instance") return json(attached);
+      return json({ error: "not found" }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+
+    render(<RunDetailPage runId="run-1" />);
+
+    expect(await screen.findByText("cd /worktrees/ws-1")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Detach" }));
+
+    expect(await screen.findByText("git checkout engine/ws-1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reattach" })).toBeEnabled();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/threads/instance/workspace",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
 });
