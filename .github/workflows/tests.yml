@@ -19,6 +19,66 @@ env:
   UV_VERSION: "0.9.28"
 
 jobs:
+  fresh-install:
+    name: README fresh install
+    runs-on: ubuntu-latest
+    env:
+      # Exercise the oldest supported interpreter instead of inheriting the
+      # repository's development version from `.python-version`.
+      UV_PYTHON: "3.11"
+    steps:
+      # Hosted runners start empty, so checkout is the fresh clone a new user
+      # would begin with. Deliberately do not restore dependency caches here.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+
+      - name: Install workspace
+        run: uv sync
+
+      - name: Install web client
+        run: npm --prefix apps/web install
+
+      - name: Build web client
+        run: npm --prefix apps/web run build
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Run OpenEngine
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run engine-web > "$RUNNER_TEMP/engine-web.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          for _ in {1..30}; do
+            if curl --fail --silent http://localhost:8000/api/config > /dev/null \
+              && curl --fail --silent http://localhost:8000/ > /dev/null; then
+              cat "$RUNNER_TEMP/engine-web.log"
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/engine-web.log"
+              echo "::error::engine-web exited before it accepted a request"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          cat "$RUNNER_TEMP/engine-web.log"
+          echo "::error::engine-web did not accept a request within 30 seconds"
+          exit 1
+
   web:
     name: web client
     runs-on: ubuntu-latest
@@ -42,6 +102,66 @@ jobs:
 
       - name: Build web client
         run: npm --prefix apps/web run build
+
+  browser:
+    # The browser tier: a real server, both provider protocols, real worktrees,
+    # and a scripted CLI in place of a model. Its own job because it needs both
+    # toolchains and a browser, and because a failure here means something a
+    # user would have seen -- which should not be reported as a component test
+    # or a Python test going red.
+    name: browser end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --locked
+
+      - name: Install web client
+        run: npm --prefix apps/web ci
+
+      - name: Install the browser
+        run: npm --prefix apps/web exec -- playwright install --with-deps chromium
+
+      - name: Drive the interface
+        run: npm --prefix apps/web run test:e2e
+
+      # Uploaded whether the run passed or failed: the report of a green run --
+      # its screenshots of each state the specs assert on -- is how somebody
+      # answers "what does the approval card look like now?" without running
+      # the tier again.
+      - name: Upload the report (a static site -- unzip, then `npx playwright show-report <dir>`)
+        # GitHub serves the artifact as a zip and will not render the HTML, so
+        # it has to be downloaded and opened locally.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload the traces of what failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          if-no-files-found: ignore
+          # Diagnostics, not archives.
+          retention-days: 14
 
   boundaries:
     # Separated from the test matrix on purpose: this job answers "did someone

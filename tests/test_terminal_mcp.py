@@ -177,7 +177,7 @@ def test_fail_step_is_bound_and_auditable() -> None:
     asyncio.run(scenario())
 
 
-def test_stdio_mcp_surface_lists_only_terminal_tools() -> None:
+def test_stdio_mcp_surface_includes_non_terminal_clarify_tool() -> None:
     response = asyncio.run(
         _mcp_response(
             "127.0.0.1",
@@ -189,8 +189,45 @@ def test_stdio_mcp_surface_lists_only_terminal_tools() -> None:
 
     assert response is not None
     tools = response["result"]["tools"]
-    assert [tool["name"] for tool in tools] == ["complete_step", "fail_step"]
+    assert [tool["name"] for tool in tools] == [
+        "complete_step",
+        "fail_step",
+        "clarify",
+    ]
     assert all(tool["inputSchema"]["additionalProperties"] is False for tool in tools)
+
+
+def test_clarify_acknowledges_without_submitting_a_terminal_result() -> None:
+    async def scenario() -> None:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        async with broker:
+            clarified = await broker._submit(
+                _request(broker, "clarify-1", "clarify", {})
+            )
+            assert broker._result is not None
+            assert not broker._result.done()
+            completed = await broker._submit(
+                _request(
+                    broker,
+                    "complete-1",
+                    "complete_step",
+                    {
+                        "outcome": "success",
+                        "summary": "Done after clarifying.",
+                        "outputs": {"revision": "abc123"},
+                    },
+                )
+            )
+
+        assert clarified == {"ok": True, "acknowledgement": "clarified"}
+        assert completed == {"ok": True, "acknowledgement": "accepted"}
+
+    asyncio.run(scenario())
 
 
 def test_reviewer_mcp_surface_includes_repo_comment_tool() -> None:
@@ -265,6 +302,41 @@ def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
         ]
 
     asyncio.run(scenario())
+
+
+def test_the_bridge_credential_can_never_read_as_a_command_line_flag() -> None:
+    """The token is an argv element, so its alphabet is a correctness property.
+
+    `token_urlsafe` draws from an alphabet that includes `-`, and a token that
+    began with one was read by the server's own parser as an option: it exited
+    on `--token: expected one argument` before answering `initialize`. About
+    one agent run in sixty-four, and nothing in the aftermath named the cause
+    -- the step's agent simply had no tools, and the run failed two
+    corrections later.
+
+    Sampled rather than asserted once, because a one-in-sixty-four fault is
+    not something a single draw catches.
+    """
+
+    async def scenario() -> list[str]:
+        tokens: list[str] = []
+        for index in range(200):
+            broker = TerminalMcpBroker(
+                run_id=RunId(f"run-{index}"),
+                agent_run_id=AgentRunId(f"agent-run-{index}"),
+                step=STEP,
+                registry=TerminalResultRegistry(),
+            )
+            async with broker:
+                config = broker.config
+                tokens.append(config.args[config.args.index("--token") + 1])
+        return tokens
+
+    tokens = asyncio.run(scenario())
+
+    assert all(token.isalnum() for token in tokens)
+    # And it is a credential, so no two sessions share one.
+    assert len(set(tokens)) == len(tokens)
 
 
 def test_stdio_bridge_returns_a_small_acknowledgement() -> None:

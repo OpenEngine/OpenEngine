@@ -137,18 +137,19 @@ class WorkflowExecutor:
     ) -> None:
         """Reconstruct and run the current agent command after a pause/restart."""
 
-        state = await self._require_state(run_id)
+        durable_state = await self._require_state(run_id)
+        state = durable_state
         definition = self._definition_for(state)
         target_step_id = step_id or state.current_step_id
         target_step = definition.step(target_step_id) if target_step_id else None
+        deferred_event: StepReactivated | None = None
         if message is not None:
             if not isinstance(target_step, AgentStep) or not target_step.editable:
                 raise WorkflowExecutionError("workflow step is read-only")
-            state, commands = await self._transition(
-                state,
-                StepReactivated(run_id=run_id, step_id=target_step.step_id),
-                definition,
+            deferred_event = StepReactivated(
+                run_id=run_id, step_id=target_step.step_id
             )
+            state, commands = decide(state, deferred_event, definition)
             if commands:
                 raise WorkflowExecutionError(
                     "reactivating an agent step unexpectedly emitted commands"
@@ -171,6 +172,9 @@ class WorkflowExecutor:
                 runner=runner,
                 runner_name=selected_name,
                 continuation=message,
+                deferred_state=(durable_state, deferred_event)
+                if deferred_event is not None
+                else None,
             )
             if outcome is not None:
                 await self._drive(
@@ -305,14 +309,30 @@ class WorkflowExecutor:
         runner: AgentRunner,
         runner_name: str,
         continuation: str | None = None,
+        deferred_state: tuple[RunState, Event] | None = None,
     ) -> _StepOutcome | None:
         assert command.step is not None
         folded: _StepOutcome | None = None
 
+        async def fold(event: Event) -> _StepOutcome:
+            transition_state = state
+            if deferred_state is not None:
+                durable_state, deferred_event = deferred_state
+                transition_state, commands = await self._transition(
+                    durable_state, deferred_event, definition
+                )
+                if commands or transition_state != state:
+                    raise WorkflowExecutionError(
+                        "deferred step reactivation did not produce the expected state"
+                    )
+            next_state, commands = await self._transition(
+                transition_state, event, definition
+            )
+            return _StepOutcome(event, next_state, commands)
+
         async def deliver_terminal(event: Event) -> None:
             nonlocal folded
-            next_state, commands = await self._transition(state, event, definition)
-            folded = _StepOutcome(event, next_state, commands)
+            folded = await fold(event)
 
         terminal = await self._dispatcher.run_workflow_agent(
             command,
@@ -331,18 +351,18 @@ class WorkflowExecutor:
             assert terminal == folded.event
             return folded
         if isinstance(terminal, (StepCompleted, RunFailed)):
-            next_state, commands = await self._transition(state, terminal, definition)
-            return _StepOutcome(terminal, next_state, commands)
+            return await fold(terminal)
         if requests_clarification_or_escalation(terminal):
-            await self._transition(
-                state,
-                AgentStepPaused(
-                    run_id=state.run_id,
-                    step_id=command.step.step_id,
-                    agent_run_id=command.agent_run_id,
-                ),
-                definition,
-            )
+            if deferred_state is None:
+                await self._transition(
+                    state,
+                    AgentStepPaused(
+                        run_id=state.run_id,
+                        step_id=command.step.step_id,
+                        agent_run_id=command.agent_run_id,
+                    ),
+                    definition,
+                )
             return None
         raise WorkflowExecutionError(
             f"{command.step.step_id} runner exited without a valid completion state"

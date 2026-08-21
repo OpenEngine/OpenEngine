@@ -1,4 +1,4 @@
-"""Run-bound terminal workflow tools over MCP.
+"""Run-bound workflow tools over MCP.
 
 The provider CLI launches this module as a stdio MCP server. It deliberately
 contains no workflow identifiers: an opaque credential connects it to the
@@ -78,7 +78,12 @@ class TerminalMcpBroker:
         self._step = step
         self._registry = registry
         self._deliver = deliver
-        self._token = secrets.token_urlsafe(32)
+        # Hex rather than URL-safe base64, because this credential is handed to
+        # the provider as an argv element: `token_urlsafe` can begin with `-`,
+        # and roughly one session in sixty-four then had its server exit on
+        # `--token: expected one argument` before answering `initialize`. Same
+        # 256 bits, out of an alphabet nothing reads as an option.
+        self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
         self._result: asyncio.Future[TerminalEvent] | None = None
         self._source_control: SourceControl | None = None
@@ -169,6 +174,13 @@ class TerminalMcpBroker:
                     return {"ok": False, "error": f"could not add comment: {error}"}
                 self._comments_added += 1
                 return {"ok": True, "acknowledgement": "comment added"}
+            if name == "clarify":
+                if not isinstance(arguments, dict) or arguments:
+                    return {
+                        "ok": False,
+                        "error": "clarify does not accept arguments",
+                    }
+                return {"ok": True, "acknowledgement": "clarified"}
             if name == "complete_step":
                 if self._source_control is not None and not self._comments_added:
                     return {
@@ -232,6 +244,19 @@ def _tools(repo_comments: bool = False) -> list[dict[str, object]]:
                 "type": "object",
                 "properties": {"summary": {"type": "string", "minLength": 1}},
                 "required": ["summary"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "clarify",
+            "description": (
+                "Finish answering a human question without changing workflow "
+                "run state. Call this after the answer when no implementation "
+                "change was requested or made."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
                 "additionalProperties": False,
             },
         },

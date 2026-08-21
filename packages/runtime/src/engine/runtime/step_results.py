@@ -34,6 +34,7 @@ INVALID_COMPLETION_ERROR = (
 _CLARIFICATION_OR_ESCALATION_TOOLS = frozenset(
     {
         "askuserquestion",
+        "clarify",
         "escalate",
         "escalatetohuman",
         "requestclarification",
@@ -48,7 +49,10 @@ def step_result_instructions(step: StepSpec) -> str:
     outputs = ", ".join(step.required_outputs) or "none"
     return (
         "When this step is complete, call the workflow MCP tool `complete_step`. "
-        "If the step cannot be completed, call `fail_step`. If you need information "
+        "If you are only answering a human's question and did not change the "
+        "implementation, call `clarify` after answering; it leaves workflow run "
+        "state unchanged. If the step cannot be completed, call `fail_step`. "
+        "If you need information "
         "or a human decision before continuing, use an available clarification or "
         "escalation tool. Do not end the session without making one of those calls.\n\n"
         f"The declared outputs for `complete_step` are: {outputs}."

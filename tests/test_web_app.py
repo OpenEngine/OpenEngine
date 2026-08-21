@@ -9,6 +9,7 @@ import httpx
 import openengine as oe
 import pytest
 
+import github_fakes
 from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
 from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
@@ -231,6 +232,35 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
     ]
 
 
+def test_review_comments_are_left_with_the_gh_the_composition_names(tmp_path) -> None:
+    """Which `gh` runs is the composition's to say, as the two CLIs are.
+
+    Proved by leaving a comment rather than by reading the constructor argument
+    back, because what matters is the executable the adapter actually spawns:
+    an unwired `github_binary` spawns whatever `gh` is on PATH, which for a
+    reviewer means somebody's real repository.
+    """
+    log = tmp_path / "gh.jsonl"
+    capabilities = build_capabilities(
+        Settings(
+            github_binary=github_fakes.install(tmp_path, log),
+            sqlite_path=str(tmp_path / "c.sqlite3"),
+        )
+    )
+    try:
+        asyncio.run(
+            capabilities.source_control.add_comment(
+                "https://github.com/acme/api/pull/7", "Looks right."
+            )
+        )
+    finally:
+        capabilities.state_store.close()
+
+    assert [call["argv"] for call in github_fakes.calls(log)] == [
+        ["pr", "comment", "https://github.com/acme/api/pull/7", "--body", "Looks right."]
+    ]
+
+
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     database = tmp_path / "conversations.sqlite3"
     runner = ConcurrentRunner()
@@ -440,6 +470,16 @@ class TerminalToolRunner(ConcurrentRunner):
             # the way any provider would. Only an accepted result is followed
             # by the runtime cancelling the process.
             return AgentTurn(Message.assistant("The terminal call was refused."))
+        if self.tool_name == "clarify":
+            call = ToolCall(
+                "workflow-tool-call-1",
+                "mcp__workflow__clarify",
+                json.dumps(self.arguments),
+            )
+            return AgentTurn(
+                Message.assistant("The existing behavior is intentional."),
+                steps=(Message.assistant(tool_calls=(call,)),),
+            )
         await self.cancelled.wait()
         return AgentTurn(Message.assistant("Terminal result accepted."))
 
@@ -1356,6 +1396,73 @@ def test_message_reactivates_a_closed_implementation_step() -> None:
     assert "Implementation updated from guidance." in reviewer.seen[-1][-1].content
 
 
+def test_clarifying_a_closed_implementation_does_not_reactivate_the_run() -> None:
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Initial implementation.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    app = _workflow_app(store, implementer, reviewers={"test": _reviewer()})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement the configurable behavior.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            awaiting = await _await_phase(client, run_id, "awaiting_human_review")
+            implementation_id = awaiting.json()["steps"][0]["agentInstanceId"]
+            approved = await client.post(
+                f"/api/runs/{run_id}/human-review",
+                json={"approved": True, "summary": "Approved."},
+            )
+            before = await store.load(run_id)
+            history_before = await store.history(run_id)
+
+            implementer.tool_name = "clarify"
+            implementer.arguments = {}
+            answered = await client.post(
+                f"/api/threads/{implementation_id}/runs",
+                json={"text": "Why does the legacy response header remain?"},
+            )
+            after = await store.load(run_id)
+            history_after = await store.history(run_id)
+            conversation = await store.load_conversation(implementation_id)
+            return (
+                approved,
+                answered,
+                before,
+                after,
+                history_before,
+                history_after,
+                conversation,
+            )
+
+    approved, answered, before, after, history_before, history_after, conversation = (
+        asyncio.run(scenario())
+    )
+
+    assert approved.json()["phase"] == "succeeded"
+    assert answered.status_code == 200
+    assert after == before
+    assert history_after == history_before
+    assert not any(isinstance(event, StepReactivated) for event in history_after)
+    assert conversation is not None
+    assert conversation.messages[-1].content == "The existing behavior is intentional."
+
+
 def test_approval_requests_pop_in_on_workflow_conversations() -> None:
     store = InMemoryStateStore()
     runner = ApprovalWorkflowRunner()
@@ -1611,6 +1718,37 @@ def test_implementation_conversation_can_enable_system_auto_approvals() -> None:
     assert {approval.decision_source for approval in approvals} == {
         ApprovalDecisionSource.POLICY
     }
+
+
+def test_review_conversation_can_enable_system_auto_approvals() -> None:
+    store = InMemoryStateStore()
+    instance = asyncio.run(
+        store.create_instance(
+            AgentId("review-agent"),
+            runner="test",
+            workflow_run_id=RunId("run-review-auto-approve"),
+            workflow_step_id=REVIEW_STEP,
+        )
+    )
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            before = await client.get(f"/api/threads/{instance.instance_id}")
+            enabled = await client.patch(
+                f"/api/threads/{instance.instance_id}", json={"autoApprove": True}
+            )
+            return before, enabled, await store.load_instance(instance.instance_id)
+
+    before, enabled, stored = asyncio.run(scenario())
+
+    assert before.json()["editable"] is False
+    assert before.json()["autoApprove"] is False
+    assert enabled.status_code == 200
+    assert enabled.json()["editable"] is False
+    assert enabled.json()["autoApprove"] is True
+    assert stored is not None and stored.auto_approve is True
 
 
 def test_conversation_transcript_carries_approvals_after_its_run_ends() -> None:
