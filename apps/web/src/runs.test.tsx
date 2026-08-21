@@ -10,6 +10,7 @@ import {
   phaseLabel,
   RunDetailPage,
   RunsPage,
+  runStatusLabel,
   useRuns,
 } from "./runs";
 
@@ -116,6 +117,11 @@ describe("run display helpers", () => {
   it("counts only steps with conversations", () => {
     expect(conversationCount(run())).toBe(1);
     expect(conversationCount(run({ steps: [] }))).toBe(0);
+  });
+
+  it("labels active runs with their current workflow step", () => {
+    expect(runStatusLabel(run())).toBe("Implementation");
+    expect(runStatusLabel(run({ phase: "succeeded" }))).toBe("succeeded");
   });
 });
 
@@ -274,7 +280,7 @@ describe("RunsPage", () => {
     expect(firstCard).not.toBeNull();
     expect(within(firstCard as HTMLElement).getByText("2")).toBeInTheDocument();
     expect(within(firstCard as HTMLElement).getByText("1")).toBeInTheDocument();
-    expect(within(firstCard as HTMLElement).getByText("Implementation")).toBeInTheDocument();
+    expect(within(firstCard as HTMLElement).getAllByText("Implementation")).toHaveLength(2);
 
     const filters = screen.getByRole("group", { name: "Filter runs by phase" });
     expect(within(filters).getByRole("button", { name: "running agent" })).toBeInTheDocument();

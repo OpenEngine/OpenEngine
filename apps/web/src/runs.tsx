@@ -25,6 +25,16 @@ export function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
 }
 
+/** Prefer the workflow's vocabulary while a run is active. The engine phase
+ *  still drives behavior, but an operator cares which step is doing the work. */
+export function runStatusLabel(run: ApiWorkflowRun) {
+  if (run.phase !== "succeeded" && run.phase !== "failed") {
+    const current = run.steps.find((step) => step.stepId === run.currentStepId);
+    if (current) return current.name;
+  }
+  return phaseLabel(run.phase);
+}
+
 /** How loudly a run's phase should read. Failure is the only thing that gets
  *  the accent; a run still moving is ink, and one not started yet is a rule. */
 export function phaseAccent(phase: string): "flame" | "quiet" | undefined {
@@ -144,7 +154,7 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
               >
                 <div className="card-top">
                   <span className={`chip ${run.phase === "pending" ? "chip-flame" : ""}`}>
-                    {phaseLabel(run.phase)}
+                    {runStatusLabel(run)}
                   </span>
                   <code className="card-id">{run.runId}</code>
                 </div>
@@ -504,7 +514,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 <p className="lede">{run.taskPrompt}</p>
               </div>
               <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
-                {phaseLabel(run.phase)}
+                {runStatusLabel(run)}
               </span>
             </div>
           </header>

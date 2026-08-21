@@ -148,6 +148,7 @@ describe("Sidebar", () => {
 
     const entry = within(body("Workflows")).getByRole("link", { name: /First run/ });
     expect(entry).toHaveAttribute("href", "/runs/run-1");
+    expect(entry).toHaveTextContent("Implementation · v1");
     expect(entry.closest(".rail-item")).toHaveAttribute("data-active", "true");
     expect(
       within(body("Workflows")).getByRole("link", { name: "Implementation conversation" }),
