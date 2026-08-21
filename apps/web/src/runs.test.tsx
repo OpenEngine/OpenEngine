@@ -331,6 +331,82 @@ describe("RunDetailPage", () => {
     );
   });
 
+  it("records a rejection as the decision it was", async () => {
+    const completed = run().steps.map((step) => ({ ...step, status: "completed" }));
+    const awaiting = run({
+      phase: "awaiting_human_review",
+      currentStepId: "human-review",
+      steps: completed,
+      pendingHumanReview: {
+        stepId: "human-review",
+        title: "Review implementation for task-1",
+        summary: "Implementation: done",
+      },
+    });
+    const decided = run({
+      phase: "failed",
+      currentStepId: null,
+      terminalOutcome: "rejected",
+      steps: completed,
+      humanDecision: {
+        stepId: "human-review",
+        approved: false,
+        outcome: "rejected",
+        summary: "The greeting is wrong.",
+      },
+    });
+    // Held open, so the buttons can be read mid-decision: the pressed one is
+    // the only thing on the page that says which decision is in flight, and a
+    // run must not be able to take two.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1/human-review" && init?.method === "POST") {
+        await held;
+        return json(decided);
+      }
+      if (path === "/api/runs/run-1") return json(awaiting);
+      return json({ error: "not found" }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+
+    const { container } = render(<RunDetailPage runId="run-1" />);
+
+    const note = await screen.findByRole("textbox", { name: "Decision note" });
+    await user.type(note, "The greeting is wrong.");
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+
+    expect(await screen.findByRole("button", { name: "Rejecting…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+
+    await act(async () => {
+      release();
+      await held;
+    });
+
+    // The rejection is terminal in the other direction, and the page has to
+    // say so: a decision recorded as approved here is the failure this asserts
+    // against, and it is not one the run offers a way back from.
+    expect(await screen.findByText("failed")).toBeVisible();
+    expect(
+      within(container.querySelector(".stats") as HTMLElement).getByText("rejected"),
+    ).toBeVisible();
+    expect(container.querySelector(".callout-rejected")).toHaveTextContent(
+      "The greeting is wrong.",
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/runs/run-1/human-review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ approved: false, summary: "The greeting is wrong." }),
+      }),
+    );
+  });
+
   it("keeps the decision available after one is refused", async () => {
     const awaiting = run({
       phase: "awaiting_human_review",
