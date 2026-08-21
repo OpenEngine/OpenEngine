@@ -1,6 +1,12 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
-import { api, type ApiRunStep, type ApiWorkflowRun, type EngineConfig } from "./api";
+import {
+  api,
+  completeHumanReview,
+  type ApiRunStep,
+  type ApiWorkflowRun,
+  type EngineConfig,
+} from "./api";
 import { Stat, StatStrip } from "./brand";
 import { WorkspaceControl } from "./workspace";
 
@@ -314,6 +320,75 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
   );
 }
 
+/** The decision that ends a run, on the run it ends.
+ *
+ *  A run stops at human review and waits there indefinitely, and this is the
+ *  only thing that moves it -- so it sits inside the callout that presents what
+ *  the decision is made from rather than on a page of its own. The note is
+ *  optional, because the button already says what was decided; it is where the
+ *  reason goes, and the run keeps it as the decision's summary. */
+function HumanReviewDecision({
+  run,
+  onDecided,
+}: {
+  run: ApiWorkflowRun;
+  onDecided: (decided: ApiWorkflowRun) => void;
+}) {
+  const [note, setNote] = useState("");
+  // Which button was pressed, so the one that is working says so and neither
+  // can be pressed twice into two decisions on one run.
+  const [deciding, setDeciding] = useState<"approve" | "reject">();
+  const [error, setError] = useState("");
+
+  async function decide(approved: boolean) {
+    setDeciding(approved ? "approve" : "reject");
+    setError("");
+    try {
+      onDecided(await completeHumanReview(run.runId, approved, note.trim()));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+      setDeciding(undefined);
+    }
+  }
+
+  return (
+    <div className="decision">
+      <label>
+        <span>Decision note</span>
+        <textarea
+          rows={3}
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          placeholder="Optional — why this run was approved or rejected."
+        />
+      </label>
+      {error && (
+        <p className="notice" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="decision-actions">
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={deciding !== undefined}
+          onClick={() => void decide(true)}
+        >
+          {deciding === "approve" ? "Approving…" : "Approve"}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={deciding !== undefined}
+          onClick={() => void decide(false)}
+        >
+          {deciding === "reject" ? "Rejecting…" : "Reject"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   return (
     <article className={`step ${current ? "step-current" : ""}`}>
@@ -441,6 +516,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 The implementation and agent review are complete. A human approval or rejection
                 is the final decision.
               </p>
+              <HumanReviewDecision run={run} onDecided={setRun} />
             </section>
           )}
           {run.humanDecision && (
