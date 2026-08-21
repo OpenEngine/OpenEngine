@@ -621,7 +621,8 @@ def test_a_completion_without_its_declared_output_is_refused(
         capabilities.state_store.close()
 
     assert run["phase"] == "failed"
-    assert "without reporting a valid terminal result" in run["failureReason"]
+    reason = run["failureReason"]
+    assert "without reporting a valid terminal result" in reason, reason
     # The refusal is put to the agent rather than only written down: it comes
     # back as that tool call's own result, which is how a real one would learn
     # of it, and the correction that follows is the runtime asking again.
