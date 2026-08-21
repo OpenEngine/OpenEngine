@@ -8,6 +8,7 @@ import { expect, shot, test, type Script } from "./harness";
 const TASK = "Add a greeting file to the repository.";
 const PULL_REQUEST = "https://github.com/acme/api/pull/7";
 const FINDING = "greeting.txt is not covered by a test.";
+const DECISION = "The finding can wait; ship the greeting.";
 
 /** What the implementation waits for before writing anything.
  *
@@ -88,7 +89,7 @@ function step(page: Page, name: string) {
 }
 
 for (const runner of ["codex", "claude"]) {
-  test(`a ${runner} workflow run provisions, streams, and reaches review`, async ({
+  test(`a ${runner} workflow run provisions, streams, and is approved`, async ({
     page,
     engine,
   }, testInfo) => {
@@ -151,5 +152,30 @@ for (const runner of ["codex", "claude"]) {
     // The reviewer's finding left the process the way a real one would, through
     // `gh` -- which here records rather than comments on somebody's repository.
     expect(readFileSync(engine.ghLog, "utf-8")).toContain(FINDING);
+
+    // The decision, made the way a person makes it: the run stops until
+    // somebody presses one of these, and pressing one is the only thing in the
+    // browser that can end a run.
+    await page.getByLabel("Decision note").fill(DECISION);
+    await page.getByRole("button", { name: "Approve" }).click();
+    await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
+    await shot(page, testInfo, "4 approved");
+
+    // Reload rather than re-render: the end state is the store's, so it has to
+    // survive the page that submitted it going away.
+    await page.reload();
+    await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
+    await expect(page.locator(".stats")).toContainText("approved");
+    const stages = page.locator(".stages .stage");
+    await expect(stages).toHaveText([
+      "Workspace",
+      "Implementation",
+      "Review",
+      "Human review",
+    ]);
+    for (const index of [0, 1, 2, 3])
+      await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
+    await expect(step(page, "Human review")).toContainText(DECISION);
+    await expect(page.locator(".callout-action")).toHaveCount(0);
   });
 }
