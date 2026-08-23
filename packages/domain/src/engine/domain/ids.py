@@ -18,6 +18,15 @@ from typing import NewType
 TaskId = NewType("TaskId", str)
 """A unit of work requested of the engine, e.g. "fix the flaky auth test"."""
 
+ProjectId = NewType("ProjectId", str)
+"""An end-to-end product whose delivery is planned through milestones."""
+
+MilestoneId = NewType("MilestoneId", str)
+"""A delivery goal within a project."""
+
+WorkstreamId = NewType("WorkstreamId", str)
+"""A body of workflow-run work within a milestone."""
+
 StepId = NewType("StepId", str)
 """One step in a workflow."""
 
@@ -67,10 +76,13 @@ __all__ = [
     "ApprovalId",
     "ConversationId",
     "MessageId",
+    "MilestoneId",
+    "ProjectId",
     "RunId",
     "SessionGrantId",
     "StepId",
     "TaskId",
     "WorkflowId",
+    "WorkstreamId",
     "WorkspaceId",
 ]

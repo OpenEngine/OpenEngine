@@ -14,6 +14,7 @@ from engine.domain.ids import (
     StepId,
     TaskId,
     WorkflowId,
+    WorkstreamId,
     WorkspaceId,
 )
 from engine.domain.workflow import WorkflowDefinition
@@ -38,6 +39,7 @@ class RunState:
     run_id: RunId
     task_id: TaskId
     workflow_id: WorkflowId
+    workstream_id: WorkstreamId | None = None
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""
     prompt: str = ""

@@ -18,6 +18,7 @@ from engine.domain import (
     RunState,
     TaskId,
     WorkflowId,
+    WorkstreamId,
 )
 from engine.ports import Workspace, WorkspaceProvider, WorkspaceState
 from engine.runtime import Capabilities, Dispatcher, UnhandledCommandError
@@ -25,6 +26,7 @@ from engine.runtime import Capabilities, Dispatcher, UnhandledCommandError
 RUN = RunId("run-1")
 TASK = TaskId("task-1")
 WORKFLOW_ID = WorkflowId("command-test-v1")
+WORKSTREAM_ID = WorkstreamId("workstream-engine")
 WORKFLOW = oe.workflow(
     id=str(WORKFLOW_ID),
     name="Command test",
@@ -51,11 +53,13 @@ def test_decide_needs_no_infrastructure() -> None:
         prompt="fix the flaky test",
         repository="acme/api",
         workflow_id=WORKFLOW_ID,
+        workstream_id=WORKSTREAM_ID,
     )
 
     next_state, commands = decide(state, event, WORKFLOW)
 
     assert next_state.phase is RunPhase.PREPARING_WORKSPACE
+    assert next_state.workstream_id == WORKSTREAM_ID
     assert commands == (
         ProvisionWorkspace(run_id=RUN, repository="acme/api", base_ref="origin/main"),
     )

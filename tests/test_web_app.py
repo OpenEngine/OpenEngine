@@ -2278,6 +2278,12 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
             "repository": ".",
             "runner": "unknown",
         },
+        {
+            "workflowId": "implementation-review-v1",
+            "prompt": "Task",
+            "repository": ".",
+            "workstreamId": "unknown",
+        },
     ],
 )
 def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> None:

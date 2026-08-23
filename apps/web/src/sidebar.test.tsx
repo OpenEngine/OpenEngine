@@ -48,6 +48,7 @@ const run: ApiWorkflowRun = {
   workflowName: "Work",
   workflowVersion: "v1",
   taskId: "task-1",
+  workstreamId: null,
   taskPrompt: "Do the work",
   repository: ".",
   repositoryContext: { repository: "." },

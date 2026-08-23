@@ -26,11 +26,15 @@ from engine.domain.ids import (
     AgentRunId,
     ApprovalId,
     ConversationId,
+    MilestoneId,
+    ProjectId,
     RunId,
     StepId,
     TaskId,
+    WorkstreamId,
     WorkspaceId,
 )
+from engine.domain.planning import Milestone, Project, Workstream
 from engine.domain.state import RunState
 
 
@@ -45,14 +49,52 @@ class StateStore(Protocol):
     async def save(self, state: RunState) -> None:
         ...
 
-    async def list_runs(self) -> Sequence[RunState]:
-        """Return persisted workflow runs, newest first."""
+    async def list_runs(
+        self, workstream_id: WorkstreamId | None = None
+    ) -> Sequence[RunState]:
+        """Return persisted workflow runs, newest first, optionally by workstream."""
         ...
 
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         ...
 
     async def history(self, run_id: RunId) -> Sequence[Event]:
+        ...
+
+    # --- planning hierarchy ---------------------------------------------
+
+    async def save_project(self, project: Project) -> None:
+        ...
+
+    async def load_project(self, project_id: ProjectId) -> Project | None:
+        ...
+
+    async def list_projects(self) -> Sequence[Project]:
+        """Return projects newest first."""
+        ...
+
+    async def save_milestone(self, milestone: Milestone) -> None:
+        ...
+
+    async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
+        ...
+
+    async def list_milestones(
+        self, project_id: ProjectId | None = None
+    ) -> Sequence[Milestone]:
+        """Return milestones newest first, optionally for one project."""
+        ...
+
+    async def save_workstream(self, workstream: Workstream) -> None:
+        ...
+
+    async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
+        ...
+
+    async def list_workstreams(
+        self, milestone_id: MilestoneId | None = None
+    ) -> Sequence[Workstream]:
+        """Return workstreams newest first, optionally for one milestone."""
         ...
 
     # --- agent identity and conversation ---------------------------------

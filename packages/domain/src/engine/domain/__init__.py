@@ -44,13 +44,17 @@ from engine.domain.ids import (
     ApprovalId,
     ConversationId,
     MessageId,
+    MilestoneId,
+    ProjectId,
     RunId,
     SessionGrantId,
     StepId,
     TaskId,
     WorkflowId,
+    WorkstreamId,
     WorkspaceId,
 )
+from engine.domain.planning import Milestone, Project, Workstream
 from engine.domain.state import RunPhase, RunState
 from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
 from engine.domain.workflow import (
@@ -96,10 +100,14 @@ __all__ = [
     "HumanReviewStep",
     "Message",
     "MessageId",
+    "Milestone",
+    "MilestoneId",
     "Notify",
     "OutcomeTransition",
     "PersistRun",
     "ProvisionWorkspace",
+    "Project",
+    "ProjectId",
     "PublishChanges",
     "RequestHumanReview",
     "Role",
@@ -131,6 +139,8 @@ __all__ = [
     "WorkflowId",
     "WorkflowStep",
     "WorkflowTemplate",
+    "Workstream",
+    "WorkstreamId",
     "WorkspaceAccess",
     "WorkspaceId",
     "WorkspaceSpec",
