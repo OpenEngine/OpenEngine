@@ -46,6 +46,7 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkflowDefinition,
+    WorkstreamId,
     WorkspaceId,
 )
 from engine.ports import (
@@ -1066,6 +1067,7 @@ def create_app(
             prompt = _required_string(body, "prompt")
             repository = _required_string(body, "repository")
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
+            workstream_value = _optional_string(body, "workstreamId")
         except ValueError as error:
             return _error(str(error), 400)
         definition = catalog.get(workflow_id)
@@ -1074,6 +1076,14 @@ def create_app(
         runner_name = str(body.get("runner") or workflow_executor.default_runner)
         if runner_name not in workflow_executor.runners:
             return _error(f"unknown workflow runner: {runner_name}", 400)
+        workstream_id = (
+            WorkstreamId(workstream_value) if workstream_value is not None else None
+        )
+        if (
+            workstream_id is not None
+            and await session.state_store.load_workstream(workstream_id) is None
+        ):
+            return _error(f"unknown workstream: {workstream_id}", 400)
 
         run_id = RunId(f"run-{uuid4().hex[:12]}")
         task_id = TaskId(f"task-{uuid4().hex[:12]}")
@@ -1083,11 +1093,13 @@ def create_app(
             prompt=prompt,
             repository=repository,
             workflow_id=workflow_id,
+            workstream_id=workstream_id,
         )
         state = RunState(
             run_id=run_id,
             task_id=task_id,
             workflow_id=workflow_id,
+            workstream_id=workstream_id,
             prompt=prompt,
             repository=repository,
             workflow_definition=definition,
@@ -1555,6 +1567,7 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
         "workflowName": run.workflow_name,
         "workflowVersion": run.workflow_version,
         "taskId": run.task_id,
+        "workstreamId": str(run.workstream_id) if run.workstream_id else None,
         "taskPrompt": run.task_prompt,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},
@@ -1770,6 +1783,15 @@ async def _json_body(request: Request) -> dict[str, object]:
 
 def _required_string(body: dict[str, object], name: str) -> str:
     value = body.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value.strip()
+
+
+def _optional_string(body: dict[str, object], name: str) -> str | None:
+    value = body.get(name)
+    if value is None:
+        return None
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
     return value.strip()

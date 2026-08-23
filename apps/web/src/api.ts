@@ -75,6 +75,7 @@ export type ApiWorkflowRun = {
   workflowName: string;
   workflowVersion: string;
   taskId: string;
+  workstreamId: string | null;
   taskPrompt: string;
   repository: string;
   repositoryContext: { repository: string };

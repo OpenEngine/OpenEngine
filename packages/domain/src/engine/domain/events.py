@@ -15,6 +15,7 @@ from engine.domain.ids import (
     StepId,
     TaskId,
     WorkflowId,
+    WorkstreamId,
     WorkspaceId,
 )
 from engine.domain.workflow import StepOutput
@@ -35,6 +36,7 @@ class RunRequested(Event):
     prompt: str
     repository: str
     workflow_id: WorkflowId
+    workstream_id: WorkstreamId | None = None
 
 
 @dataclass(frozen=True, slots=True)
