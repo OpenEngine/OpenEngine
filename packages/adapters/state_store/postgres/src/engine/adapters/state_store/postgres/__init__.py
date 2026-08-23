@@ -1,7 +1,8 @@
 """State Store capability, backed by Postgres.
 
-Placeholder for Ticket 1. Satisfies `engine.ports.StateStore` structurally; no
-driver, connection pool, schema, or migrations yet.
+The adapter still satisfies `engine.ports.StateStore` structurally while its
+read and write operations are implemented. Its schema is managed separately by
+the PostgreSQL Alembic history in the ``engine-migrations`` package.
 """
 
 from collections.abc import Sequence

@@ -3,9 +3,8 @@ name = "engine-adapter-state-store-sqlite"
 version = "0.0.0"
 description = "State Store capability backed by SQLite."
 requires-python = ">=3.11"
-# SQLite ships with Python; only the state-store port and its domain types are
-# needed at runtime.
-dependencies = ["engine-ports"]
+# SQLite ships with Python. Alembic and SQLAlchemy manage its schema at startup.
+dependencies = ["engine-migrations", "engine-ports"]
 
 [build-system]
 requires = ["hatchling"]
@@ -15,4 +14,5 @@ build-backend = "hatchling.build"
 packages = ["src/engine"]
 
 [tool.uv.sources]
+engine-migrations = { workspace = true }
 engine-ports = { workspace = true }
