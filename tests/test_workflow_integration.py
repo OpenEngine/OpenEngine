@@ -21,7 +21,7 @@ from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -423,6 +423,22 @@ SCRIPTED_RUN = {
     ],
 }
 
+CLARIFICATION_RUN = {
+    "title": "Clarifying compatibility",
+    "scenarios": [
+        {
+            "when": "ambiguous",
+            "steps": [
+                {"type": "tool", "name": "clarify", "arguments": {}},
+                {
+                    "type": "say",
+                    "text": "Which behavior should remain compatible?",
+                },
+            ],
+        }
+    ],
+}
+
 
 def _compose(
     tmp_path: Path,
@@ -459,7 +475,7 @@ def _compose(
         build_session(capabilities, runners, str(repository)),
         runners,
         workflow_runners=build_workflow_runners(settings),
-        review_runners=build_review_runners(settings),
+        review_runners=build_read_only_runners(settings),
     )
     return app, capabilities, gh_log
 
@@ -575,6 +591,62 @@ def test_a_scripted_cli_drives_a_run_over_the_real_mcp_bridge(
         "side=RIGHT",
     ]
     assert len(recorded) == 2
+
+
+def test_codex_clarification_pauses_the_step_and_reaches_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path)
+    app, capabilities, _gh_log = _compose(
+        tmp_path, repository, monkeypatch, CLARIFICATION_RUN
+    )
+
+    async def scenario() -> tuple[dict, dict]:
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-v1",
+                        "prompt": "Resolve an ambiguous compatibility requirement.",
+                        "repository": str(repository),
+                        "runner": "codex",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                for _ in range(6_000):
+                    run = (await client.get(f"/api/runs/{run_id}")).json()
+                    implementation = run["steps"][0]
+                    if implementation["waiting"]:
+                        messages = (
+                            await client.get(
+                                "/api/threads/"
+                                f"{implementation['agentInstanceId']}/messages"
+                            )
+                        ).json()
+                        if not messages["unstable_resume"]:
+                            return run, messages
+                    await asyncio.sleep(0.01)
+                raise AssertionError(f"clarification did not pause the run: {run}")
+
+    try:
+        run, messages = asyncio.run(scenario())
+    finally:
+        capabilities.state_store.close()
+
+    assert run["phase"] == "running_agent", run["failureReason"]
+    assert run["steps"][0]["waiting"] is True
+    clarification = messages["messages"][-1]["content"]
+    assert {"type": "text", "text": "Which behavior should remain compatible?"} in (
+        clarification
+    )
+    assert any(
+        part.get("toolName") == "mcp__workflow__clarify"
+        for part in clarification
+    )
 
 
 #: A completion that leaves out a declared output is not a completion. The

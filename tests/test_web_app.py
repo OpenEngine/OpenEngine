@@ -21,8 +21,9 @@ from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_read_only_runners,
     build_runners,
+    build_session,
     build_workflow_runners,
 )
 from engine.domain import (
@@ -68,7 +69,9 @@ from engine.ports import (
     WorkspaceState,
 )
 from engine.runtime import (
+    BUILT_IN,
     INVALID_COMPLETION_ERROR,
+    PLANNER,
     AgentSession,
     ApprovalBroker,
     ApprovalCapability,
@@ -218,7 +221,7 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
     """What keeps a review read-only is the runner it gets, not its prompt."""
     settings = Settings()
     workflow_runners = build_workflow_runners(settings)
-    reviewers = build_review_runners(settings)
+    reviewers = build_read_only_runners(settings)
 
     assert set(workflow_runners) <= set(reviewers)
     codex_argv = reviewers["codex"].command_line(PROFILES[CODER])
@@ -230,6 +233,53 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
         "Glob",
         "Grep",
     ]
+
+
+def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -> None:
+    """Half of the Plan button's difference from New chat: the argv.
+
+    Same provider the user picked, same conversation machinery, and a command
+    line without the tools to change the checkout it is reading -- a property of
+    what the composition hands the planner rather than of its instructions.
+
+    Only half, and the docstring says so deliberately: this proves the planner
+    is *handed* less, not that it is *held* to less. A provider asking anyway
+    reaches the approval broker, where a policy granting `edit` would allow it;
+    what refuses it there is `read_only` on the profile, covered by
+    `test_approvals.py`. Either half alone reads like the whole thing, which is
+    how a claim like this one comes to be believed without being true.
+    """
+    settings = Settings(
+        engine_config=EngineConfig(
+            approvals=ApprovalConfig(
+                allow=(ApprovalCapability.READ, ApprovalCapability.EDIT)
+            )
+        ),
+        sqlite_path=str(tmp_path / "conversations.sqlite3"),
+    )
+    capabilities = build_capabilities(settings)
+    try:
+        session = build_session(
+            capabilities,
+            build_runners(settings),
+            read_only_runners=build_read_only_runners(settings),
+        )
+        planner = session.runner_for(PLANNER.agent_id, "claude")
+        coder = session.runner_for(CODER, "claude")
+    finally:
+        capabilities.state_store.close()
+
+    planner_argv = planner.command_line(PLANNER)
+    coder_argv = coder.command_line(PROFILES[CODER])
+
+    assert planner_argv[planner_argv.index("--allowedTools") + 1 :] == [
+        "Read",
+        "Glob",
+        "Grep",
+    ]
+    assert "Edit" in coder_argv[coder_argv.index("--allowedTools") + 1 :]
+    codex_argv = session.runner_for(PLANNER.agent_id, "codex").command_line(PLANNER)
+    assert codex_argv[codex_argv.index("--sandbox") + 1] == "read-only"
 
 
 def test_review_comments_are_left_with_the_gh_the_composition_names(tmp_path) -> None:
@@ -738,7 +788,13 @@ class ClarificationToolRunner(ConcurrentRunner):
         question = ToolCall(
             "question-1",
             "AskUserQuestion",
-            json.dumps({"question": "Which behavior should remain compatible?"}),
+            json.dumps(
+                {
+                    "questions": [
+                        {"question": "Which behavior should remain compatible?"}
+                    ]
+                }
+            ),
         )
         return AgentTurn(
             Message.assistant("Waiting for clarification."),
@@ -750,7 +806,10 @@ def _session(runner: ConcurrentRunner) -> AgentSession:
     return _session_with({"test": runner})
 
 
-def _session_with(runners: Mapping[str, ConcurrentRunner]) -> AgentSession:
+def _session_with(
+    runners: Mapping[str, ConcurrentRunner],
+    profiles: Mapping[AgentId, AgentProfile] = PROFILES,
+) -> AgentSession:
     unused = object()
     return AgentSession(
         Capabilities(
@@ -761,7 +820,7 @@ def _session_with(runners: Mapping[str, ConcurrentRunner]) -> AgentSession:
             workspace_provider=unused,
             state_store=InMemoryStateStore(),
         ),
-        profiles=PROFILES,
+        profiles=profiles,
         runners=dict(runners),
     )
 
@@ -1038,9 +1097,43 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
                 )
                 for instance in instances
             }
-            return created, reopened, listed, await store.history(run_id), conversations
+            threads = {
+                step["stepId"]: (
+                    await client.get(f"/api/threads/{step['agentInstanceId']}")
+                ).json()
+                for step in reopened.json()["steps"]
+                if step["agentInstanceId"]
+            }
+            titled_instance = instances[0]
+            await store.update_instance_metadata(
+                titled_instance.instance_id,
+                "Custom conversation title",
+                titled_instance.archived,
+                titled_instance.runner,
+            )
+            return (
+                created,
+                reopened,
+                listed,
+                await store.history(run_id),
+                conversations,
+                threads,
+                titled_instance.instance_id,
+            )
 
-    created, reopened, listed, history, conversations = asyncio.run(scenario())
+    created, reopened, listed, history, conversations, threads, titled_instance_id = (
+        asyncio.run(scenario())
+    )
+
+    async def reopen_titled_thread():
+        reopened_app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+        transport = httpx.ASGITransport(app=reopened_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/threads/{titled_instance_id}")
+
+    titled_thread = asyncio.run(reopen_titled_thread())
     body = reopened.json()
 
     assert created.status_code == 201
@@ -1081,6 +1174,8 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     # Two conversations, kept apart: the review is its own durable instance.
     assert set(conversations) == {IMPLEMENTATION_STEP, REVIEW_STEP}
     assert all(conversation.messages for conversation in conversations.values())
+    assert {thread["title"] for thread in threads.values()} == {"Named workflow"}
+    assert titled_thread.json()["title"] == "Custom conversation title"
     assert "Name this workflow" in implementer.seen[0][-1].content
     assert "`complete_step`" in implementer.seen[1][0].content
     assert "JSON" not in implementer.seen[1][0].content
@@ -1918,15 +2013,21 @@ def test_clarification_call_leaves_the_active_step_implementing() -> None:
                     ):
                         break
                 await asyncio.sleep(0.01)
-            return await client.get(f"/api/runs/{run_id}"), await store.history(run_id)
+            reopened = await client.get(f"/api/runs/{run_id}")
+            instance_id = reopened.json()["steps"][0]["agentInstanceId"]
+            messages = await client.get(f"/api/threads/{instance_id}/messages")
+            return reopened, await store.history(run_id), messages
 
-    reopened, history = asyncio.run(scenario())
+    reopened, history, messages = asyncio.run(scenario())
 
     assert reopened.json()["phase"] == "running_agent"
     assert reopened.json()["currentStepId"] == "implementation"
     assert reopened.json()["steps"][0]["waiting"] is True
     assert runner.attempts == 1
     assert not any(isinstance(event, (StepCompleted, RunFailed)) for event in history)
+    assert {"type": "text", "text": "Which behavior should remain compatible?"} in (
+        messages.json()["messages"][-1]["content"]
+    )
 
 
 def test_clarification_pause_is_not_restarted_after_process_restart() -> None:
@@ -2930,6 +3031,26 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
         ("user", "hi"),
         ("assistant", "hello"),
     ]
+
+
+def test_the_config_names_the_agent_the_plan_button_talks_to() -> None:
+    """The client asks which agent plans rather than knowing an id of its own,
+    and is told nothing when a composition has no planner to offer."""
+    runner = ConcurrentRunner()
+    shipped = create_app(_session_with({"test": runner}, BUILT_IN), {"test": runner})
+    coders_only = create_app(_session(runner), {"test": runner})
+
+    async def config(app) -> dict:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (await client.get("/api/config")).json()
+
+    shipped_config, narrow_config = asyncio.run(config(shipped)), asyncio.run(config(coders_only))
+
+    assert shipped_config["planAgent"] == "planner"
+    assert "planner" in [agent["id"] for agent in shipped_config["agents"]]
+    assert shipped_config["defaultAgent"] == "coder"
+    assert narrow_config["planAgent"] == ""
 
 
 def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None:

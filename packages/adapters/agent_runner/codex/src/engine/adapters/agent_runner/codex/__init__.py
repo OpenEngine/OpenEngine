@@ -136,6 +136,7 @@ APP_SERVER_ITEM_TYPES = {
     "agentMessage": "agent_message",
     "commandExecution": "command_execution",
     "fileChange": "file_change",
+    "mcpToolCall": "mcp_tool_call",
 }
 
 APP_SERVER_ITEM_FIELDS = {
@@ -463,10 +464,24 @@ def action_messages(item: dict[str, Any], call_id: str) -> tuple[Message, Messag
     fields, so an item type this adapter has never heard of still records what
     the agent did with it.
     """
+    name = str(item.get("type", "action"))
     arguments = {k: v for k, v in item.items() if k not in NON_ARGUMENT_FIELDS}
+    if name == "mcp_tool_call" and item.get("server") and item.get("tool"):
+        name = f"mcp__{item['server']}__{item['tool']}"
+        raw_arguments = item.get("arguments")
+        if isinstance(raw_arguments, str):
+            try:
+                raw_arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError:
+                pass
+        arguments = (
+            raw_arguments
+            if isinstance(raw_arguments, dict)
+            else {"value": raw_arguments}
+        )
     call = ToolCall(
         call_id=call_id,
-        name=str(item.get("type", "action")),
+        name=name,
         arguments=json.dumps(arguments, sort_keys=True),
     )
     output = next(

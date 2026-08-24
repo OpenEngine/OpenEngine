@@ -127,8 +127,18 @@ unzip it, and point `show-report` at the directory.
   carries the declared `pr_url` -- advances through a review that leaves its
   finding on `gh` to "Action required". Approving there ends it, and a reload
   shows the same finished run: `succeeded`, `approved`, every stage behind it.
+* `persisted-navigation.spec.ts` -- cold starts over both a SQLite file populated
+  through the current production state-store adapter and the frozen
+  `fixtures/v0.0.0.sqlite3` artifact. The run list, run detail, implementation
+  and review transcripts, and a multi-turn standalone chat are followed through
+  their browser links. Each case then starts another chat and another workflow
+  in the same database and confirms the older history remains listed. The frozen
+  artifact makes opening the database exercise migrations added after v0.0.0.
 
 ## What the rest needs
+Everything else -- workflow runs, review, reactivation, auto-approve, failure,
+plans -- is written up as tickets in **`TICKETS.md`**, in dependency order, with
+the files each one touches and what "done" means.
 
 The behaviours below are the ones we want next. Each names what has to exist
 before it can be written; nothing here is a change to the product, except where

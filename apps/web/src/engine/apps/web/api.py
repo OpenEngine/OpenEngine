@@ -58,6 +58,7 @@ from engine.ports import (
     WorkspaceState,
 )
 from engine.runtime import (
+    PLANNER,
     AgentSession,
     ApprovalBroker,
     ApprovalConfig,
@@ -348,7 +349,7 @@ class ThreadService:
                 if instance.runner in self.session.runners
                 else self.session.default_runner
             ),
-            title=instance.title,
+            title=await self._instance_title(instance),
             archived=instance.archived,
             workflow_run_id=instance.workflow_run_id,
             workflow_step_id=instance.workflow_step_id,
@@ -476,8 +477,19 @@ class ThreadService:
         run = ActiveRun(agent_run_id)
         self._active_runs[instance_id] = run
         on_approval = None
-        selected = self._runners.get(selected_runner)
-        if isinstance(selected, InteractiveAgentRunner):
+        # The runner the session will hand this turn to, not the one the name
+        # alone would pick: an agent that only reads is answered by a different
+        # object, and both whether it can pause and how it reads its own
+        # requests are that object's to say. An unknown name or an agent this
+        # process no longer composes leaves this unresolved, and the turn then
+        # fails in the session exactly where it failed before.
+        profile = self.session.profiles.get(thread.agent_id)
+        selected = (
+            self.session.runner_for(thread.agent_id, selected_runner)
+            if profile is not None and selected_runner in self.session.runners
+            else None
+        )
+        if profile is not None and isinstance(selected, InteractiveAgentRunner):
             on_approval = self.approvals.handler(
                 agent_run_id=agent_run_id,
                 instance_id=instance_id,
@@ -489,6 +501,10 @@ class ThreadService:
                 # How this provider's requests read as Engine capabilities, so
                 # the configured policy has something to evaluate them against.
                 translator=selected.permission_translator,
+                # And what this agent is, which the policy does not get to
+                # widen: a planner asking to edit is refused here, whatever the
+                # deployment allows a coder.
+                read_only=profile.read_only,
             )
 
         async def execute() -> str:
@@ -659,7 +675,11 @@ class ThreadService:
             title_context = (
                 (*history, Message.user(opening_text)) if opening_text else history
             )
-            turn = await self._runners[selected_runner].run_turn(
+            # The session's answer rather than the name's, so a chat with an
+            # agent that only reads is named by a runner that only reads too.
+            turn = await self.session.runner_for(
+                thread.agent_id, selected_runner
+            ).run_turn(
                 _new_agent_run_id(),
                 self.session.profiles[thread.agent_id],
                 (*title_context, Message.user(_TITLE_PROMPT)),
@@ -766,7 +786,7 @@ class ThreadService:
                         if instance.runner in self.session.runners
                         else self.session.default_runner
                     ),
-                    title=instance.title,
+                    title=await self._instance_title(instance),
                     archived=instance.archived,
                     workflow_run_id=instance.workflow_run_id,
                     workflow_step_id=instance.workflow_step_id,
@@ -791,6 +811,15 @@ class ThreadService:
         if definition is None and self._workflow_catalog is not None:
             definition = self._workflow_catalog.get(state.workflow_id)
         return _workflow_step_editable(definition, instance.workflow_step_id)
+
+    async def _instance_title(self, instance: AgentInstance) -> str:
+        """Name workflow conversations after their owning run."""
+        if instance.workflow_run_id is None or instance.title != "New chat":
+            return instance.title
+        state = await self.session.state_store.load(instance.workflow_run_id)
+        if state is None:
+            return instance.title
+        return state.name or state.prompt or str(state.run_id)
 
 
 def create_app(
@@ -850,6 +879,10 @@ def create_app(
                 step_runner.permission_translator if step_runner is not None else None
             ),
             auto_approve=lambda: service.auto_approve_enabled(command.instance_id),
+            # The command carries the profile it was started with, so a step
+            # running an agent that only reads is held to that here as well as
+            # in a chat -- including against the conversation's own auto-approve.
+            read_only=command.profile.read_only,
         )
 
     workflow_executor = WorkflowExecutor(
@@ -1038,6 +1071,13 @@ def create_app(
                     for name, runner in runners.items()
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
+                # Which agent the Plan button starts a conversation with, named
+                # here rather than in the client so the id stays one thing this
+                # process owns. Empty when no such profile is composed, which is
+                # the client's cue that there is nothing to plan with.
+                "planAgent": (
+                    str(PLANNER.agent_id) if PLANNER.agent_id in session.profiles else ""
+                ),
                 "defaultRunner": session.default_runner,
                 "workflowRunners": list(workflow_executor.runners),
                 "defaultWorkflowRunner": workflow_executor.default_runner,
@@ -1506,6 +1546,7 @@ def create_app(
                 Route("/runs/{run_id}", spa_page),
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),
+                Route("/plan", spa_page),
             ]
         )
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
@@ -1752,6 +1793,9 @@ def _merge_message(content: list[dict[str, object]], message: Message) -> bool:
                     "argsText": call.arguments,
                 }
             )
+            clarification = _clarification_context(call.name, arguments)
+            if clarification:
+                content.append({"type": "text", "text": clarification})
             changed = True
     elif message.role is Role.TOOL and message.tool_call_id:
         for part in reversed(content):
@@ -1760,6 +1804,50 @@ def _merge_message(content: list[dict[str, object]], message: Message) -> bool:
                 changed = True
                 break
     return changed
+
+
+_CLARIFICATION_TOOLS = frozenset(
+    {
+        "askuserquestion",
+        "escalate",
+        "escalatetohuman",
+        "requestclarification",
+        "requesthumanreview",
+        "requestuserinput",
+    }
+)
+
+
+def _clarification_context(tool_name: str, arguments: object) -> str | None:
+    """Extract the question text from a provider's clarification tool call."""
+
+    leaf_name = tool_name.rsplit("__", 1)[-1].rsplit(".", 1)[-1]
+    normalized = "".join(
+        character for character in leaf_name.lower() if character.isalnum()
+    )
+    if normalized not in _CLARIFICATION_TOOLS or not isinstance(arguments, dict):
+        return None
+
+    questions = arguments.get("questions")
+    candidates = questions if isinstance(questions, list) else (arguments,)
+    context: list[str] = []
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            text = candidate.strip()
+        elif isinstance(candidate, dict):
+            text = next(
+                (
+                    value.strip()
+                    for key in ("question", "prompt", "message")
+                    if isinstance((value := candidate.get(key)), str) and value.strip()
+                ),
+                "",
+            )
+        else:
+            text = ""
+        if text and text not in context:
+            context.append(text)
+    return "\n\n".join(context) or None
 
 
 _TITLE_PROMPT = (

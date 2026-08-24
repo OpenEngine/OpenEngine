@@ -40,14 +40,29 @@ class PolicyDecision(Enum):
 
 
 def policy_decision_for(
-    policy: ApprovalConfig, scope: PermissionScope | None
+    policy: ApprovalConfig,
+    scope: PermissionScope | None,
+    *,
+    read_only: bool = False,
 ) -> PolicyDecision:
     """The configured answer for a request classified as `scope`.
 
     A bash pattern beats `auto_approve` in both directions. `auto_approve` is a
     blanket "stop asking me"; a pattern is a sentence somebody wrote about one
     command, and the specific statement is the one they meant.
+
+    `read_only` is the turn saying its agent is one that never changes anything,
+    and it is answered before the configuration rather than by it. A deployment
+    that allows edits is describing what an agent *asked to change something*
+    may do, not granting one that was never asked to; so nothing survives this
+    -- not `auto_approve`, not a shell allow pattern, and not a request no
+    runner could classify, since a request nobody can name cannot be shown to be
+    a read.
     """
+    if read_only and (
+        scope is None or scope.capability is not ApprovalCapability.READ
+    ):
+        return PolicyDecision.DENY
     if scope is None:
         return PolicyDecision.ALLOW if policy.auto_approve else PolicyDecision.ASK
     if scope.capability is ApprovalCapability.BASH:

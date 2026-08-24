@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { answerQuestion, api, messageText, setThreadAutoApprove } from "./api";
+import {
+  answerQuestion,
+  api,
+  messageText,
+  newChatAgent,
+  setThreadAutoApprove,
+  type EngineConfig,
+} from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -60,6 +67,30 @@ describe("messageText", () => {
 
   it("returns an empty string for unsupported content", () => {
     expect(messageText({ content: { type: "text", text: "hidden" } })).toBe("");
+  });
+});
+
+describe("newChatAgent", () => {
+  const config = {
+    agents: [],
+    runners: [],
+    defaultAgent: "coder",
+    planAgent: "planner",
+    defaultRunner: "claude",
+    workflowRunners: [],
+    defaultWorkflowRunner: "claude",
+    workflows: [],
+  } satisfies EngineConfig;
+
+  it("starts a plan on the planning agent and a chat on the default", () => {
+    expect(newChatAgent(config, true)).toBe("planner");
+    expect(newChatAgent(config, false)).toBe("coder");
+  });
+
+  /** The id is the server's to name, so a deployment composing no planner says
+   *  so with an empty one -- and the page still opens on something. */
+  it("falls back to the default agent when no planner is composed", () => {
+    expect(newChatAgent({ ...config, planAgent: "" }, true)).toBe("coder");
   });
 });
 
