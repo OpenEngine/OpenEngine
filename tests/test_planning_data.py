@@ -8,6 +8,7 @@ import pytest
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.domain import (
+    AgentInstanceId,
     Milestone,
     MilestoneId,
     Project,
@@ -19,6 +20,8 @@ from engine.domain import (
     WorkflowId,
     Workstream,
     WorkstreamId,
+    instance_id_for_project,
+    project_id_for_instance,
 )
 from engine.ports import StateStore
 
@@ -138,6 +141,21 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
         assert asyncio.run(second.history(run.run_id)) == (requested,)
     finally:
         second.close()
+
+
+def test_project_id_round_trips_the_conversation_that_owns_it() -> None:
+    instance_id = AgentInstanceId("agi-abc123")
+
+    assert instance_id_for_project(project_id_for_instance(instance_id)) == instance_id
+
+
+def test_a_project_that_no_conversation_named_reads_back_as_none() -> None:
+    """The read-back is a guess about the shape, so it declines what it cannot
+    read: a project recorded some other way owns no conversation, and callers
+    must still confirm the instance it does name exists."""
+
+    assert instance_id_for_project(ProjectId("workstream-1")) is None
+    assert instance_id_for_project(ProjectId("project-")) is None
 
 
 def test_planning_children_require_their_parent(store: StateStore) -> None:

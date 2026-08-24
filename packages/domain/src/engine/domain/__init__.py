@@ -58,6 +58,7 @@ from engine.domain.planning import (
     Milestone,
     Project,
     Workstream,
+    instance_id_for_project,
     project_id_for_instance,
 )
 from engine.domain.state import RunPhase, RunState
@@ -113,6 +114,7 @@ __all__ = [
     "ProvisionWorkspace",
     "Project",
     "ProjectId",
+    "instance_id_for_project",
     "project_id_for_instance",
     "PublishChanges",
     "RequestHumanReview",

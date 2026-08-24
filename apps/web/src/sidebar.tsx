@@ -137,16 +137,23 @@ export function Sidebar({
 }: {
   projects?: ApiProject[];
   runs: ApiWorkflowRun[];
-  /** Which section the page on screen belongs to. */
+  /** Which section the page on screen belongs to, followed until the reader
+   *  opens one themselves. */
   initialSection: RailSection;
   linkChats?: boolean;
   activeRunId?: string;
   activeConversationUrl?: string;
   activeView?: "runs" | "new";
 }) {
-  const [open, setOpen] = useState<RailSection | null>(initialSection);
-  const toggle = (section: RailSection) =>
-    setOpen((current) => (current === section ? null : section));
+  // Where the page belongs is not always known at the first paint: a
+  // conversation is only recognized as a project's once the projects load. The
+  // rail follows that until the reader opens a section themselves, after which
+  // it is their choice on screen and nothing else moves it. Closing the open
+  // one is such a choice, and `closed` is how it is held: not "nothing chosen
+  // yet", which is what would put the page's section back on screen.
+  const [chosen, setChosen] = useState<RailSection | "closed" | null>(null);
+  const open = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
+  const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
   return (
     <aside className="rail">
       <RailBrand href="/" />
@@ -154,19 +161,47 @@ export function Sidebar({
         <Section id="projects" title="Projects" open={open === "projects"} onToggle={toggle}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/plan">
-              New Project
+              + New project
             </a>
           </div>
+          {/* A project opens the planning conversation it was named after,
+              which is the only page it has so far. One without a conversation
+              is still listed -- it says the project exists -- but there is
+              nowhere to send a click, so it stays the plain row it reads as. */}
           <nav className="rail-scroll" aria-label="Projects">
-            {projects.map((project) => (
-              <div className="rail-item" key={project.projectId}>
-                <div className="rail-item-trigger">
-                  <span className="rail-item-title" data-clamp="">
-                    {project.name}
-                  </span>
+            {projects.map((project) => {
+              // A row with nowhere to go is never the page you are reading. Both
+              // sides are optional here, so comparing them alone would call two
+              // absent URLs a match and mark every such row on every page.
+              const active =
+                project.conversationUrl !== undefined &&
+                project.conversationUrl === activeConversationUrl;
+              return (
+                <div
+                  className="rail-item"
+                  data-active={active || undefined}
+                  key={project.projectId}
+                >
+                  {project.conversationUrl ? (
+                    <a
+                      aria-current={active ? "page" : undefined}
+                      className="rail-item-trigger"
+                      href={project.conversationUrl}
+                    >
+                      <span className="rail-item-title" data-clamp="">
+                        {project.name}
+                      </span>
+                    </a>
+                  ) : (
+                    <div className="rail-item-trigger">
+                      <span className="rail-item-title" data-clamp="">
+                        {project.name}
+                      </span>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </nav>
         </Section>
         <Section id="workflows" title="Workflows" open={open === "workflows"} onToggle={toggle}>

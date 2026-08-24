@@ -120,11 +120,29 @@ describe("Sidebar", () => {
     expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
   });
 
+  /** Which section a conversation belongs to is only known once the projects
+   *  load, so the rail follows a late answer -- but never over the reader. */
+  it("follows a late section until the reader opens one themselves", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Sidebar runs={[run]} initialSection="chats" />);
+
+    rerender(<Sidebar runs={[run]} initialSection="projects" />);
+    expect(header("Projects")).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(header("Chats"));
+    rerender(<Sidebar runs={[run]} initialSection="workflows" />);
+
+    expect(header("Chats")).toHaveAttribute("aria-expanded", "true");
+    expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
+  });
+
   /** The header is the whole control, so the way back out of a section is the
-   *  way in: the rail can sit with all three headers stacked and nothing open. */
+   *  way in: the rail can sit with all three headers stacked and nothing open.
+   *  Closing is the reader's choice like any other, so a late answer about
+   *  where the page belongs does not fold the rail back open. */
   it("closes the open section when its own header is clicked again", async () => {
     const user = userEvent.setup();
-    render(<Sidebar runs={[run]} initialSection="workflows" />);
+    const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
 
     await user.click(header("Workflows"));
 
@@ -132,6 +150,9 @@ describe("Sidebar", () => {
     expect(body("Workflows")).toHaveAttribute("inert");
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
     expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
+
+    rerender(<Sidebar runs={[run]} initialSection="projects" />);
+    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
 
     await user.click(header("Workflows"));
 
@@ -160,7 +181,7 @@ describe("Sidebar", () => {
       "/runs/new",
     );
     expect(within(body("Chats")).getByRole("button", { name: "+ New chat" })).toBeInTheDocument();
-    expect(within(body("Projects")).getByRole("link", { name: "New Project" })).toHaveAttribute(
+    expect(within(body("Projects")).getByRole("link", { name: "+ New project" })).toHaveAttribute(
       "href",
       "/plan",
     );
@@ -176,10 +197,87 @@ describe("Sidebar", () => {
     );
 
     const newProject = within(body("Projects")).getByRole("link", {
-      name: "New Project",
+      name: "+ New project",
     });
     expect(newProject).toHaveClass("rail-button", "rail-button-primary");
     expect(within(body("Projects")).getByText("Engine roadmap")).toBeInTheDocument();
+  });
+
+  /** A project's only page is the planning conversation it was named after, so
+   *  the row is a link to it and the rail marks the one you are reading. */
+  it("opens a project's planning conversation and marks the one on screen", () => {
+    render(
+      <Sidebar
+        projects={[
+          {
+            projectId: "project-agi-1",
+            name: "Engine roadmap",
+            conversationUrl: "/conversations/agi-1",
+          },
+          {
+            projectId: "project-agi-2",
+            name: "Second roadmap",
+            conversationUrl: "/conversations/agi-2",
+          },
+        ]}
+        runs={[run]}
+        initialSection="projects"
+        activeConversationUrl="/conversations/agi-1"
+      />,
+    );
+
+    const open = within(body("Projects")).getByRole("link", { name: "Engine roadmap" });
+    expect(open).toHaveAttribute("href", "/conversations/agi-1");
+    expect(open).toHaveAttribute("aria-current", "page");
+    expect(open.closest(".rail-item")).toHaveAttribute("data-active", "true");
+    const other = within(body("Projects")).getByRole("link", { name: "Second roadmap" });
+    expect(other).not.toHaveAttribute("aria-current");
+    expect(other.closest(".rail-item")).not.toHaveAttribute("data-active");
+  });
+
+  /** The rail is drawn beside pages that are nobody's conversation, `/runs`
+   *  among them, and there it marks nothing. */
+  it("marks no project when no conversation is on screen", () => {
+    render(
+      <Sidebar
+        projects={[
+          {
+            projectId: "project-agi-1",
+            name: "Engine roadmap",
+            conversationUrl: "/conversations/agi-1",
+          },
+          { projectId: "project-2", name: "Recorded roadmap" },
+        ]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
+
+    for (const name of ["Engine roadmap", "Recorded roadmap"])
+      expect(
+        within(body("Projects")).getByText(name).closest(".rail-item"),
+      ).not.toHaveAttribute("data-active");
+  });
+
+  /** A project recorded some other way still says it exists, but a row that
+   *  leads nowhere should not dress up as something to click. */
+  it("lists a project with no conversation as plain text", () => {
+    render(
+      <Sidebar
+        projects={[{ projectId: "project-1", name: "Engine roadmap" }]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
+
+    expect(
+      within(body("Projects")).queryByRole("link", { name: "Engine roadmap" }),
+    ).not.toBeInTheDocument();
+    const row = within(body("Projects")).getByText("Engine roadmap");
+    expect(row).toBeInTheDocument();
+    // Two absent URLs are not a match: without this the row reads as the page
+    // you are on, on every page that is not a conversation.
+    expect(row.closest(".rail-item")).not.toHaveAttribute("data-active");
   });
 
   it("lists runs with their conversations and marks the one on screen", () => {
