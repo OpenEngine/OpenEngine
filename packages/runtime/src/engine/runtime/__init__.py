@@ -37,6 +37,7 @@ from engine.runtime.profiles import (
     UnknownAgentError,
     profile_for,
 )
+from engine.runtime.planning_tools import PlanningMcpBroker, PlanningTools, ProjectPlan
 from engine.runtime.run_read_model import RunReader, WorkflowRunView
 from engine.runtime.session import (
     DEFAULT_RUNNER,
@@ -105,6 +106,9 @@ __all__ = [
     "LoadedEngineConfig",
     "WorkflowsConfig",
     "PolicyDecision",
+    "PlanningMcpBroker",
+    "PlanningTools",
+    "ProjectPlan",
     "RunReader",
     "TerminalMcpBroker",
     "TerminalResultAlreadySubmittedError",

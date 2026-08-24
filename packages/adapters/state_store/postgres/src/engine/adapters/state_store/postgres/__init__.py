@@ -76,6 +76,9 @@ class PostgresStateStore:
     ) -> Sequence[Milestone]:
         raise NotImplementedError("Milestone reads land with the state-store ticket")
 
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        raise NotImplementedError("Milestone writes land with the state-store ticket")
+
     async def save_workstream(self, workstream: Workstream) -> None:
         raise NotImplementedError("Workstream writes land with the state-store ticket")
 

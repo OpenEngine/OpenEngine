@@ -192,20 +192,30 @@ class SQLiteStateStore:
                 raise KeyError(f"no project {milestone.project_id!r}")
             self._connection.execute(
                 """
-                INSERT INTO milestones (milestone_id, project_id, name)
-                VALUES (?, ?, ?)
+                INSERT INTO milestones (
+                    milestone_id, project_id, name, description, dependencies
+                )
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(milestone_id) DO UPDATE SET
                     project_id = excluded.project_id,
-                    name = excluded.name
+                    name = excluded.name,
+                    description = excluded.description,
+                    dependencies = excluded.dependencies
                 """,
-                (milestone.milestone_id, milestone.project_id, milestone.name),
+                (
+                    milestone.milestone_id,
+                    milestone.project_id,
+                    milestone.name,
+                    milestone.description,
+                    json.dumps(milestone.dependencies),
+                ),
             )
 
     async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT milestone_id, project_id, name
+                SELECT milestone_id, project_id, name, description, dependencies
                 FROM milestones WHERE milestone_id = ?
                 """,
                 (milestone_id,),
@@ -215,7 +225,10 @@ class SQLiteStateStore:
     async def list_milestones(
         self, project_id: ProjectId | None = None
     ) -> Sequence[Milestone]:
-        query = "SELECT milestone_id, project_id, name FROM milestones"
+        query = (
+            "SELECT milestone_id, project_id, name, description, dependencies "
+            "FROM milestones"
+        )
         parameters: tuple[object, ...] = ()
         if project_id is not None:
             query += " WHERE project_id = ?"
@@ -224,6 +237,18 @@ class SQLiteStateStore:
         with self._lock:
             rows = self._connection.execute(query, parameters).fetchall()
         return tuple(_milestone_from_row(row) for row in rows)
+
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        with self._lock, self._connection:
+            try:
+                cursor = self._connection.execute(
+                    "DELETE FROM milestones WHERE milestone_id = ?", (milestone_id,)
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"milestone {milestone_id!r} still has workstreams"
+                ) from error
+        return cursor.rowcount > 0
 
     async def save_workstream(self, workstream: Workstream) -> None:
         with self._lock, self._connection:
@@ -652,6 +677,10 @@ def _milestone_from_row(row: sqlite3.Row) -> Milestone:
         milestone_id=MilestoneId(row["milestone_id"]),
         project_id=ProjectId(row["project_id"]),
         name=row["name"],
+        description=row["description"],
+        dependencies=tuple(
+            MilestoneId(dependency) for dependency in json.loads(row["dependencies"])
+        ),
     )
 
 

@@ -1,6 +1,6 @@
 """Planning hierarchy that groups workflow runs into product delivery work."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from engine.domain.ids import MilestoneId, ProjectId, WorkstreamId
 
@@ -20,6 +20,8 @@ class Milestone:
     milestone_id: MilestoneId
     project_id: ProjectId
     name: str
+    description: str = ""
+    dependencies: tuple[MilestoneId, ...] = field(default=())
 
 
 @dataclass(frozen=True, slots=True)

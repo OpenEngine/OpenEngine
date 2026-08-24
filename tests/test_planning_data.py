@@ -38,7 +38,17 @@ def store(request: pytest.FixtureRequest) -> Iterator[StateStore]:
 def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
     project = Project(ProjectId("project-engine"), "Engine")
     milestone = Milestone(
-        MilestoneId("milestone-foundation"), project.project_id, "Foundation"
+        MilestoneId("milestone-foundation"),
+        project.project_id,
+        "Foundation",
+        "Establish the data and runtime foundations.",
+    )
+    launch = Milestone(
+        MilestoneId("milestone-launch"),
+        project.project_id,
+        "Launch",
+        "Ship the first release.",
+        (milestone.milestone_id,),
     )
     workstream = Workstream(
         WorkstreamId("workstream-data"), milestone.milestone_id, "Data model"
@@ -56,6 +66,7 @@ def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
     async def scenario() -> None:
         await store.save_project(project)
         await store.save_milestone(milestone)
+        await store.save_milestone(launch)
         await store.save_workstream(workstream)
         await store.save_workstream(other_workstream)
         await store.save(run)
@@ -63,13 +74,17 @@ def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
         assert await store.load_project(project.project_id) == project
         assert await store.load_milestone(milestone.milestone_id) == milestone
         assert await store.load_workstream(workstream.workstream_id) == workstream
-        assert await store.list_milestones(project.project_id) == (milestone,)
+        assert await store.list_milestones(project.project_id) == (launch, milestone)
         assert await store.list_workstreams(milestone.milestone_id) == (
             other_workstream,
             workstream,
         )
         assert await store.list_runs(workstream.workstream_id) == (run,)
         assert await store.list_runs(other_workstream.workstream_id) == ()
+        assert await store.delete_milestone(launch.milestone_id) is True
+        assert await store.delete_milestone(launch.milestone_id) is False
+        with pytest.raises(ValueError, match="still has workstreams"):
+            await store.delete_milestone(milestone.milestone_id)
 
     asyncio.run(scenario())
 
@@ -77,7 +92,16 @@ def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
 def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
     path = tmp_path / "planning.sqlite3"
     project = Project(ProjectId("project-engine"), "Engine")
-    milestone = Milestone(MilestoneId("milestone-v1"), project.project_id, "V1")
+    foundation = Milestone(
+        MilestoneId("milestone-foundation"), project.project_id, "Foundation"
+    )
+    milestone = Milestone(
+        MilestoneId("milestone-v1"),
+        project.project_id,
+        "V1",
+        "The first usable release.",
+        (foundation.milestone_id,),
+    )
     workstream = Workstream(
         WorkstreamId("workstream-runtime"), milestone.milestone_id, "Runtime"
     )
@@ -98,6 +122,7 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
 
     first = SQLiteStateStore(path)
     asyncio.run(first.save_project(project))
+    asyncio.run(first.save_milestone(foundation))
     asyncio.run(first.save_milestone(milestone))
     asyncio.run(first.save_workstream(workstream))
     asyncio.run(first.save(run))
@@ -107,7 +132,7 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
     second = SQLiteStateStore(path)
     try:
         assert asyncio.run(second.list_projects()) == (project,)
-        assert asyncio.run(second.list_milestones()) == (milestone,)
+        assert asyncio.run(second.list_milestones()) == (milestone, foundation)
         assert asyncio.run(second.list_workstreams()) == (workstream,)
         assert asyncio.run(second.load(run.run_id)) == run
         assert asyncio.run(second.history(run.run_id)) == (requested,)
