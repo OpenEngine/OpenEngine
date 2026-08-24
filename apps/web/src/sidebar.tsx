@@ -1,10 +1,12 @@
-/** The rail: Projects, Workflows, Chats, in that order, with one open.
+/** The rail: Projects, Workflows, Chats, in that order, with at most one open.
  *
  *  All three headers stay on screen at all times and the open one takes the
  *  space that is left, so choosing a section slides the headers above it up
  *  and the ones below it down rather than swapping one rail for another. The
  *  open header is printed in white and the closed ones in the rail's muted
- *  ink, which is the whole of the selected state. */
+ *  ink, which is the whole of the selected state. Clicking the open header
+ *  again closes it, leaving the three headers stacked and nothing beneath
+ *  them. */
 
 import {
   ThreadListItemPrimitive,
@@ -23,13 +25,13 @@ function Section({
   id,
   title,
   open,
-  onOpen,
+  onToggle,
   children,
 }: {
   id: RailSection;
   title: string;
   open: boolean;
-  onOpen: (section: RailSection) => void;
+  onToggle: (section: RailSection) => void;
   children: ReactNode;
 }) {
   return (
@@ -38,7 +40,7 @@ function Section({
         aria-controls={`rail-${id}`}
         aria-expanded={open}
         className="rail-head"
-        onClick={() => onOpen(id)}
+        onClick={() => onToggle(id)}
         type="button"
       >
         {title}
@@ -140,12 +142,14 @@ export function Sidebar({
   activeConversationUrl?: string;
   activeView?: "runs" | "new";
 }) {
-  const [open, setOpen] = useState<RailSection>(initialSection);
+  const [open, setOpen] = useState<RailSection | null>(initialSection);
+  const toggle = (section: RailSection) =>
+    setOpen((current) => (current === section ? null : section));
   return (
     <aside className="rail">
       <RailBrand href="/" />
       <div className="rail-sections">
-        <Section id="projects" title="Projects" open={open === "projects"} onOpen={setOpen}>
+        <Section id="projects" title="Projects" open={open === "projects"} onToggle={toggle}>
           {/* A plan is a conversation like any other, so this is the new chat
               page reached by a link rather than a rail control of its own --
               what the link settles is which agent answers there. Amber rather
@@ -164,7 +168,7 @@ export function Sidebar({
             </p>
           </div>
         </Section>
-        <Section id="workflows" title="Workflows" open={open === "workflows"} onOpen={setOpen}>
+        <Section id="workflows" title="Workflows" open={open === "workflows"} onToggle={toggle}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/runs/new">
               + New workflow
@@ -221,7 +225,7 @@ export function Sidebar({
             ))}
           </nav>
         </Section>
-        <Section id="chats" title="Chats" open={open === "chats"} onOpen={setOpen}>
+        <Section id="chats" title="Chats" open={open === "chats"} onToggle={toggle}>
           <ThreadListPrimitive.Root className="rail-list">
             <div className="rail-nav">
               {linkChats ? (
