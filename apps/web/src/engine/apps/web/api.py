@@ -665,13 +665,16 @@ class ThreadService:
     ) -> str:
         """Ask the thread's agent for a title without changing its transcript."""
         thread = await self._require(instance_id)
-        if thread.title != "New chat":
+        project_id = _thread_project_id(instance_id)
+        project = await self.session.state_store.load_project(project_id)
+        names_project = thread.title == "New project" and project is not None
+        if thread.title != "New chat" and not names_project:
             return thread.title
         selected_runner = runner or thread.runner
         if selected_runner not in self.session.runners:
             raise ValueError(f"unknown runner {selected_runner!r}")
         async with self._locks[instance_id]:
-            if thread.title != "New chat":
+            if thread.title not in {"New chat", "New project"}:
                 return thread.title
             history = await self.session.history(instance_id)
             title_context = (
@@ -692,6 +695,14 @@ class ThreadService:
             )
         title = _clean_title(turn.message.content)
         if title:
+            # Project creation is part of thread initialization, before the
+            # client receives the permalink. Rename that durable placeholder
+            # before consuming the sentinel title so an interrupted request is
+            # always safe to retry after a reload.
+            if names_project:
+                await self.session.state_store.save_project(
+                    Project(project_id, title)
+                )
             thread.title = title
             await self._persist_metadata(thread)
         return thread.title
@@ -1228,6 +1239,9 @@ def create_app(
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
+        create_project = body.get("createProject", False)
+        if not isinstance(create_project, bool):
+            return _error("createProject must be a boolean", 400)
         try:
             thread = await service.create(
                 AgentId(_required_string(body, "agentId")),
@@ -1235,6 +1249,17 @@ def create_app(
             )
         except (KeyError, ValueError) as error:
             return _error(str(error), 400)
+        if create_project:
+            # Finish the durable intent before returning the thread id. The
+            # client cannot replace /plan with its permalink until this request
+            # resolves, so closing or reloading during the slower title request
+            # cannot strand an ordinary chat without its project.
+            thread = await service.update_metadata(
+                thread.instance_id, title="New project"
+            )
+            await session.state_store.save_project(
+                Project(_thread_project_id(thread.instance_id), thread.title)
+            )
         return JSONResponse(_thread_json(thread), status_code=201)
 
     async def get_thread(request: Request) -> JSONResponse:
@@ -1611,6 +1636,11 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
 
 def _project_json(project: Project) -> dict[str, str]:
     return {"projectId": str(project.project_id), "name": project.name}
+
+
+def _thread_project_id(instance_id: AgentInstanceId) -> ProjectId:
+    """The durable project owned by a New Project conversation."""
+    return ProjectId(f"project-{instance_id}")
 
 
 def _workflow_step_editable(

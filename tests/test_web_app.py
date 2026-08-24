@@ -3173,6 +3173,50 @@ def test_projects_api_creates_and_lists_projects_newest_first() -> None:
     ]
 
 
+def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
+    runner = ConcurrentRunner(('"Durable project intent"',))
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={
+                    "agentId": "coder",
+                    "runner": "test",
+                    "createProject": True,
+                },
+            )
+            before_title = await client.get("/api/projects")
+            titled = await client.post(
+                f"/api/threads/{created.json()['id']}/title",
+                json={"text": "Keep this intent across a reload"},
+            )
+            after_title = await client.get("/api/projects")
+            return created, before_title, titled, after_title
+
+    created, before_title, titled, after_title = asyncio.run(scenario())
+
+    assert created.status_code == 201
+    assert created.json()["title"] == "New project"
+    assert before_title.json()["projects"] == [
+        {
+            "projectId": f"project-{created.json()['id']}",
+            "name": "New project",
+        }
+    ]
+    assert titled.json() == {"title": "Durable project intent"}
+    assert after_title.json()["projects"] == [
+        {
+            "projectId": f"project-{created.json()['id']}",
+            "name": "Durable project intent",
+        }
+    ]
+
+
 def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn() -> None:
     """Naming happens before the message it names is sent, so it cannot fail it.
 
