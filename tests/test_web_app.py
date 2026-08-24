@@ -1001,6 +1001,95 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
+def test_planning_http_api_creates_hierarchy_and_associates_a_run() -> None:
+    store = InMemoryStateStore()
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            project = await client.post(
+                "/api/projects",
+                json={"projectId": "project-engine", "name": "Engine"},
+            )
+            milestone = await client.post(
+                "/api/milestones",
+                json={
+                    "milestoneId": "milestone-foundation",
+                    "projectId": "project-engine",
+                    "name": "Foundation",
+                },
+            )
+            workstream = await client.post(
+                "/api/workstreams",
+                json={
+                    "workstreamId": "workstream-runtime",
+                    "milestoneId": "milestone-foundation",
+                    "name": "Runtime",
+                },
+            )
+            projects = await client.get("/api/projects")
+            milestones = await client.get(
+                "/api/milestones", params={"projectId": "project-engine"}
+            )
+            workstreams = await client.get(
+                "/api/workstreams",
+                params={"milestoneId": "milestone-foundation"},
+            )
+            config = await client.get("/api/config")
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Improve the runtime.",
+                    "repository": "acme/api",
+                    "workstreamId": "workstream-runtime",
+                },
+            )
+            saved = await store.load(RunId(created.json()["runId"]))
+        return (
+            project,
+            milestone,
+            workstream,
+            projects,
+            milestones,
+            workstreams,
+            config,
+            created,
+            saved,
+        )
+
+    (
+        project,
+        milestone,
+        workstream,
+        projects,
+        milestones,
+        workstreams,
+        config,
+        created,
+        saved,
+    ) = asyncio.run(scenario())
+
+    assert (project.status_code, milestone.status_code, workstream.status_code) == (
+        201,
+        201,
+        201,
+    )
+    assert projects.json()["projects"] == [
+        {"projectId": "project-engine", "name": "Engine"}
+    ]
+    assert milestones.json()["milestones"][0]["projectId"] == "project-engine"
+    assert workstreams.json()["workstreams"][0]["milestoneId"] == (
+        "milestone-foundation"
+    )
+    assert config.json()["workstreams"] == workstreams.json()["workstreams"]
+    assert created.status_code == 201
+    assert created.json()["workstreamId"] == "workstream-runtime"
+    assert saved is not None
+    assert saved.workstream_id == "workstream-runtime"
+
+
 def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     store = InMemoryStateStore()
     implementer = TerminalToolRunner(

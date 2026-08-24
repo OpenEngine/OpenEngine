@@ -197,6 +197,7 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
   const [repository, setRepository] = useState(".");
   const [runner, setRunner] = useState(config.defaultWorkflowRunner);
   const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
+  const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -217,6 +218,7 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
           prompt,
           repository,
           runner,
+          ...(workstreamId ? { workstreamId } : {}),
         }),
       });
       // The run now owns this prompt, so the draft has nothing left to keep.
@@ -251,6 +253,31 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
                 {workflow.name} · {workflow.version}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          <span>Workstream</span>
+          <select
+            value={workstreamId}
+            onChange={(event) => setWorkstreamId(event.target.value)}
+          >
+            <option value="">No workstream</option>
+            {config.workstreams.map((workstream) => {
+              const milestone = config.milestones.find(
+                (item) => item.milestoneId === workstream.milestoneId,
+              );
+              const project = config.projects.find(
+                (item) => item.projectId === milestone?.projectId,
+              );
+              const path = [project?.name, milestone?.name, workstream.name]
+                .filter(Boolean)
+                .join(" / ");
+              return (
+                <option key={workstream.workstreamId} value={workstream.workstreamId}>
+                  {path}
+                </option>
+              );
+            })}
           </select>
         </label>
         <label>

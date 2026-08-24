@@ -25,6 +25,21 @@ const config: EngineConfig = {
     { id: "work-v1", name: "Work", version: "v1" },
     { id: "release-v2", name: "Release", version: "v2" },
   ],
+  projects: [{ projectId: "project-engine", name: "Engine" }],
+  milestones: [
+    {
+      milestoneId: "milestone-foundation",
+      projectId: "project-engine",
+      name: "Foundation",
+    },
+  ],
+  workstreams: [
+    {
+      workstreamId: "workstream-runtime",
+      milestoneId: "milestone-foundation",
+      name: "Runtime",
+    },
+  ],
 };
 
 function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
@@ -134,6 +149,28 @@ describe("NewWorkflowPage", () => {
     expect(within(selector).getByRole("option", { name: "Release · v2" })).toHaveValue(
       "release-v2",
     );
+  });
+
+  it("submits a selected workstream while preserving the ungrouped option", async () => {
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<NewWorkflowPage config={config} />);
+
+    const workstream = screen.getByRole("combobox", { name: "Workstream" });
+    expect(within(workstream).getByRole("option", { name: "No workstream" })).toHaveValue(
+      "",
+    );
+    await user.selectOptions(workstream, "workstream-runtime");
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Create workflow run" }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const request = fetch.mock.calls.find(([path]) => path === "/api/runs")?.[1];
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      workstreamId: "workstream-runtime",
+    });
   });
 
   it("restores a prompt after unmounting and remounting", async () => {

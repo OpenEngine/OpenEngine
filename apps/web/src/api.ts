@@ -32,6 +32,9 @@ export type EngineConfig = {
   workflowRunners: string[];
   defaultWorkflowRunner: string;
   workflows: { id: string; name: string; version: string }[];
+  projects: { projectId: string; name: string }[];
+  milestones: { milestoneId: string; projectId: string; name: string }[];
+  workstreams: { workstreamId: string; milestoneId: string; name: string }[];
 };
 
 export type ApiThread = {

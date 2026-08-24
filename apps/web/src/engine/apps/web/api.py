@@ -36,6 +36,10 @@ from engine.domain import (
     ApprovalRecord,
     HumanReviewCompleted,
     Message,
+    Milestone,
+    MilestoneId,
+    Project,
+    ProjectId,
     Role,
     RunId,
     RunPhase,
@@ -46,6 +50,7 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkflowDefinition,
+    Workstream,
     WorkstreamId,
     WorkspaceId,
 )
@@ -1023,6 +1028,9 @@ def create_app(
             await asyncio.sleep(0.25)
 
     async def config(_request: Request) -> JSONResponse:
+        projects = await session.state_store.list_projects()
+        milestones = await session.state_store.list_milestones()
+        workstreams = await session.state_store.list_workstreams()
         return JSONResponse(
             {
                 "agents": [
@@ -1049,8 +1057,83 @@ def create_app(
                     }
                     for definition in catalog
                 ],
+                "projects": [_project_json(project) for project in projects],
+                "milestones": [
+                    _milestone_json(milestone) for milestone in milestones
+                ],
+                "workstreams": [
+                    _workstream_json(workstream) for workstream in workstreams
+                ],
             }
         )
+
+    async def list_projects(_request: Request) -> JSONResponse:
+        projects = await session.state_store.list_projects()
+        return JSONResponse(
+            {"projects": [_project_json(project) for project in projects]}
+        )
+
+    async def create_project(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        try:
+            project = Project(
+                project_id=ProjectId(_required_string(body, "projectId")),
+                name=_required_string(body, "name"),
+            )
+        except ValueError as error:
+            return _error(str(error), 400)
+        await session.state_store.save_project(project)
+        return JSONResponse(_project_json(project), status_code=201)
+
+    async def list_milestones(request: Request) -> JSONResponse:
+        project_value = request.query_params.get("projectId")
+        project_id = ProjectId(project_value) if project_value else None
+        milestones = await session.state_store.list_milestones(project_id)
+        return JSONResponse(
+            {"milestones": [_milestone_json(milestone) for milestone in milestones]}
+        )
+
+    async def create_milestone(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        try:
+            milestone = Milestone(
+                milestone_id=MilestoneId(_required_string(body, "milestoneId")),
+                project_id=ProjectId(_required_string(body, "projectId")),
+                name=_required_string(body, "name"),
+            )
+        except ValueError as error:
+            return _error(str(error), 400)
+        if await session.state_store.load_project(milestone.project_id) is None:
+            return _error(f"unknown project: {milestone.project_id}", 400)
+        await session.state_store.save_milestone(milestone)
+        return JSONResponse(_milestone_json(milestone), status_code=201)
+
+    async def list_workstreams(request: Request) -> JSONResponse:
+        milestone_value = request.query_params.get("milestoneId")
+        milestone_id = MilestoneId(milestone_value) if milestone_value else None
+        workstreams = await session.state_store.list_workstreams(milestone_id)
+        return JSONResponse(
+            {
+                "workstreams": [
+                    _workstream_json(workstream) for workstream in workstreams
+                ]
+            }
+        )
+
+    async def create_workstream(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        try:
+            workstream = Workstream(
+                workstream_id=WorkstreamId(_required_string(body, "workstreamId")),
+                milestone_id=MilestoneId(_required_string(body, "milestoneId")),
+                name=_required_string(body, "name"),
+            )
+        except ValueError as error:
+            return _error(str(error), 400)
+        if await session.state_store.load_milestone(workstream.milestone_id) is None:
+            return _error(f"unknown milestone: {workstream.milestone_id}", 400)
+        await session.state_store.save_workstream(workstream)
+        return JSONResponse(_workstream_json(workstream), status_code=201)
 
     async def list_threads(_request: Request) -> JSONResponse:
         return JSONResponse({"threads": [_thread_json(t) for t in await service.list()]})
@@ -1444,6 +1527,12 @@ def create_app(
 
     routes = [
         Route("/api/config", config),
+        Route("/api/projects", list_projects),
+        Route("/api/projects", create_project, methods=["POST"]),
+        Route("/api/milestones", list_milestones),
+        Route("/api/milestones", create_milestone, methods=["POST"]),
+        Route("/api/workstreams", list_workstreams),
+        Route("/api/workstreams", create_workstream, methods=["POST"]),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
@@ -1522,6 +1611,26 @@ def _with_workspace(thread: ChatThread, state: WorkspaceState | None) -> ChatThr
     thread.workspace_ref = state.ref if state is not None else None
     thread.workspace_root = state.root_path if state is not None else None
     return thread
+
+
+def _project_json(project: Project) -> dict[str, str]:
+    return {"projectId": str(project.project_id), "name": project.name}
+
+
+def _milestone_json(milestone: Milestone) -> dict[str, str]:
+    return {
+        "milestoneId": str(milestone.milestone_id),
+        "projectId": str(milestone.project_id),
+        "name": milestone.name,
+    }
+
+
+def _workstream_json(workstream: Workstream) -> dict[str, str]:
+    return {
+        "workstreamId": str(workstream.workstream_id),
+        "milestoneId": str(workstream.milestone_id),
+        "name": workstream.name,
+    }
 
 
 def _thread_json(thread: ChatThread) -> dict[str, object]:
