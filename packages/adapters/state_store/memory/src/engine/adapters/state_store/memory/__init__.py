@@ -131,6 +131,15 @@ class InMemoryStateStore:
             milestones = [item for item in milestones if item.project_id == project_id]
         return tuple(reversed(milestones))
 
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        with self._lock:
+            if any(
+                workstream.milestone_id == milestone_id
+                for workstream in self._workstreams.values()
+            ):
+                raise ValueError(f"milestone {milestone_id!r} still has workstreams")
+            return self._milestones.pop(milestone_id, None) is not None
+
     async def save_workstream(self, workstream: Workstream) -> None:
         with self._lock:
             if workstream.milestone_id not in self._milestones:
