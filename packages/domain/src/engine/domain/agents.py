@@ -40,11 +40,12 @@ from engine.domain.ids import (
 class AgentProfile:
     """The definition of an agent role.
 
-    `capabilities` names the tools this agent is granted -- the runtime resolves
-    each name to a concrete tool and exposes only those to the model, so a
-    profile can be read as the complete statement of what an agent may do. The
-    foreman's grants will eventually include dispatch and workflow authoring;
-    a reviewer's will not.
+    `capabilities` names the tools this agent role is granted -- the runtime
+    resolves each name to a concrete tool and exposes only those to the model.
+    A conversation may add grants from its durable context: project chats, for
+    example, receive project tools regardless of which agent role was selected.
+    The foreman's grants will eventually include dispatch and workflow
+    authoring; a reviewer's will not.
 
     Grants are plain strings rather than an enum because tools are registered by
     the runtime, and the set is expected to grow faster than this module.

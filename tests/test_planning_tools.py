@@ -26,8 +26,37 @@ from engine.runtime.planning_tools import (
     PlanningTools,
     ProjectPlan,
     _mcp_response,
+    project_chat_capabilities,
 )
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+
+def test_only_project_backed_chats_receive_milestone_capabilities() -> None:
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        project_chat = AgentInstance(
+            AgentInstanceId("agi-project"),
+            AgentId("coder"),
+            ConversationId("conversation-project"),
+        )
+        ordinary_chat = AgentInstance(
+            AgentInstanceId("agi-ordinary"),
+            AgentId("planner"),
+            ConversationId("conversation-ordinary"),
+        )
+        await store.save_project(
+            Project(project_id_for_instance(project_chat.instance_id), "OpenEngine")
+        )
+
+        assert await project_chat_capabilities(store, project_chat) == (
+            "add_milestone",
+            "list_milestones",
+            "update_milestone",
+            "delete_milestone",
+        )
+        assert await project_chat_capabilities(store, ordinary_chat) == ()
+
+    asyncio.run(scenario())
 
 
 def test_planning_tools_create_present_update_and_delete_milestone_objects() -> None:

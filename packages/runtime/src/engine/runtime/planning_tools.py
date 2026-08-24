@@ -33,6 +33,14 @@ PLANNING_TOOL_NAMES = (
 )
 
 
+async def project_chat_capabilities(
+    store: StateStore, instance: AgentInstance
+) -> tuple[str, ...]:
+    """Grant milestone tools only when this conversation owns a project."""
+    project = await store.load_project(project_id_for_instance(instance.instance_id))
+    return PLANNING_TOOL_NAMES if project is not None else ()
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectPlan:
     """One project and its milestones, shaped for tool responses."""
@@ -615,4 +623,5 @@ __all__ = [
     "PlanningMcpBroker",
     "PlanningTools",
     "ProjectPlan",
+    "project_chat_capabilities",
 ]

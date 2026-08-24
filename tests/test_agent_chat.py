@@ -677,6 +677,50 @@ def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> N
     assert granted == [("add_milestone",)]
 
 
+def test_conversation_context_can_grant_an_mcp_tool() -> None:
+    store = InMemoryStateStore()
+    seen: list[McpServerConfig] = []
+
+    class Broker:
+        config = McpServerConfig("planning", "python", ("planning-server",))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+    class McpRunner(ScriptedRunner):
+        async def run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+        ):
+            seen.append(mcp_server)
+            assert profile.capabilities == ("add_milestone",)
+            return await super().run_turn(agent_run_id, profile, messages)
+
+    async def contextual_grants(_store, _instance):
+        return ("add_milestone",)
+
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=McpRunner(),
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles=PROFILES,
+        mcp_brokers={"add_milestone": lambda *_args: Broker()},
+        capability_resolver=contextual_grants,
+    )
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "Add the foundation."))
+
+    assert seen == [Broker.config]
+
+
 def test_an_unknown_mcp_grant_is_rejected_before_the_runner_starts() -> None:
     store = InMemoryStateStore()
     planner = AgentId("planner")
@@ -868,12 +912,7 @@ def test_shipped_profiles_grant_nothing_they_cannot_honour() -> None:
     assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder"), AgentId("planner")}
     assert BUILT_IN[AgentId("foreman")].capabilities == ()
     assert BUILT_IN[AgentId("coder")].capabilities == ()
-    assert BUILT_IN[AgentId("planner")].capabilities == (
-        "add_milestone",
-        "list_milestones",
-        "update_milestone",
-        "delete_milestone",
-    )
+    assert BUILT_IN[AgentId("planner")].capabilities == ()
     assert all(profile.instructions.strip() for profile in BUILT_IN.values())
 
 
