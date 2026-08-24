@@ -370,6 +370,10 @@ FINDING = "greeting.txt is not covered by a test."
 
 #: The reviewer's prompt quotes the task the implementation was given, so the
 #: scenario only a reviewer can match is listed first: the first match wins.
+#:
+#: Both scenarios end on their terminal tool call, which is what the step
+#: instructions ask for and what a step assembled answer-last used to trip on.
+#: Keep it that way: a closing `say` would hide that shape from this tier again.
 SCRIPTED_RUN = {
     "title": "Adding a greeting",
     "scenarios": [
@@ -396,7 +400,6 @@ SCRIPTED_RUN = {
                         "outputs": {"findings": FINDING},
                     },
                 },
-                {"type": "say", "text": "Left the finding on the pull request."},
             ],
         },
         {
@@ -413,11 +416,6 @@ SCRIPTED_RUN = {
                         "outputs": {"pr_url": PULL_REQUEST},
                     },
                 },
-                # A turn ends in the agent's answer, and a turn that finishes
-                # before the runtime cancels it is only assembled in the order
-                # it was streamed when its last item is a message. Workaround
-                # for #105, which carries the reproduction.
-                {"type": "say", "text": "Wrote greeting.txt."},
             ],
         },
     ],
