@@ -52,6 +52,10 @@ the v1 DSL. Workflow files are trusted configuration and execute once during
 startup. A compiled definition is snapshotted onto every run so editing or
 removing a file does not change an in-flight run.
 
+A proposed migration to repository-owned LangGraph graphs, including the local
+SQLite and scaled Temporal persistence boundaries, is documented in the
+[LangGraph workflow migration plan](docs/langgraph-workflow-migration.md).
+
 Engine also supports agent attribution and provider-neutral approval policy:
 
 ```toml
