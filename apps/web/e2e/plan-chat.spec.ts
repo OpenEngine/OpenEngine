@@ -1,11 +1,12 @@
 import { expect, shot, test, type Script } from "./harness";
 
+const PROJECT_NAME = "Planning the greeting file";
 const SCRIPT: Script = {
-  title: "Planning the greeting file",
+  title: PROJECT_NAME,
   scenarios: [{ steps: [{ type: "say", text: "Here is what I would change." }] }],
 };
 
-test("the rail's plan button opens a new conversation with the planning agent", async ({
+test("a new project opens a planning conversation and appears in the rail", async ({
   page,
   engine,
 }, testInfo) => {
@@ -13,7 +14,7 @@ test("the rail's plan button opens a new conversation with the planning agent", 
 
   await page.goto("/conversations");
   await page.getByRole("button", { name: "Projects" }).click();
-  await page.getByRole("link", { name: "Plan" }).click();
+  await page.getByRole("link", { name: "New Project" }).click();
 
   // The new conversation page, on the agent that plans rather than the one
   // that codes -- which is the whole of what the button settles.
@@ -31,6 +32,12 @@ test("the rail's plan button opens a new conversation with the planning agent", 
 
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
   await shot(page, testInfo, "2 the planner answers");
+
+  const { projects } = await (await page.request.get("/api/projects")).json();
+  expect(projects).toHaveLength(1);
+  expect(projects[0].name).toBe(PROJECT_NAME);
+  await page.getByRole("button", { name: "Projects" }).click();
+  await expect(page.getByText(PROJECT_NAME)).toBeVisible();
 
   const { threads } = await (await page.request.get("/api/threads")).json();
   expect(threads).toHaveLength(1);

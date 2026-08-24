@@ -3141,6 +3141,38 @@ def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
     ]
 
 
+def test_projects_api_creates_and_lists_projects_newest_first() -> None:
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            missing = await client.post("/api/projects", json={})
+            first = await client.post(
+                "/api/projects", json={"name": "First project"}
+            )
+            second = await client.post(
+                "/api/projects", json={"name": "Second project"}
+            )
+            listed = await client.get("/api/projects")
+            return missing, first, second, listed
+
+    missing, first, second, listed = asyncio.run(scenario())
+
+    assert missing.status_code == 400
+    assert first.status_code == 201
+    assert first.json()["projectId"].startswith("project-")
+    assert first.json()["name"] == "First project"
+    assert second.status_code == 201
+    assert [project["name"] for project in listed.json()["projects"]] == [
+        "Second project",
+        "First project",
+    ]
+
+
 def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn() -> None:
     """Naming happens before the message it names is sent, so it cannot fail it.
 

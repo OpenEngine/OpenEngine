@@ -36,6 +36,8 @@ from engine.domain import (
     ApprovalRecord,
     HumanReviewCompleted,
     Message,
+    Project,
+    ProjectId,
     Role,
     RunId,
     RunPhase,
@@ -1071,7 +1073,7 @@ def create_app(
                     for name, runner in runners.items()
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
-                # Which agent the Plan button starts a conversation with, named
+                # Which agent the New Project button starts a conversation with, named
                 # here rather than in the client so the id stays one thing this
                 # process owns. Empty when no such profile is composed, which is
                 # the client's cue that there is nothing to plan with.
@@ -1099,6 +1101,22 @@ def create_app(
         return JSONResponse(
             {"runs": [_run_json(run) for run in await run_reader.list()]}
         )
+
+    async def list_projects(_request: Request) -> JSONResponse:
+        projects = await session.state_store.list_projects()
+        return JSONResponse(
+            {"projects": [_project_json(project) for project in projects]}
+        )
+
+    async def create_project(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        try:
+            name = _required_string(body, "name")
+        except ValueError as error:
+            return _error(str(error), 400)
+        project = Project(ProjectId(f"project-{uuid4().hex[:12]}"), name[:80])
+        await session.state_store.save_project(project)
+        return JSONResponse(_project_json(project), status_code=201)
 
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
@@ -1484,6 +1502,8 @@ def create_app(
 
     routes = [
         Route("/api/config", config),
+        Route("/api/projects", list_projects),
+        Route("/api/projects", create_project, methods=["POST"]),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
@@ -1587,6 +1607,10 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
         result["editable"] = thread.editable
         result["autoApprove"] = thread.auto_approve
     return result
+
+
+def _project_json(project: Project) -> dict[str, str]:
+    return {"projectId": str(project.project_id), "name": project.name}
 
 
 def _workflow_step_editable(

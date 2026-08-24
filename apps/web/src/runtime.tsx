@@ -25,6 +25,7 @@ import {
 
 import {
   api,
+  createProject,
   messageText,
   runNotStartedError,
   type ApiApproval,
@@ -36,6 +37,8 @@ import { publishApproval } from "./approvals";
 type NewChatDefaults = {
   agentId: string;
   runner: string;
+  /** The first message starts a project named by the same agent-generated title. */
+  createProject?: boolean;
 };
 
 type ThreadInitializer = {
@@ -338,6 +341,7 @@ function EngineRuntime({
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
+  const projectThreadsRef = useRef(new Set<string>());
   defaultsRef.current = defaults;
 
   const modelAdapter = useMemo<ChatModelAdapter>(
@@ -365,14 +369,27 @@ function EngineRuntime({
           // named is still a chat to send to. Anything but an abort is
           // swallowed: the alternative is reporting "the run could not be
           // started" for a run nothing has tried to start yet.
-          await api(`/api/threads/${threadId}/title`, {
+          let title = "New project";
+          await api<{ title: string }>(`/api/threads/${threadId}/title`, {
             method: "POST",
             body: JSON.stringify({ text }),
             signal: abortSignal,
-          }).catch((failure: unknown) => {
-            if (failure instanceof Error && failure.name === "AbortError") throw failure;
-          });
+          })
+            .then((result) => {
+              title = result.title;
+            })
+            .catch((failure: unknown) => {
+              if (failure instanceof Error && failure.name === "AbortError") throw failure;
+            });
           await reloadThreadsRef.current?.();
+
+          if (
+            defaultsRef.current.createProject &&
+            !projectThreadsRef.current.has(threadId)
+          ) {
+            await createProject(title, abortSignal);
+            projectThreadsRef.current.add(threadId);
+          }
 
           response = await fetch(`/api/threads/${threadId}/runs`, {
             method: "POST",
