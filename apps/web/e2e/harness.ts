@@ -10,7 +10,13 @@
  *  depend on what ran first. */
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,6 +28,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
 const SERVER = path.join(HERE, "harness", "server.py");
 const SEED = path.join(HERE, "harness", "seed.py");
+const V0_DATABASE = path.join(HERE, "fixtures", "v0.0.0.sqlite3");
 
 /** How long a composed server may take to answer. Long enough for `uv run` to
  *  resolve the workspace on a cold machine, short enough to fail rather than
@@ -69,14 +76,17 @@ export class Engine {
   }
 }
 
-export const test = base.extend<{ engine: Engine; seededDatabase: boolean }>({
+export type SeededDatabase = false | "current" | "v0.0.0";
+
+export const test = base.extend<{ engine: Engine; seededDatabase: SeededDatabase }>({
   seededDatabase: [false, { option: true }],
   engine: async ({ seededDatabase }, use, testInfo) => {
     const root = mkdtempSync(path.join(tmpdir(), "engine-e2e-"));
     const state = path.join(root, "state");
     mkdirSync(state);
     const { repository, origin } = fixtureRepository(root);
-    if (seededDatabase) seedState(state, repository);
+    if (seededDatabase === "current") seedState(state, repository);
+    if (seededDatabase === "v0.0.0") restoreV0Database(state);
     const scriptPath = path.join(root, "script.json");
     const engine = new Engine(
       `http://127.0.0.1:${await freePort()}`,
@@ -231,6 +241,15 @@ function seedState(state: string, repository: string): void {
     ["run", "--frozen", "python", SEED, "--state", state, "--repository", repository],
     { cwd: REPO_ROOT, stdio: "pipe" },
   );
+}
+
+/** Copy the immutable v0.0.0 artifact before the current adapter opens it.
+ *
+ *  Unlike `seedState`, this deliberately does not write through current code.
+ *  Opening the copied file therefore exercises every compatibility migration
+ *  between the checked-in schema and the application under test. */
+function restoreV0Database(state: string): void {
+  copyFileSync(V0_DATABASE, path.join(state, "conversations.sqlite3"));
 }
 
 async function waitUntilServing(url: string, server: Server) {

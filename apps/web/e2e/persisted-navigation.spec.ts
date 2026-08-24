@@ -1,6 +1,13 @@
-import type { Page } from "@playwright/test";
+import type { Page, TestInfo } from "@playwright/test";
 
-import { expect, shot, test, type Script } from "./harness";
+import {
+  expect,
+  shot,
+  test,
+  type Engine,
+  type Script,
+  type SeededDatabase,
+} from "./harness";
 
 const SEEDED_RUN = "Seeded navigation coverage";
 const SEEDED_CHAT = "Seeded SQLite conversation";
@@ -12,12 +19,13 @@ function step(page: Page, name: string) {
     .filter({ has: page.getByRole("heading", { name, exact: true }) });
 }
 
-test.use({ seededDatabase: true });
-
-test("seeded SQLite history stays navigable while new chats and workflows start", async ({
+async function verifyPersistedNavigation({
   page,
   engine,
-}, testInfo) => {
+}: {
+  page: Page;
+  engine: Engine;
+}, testInfo: TestInfo) {
   // The process starts with the database already populated. Begin at the list
   // page, then follow the same links a person uses instead of addressing each
   // API or detail route directly.
@@ -92,7 +100,10 @@ test("seeded SQLite history stays navigable while new chats and workflows start"
   await page.getByLabel("Message the agent").fill("Start a fresh chat beside history.");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText(FRESH_CHAT_REPLY)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Fresh chat beside history" })).toBeVisible();
+  const { threads } = await (await page.request.get("/api/threads")).json();
+  expect(
+    threads.some((thread: { title: string }) => thread.title === "Fresh chat beside history"),
+  ).toBe(true);
   await shot(page, testInfo, "6 fresh chat beside seeded history");
 
   const pullRequest = "https://github.com/acme/engine/pull/42";
@@ -160,4 +171,14 @@ test("seeded SQLite history stays navigable while new chats and workflows start"
   await expect(
     page.locator(".cards").getByRole("link", { name: new RegExp(SEEDED_RUN) }),
   ).toBeVisible();
-});
+}
+
+for (const database of ["current", "v0.0.0"] satisfies SeededDatabase[]) {
+  test.describe(`${database} SQLite database`, () => {
+    test.use({ seededDatabase: database });
+    test(
+      "history stays navigable while new chats and workflows start",
+      verifyPersistedNavigation,
+    );
+  });
+}

@@ -31,7 +31,6 @@ from engine.domain import (
     StepId,
     StepOutput,
     TaskId,
-    WorkflowId,
 )
 from engine.runtime import load_workflow_catalog
 
@@ -80,9 +79,10 @@ async def _seed_chat(store: SQLiteStateStore) -> None:
 
 
 async def _seed_workflow(store: SQLiteStateStore, repository: str) -> None:
-    definition = load_workflow_catalog(REPO_ROOT / "workflows").require(
-        WorkflowId("implementation-review-v1")
-    )
+    catalog = load_workflow_catalog(REPO_ROOT / "workflows")
+    if len(catalog) != 1:
+        raise ValueError("the browser seed expects exactly one repository workflow")
+    definition = next(iter(catalog))
     implementation = StepCompleted(
         run_id=RUN_ID,
         step_id=StepId("implementation"),
