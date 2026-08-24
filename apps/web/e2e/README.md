@@ -129,6 +129,9 @@ unzip it, and point `show-report` at the directory.
   shows the same finished run: `succeeded`, `approved`, every stage behind it.
 
 ## What the rest needs
+Everything else -- workflow runs, review, reactivation, auto-approve, failure,
+plans -- is written up as tickets in **`TICKETS.md`**, in dependency order, with
+the files each one touches and what "done" means.
 
 The behaviours below are the ones we want next. Each names what has to exist
 before it can be written; nothing here is a change to the product, except where
