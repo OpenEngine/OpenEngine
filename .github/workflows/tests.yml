@@ -42,7 +42,7 @@ jobs:
           enable-cache: false
 
       - name: Install workspace
-        run: uv sync
+        run: uv sync --all-packages
 
       - name: Install web client
         run: npm --prefix apps/web install
@@ -127,7 +127,7 @@ jobs:
           enable-cache: true
 
       - name: Install workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
 
       - name: Install web client
         run: npm --prefix apps/web ci
@@ -185,7 +185,7 @@ jobs:
         run: uv lock --check
 
       - name: Install workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
 
       - name: Dependency direction holds
         # domain <- engine, ports <- runtime <- adapters, apps compose.
@@ -257,7 +257,7 @@ jobs:
           enable-cache: true
 
       - name: Install workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
 
       - name: Run tests
         # The blocking tier, and everything in it is deterministic: protocol

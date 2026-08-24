@@ -1,7 +1,7 @@
 """State Store capability, backed by Postgres.
 
-Placeholder for Ticket 1. Satisfies `engine.ports.StateStore` structurally; no
-driver, connection pool, schema, or migrations yet.
+The adapter satisfies `engine.ports.StateStore` structurally, but its behavior
+and Alembic schema are placeholders until PostgreSQL support is needed.
 """
 
 from collections.abc import Sequence
@@ -35,6 +35,7 @@ class PostgresStateStore:
     """
 
     def __init__(self, dsn: str, schema: str = "engine") -> None:
+        # TODO: Implement PostgreSQL storage when OpenEngine has a need for it.
         self._dsn = dsn
         self._schema = schema
 

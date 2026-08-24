@@ -11,7 +11,7 @@ verified shell installer is tracked in the
 [portable distribution plan](docs/portability.md).
 
 ```bash
-uv sync            # install all 16 workspace packages, editable
+uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
 uv run pytest      # run the suite, including the boundary checks
@@ -21,6 +21,14 @@ All three entrypoints run today and report their wiring:
 
 ```bash
 uv run engine-web
+```
+
+SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
+history is currently a placeholder; the SQLite state store upgrades its
+database on startup and can also be upgraded explicitly:
+
+```bash
+DATABASE_URL=sqlite:///conversations.sqlite3 uv run engine-migrate
 ```
 
 ## Configuration
