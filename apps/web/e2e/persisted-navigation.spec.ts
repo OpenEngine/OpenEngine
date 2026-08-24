@@ -19,6 +19,18 @@ function step(page: Page, name: string) {
     .filter({ has: page.getByRole("heading", { name, exact: true }) });
 }
 
+async function expectSeededChatHistory(page: Page) {
+  await expect(page.getByRole("heading", { name: SEEDED_CHAT })).toBeVisible();
+  await expect(page.getByText("What survives when the web process restarts?")).toBeVisible();
+  await expect(
+    page.getByText("The SQLite-backed conversation history survives."),
+  ).toBeVisible();
+  await expect(page.getByText("Can I still navigate back to this answer?")).toBeVisible();
+  await expect(
+    page.getByText("Yes. This second turn proves the complete history loaded."),
+  ).toBeVisible();
+}
+
 async function verifyPersistedNavigation({
   page,
   engine,
@@ -74,15 +86,7 @@ async function verifyPersistedNavigation({
   // pre-existing standalone conversation survived the cold start.
   await page.getByRole("button", { name: "Chats", exact: true }).click();
   await page.getByRole("link", { name: new RegExp(SEEDED_CHAT) }).click();
-  await expect(page.getByRole("heading", { name: SEEDED_CHAT })).toBeVisible();
-  await expect(page.getByText("What survives when the web process restarts?")).toBeVisible();
-  await expect(
-    page.getByText("The SQLite-backed conversation history survives."),
-  ).toBeVisible();
-  await expect(page.getByText("Can I still navigate back to this answer?")).toBeVisible();
-  await expect(
-    page.getByText("Yes. This second turn proves the complete history loaded."),
-  ).toBeVisible();
+  await expectSeededChatHistory(page);
   await shot(page, testInfo, "5 seeded standalone chat history");
 
   // Existing rows must not make the create path behave like a restore path.
@@ -153,7 +157,9 @@ async function verifyPersistedNavigation({
     ],
   };
   engine.script(workflowScript);
-  await page.goto("/runs/new");
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "+ New workflow", exact: true }).click();
+  await expect(page).toHaveURL("/runs/new");
   await expect(page.getByRole("heading", { name: "Start a workflow" })).toBeVisible();
   await page.getByLabel("Repository").fill(engine.repository);
   await page.getByLabel("Task prompt").fill("Start a fresh workflow beside history.");
@@ -171,6 +177,13 @@ async function verifyPersistedNavigation({
   await expect(
     page.locator(".cards").getByRole("link", { name: new RegExp(SEEDED_RUN) }),
   ).toBeVisible();
+
+  // The older chat and every message remain reachable after both new records
+  // have been persisted, not merely before the create paths run.
+  await page.getByRole("button", { name: "Chats", exact: true }).click();
+  await page.getByRole("link", { name: new RegExp(SEEDED_CHAT) }).click();
+  await expectSeededChatHistory(page);
+  await shot(page, testInfo, "8 seeded chat history after new records");
 }
 
 for (const database of ["current", "v0.0.0"] satisfies SeededDatabase[]) {
