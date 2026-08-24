@@ -738,7 +738,13 @@ class ClarificationToolRunner(ConcurrentRunner):
         question = ToolCall(
             "question-1",
             "AskUserQuestion",
-            json.dumps({"question": "Which behavior should remain compatible?"}),
+            json.dumps(
+                {
+                    "questions": [
+                        {"question": "Which behavior should remain compatible?"}
+                    ]
+                }
+            ),
         )
         return AgentTurn(
             Message.assistant("Waiting for clarification."),
@@ -1918,15 +1924,21 @@ def test_clarification_call_leaves_the_active_step_implementing() -> None:
                     ):
                         break
                 await asyncio.sleep(0.01)
-            return await client.get(f"/api/runs/{run_id}"), await store.history(run_id)
+            reopened = await client.get(f"/api/runs/{run_id}")
+            instance_id = reopened.json()["steps"][0]["agentInstanceId"]
+            messages = await client.get(f"/api/threads/{instance_id}/messages")
+            return reopened, await store.history(run_id), messages
 
-    reopened, history = asyncio.run(scenario())
+    reopened, history, messages = asyncio.run(scenario())
 
     assert reopened.json()["phase"] == "running_agent"
     assert reopened.json()["currentStepId"] == "implementation"
     assert reopened.json()["steps"][0]["waiting"] is True
     assert runner.attempts == 1
     assert not any(isinstance(event, (StepCompleted, RunFailed)) for event in history)
+    assert {"type": "text", "text": "Which behavior should remain compatible?"} in (
+        messages.json()["messages"][-1]["content"]
+    )
 
 
 def test_clarification_pause_is_not_restarted_after_process_restart() -> None:
