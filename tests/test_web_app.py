@@ -1051,6 +1051,13 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
                 for step in reopened.json()["steps"]
                 if step["agentInstanceId"]
             }
+            titled_instance = instances[0]
+            await store.update_instance_metadata(
+                titled_instance.instance_id,
+                "Custom conversation title",
+                titled_instance.archived,
+                titled_instance.runner,
+            )
             return (
                 created,
                 reopened,
@@ -1058,9 +1065,22 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
                 await store.history(run_id),
                 conversations,
                 threads,
+                titled_instance.instance_id,
             )
 
-    created, reopened, listed, history, conversations, threads = asyncio.run(scenario())
+    created, reopened, listed, history, conversations, threads, titled_instance_id = (
+        asyncio.run(scenario())
+    )
+
+    async def reopen_titled_thread():
+        reopened_app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+        transport = httpx.ASGITransport(app=reopened_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/threads/{titled_instance_id}")
+
+    titled_thread = asyncio.run(reopen_titled_thread())
     body = reopened.json()
 
     assert created.status_code == 201
@@ -1102,6 +1122,7 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     assert set(conversations) == {IMPLEMENTATION_STEP, REVIEW_STEP}
     assert all(conversation.messages for conversation in conversations.values())
     assert {thread["title"] for thread in threads.values()} == {"Named workflow"}
+    assert titled_thread.json()["title"] == "Custom conversation title"
     assert "Name this workflow" in implementer.seen[0][-1].content
     assert "`complete_step`" in implementer.seen[1][0].content
     assert "JSON" not in implementer.seen[1][0].content

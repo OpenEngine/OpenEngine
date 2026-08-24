@@ -794,7 +794,7 @@ class ThreadService:
 
     async def _instance_title(self, instance: AgentInstance) -> str:
         """Name workflow conversations after their owning run."""
-        if instance.workflow_run_id is None:
+        if instance.workflow_run_id is None or instance.title != "New chat":
             return instance.title
         state = await self.session.state_store.load(instance.workflow_run_id)
         if state is None:
