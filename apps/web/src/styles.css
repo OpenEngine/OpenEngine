@@ -399,6 +399,7 @@ ul, ol { padding: 0; list-style: none; }
 /* --- panel head and stat strip ------------------------------------------- */
 
 .panel { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+.panel-plan { grid-template-rows: auto auto minmax(0, 1fr) 50%; }
 .panel-scroll { display: block; min-width: 0; overflow-y: auto; }
 
 .panel-head {
@@ -514,6 +515,75 @@ select:disabled { cursor: default; }
 .message-assistant p { margin: 0 0 14px; font-size: 16px; line-height: 1.65; white-space: pre-wrap; }
 .message-assistant > :last-child { margin-bottom: 0; }
 .message-error { margin: 14px 0 0 !important; }
+
+/* --- plan milestone visualizer ------------------------------------------ */
+
+.milestone-visualizer {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  padding: 22px var(--gutter) 28px;
+  overflow-x: auto;
+  background: var(--white);
+  border-top: 1px solid var(--ink);
+}
+.milestone-head {
+  display: flex;
+  gap: 20px;
+  align-items: end;
+  justify-content: space-between;
+}
+.milestone-head > div { display: grid; gap: 8px; }
+.milestone-head h2 { font-size: 22px; font-weight: 800; letter-spacing: -.03em; }
+.milestone-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 560px;
+  min-height: 150px;
+}
+.milestone-track::before {
+  position: absolute;
+  top: 50%;
+  right: 12.5%;
+  left: 12.5%;
+  height: 2px;
+  background: var(--ink);
+  content: "";
+}
+.milestone {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: 1 1 0;
+  grid-template-rows: 1fr auto 1fr;
+  gap: 9px;
+  justify-items: center;
+  height: 112px;
+  min-width: 0;
+  text-align: center;
+}
+.milestone-marker {
+  grid-row: 2;
+  width: 15px;
+  height: 15px;
+  background: var(--amber);
+  border: 3px solid var(--white);
+  outline: 2px solid var(--ink);
+}
+.milestone-number {
+  align-self: end;
+  color: var(--faint);
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .12em;
+}
+.milestone-name {
+  max-width: 130px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
 
 .tool {
   margin: 0 0 8px;

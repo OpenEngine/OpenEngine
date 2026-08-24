@@ -12,6 +12,7 @@ import {
   type RunnerOption,
 } from "./api";
 import { ChatThread, ConversationStats } from "./chat";
+import { MilestoneVisualizer } from "./milestones";
 import { EngineRuntimeProvider } from "./runtime";
 import { NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
 import { Sidebar, type RailSection } from "./sidebar";
@@ -21,17 +22,24 @@ function ChatPanel({
   config,
   agentId,
   runner,
+  plan,
   onAgentChange,
   onRunnerChange,
 }: {
   config: EngineConfig;
   agentId: string;
   runner: string;
+  plan: boolean;
   onAgentChange: (agentId: string) => void;
   onRunnerChange: (runner: string) => void;
 }) {
+  const custom = useAuiState((state) => state.threadListItem.custom) as
+    | ThreadCustom
+    | undefined;
+  const planning = plan || Boolean(config.planAgent && custom?.agentId === config.planAgent);
+
   return (
-    <main className="panel">
+    <main className={`panel ${planning ? "panel-plan" : ""}`}>
       <ChatHeader
         config={config}
         agentId={agentId}
@@ -41,6 +49,7 @@ function ChatPanel({
       />
       <ConversationStats />
       <ChatThread />
+      {planning && <MilestoneVisualizer />}
     </main>
   );
 }
@@ -382,6 +391,7 @@ function App() {
             config={config}
             agentId={agentId}
             runner={runner}
+            plan={plan}
             onAgentChange={setAgentId}
             onRunnerChange={setRunner}
           />

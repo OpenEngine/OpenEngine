@@ -24,6 +24,7 @@ test("the rail's plan button opens a new conversation with the planning agent", 
   // whole name, and hence not `getByLabel("Agent")`, which the composer's
   // "Message the agent" also answers to.
   await expect(page.getByRole("combobox", { name: /^Agent/ })).toHaveValue("planner");
+  await expect(page.getByRole("region", { name: "Milestone timeline" })).toBeVisible();
   await shot(page, testInfo, "1 the plan page");
 
   await page.getByLabel("Message the agent").fill("How would you add a greeting file?");
@@ -42,6 +43,7 @@ test("the rail's plan button opens a new conversation with the planning agent", 
   await expect(page).toHaveURL(`/conversations/${threads[0].id}`);
   await page.reload();
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Milestone timeline" })).toBeVisible();
 });
 
 test("a new chat started from the plan page is not another plan", async ({
@@ -58,4 +60,5 @@ test("a new chat started from the plan page is not another plan", async ({
   // ordinary chat has to leave rather than reuse them where it stands.
   await expect(page).toHaveURL(/\/conversations$/);
   await expect(page.getByRole("combobox", { name: /^Agent/ })).toHaveValue("coder");
+  await expect(page.getByRole("region", { name: "Milestone timeline" })).toHaveCount(0);
 });
