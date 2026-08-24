@@ -11,7 +11,7 @@ verified shell installer is tracked in the
 [portable distribution plan](docs/portability.md).
 
 ```bash
-uv sync            # install all workspace packages, editable
+uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
 uv run pytest      # run the suite, including the boundary checks

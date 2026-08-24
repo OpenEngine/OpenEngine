@@ -110,7 +110,7 @@ jobs:
           enable-cache: true
 
       - name: Install workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
 
       - name: Install the pinned CLI release
         run: npm install --global --prefix "$RUNNER_TEMP/agent-cli" "${{ matrix.package }}@${{ matrix.version }}"
