@@ -23,13 +23,12 @@ All three entrypoints run today and report their wiring:
 uv run engine-web
 ```
 
-SQLite and PostgreSQL schemas have independent Alembic histories. The SQLite
-state store upgrades its database on startup; either database can also be
-upgraded explicitly, with the history selected from the URL:
+SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
+history is currently a placeholder; the SQLite state store upgrades its
+database on startup and can also be upgraded explicitly:
 
 ```bash
 DATABASE_URL=sqlite:///conversations.sqlite3 uv run engine-migrate
-DATABASE_URL=postgresql+psycopg://localhost/engine uv run engine-migrate
 ```
 
 ## Configuration

@@ -30,7 +30,7 @@ def database_kind(database: str | Connection | sqlite3.Connection) -> DatabaseKi
         backend = make_url(database).get_backend_name()
     if backend == "sqlite":
         return "sqlite"
-    if backend in {"postgres", "postgresql"}:
+    if backend == "postgresql":
         return "postgres"
     raise ValueError(f"unsupported database backend: {backend}")
 

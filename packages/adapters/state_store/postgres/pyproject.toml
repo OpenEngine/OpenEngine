@@ -3,10 +3,8 @@ name = "engine-adapter-state-store-postgres"
 version = "0.0.0"
 description = "State Store capability backed by Postgres."
 requires-python = ">=3.11"
-# Alembic owns the Postgres schema even while the state-store behavior remains
-# a placeholder.
 dependencies = [
-    "engine-migrations[postgres]",
+    "engine-migrations",
     "engine-runtime",
 ]
 

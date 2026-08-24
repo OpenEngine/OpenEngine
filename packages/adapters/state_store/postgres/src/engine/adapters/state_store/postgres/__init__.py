@@ -1,8 +1,7 @@
 """State Store capability, backed by Postgres.
 
-The adapter still satisfies `engine.ports.StateStore` structurally while its
-read and write operations are implemented. Its schema is managed separately by
-the PostgreSQL Alembic history in the ``engine-migrations`` package.
+The adapter satisfies `engine.ports.StateStore` structurally, but its behavior
+and Alembic schema are placeholders until PostgreSQL support is needed.
 """
 
 from collections.abc import Sequence
@@ -36,6 +35,7 @@ class PostgresStateStore:
     """
 
     def __init__(self, dsn: str, schema: str = "engine") -> None:
+        # TODO: Implement PostgreSQL storage when OpenEngine has a need for it.
         self._dsn = dsn
         self._schema = schema
 

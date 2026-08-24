@@ -30,6 +30,11 @@ def test_database_kind_rejects_unsupported_databases() -> None:
         database_kind("mysql://localhost/engine")
 
 
+def test_upgrade_rejects_postgres_alias_before_running_alembic() -> None:
+    with pytest.raises(ValueError, match="unsupported database backend: postgres"):
+        upgrade("postgres://localhost/engine")
+
+
 def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
     database = tmp_path / "state.sqlite3"
 
@@ -50,11 +55,11 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
     assert revision == ("sqlite_0001",)
 
 
-def test_postgres_history_can_render_without_a_live_database(capsys) -> None:
+def test_postgres_history_is_a_placeholder(capsys) -> None:
     config = alembic_config("postgresql+psycopg://localhost/engine")
 
     command.upgrade(config, "head", sql=True)
 
     sql = capsys.readouterr().out
-    assert "CREATE TABLE agent_instances" in sql
+    assert "CREATE TABLE agent_instances" not in sql
     assert "postgres_0001" in sql

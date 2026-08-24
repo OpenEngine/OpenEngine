@@ -5,9 +5,6 @@ description = "Alembic migration histories for OpenEngine state stores."
 requires-python = ">=3.11"
 dependencies = ["alembic>=1.16", "sqlalchemy>=2.0"]
 
-[project.optional-dependencies]
-postgres = ["psycopg[binary]>=3.2"]
-
 [project.scripts]
 engine-migrate = "migrations.migration:main"
 
