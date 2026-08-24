@@ -211,6 +211,76 @@ def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> N
     asyncio.run(scenario())
 
 
+def test_planning_mcp_rejects_cross_project_milestone_access() -> None:
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        first_instance = AgentInstance(
+            AgentInstanceId("planner-first"),
+            AgentId("planner"),
+            ConversationId("conversation-first"),
+        )
+        second_instance = AgentInstance(
+            AgentInstanceId("planner-second"),
+            AgentId("planner"),
+            ConversationId("conversation-second"),
+        )
+        first_project = Project(
+            project_id_for_instance(first_instance.instance_id), "First"
+        )
+        second_project = Project(
+            project_id_for_instance(second_instance.instance_id), "Second"
+        )
+        await store.save_project(first_project)
+        await store.save_project(second_project)
+        foreign = await PlanningTools(store).add_milestone(
+            second_project.project_id, "Foreign", "Belongs to the second project."
+        )
+
+        broker = PlanningMcpBroker(store, PLANNING_TOOL_NAMES, first_instance)
+        listed = await _mcp_response(
+            "127.0.0.1",
+            1,
+            "unused",
+            PLANNING_TOOL_NAMES,
+            {"jsonrpc": "2.0", "id": "list-tools", "method": "tools/list"},
+        )
+        assert listed is not None
+        list_tool = next(
+            tool
+            for tool in listed["result"]["tools"]
+            if tool["name"] == "list_milestones"
+        )
+        assert list_tool["inputSchema"] == {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+        _, own_plan = await broker._call("list_milestones", {})
+        assert own_plan == {
+            "project": {
+                "project_id": first_project.project_id,
+                "name": "First",
+            },
+            "milestones": [],
+        }
+        with pytest.raises(ValueError, match="unexpected arguments: project_id"):
+            await broker._call(
+                "list_milestones", {"project_id": second_project.project_id}
+            )
+        with pytest.raises(ValueError, match="another project"):
+            await broker._call(
+                "update_milestone",
+                {"milestone_id": foreign.milestone_id, "name": "Compromised"},
+            )
+        with pytest.raises(ValueError, match="another project"):
+            await broker._call(
+                "delete_milestone", {"milestone_id": foreign.milestone_id}
+            )
+        assert await store.load_milestone(foreign.milestone_id) == foreign
+
+    asyncio.run(scenario())
+
+
 def test_planner_turn_launches_scoped_stdio_mcp_and_forwards_a_call() -> None:
     async def scenario() -> None:
         store = InMemoryStateStore()

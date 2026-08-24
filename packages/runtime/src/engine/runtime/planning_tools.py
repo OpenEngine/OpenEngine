@@ -210,6 +210,7 @@ class PlanningMcpBroker:
         capabilities: Sequence[str],
         instance: AgentInstance,
     ) -> None:
+        self._store = store
         self._tools = PlanningTools(store)
         self._capabilities = _validated_capabilities(capabilities)
         self._project_id = project_id_for_instance(instance.instance_id)
@@ -301,10 +302,8 @@ class PlanningMcpBroker:
                 milestone
             )
         if name == "list_milestones":
-            _exact_arguments(arguments, required={"project_id"})
-            plan = await self._tools.list_milestones(
-                ProjectId(_string(arguments, "project_id"))
-            )
+            _exact_arguments(arguments, required=set())
+            plan = await self._tools.list_milestones(self._project_id)
             return plan.render(), plan.to_dict()
         if name == "update_milestone":
             _exact_arguments(
@@ -312,8 +311,9 @@ class PlanningMcpBroker:
                 required={"milestone_id"},
                 optional={"name", "description", "dependencies"},
             )
+            milestone_id = await self._require_owned_milestone(arguments)
             milestone = await self._tools.update_milestone(
-                MilestoneId(_string(arguments, "milestone_id")),
+                milestone_id,
                 name=_optional_string(arguments, "name"),
                 description=_optional_string(arguments, "description"),
                 dependencies=(
@@ -327,13 +327,23 @@ class PlanningMcpBroker:
             )
         if name == "delete_milestone":
             _exact_arguments(arguments, required={"milestone_id"})
-            milestone = await self._tools.delete_milestone(
-                MilestoneId(_string(arguments, "milestone_id"))
-            )
+            milestone_id = await self._require_owned_milestone(arguments)
+            milestone = await self._tools.delete_milestone(milestone_id)
             return f"Deleted milestone `{milestone.milestone_id}`.", _milestone_dict(
                 milestone
             )
         raise ValueError(f"unknown planning tool: {name}")
+
+    async def _require_owned_milestone(
+        self, arguments: dict[str, object]
+    ) -> MilestoneId:
+        milestone_id = MilestoneId(_string(arguments, "milestone_id"))
+        milestone = await self._store.load_milestone(milestone_id)
+        if milestone is None:
+            raise KeyError(f"no milestone {milestone_id!r}")
+        if milestone.project_id != self._project_id:
+            raise ValueError(f"milestone {milestone_id!r} belongs to another project")
+        return milestone_id
 
 
 def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
@@ -358,11 +368,12 @@ def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
         },
         {
             "name": "list_milestones",
-            "description": "Read an agent-friendly presentation of a project plan.",
+            "description": (
+                "Read the plan for the project owned by this planning conversation."
+            ),
             "inputSchema": {
                 "type": "object",
-                "properties": {"project_id": identifier},
-                "required": ["project_id"],
+                "properties": {},
                 "additionalProperties": False,
             },
         },
