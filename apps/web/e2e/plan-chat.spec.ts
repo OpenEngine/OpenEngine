@@ -37,7 +37,9 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   expect(projects).toHaveLength(1);
   expect(projects[0].name).toBe(PROJECT_NAME);
   await page.getByRole("button", { name: "Projects" }).click();
-  await expect(page.getByText(PROJECT_NAME)).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "Projects" }).getByText(PROJECT_NAME),
+  ).toBeVisible();
 
   const { threads } = await (await page.request.get("/api/threads")).json();
   expect(threads).toHaveLength(1);
