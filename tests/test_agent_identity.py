@@ -7,6 +7,7 @@ that possible, because collapsing any two of them is the easy mistake.
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import replace
 
 import pytest
 
@@ -241,7 +242,10 @@ def test_dispatch_routes_a_start_to_the_agent_runner() -> None:
 
     agent_run_id, profile, messages, _ = runner.calls[0]
     assert agent_run_id == AgentRunId("ar-1")
-    assert profile is FOREMAN
+    # The command's profile, plus the note telling the agent what it holds --
+    # dispatch adds that and changes nothing else about the role.
+    assert replace(profile, instructions=FOREMAN.instructions) == FOREMAN
+    assert profile.instructions.startswith(FOREMAN.instructions)
     assert messages == (Message.user("status?"),)
 
 

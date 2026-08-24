@@ -12,6 +12,7 @@ another without being edited.
 """
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from engine.domain.agents import AgentProfile
 from engine.domain.ids import AgentId
@@ -67,6 +68,39 @@ BUILT_IN: Mapping[AgentId, AgentProfile] = {
     profile.agent_id: profile for profile in (FOREMAN, CODER, PLANNER)
 }
 
+#: Introduces the granted tool names appended to a profile's instructions.
+#: A grant is not an announcement: resolving one puts the tool in front of the
+#: provider and says nothing to the model, so an agent reads its role
+#: description as the whole story -- a planner told its plan is the deliverable
+#: holds milestone tools and still answers with what it *would* record. The
+#: system prompt is where that gap closes.
+GRANTED_TOOLS_NOTE = (
+    "These tools are granted to you for this conversation, on top of the ones "
+    "your provider always offers. Use them when the work calls for them rather "
+    "than describing what you would do with them. Your provider may expose "
+    "them under a prefixed name."
+)
+
+
+def with_granted_tools(profile: AgentProfile) -> AgentProfile:
+    """The same profile, with its instructions naming what it was granted.
+
+    Names only, unprefixed: how a provider spells a tool is the adapter's
+    business, and the runtime writing `mcp__planning__add_milestone` would be
+    the runtime claiming to know which provider is answering.
+
+    A profile granted nothing is returned untouched, so the note never appears
+    announcing an empty set.
+    """
+    if not profile.capabilities:
+        return profile
+    granted = "\n".join(f"- {name}" for name in profile.capabilities)
+    sections = (profile.instructions.strip(), f"{GRANTED_TOOLS_NOTE}\n\n{granted}")
+    return replace(
+        profile,
+        instructions="\n\n".join(section for section in sections if section),
+    )
+
 
 class UnknownAgentError(KeyError):
     """No profile is registered under that id."""
@@ -84,4 +118,13 @@ def profile_for(agent_id: AgentId, profiles: Mapping[AgentId, AgentProfile] = BU
         raise UnknownAgentError(agent_id, profiles) from None
 
 
-__all__ = ["BUILT_IN", "CODER", "FOREMAN", "PLANNER", "UnknownAgentError", "profile_for"]
+__all__ = [
+    "BUILT_IN",
+    "CODER",
+    "FOREMAN",
+    "GRANTED_TOOLS_NOTE",
+    "PLANNER",
+    "UnknownAgentError",
+    "profile_for",
+    "with_granted_tools",
+]

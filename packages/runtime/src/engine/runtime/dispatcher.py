@@ -39,6 +39,7 @@ from engine.ports import (
     TurnObserver,
 )
 from engine.runtime.capabilities import Capabilities
+from engine.runtime.profiles import with_granted_tools
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
     requests_clarification_or_escalation,
@@ -89,7 +90,7 @@ class Dispatcher:
                 if command.step is None:
                     await caps.agent_runner.run_turn(
                         command.agent_run_id,
-                        command.profile,
+                        with_granted_tools(command.profile),
                         (Message.user(command.prompt),),
                         workspace_id=command.workspace_id,
                     )
@@ -126,6 +127,11 @@ class Dispatcher:
         caps = self._capabilities
         selected_runner = runner or caps.agent_runner
         assert command.step is not None
+        # Once, here, rather than at each of the branches below: every one of
+        # them hands `command.profile` to a runner, and a step told about its
+        # terminal tools by `step_result_instructions` but not about the grants
+        # its profile carries is only half briefed.
+        command = replace(command, profile=with_granted_tools(command.profile))
         instance = await caps.state_store.create_instance(
             command.profile.agent_id,
             workspace_id=command.workspace_id,

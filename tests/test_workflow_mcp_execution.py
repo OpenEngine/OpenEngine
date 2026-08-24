@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.domain import (
@@ -20,7 +21,12 @@ from engine.domain import (
     ToolSpec,
 )
 from engine.ports import AgentTurn, McpServerConfig
-from engine.runtime import Capabilities, Dispatcher, INVALID_COMPLETION_ERROR
+from engine.runtime import (
+    Capabilities,
+    Dispatcher,
+    GRANTED_TOOLS_NOTE,
+    INVALID_COMPLETION_ERROR,
+)
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 
@@ -124,6 +130,50 @@ def test_accepted_result_is_delivered_then_the_cli_is_cancelled() -> None:
         assert result == delivered[0]
         assert result.mcp_request_id == "tool-call-7"
         assert runner.cancelled.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_a_workflow_step_is_told_which_tools_its_profile_grants() -> None:
+    """The step instructions name the terminal tools; nothing named the rest.
+
+    A reviewer granted `add_comment` and never told it holds one reports the
+    comment it would have left, which is the same failure as a planner that
+    describes a milestone instead of recording it.
+    """
+
+    class ProfileCapturingRunner(CallingMcpRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.profiles: list[AgentProfile] = []
+
+        async def run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+        ):
+            self.profiles.append(profile)
+            return await super().run_turn_with_mcp(
+                agent_run_id, profile, messages, mcp_server, workspace_id
+            )
+
+    async def scenario() -> None:
+        runner = ProfileCapturingRunner()
+        reviewer = AgentProfile(
+            AgentId("reviewer"), "Review the change.", capabilities=("add_comment",)
+        )
+        command = replace(
+            COMMAND,
+            profile=reviewer,
+            step=StepSpec(StepId("review"), reviewer.agent_id),
+        )
+
+        await Dispatcher(_capabilities(runner)).run_workflow_agent(
+            command, runner=runner
+        )
+
+        instructions = runner.profiles[0].instructions
+        assert instructions.startswith("Review the change.")
+        assert GRANTED_TOOLS_NOTE in instructions
+        assert "- add_comment" in instructions
 
     asyncio.run(scenario())
 

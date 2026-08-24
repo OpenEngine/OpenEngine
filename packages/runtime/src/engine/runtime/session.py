@@ -37,7 +37,7 @@ from engine.ports.workspace_provider import WorkspaceState
 from engine.ports.state_store import StateStore
 from engine.runtime.approvals import ApprovalsUnsupportedError
 from engine.runtime.capabilities import Capabilities
-from engine.runtime.profiles import BUILT_IN, profile_for
+from engine.runtime.profiles import BUILT_IN, profile_for, with_granted_tools
 
 #: Grant name -> the tool it resolves to. Empty until tools exist; a profile
 #: granting anything therefore fails loudly, which is the intended behaviour.
@@ -393,6 +393,9 @@ class AgentSession:
                     dict.fromkeys((*profile.capabilities, *contextual))
                 ),
             )
+        # After the contextual grants, so the agent is told about everything
+        # this turn hands over rather than only what its role declares.
+        profile = with_granted_tools(profile)
         # After the profile, because which runner answers depends on it -- and
         # still before anything is written, so a turn nobody can run leaves the
         # transcript as it was.
