@@ -14,7 +14,7 @@ test("a new project opens a planning conversation and appears in the rail", asyn
 
   await page.goto("/conversations");
   await page.getByRole("button", { name: "Projects" }).click();
-  await page.getByRole("link", { name: "New Project" }).click();
+  await page.getByRole("link", { name: "+ New project" }).click();
 
   // The new conversation page, on the agent that plans rather than the one
   // that codes -- which is the whole of what the button settles.

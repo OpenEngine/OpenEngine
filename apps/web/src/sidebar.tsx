@@ -150,7 +150,7 @@ export function Sidebar({
         <Section id="projects" title="Projects" open={open === "projects"} onOpen={setOpen}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/plan">
-              New Project
+              + New project
             </a>
           </div>
           <nav className="rail-scroll" aria-label="Projects">
