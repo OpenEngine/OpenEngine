@@ -8,6 +8,7 @@ import {
   setThreadAutoApprove,
   setThreadRunner,
   type ApiThread,
+  type ApiProject,
   type EngineConfig,
   type RunnerOption,
 } from "./api";
@@ -309,6 +310,30 @@ function PlanPermalink() {
   return null;
 }
 
+function useProjects() {
+  const [projects, setProjects] = useState<ApiProject[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      api<{ projects: ApiProject[] }>("/api/projects")
+        .then((value) => {
+          if (!cancelled) setProjects(value.projects);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) timer = window.setTimeout(load, 1000);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+  return projects;
+}
+
 /** One shell for every screen: the rail, and the page beside it.
  *
  *  The rail lists chats wherever it is drawn, so the chat runtime is mounted
@@ -320,6 +345,7 @@ function App() {
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
   const { runs, error: runsError } = useRuns();
+  const projects = useProjects();
 
   // Settled for this mount: the route is read once, and every move between
   // pages here is a full page load.
@@ -351,17 +377,18 @@ function App() {
   const activeRunId = route.kind === "run" || route.kind === "chat" ? route.runId : undefined;
   return (
     <EngineRuntimeProvider
-      defaults={{ agentId, runner }}
+      defaults={{ agentId, runner, createProject: plan }}
       initialThreadId={chat ? route.threadId : undefined}
       rememberActiveThread={chat}
       // The plan page opens on a new conversation rather than the last one:
-      // a Plan button that handed you back the chat you were in would not be
+      // a New Project button that handed you back the chat you were in would not be
       // a plan. What it starts is still an ordinary chat to come back to.
       restoreActiveThread={chat && !plan}
     >
       <div className="app-shell">
         {plan && <PlanPermalink />}
         <Sidebar
+          projects={projects}
           runs={runs}
           initialSection={sectionFor(route)}
           linkChats={!standaloneChat}
