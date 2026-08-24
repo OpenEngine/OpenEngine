@@ -1752,6 +1752,9 @@ def _merge_message(content: list[dict[str, object]], message: Message) -> bool:
                     "argsText": call.arguments,
                 }
             )
+            clarification = _clarification_context(call.name, arguments)
+            if clarification:
+                content.append({"type": "text", "text": clarification})
             changed = True
     elif message.role is Role.TOOL and message.tool_call_id:
         for part in reversed(content):
@@ -1760,6 +1763,50 @@ def _merge_message(content: list[dict[str, object]], message: Message) -> bool:
                 changed = True
                 break
     return changed
+
+
+_CLARIFICATION_TOOLS = frozenset(
+    {
+        "askuserquestion",
+        "escalate",
+        "escalatetohuman",
+        "requestclarification",
+        "requesthumanreview",
+        "requestuserinput",
+    }
+)
+
+
+def _clarification_context(tool_name: str, arguments: object) -> str | None:
+    """Extract the question text from a provider's clarification tool call."""
+
+    leaf_name = tool_name.rsplit("__", 1)[-1].rsplit(".", 1)[-1]
+    normalized = "".join(
+        character for character in leaf_name.lower() if character.isalnum()
+    )
+    if normalized not in _CLARIFICATION_TOOLS or not isinstance(arguments, dict):
+        return None
+
+    questions = arguments.get("questions")
+    candidates = questions if isinstance(questions, list) else (arguments,)
+    context: list[str] = []
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            text = candidate.strip()
+        elif isinstance(candidate, dict):
+            text = next(
+                (
+                    value.strip()
+                    for key in ("question", "prompt", "message")
+                    if isinstance((value := candidate.get(key)), str) and value.strip()
+                ),
+                "",
+            )
+        else:
+            text = ""
+        if text and text not in context:
+            context.append(text)
+    return "\n\n".join(context) or None
 
 
 _TITLE_PROMPT = (
