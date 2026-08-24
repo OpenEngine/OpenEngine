@@ -18,10 +18,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Container, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 from engine.domain import (
@@ -50,6 +51,7 @@ from engine.domain import (
     WorkflowDefinition,
     WorkstreamId,
     WorkspaceId,
+    instance_id_for_project,
     project_id_for_instance,
 )
 from engine.ports import (
@@ -1116,8 +1118,22 @@ def create_app(
 
     async def list_projects(_request: Request) -> JSONResponse:
         projects = await session.state_store.list_projects()
+        # A project is reached through the planning conversation it was named
+        # after, which is the only page it has. Resolved against the threads
+        # that can be opened rather than spelled from the id alone: a project
+        # recorded some other way has the same shape and no conversation, and
+        # an archived plan's page is a blank new chat rather than the plan.
+        conversations = {
+            thread.instance_id
+            for thread in await service.list()
+            if not thread.archived
+        }
         return JSONResponse(
-            {"projects": [_project_json(project) for project in projects]}
+            {
+                "projects": [
+                    _project_json(project, conversations) for project in projects
+                ]
+            }
         )
 
     async def create_project(request: Request) -> JSONResponse:
@@ -1128,7 +1144,8 @@ def create_app(
             return _error(str(error), 400)
         project = Project(ProjectId(f"project-{uuid4().hex[:12]}"), name[:80])
         await session.state_store.save_project(project)
-        return JSONResponse(_project_json(project), status_code=201)
+        # Recorded rather than planned, so it owns no conversation to link to.
+        return JSONResponse(_project_json(project, ()), status_code=201)
 
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
@@ -1635,8 +1652,20 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
     return result
 
 
-def _project_json(project: Project) -> dict[str, str]:
-    return {"projectId": str(project.project_id), "name": project.name}
+def _project_json(
+    project: Project, conversations: Container[AgentInstanceId]
+) -> dict[str, str]:
+    """Render a project, linked to its plan when that conversation is open.
+
+    `conversations` is required rather than defaulted: a caller that forgot it
+    would quietly emit the linkless rows this link exists to replace.
+    """
+
+    result = {"projectId": str(project.project_id), "name": project.name}
+    instance_id = instance_id_for_project(project.project_id)
+    if instance_id is not None and instance_id in conversations:
+        result["conversationUrl"] = f"/conversations/{quote(str(instance_id), safe='')}"
+    return result
 
 
 def _workflow_step_editable(

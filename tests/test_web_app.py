@@ -3171,6 +3171,12 @@ def test_projects_api_creates_and_lists_projects_newest_first() -> None:
         "Second project",
         "First project",
     ]
+    # Recorded directly rather than by planning, so there is no conversation to
+    # open and the rail has nowhere to send a click.
+    assert all(
+        "conversationUrl" not in project
+        for project in listed.json()["projects"]
+    )
 
 
 def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
@@ -3206,6 +3212,7 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
         {
             "projectId": f"project-{created.json()['id']}",
             "name": "New project",
+            "conversationUrl": f"/conversations/{created.json()['id']}",
         }
     ]
     assert titled.json() == {"title": "Durable project intent"}
@@ -3213,6 +3220,46 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
         {
             "projectId": f"project-{created.json()['id']}",
             "name": "Durable project intent",
+            "conversationUrl": f"/conversations/{created.json()['id']}",
+        }
+    ]
+
+
+def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
+    """Archiving is one click away in the rail, and the archived conversation
+    opens as a blank new chat. The project is still listed -- it exists -- but
+    without a link, which is the row a project with no conversation already
+    gets. Restoring the chat gives the link back."""
+
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test", "createProject": True},
+            )
+            thread_id = created.json()["id"]
+            await client.post(f"/api/threads/{thread_id}/archive")
+            archived = await client.get("/api/projects")
+            await client.post(f"/api/threads/{thread_id}/unarchive")
+            restored = await client.get("/api/projects")
+            return thread_id, archived, restored
+
+    thread_id, archived, restored = asyncio.run(scenario())
+
+    assert archived.json()["projects"] == [
+        {"projectId": f"project-{thread_id}", "name": "New project"}
+    ]
+    assert restored.json()["projects"] == [
+        {
+            "projectId": f"project-{thread_id}",
+            "name": "New project",
+            "conversationUrl": f"/conversations/{thread_id}",
         }
     ]
 
