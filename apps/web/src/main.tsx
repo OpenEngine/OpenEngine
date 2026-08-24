@@ -155,7 +155,6 @@ function ConversationHeader({
   // the truthful thing to show while it is being read.
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
   const workflowConversation = Boolean(thread?.workflowRunId);
-  const implementationConversation = workflowConversation && Boolean(thread?.editable);
   const autoApprove = chosenAutoApprove ?? thread?.autoApprove ?? false;
   const title = fetched?.title || listedTitle || "New chat";
 
@@ -200,7 +199,7 @@ function ConversationHeader({
 
   return (
     <header
-      className={`panel-head ${implementationConversation ? "panel-head-implementation" : ""}`}
+      className={`panel-head ${workflowConversation ? "panel-head-workflow" : ""}`}
     >
       <div className="panel-head-copy">
         <p className="eyebrow">This conversation</p>
