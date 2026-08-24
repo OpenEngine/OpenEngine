@@ -179,13 +179,22 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     }
 
 
-def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
-    """Read-only runners used only for workflow review steps.
+def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
+    """The runners without the tools to change anything, by provider name.
 
-    Not built from `approvals.allow`, and deliberately: a reviewer that cannot
-    write is a property of the step rather than a permission the deployment gets
-    to widen. A policy granting `edit` is a statement about what an agent may do
+    Two callers, one property: a workflow review step, and any profile that says
+    it only reads. Named for what the runners are rather than for the first
+    thing that wanted them, because the planner wants them for the same reason
+    the reviewer does.
+
+    Not built from `approvals.allow`, and deliberately: being unable to write is
+    a property of the work rather than a permission the deployment gets to
+    widen. A policy granting `edit` is a statement about what an agent may do
     when somebody asks it to change something, not about the one asked to read.
+
+    Withholding the tools is half of it. The other half is that a `read_only`
+    profile's approvals are refused by the broker, so a policy cannot hand back
+    at the pause what this withheld before the turn.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
@@ -213,7 +222,7 @@ def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     """Write-enabled runners used only for workflow implementation steps.
 
-    Named to match `build_review_runners` on purpose, and a subset of it: a run
+    Named to match `build_read_only_runners` on purpose, and a subset of it: a run
     implements with the write-enabled runner of the provider it picked, and is
     then reviewed by the read-only runner of that same name. The reviewer is
     told not to modify the workspace, but what actually stops it is being run
@@ -251,6 +260,7 @@ def build_session(
     capabilities: Capabilities,
     runners: Mapping[str, AgentRunner],
     repository: str = ".",
+    read_only_runners: Mapping[str, AgentRunner] | None = None,
 ) -> AgentSession:
     """Conversations, over the capabilities this process composed.
 
@@ -261,18 +271,23 @@ def build_session(
     A conversation may be continued by any of `runners`, including one that did
     not start it: we hold the transcript, so whichever answers next is handed
     everything the other one said and did.
+
+    `read_only_runners` answers the agents that only read, by the same provider
+    names -- so a planning conversation is the CLI the user picked, without the
+    tools to change the tree it is reading.
     """
     return AgentSession(
         capabilities,
         runners=runners,
         workspace_repository=repository,
+        read_only_runners=read_only_runners,
     )
 
 
 __all__ = [
     "Settings",
     "build_capabilities",
-    "build_review_runners",
+    "build_read_only_runners",
     "build_runners",
     "build_workflow_runners",
     "build_session",

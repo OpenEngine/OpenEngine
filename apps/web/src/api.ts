@@ -28,11 +28,22 @@ export type EngineConfig = {
   agents: AgentOption[];
   runners: RunnerOption[];
   defaultAgent: string;
+  /** The agent the Plan button talks to, empty when none is composed. */
+  planAgent: string;
   defaultRunner: string;
   workflowRunners: string[];
   defaultWorkflowRunner: string;
   workflows: { id: string; name: string; version: string }[];
 };
+
+/** Which agent the next conversation starts on, for a plan or an ordinary chat.
+ *
+ *  A deployment that composed no planner says so with an empty `planAgent`, and
+ *  the plan page then opens on the default rather than on nothing: the button
+ *  starting a chat you can retarget is better than one that starts none. */
+export function newChatAgent(config: EngineConfig, plan: boolean): string {
+  return (plan && config.planAgent) || config.defaultAgent;
+}
 
 export type ApiThread = {
   id: string;

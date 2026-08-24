@@ -45,9 +45,9 @@ type ThreadInitializer = {
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
-function useInitialThreadId(forcedThreadId?: string, remember = true) {
+function useInitialThreadId(forcedThreadId?: string, restore = true) {
   const storedThreadId = useRef(
-    forcedThreadId ?? (!remember || typeof window === "undefined"
+    forcedThreadId ?? (!restore || typeof window === "undefined"
       ? undefined
       : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined),
   ).current;
@@ -290,18 +290,27 @@ function HistoryProvider({ children }: PropsWithChildren) {
 /** `rememberActiveThread` is what separates the rail's runtime from the chat's.
  *  A workflow page mounts this only so the rail can list and start chats, and a
  *  page with no transcript on it has no business restoring the last chat --
- *  still less naming a different one as the chat to come back to. */
+ *  still less naming a different one as the chat to come back to.
+ *
+ *  `restoreActiveThread` is the reading half of that on its own, for the one
+ *  page that owns a transcript and still opens on a new one: the plan page
+ *  starts a conversation rather than resuming one, but the conversation it
+ *  starts is the chat to come back to like any other. Off for both would freeze
+ *  the memory rather than skip it, and leave whatever you were in before as
+ *  the chat the rail returns you to. */
 export function EngineRuntimeProvider({
   defaults,
   children,
   initialThreadId,
   rememberActiveThread = true,
+  restoreActiveThread = rememberActiveThread,
 }: PropsWithChildren<{
   defaults: NewChatDefaults;
   initialThreadId?: string;
   rememberActiveThread?: boolean;
+  restoreActiveThread?: boolean;
 }>) {
-  const initialThread = useInitialThreadId(initialThreadId, rememberActiveThread);
+  const initialThread = useInitialThreadId(initialThreadId, restoreActiveThread);
   if (initialThread.loading)
     return <main className="loading">Restoring chats…</main>;
 

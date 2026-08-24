@@ -57,6 +57,20 @@ class AgentProfile:
     """Preferred model, advisory. Empty means the runner's default."""
     description: str = ""
     """One line, for humans choosing an agent to talk to."""
+    read_only: bool = False
+    """Whether this role may read a workspace but never change it.
+
+    A statement about the role rather than about one piece of work, which is
+    what a conversation has instead of a step: a workflow step declares its own
+    `workspace_access`, and nothing here overrides it.
+
+    The runtime honours it twice, because either half alone is a suggestion.
+    The profile is answered by a read-only runner where one is wired, so the
+    provider is not handed the tools; and the same flag reaches the approval
+    broker, where anything but a read is refused whatever the deployment's
+    policy allows -- otherwise a configuration granting `edit` would hand back
+    at the pause exactly what the runner withheld before the turn.
+    """
 
 
 class AgentRunStatus(Enum):

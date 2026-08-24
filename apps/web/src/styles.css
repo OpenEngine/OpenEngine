@@ -3,7 +3,12 @@
  *  Three surfaces and one accent: a near-black rail, a paper panel, and flame
  *  for the one thing on a screen that wants acting on. Nothing is rounded and
  *  nothing floats; structure is drawn with rules, not with shadows. Labels and
- *  every figure are monospaced so columns of them line up down the page. */
+ *  every figure are monospaced so columns of them line up down the page.
+ *
+ *  Amber is the one deliberate exception, and it is a different verb rather
+ *  than a second accent: flame starts work, amber starts a plan -- a reading
+ *  agent that changes nothing. It is printed with the rail's own ink on top,
+ *  which is what keeps it legible where white on flame would not be. */
 
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
@@ -23,6 +28,9 @@
   --flame: #e8452b;
   --flame-deep: #c9351d;
   --flame-wash: #fbe7e2;
+
+  --amber: #f08b1e;
+  --amber-deep: #d97609;
 
   --night: #111111;
   --night-raised: #1c1c1b;
@@ -268,6 +276,15 @@ ul, ol { padding: 0; list-style: none; }
   border-color: var(--flame);
 }
 .rail-button-primary:hover { background: var(--flame-deep); border-color: var(--flame-deep); }
+/* The section lead that starts a plan. Orange rather than flame so it is not
+   read as a third instance of the same control, and dark on it because white
+   on orange is not a contrast this system would print. */
+.rail-button-plan {
+  color: var(--night);
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.rail-button-plan:hover { background: var(--amber-deep); border-color: var(--amber-deep); }
 
 .rail-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 
