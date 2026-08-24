@@ -65,6 +65,9 @@ export type ApiThread = {
 export type ApiProject = {
   projectId: string;
   name: string;
+  /** The planning conversation this project was named after, when it still has
+   *  one. A project with none is listed but has nothing to open. */
+  conversationUrl?: string;
 };
 
 export function createProject(name: string, signal?: AbortSignal): Promise<ApiProject> {

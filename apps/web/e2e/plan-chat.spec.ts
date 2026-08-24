@@ -51,6 +51,30 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await expect(page).toHaveURL(`/conversations/${threads[0].id}`);
   await page.reload();
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+
+  // Leave the plan behind, then come back to it the way the rail offers: the
+  // project row opens the conversation it was named after.
+  await page.goto("/runs");
+  await page.getByRole("button", { name: "Projects" }).click();
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("link", { name: PROJECT_NAME })
+    .click();
+
+  await expect(page).toHaveURL(`/conversations/${threads[0].id}`);
+  await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  // Arriving on a plan, the rail opens on Projects with that one marked, rather
+  // than on Chats with the row you just clicked folded out of sight.
+  await expect(page.getByRole("button", { name: "Projects" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page
+      .getByRole("navigation", { name: "Projects" })
+      .getByRole("link", { name: PROJECT_NAME }),
+  ).toHaveAttribute("aria-current", "page");
+  await shot(page, testInfo, "3 the project reopens its plan");
 });
 
 test("a new chat started from the plan page is not another plan", async ({
