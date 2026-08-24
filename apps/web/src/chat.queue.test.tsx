@@ -1,16 +1,18 @@
 import { act, render, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { QueuedMessagePersistence } from "./chat";
+import { Composer, QueuedMessagePersistence } from "./chat";
 
 const runtime = vi.hoisted(() => ({
   draft: "",
   sending: false,
   state: {
     threadListItem: { remoteId: "thread-queue" as string | undefined },
-    thread: { isLoading: false },
+    thread: { isLoading: false, isRunning: true, messages: [] },
     composer: {
       canSend: false,
+      text: "",
       queue: [] as Array<{
         id: string;
         parts: Array<{ type: "text"; text: string }>;
@@ -31,6 +33,7 @@ const runtime = vi.hoisted(() => ({
 
 vi.mock("@assistant-ui/react", async () => {
   const { useSyncExternalStore } = await import("react");
+  const Root = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
   const aui = {
     composer: {
       getState: () => ({
@@ -41,8 +44,17 @@ vi.mock("@assistant-ui/react", async () => {
       setText: runtime.setText,
       send: runtime.send,
     },
+    threadListItem: { getState: () => runtime.state.threadListItem },
+    queueItem: () => ({ move: vi.fn() }),
   };
   return {
+    ComposerPrimitive: {
+      Root,
+      Input: () => <textarea aria-label="Message the agent" />,
+      Cancel: Root,
+      Queue: () => null,
+    },
+    QueueItemPrimitive: { Text: () => null, Remove: Root },
     useAuiState: (select: (state: typeof runtime.state) => unknown) =>
       useSyncExternalStore(
         runtime.subscribe,
@@ -62,10 +74,12 @@ beforeEach(() => {
   runtime.state.threadListItem.remoteId = "thread-queue";
   runtime.state.thread.isLoading = false;
   runtime.state.composer.canSend = false;
+  runtime.state.composer.text = "";
   runtime.state.composer.queue = [];
   runtime.listeners.clear();
   runtime.setText.mockReset().mockImplementation((text: string) => {
     runtime.draft = text;
+    runtime.state.composer.text = text;
     runtime.state.composer.canSend = text.length > 0 && !runtime.sending;
     runtime.notify();
   });
@@ -78,6 +92,7 @@ beforeEach(() => {
       parts: [{ type: "text", text }],
     });
     runtime.draft = "";
+    runtime.state.composer.text = "";
     runtime.notify();
     queueMicrotask(() => {
       runtime.sending = false;
@@ -91,10 +106,10 @@ afterEach(() => vi.clearAllMocks());
 
 describe("QueuedMessagePersistence", () => {
   it("restores queued follow-ups after history has loaded and preserves the draft", async () => {
-    runtime.draft = "unfinished draft";
     runtime.state.thread.isLoading = true;
+    window.localStorage.setItem("engine.composerDraft.thread-queue", "unfinished draft");
     window.localStorage.setItem(queueKey, JSON.stringify(["first follow-up", "second follow-up"]));
-    render(<QueuedMessagePersistence />);
+    render(<Composer />);
 
     expect(runtime.send).not.toHaveBeenCalled();
 
@@ -103,6 +118,7 @@ describe("QueuedMessagePersistence", () => {
 
     await waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(2));
     expect(runtime.setText.mock.calls.map(([text]) => text)).toEqual([
+      "unfinished draft",
       "first follow-up",
       "second follow-up",
       "unfinished draft",
@@ -115,7 +131,7 @@ describe("QueuedMessagePersistence", () => {
   });
 
   it("updates durable queue state when a pending item is added or removed", async () => {
-    render(<QueuedMessagePersistence />);
+    render(<QueuedMessagePersistence draftRestored />);
 
     runtime.state.composer.queue = [
       { id: "queued-1", parts: [{ type: "text", text: "keep me" }] },
@@ -132,7 +148,7 @@ describe("QueuedMessagePersistence", () => {
 
   it("ignores malformed saved queue data", async () => {
     window.localStorage.setItem(queueKey, "not json");
-    render(<QueuedMessagePersistence />);
+    render(<QueuedMessagePersistence draftRestored />);
 
     await waitFor(() => expect(window.localStorage.getItem(queueKey)).toBeNull());
     expect(runtime.send).not.toHaveBeenCalled();

@@ -210,7 +210,7 @@ export function AssistantMessage() {
  *  settle before putting saved messages back: at that point an active run has
  *  resumed and they queue behind it, or a run that finished while this page
  *  was away accepts the first follow-up immediately. */
-export function QueuedMessagePersistence() {
+export function QueuedMessagePersistence({ draftRestored }: { draftRestored: boolean }) {
   const aui = useAui();
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const historyLoading = useAuiState((state) => state.thread.isLoading);
@@ -226,7 +226,7 @@ export function QueuedMessagePersistence() {
   }>();
 
   useEffect(() => {
-    if (!queueKey || historyLoading) return;
+    if (!queueKey || historyLoading || !draftRestored) return;
 
     const saved = readQueuedMessages(queueKey);
     if (saved.length && aui.composer.getState().queue.length === 0) {
@@ -237,7 +237,7 @@ export function QueuedMessagePersistence() {
     }
     setRestoringQueue(undefined);
     setRestoredQueueKey(queueKey);
-  }, [aui, historyLoading, queueKey]);
+  }, [aui, draftRestored, historyLoading, queueKey]);
 
   useEffect(() => {
     if (!restoringQueue || restoringQueue.key !== queueKey || !canSend) return;
@@ -271,7 +271,7 @@ export function QueuedMessagePersistence() {
   return null;
 }
 
-function Composer() {
+export function Composer() {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const canSend = useAuiState((state) => state.composer.canSend);
@@ -345,7 +345,7 @@ function Composer() {
 
   return (
     <>
-      <QueuedMessagePersistence />
+      <QueuedMessagePersistence draftRestored={restoredDraftKey === draftKey} />
       <div className="queue" aria-live="polite">
         <ComposerPrimitive.Queue>
           {() => (
