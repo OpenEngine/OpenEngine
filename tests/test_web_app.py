@@ -21,7 +21,7 @@ from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -221,7 +221,7 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
     """What keeps a review read-only is the runner it gets, not its prompt."""
     settings = Settings()
     workflow_runners = build_workflow_runners(settings)
-    reviewers = build_review_runners(settings)
+    reviewers = build_read_only_runners(settings)
 
     assert set(workflow_runners) <= set(reviewers)
     codex_argv = reviewers["codex"].command_line(PROFILES[CODER])
@@ -236,15 +236,20 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
 
 
 def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -> None:
-    """The Plan button's whole difference from New chat.
+    """Half of the Plan button's difference from New chat: the argv.
 
-    Same provider the user picked, same conversation machinery -- and a set of
-    tools that cannot change the checkout it is reading, which is a property of
+    Same provider the user picked, same conversation machinery, and a command
+    line without the tools to change the checkout it is reading -- a property of
     what the composition hands the planner rather than of its instructions.
+
+    Only half, and the docstring says so deliberately: this proves the planner
+    is *handed* less, not that it is *held* to less. A provider asking anyway
+    reaches the approval broker, where a policy granting `edit` would allow it;
+    what refuses it there is `read_only` on the profile, covered by
+    `test_approvals.py`. Either half alone reads like the whole thing, which is
+    how a claim like this one comes to be believed without being true.
     """
     settings = Settings(
-        # The policy this repository ships: chat may edit what it is asked to.
-        # A planning conversation is what that permission does not reach.
         engine_config=EngineConfig(
             approvals=ApprovalConfig(
                 allow=(ApprovalCapability.READ, ApprovalCapability.EDIT)
@@ -257,7 +262,7 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
         session = build_session(
             capabilities,
             build_runners(settings),
-            read_only_runners=build_review_runners(settings),
+            read_only_runners=build_read_only_runners(settings),
         )
         planner = session.runner_for(PLANNER.agent_id, "claude")
         coder = session.runner_for(CODER, "claude")

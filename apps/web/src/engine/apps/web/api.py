@@ -476,8 +476,19 @@ class ThreadService:
         run = ActiveRun(agent_run_id)
         self._active_runs[instance_id] = run
         on_approval = None
-        selected = self._runners.get(selected_runner)
-        if isinstance(selected, InteractiveAgentRunner):
+        # The runner the session will hand this turn to, not the one the name
+        # alone would pick: an agent that only reads is answered by a different
+        # object, and both whether it can pause and how it reads its own
+        # requests are that object's to say. An unknown name or an agent this
+        # process no longer composes leaves this unresolved, and the turn then
+        # fails in the session exactly where it failed before.
+        profile = self.session.profiles.get(thread.agent_id)
+        selected = (
+            self.session.runner_for(thread.agent_id, selected_runner)
+            if profile is not None and selected_runner in self.session.runners
+            else None
+        )
+        if profile is not None and isinstance(selected, InteractiveAgentRunner):
             on_approval = self.approvals.handler(
                 agent_run_id=agent_run_id,
                 instance_id=instance_id,
@@ -489,6 +500,10 @@ class ThreadService:
                 # How this provider's requests read as Engine capabilities, so
                 # the configured policy has something to evaluate them against.
                 translator=selected.permission_translator,
+                # And what this agent is, which the policy does not get to
+                # widen: a planner asking to edit is refused here, whatever the
+                # deployment allows a coder.
+                read_only=profile.read_only,
             )
 
         async def execute() -> str:
@@ -854,6 +869,10 @@ def create_app(
                 step_runner.permission_translator if step_runner is not None else None
             ),
             auto_approve=lambda: service.auto_approve_enabled(command.instance_id),
+            # The command carries the profile it was started with, so a step
+            # running an agent that only reads is held to that here as well as
+            # in a chat -- including against the conversation's own auto-approve.
+            read_only=command.profile.read_only,
         )
 
     workflow_executor = WorkflowExecutor(

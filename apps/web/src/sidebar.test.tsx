@@ -147,15 +147,15 @@ describe("Sidebar", () => {
     expect(within(body("Projects")).getByText(/in progress/i)).toBeInTheDocument();
   });
 
-  /** Planning is a conversation, and the button that starts one is the same
-   *  accented control the other two sections lead with. */
-  it("leads the projects section with the accented plan button", () => {
+  /** Planning is a conversation, and the button that starts one leads its
+   *  section like the other two -- in amber rather than the flame accent, so a
+   *  plan does not read as a third of the same control. */
+  it("leads the projects section with the amber plan button", () => {
     render(<Sidebar runs={[run]} initialSection="projects" />);
 
-    expect(within(body("Projects")).getByRole("link", { name: "Plan" })).toHaveClass(
-      "rail-button",
-      "rail-button-primary",
-    );
+    const plan = within(body("Projects")).getByRole("link", { name: "Plan" });
+    expect(plan).toHaveClass("rail-button", "rail-button-plan");
+    expect(plan).not.toHaveClass("rail-button-primary");
   });
 
   it("lists runs with their conversations and marks the one on screen", () => {

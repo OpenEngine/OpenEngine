@@ -15,7 +15,7 @@ from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -37,9 +37,9 @@ def report_wiring(settings: Settings) -> None:
     """Print the composed capability graph, as the other two roots do."""
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
-    review_runners = build_review_runners(settings)
+    read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
-    session = build_session(capabilities, runners, read_only_runners=review_runners)
+    session = build_session(capabilities, runners, read_only_runners=read_only_runners)
     print(
         describe_loaded_config(
             LoadedEngineConfig(config=settings.engine_config, path=settings.config_path)
@@ -57,13 +57,20 @@ def report_wiring(settings: Settings) -> None:
             for name, runner in workflow_runners.items()
         )
     )
+    # Named for what they are and what uses them: an operator reading this has
+    # to be able to see that a planning chat runs on these too, not only a
+    # workflow's review step.
     print(
-        "review runners: "
+        "read-only runners (workflow reviews, read-only agents): "
         + ", ".join(
             f"{name} ({type(runner).__name__})"
-            for name, runner in review_runners.items()
+            for name, runner in read_only_runners.items()
         )
     )
+    read_only_agents = sorted(
+        agent_id for agent_id, profile in session.profiles.items() if profile.read_only
+    )
+    print(f"read-only agents: {', '.join(read_only_agents) or 'none'}")
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
@@ -90,15 +97,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
-    review_runners = build_review_runners(settings)
+    read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
-    session = build_session(capabilities, runners, read_only_runners=review_runners)
+    session = build_session(capabilities, runners, read_only_runners=read_only_runners)
     app = create_app(
         session,
         runners,
         STATIC_DIRECTORY,
         workflow_runners=workflow_runners,
-        review_runners=review_runners,
+        review_runners=read_only_runners,
         workflow_catalog=workflow_catalog,
         approval_policy=loaded.config.approvals,
     )

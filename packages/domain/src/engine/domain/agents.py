@@ -62,10 +62,14 @@ class AgentProfile:
 
     A statement about the role rather than about one piece of work, which is
     what a conversation has instead of a step: a workflow step declares its own
-    `workspace_access`, and nothing here overrides it. The runtime honours this
-    by answering the profile with a read-only runner where one is wired, so a
-    planner and a coder differ in what they may do and not only in what they
-    were told.
+    `workspace_access`, and nothing here overrides it.
+
+    The runtime honours it twice, because either half alone is a suggestion.
+    The profile is answered by a read-only runner where one is wired, so the
+    provider is not handed the tools; and the same flag reaches the approval
+    broker, where anything but a read is refused whatever the deployment's
+    policy allows -- otherwise a configuration granting `edit` would hand back
+    at the pause exactly what the runner withheld before the turn.
     """
 
 

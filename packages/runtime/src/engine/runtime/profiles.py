@@ -56,8 +56,9 @@ PLANNER = AgentProfile(
     ),
     capabilities=(),
     description="Reads the code and writes the plan for a change.",
-    # What actually holds it to reading is the runner it gets, which is why this
-    # is stated here rather than left to the instructions above.
+    # What holds it to reading is the runner it gets and the approvals it is
+    # refused, neither of which is the paragraph above. Stated here so both can
+    # act on it.
     read_only=True,
 )
 

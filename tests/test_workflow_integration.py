@@ -21,7 +21,7 @@ from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -459,7 +459,7 @@ def _compose(
         build_session(capabilities, runners, str(repository)),
         runners,
         workflow_runners=build_workflow_runners(settings),
-        review_runners=build_review_runners(settings),
+        review_runners=build_read_only_runners(settings),
     )
     return app, capabilities, gh_log
 

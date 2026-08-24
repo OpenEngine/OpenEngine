@@ -37,4 +37,25 @@ test("the rail's plan button opens a new conversation with the planning agent", 
   // The chat is an ordinary one, listed beside the others: what a plan starts
   // is a conversation, and only its agent is different.
   expect(threads[0].agentId).toBe("planner");
+  // And it now has a URL of its own, so a refresh reopens the plan being
+  // written rather than starting a second empty one.
+  await expect(page).toHaveURL(`/conversations/${threads[0].id}`);
+  await page.reload();
+  await expect(page.getByText("Here is what I would change.")).toBeVisible();
+});
+
+test("a new chat started from the plan page is not another plan", async ({
+  page,
+  engine,
+}) => {
+  engine.script(SCRIPT);
+
+  await page.goto("/plan");
+  await page.getByRole("button", { name: "Chats" }).click();
+  await page.getByRole("link", { name: "+ New chat" }).click();
+
+  // The plan page's defaults are a plan's, so the control that starts an
+  // ordinary chat has to leave rather than reuse them where it stands.
+  await expect(page).toHaveURL(/\/conversations$/);
+  await expect(page.getByRole("combobox", { name: /^Agent/ })).toHaveValue("coder");
 });

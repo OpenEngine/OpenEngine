@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 
 import {
   api,
+  newChatAgent,
   setThreadAutoApprove,
   setThreadRunner,
   type ApiThread,
@@ -294,6 +295,20 @@ function sectionFor(route: Route): RailSection {
   return "workflows";
 }
 
+/** `/plan` is where a plan starts, not where it lives.
+ *
+ *  Once the conversation exists it has a URL of its own, and taking it means a
+ *  refresh reopens the plan being written rather than starting a second empty
+ *  one. Replaced rather than pushed: Back belongs to whatever page sent you
+ *  here, and there is nothing at `/plan` to return to. */
+function PlanPermalink() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  useEffect(() => {
+    if (remoteId) window.history.replaceState(null, "", `/conversations/${remoteId}`);
+  }, [remoteId]);
+  return null;
+}
+
 /** One shell for every screen: the rail, and the page beside it.
  *
  *  The rail lists chats wherever it is drawn, so the chat runtime is mounted
@@ -306,15 +321,16 @@ function App() {
   const [runner, setRunner] = useState("");
   const { runs, error: runsError } = useRuns();
 
+  // Settled for this mount: the route is read once, and every move between
+  // pages here is a full page load.
   const plan = route.kind === "chat" && Boolean(route.plan);
 
   useEffect(() => {
     api<EngineConfig>("/api/config")
       .then((value) => {
         setConfig(value);
-        // The plan page is the new chat page with its agent already chosen;
-        // a deployment that composed no planner leaves it on the default.
-        setAgentId((plan && value.planAgent) || value.defaultAgent);
+        // The plan page is the new chat page with its agent already chosen.
+        setAgentId(newChatAgent(value, plan));
         setRunner(value.defaultRunner);
       })
       .catch((reason: Error) => setError(reason.message));
@@ -329,17 +345,22 @@ function App() {
   // Switching the open conversation in place is for the rail beside a chat of
   // its own. A workflow step's transcript is reached through its run, so
   // leaving one is a move to another page rather than a swap under the URL.
-  const standaloneChat = chat && !route.runId;
+  // The plan page is the other exception: its defaults are a plan's, so "+ New
+  // chat" there has to leave rather than quietly start a second planner.
+  const standaloneChat = chat && !route.runId && !plan;
   const activeRunId = route.kind === "run" || route.kind === "chat" ? route.runId : undefined;
   return (
     <EngineRuntimeProvider
       defaults={{ agentId, runner }}
       initialThreadId={chat ? route.threadId : undefined}
-      // The plan page starts a conversation rather than resuming one, so it
-      // neither restores the chat you were last in nor claims to be it.
-      rememberActiveThread={chat && !plan}
+      rememberActiveThread={chat}
+      // The plan page opens on a new conversation rather than the last one:
+      // a Plan button that handed you back the chat you were in would not be
+      // a plan. What it starts is still an ordinary chat to come back to.
+      restoreActiveThread={chat && !plan}
     >
       <div className="app-shell">
+        {plan && <PlanPermalink />}
         <Sidebar
           runs={runs}
           initialSection={sectionFor(route)}

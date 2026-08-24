@@ -14,7 +14,8 @@ approval policy plumbing -- and changes only what a test must own:
 
 Everything else is production wiring, including the parts that are easy to get
 wrong: the interactive runners, the write-enabled workflow runners, and the
-read-only reviewers that go with them.
+read-only runners that answer both a workflow's reviews and the agents that
+never change anything.
 
 Run by `apps/web/e2e/harness.ts`, one process per test, on a port the test
 picked. It is not a fixture generator: it starts a server and serves until it
@@ -40,7 +41,7 @@ from engine.apps.web.api import create_app  # noqa: E402
 from engine.apps.web.composition import (  # noqa: E402
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -109,15 +110,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
-    review_runners = build_review_runners(settings)
+    read_only_runners = build_read_only_runners(settings)
     app = create_app(
         build_session(
-            capabilities, runners, args.repository, read_only_runners=review_runners
+            capabilities, runners, args.repository, read_only_runners=read_only_runners
         ),
         runners,
         STATIC_DIRECTORY,
         workflow_runners=build_workflow_runners(settings),
-        review_runners=review_runners,
+        review_runners=read_only_runners,
         approval_policy=loaded.config.approvals,
     )
     print(describe_loaded_config(loaded), flush=True)
