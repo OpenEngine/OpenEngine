@@ -35,7 +35,22 @@ import { Stat, StatStrip } from "./brand";
 import { WorkspaceControl } from "./workspace";
 
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
+const COMPOSER_QUEUE_KEY_PREFIX = "engine.composerQueue.";
 const NEW_CHAT_DRAFT_ID = "new";
+
+function readQueuedMessages(key: string): string[] {
+  const saved = window.localStorage.getItem(key);
+  if (!saved) return [];
+  try {
+    const messages = JSON.parse(saved) as unknown;
+    if (!Array.isArray(messages)) return [];
+    return messages.filter(
+      (message): message is string => typeof message === "string" && message.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
 
 export function toolResultText(result: unknown): string {
   if (typeof result === "string") return result;
@@ -189,6 +204,73 @@ export function AssistantMessage() {
   );
 }
 
+/** Keep pending follow-ups through the full page loads used for navigation.
+ *
+ *  The queue belongs to assistant-ui's in-memory runtime. Wait for history to
+ *  settle before putting saved messages back: at that point an active run has
+ *  resumed and they queue behind it, or a run that finished while this page
+ *  was away accepts the first follow-up immediately. */
+export function QueuedMessagePersistence() {
+  const aui = useAui();
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const historyLoading = useAuiState((state) => state.thread.isLoading);
+  const canSend = useAuiState((state) => state.composer.canSend);
+  const queue = useAuiState((state) => state.composer.queue);
+  const queueKey = remoteId ? `${COMPOSER_QUEUE_KEY_PREFIX}${remoteId}` : undefined;
+  const [restoredQueueKey, setRestoredQueueKey] = useState<string>();
+  const [restoringQueue, setRestoringQueue] = useState<{
+    key: string;
+    messages: string[];
+    index: number;
+    draft: string;
+  }>();
+
+  useEffect(() => {
+    if (!queueKey || historyLoading) return;
+
+    const saved = readQueuedMessages(queueKey);
+    if (saved.length && aui.composer.getState().queue.length === 0) {
+      const draft = aui.composer.getState().text;
+      aui.composer.setText(saved[0]!);
+      setRestoringQueue({ key: queueKey, messages: saved, index: 0, draft });
+      return;
+    }
+    setRestoringQueue(undefined);
+    setRestoredQueueKey(queueKey);
+  }, [aui, historyLoading, queueKey]);
+
+  useEffect(() => {
+    if (!restoringQueue || restoringQueue.key !== queueKey || !canSend) return;
+    aui.composer.send();
+    const index = restoringQueue.index + 1;
+    const next = restoringQueue.messages[index];
+    if (next !== undefined) {
+      aui.composer.setText(next);
+      setRestoringQueue({ ...restoringQueue, index });
+      return;
+    }
+    aui.composer.setText(restoringQueue.draft);
+    setRestoringQueue(undefined);
+    setRestoredQueueKey(restoringQueue.key);
+  }, [aui, canSend, queueKey, restoringQueue]);
+
+  useEffect(() => {
+    if (!queueKey || restoredQueueKey !== queueKey) return;
+    const messages = queue
+      .map((item) =>
+        item.parts
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n\n"),
+      )
+      .filter((message) => message.length > 0);
+    if (messages.length) window.localStorage.setItem(queueKey, JSON.stringify(messages));
+    else window.localStorage.removeItem(queueKey);
+  }, [queue, queueKey, restoredQueueKey]);
+
+  return null;
+}
+
 function Composer() {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
@@ -263,6 +345,7 @@ function Composer() {
 
   return (
     <>
+      <QueuedMessagePersistence />
       <div className="queue" aria-live="polite">
         <ComposerPrimitive.Queue>
           {() => (
