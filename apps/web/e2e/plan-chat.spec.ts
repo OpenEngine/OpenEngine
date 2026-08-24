@@ -36,7 +36,8 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   const { projects } = await (await page.request.get("/api/projects")).json();
   expect(projects).toHaveLength(1);
   expect(projects[0].name).toBe(PROJECT_NAME);
-  await page.getByRole("button", { name: "Projects" }).click();
+  // The plan page opens on Projects, so the section that lists the new project
+  // is already open -- clicking its header here would close it.
   await expect(
     page.getByRole("navigation", { name: "Projects" }).getByText(PROJECT_NAME),
   ).toBeVisible();

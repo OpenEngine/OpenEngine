@@ -136,6 +136,30 @@ describe("Sidebar", () => {
     expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
   });
 
+  /** The header is the whole control, so the way back out of a section is the
+   *  way in: the rail can sit with all three headers stacked and nothing open.
+   *  Closing is the reader's choice like any other, so a late answer about
+   *  where the page belongs does not fold the rail back open. */
+  it("closes the open section when its own header is clicked again", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
+
+    await user.click(header("Workflows"));
+
+    expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
+    expect(body("Workflows")).toHaveAttribute("inert");
+    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
+    expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
+
+    rerender(<Sidebar runs={[run]} initialSection="projects" />);
+    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(header("Workflows"));
+
+    expect(header("Workflows")).toHaveAttribute("aria-expanded", "true");
+    expect(body("Workflows")).not.toHaveAttribute("inert");
+  });
+
   it("keeps a closed section mounted but out of reach", async () => {
     const user = userEvent.setup();
     render(<Sidebar runs={[run]} initialSection="chats" />);

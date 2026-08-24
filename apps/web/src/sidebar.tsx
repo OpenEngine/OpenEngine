@@ -1,10 +1,12 @@
-/** The rail: Projects, Workflows, Chats, in that order, with one open.
+/** The rail: Projects, Workflows, Chats, in that order, with at most one open.
  *
  *  All three headers stay on screen at all times and the open one takes the
  *  space that is left, so choosing a section slides the headers above it up
  *  and the ones below it down rather than swapping one rail for another. The
  *  open header is printed in white and the closed ones in the rail's muted
- *  ink, which is the whole of the selected state. */
+ *  ink, which is the whole of the selected state. Clicking the open header
+ *  again closes it, leaving the three headers stacked and nothing beneath
+ *  them. */
 
 import {
   ThreadListItemPrimitive,
@@ -23,13 +25,13 @@ function Section({
   id,
   title,
   open,
-  onOpen,
+  onToggle,
   children,
 }: {
   id: RailSection;
   title: string;
   open: boolean;
-  onOpen: (section: RailSection) => void;
+  onToggle: (section: RailSection) => void;
   children: ReactNode;
 }) {
   return (
@@ -38,7 +40,7 @@ function Section({
         aria-controls={`rail-${id}`}
         aria-expanded={open}
         className="rail-head"
-        onClick={() => onOpen(id)}
+        onClick={() => onToggle(id)}
         type="button"
       >
         {title}
@@ -146,14 +148,17 @@ export function Sidebar({
   // Where the page belongs is not always known at the first paint: a
   // conversation is only recognized as a project's once the projects load. The
   // rail follows that until the reader opens a section themselves, after which
-  // it is their choice on screen and nothing else moves it.
-  const [chosen, setChosen] = useState<RailSection | null>(null);
-  const open = chosen ?? initialSection;
+  // it is their choice on screen and nothing else moves it. Closing the open
+  // one is such a choice, and `closed` is how it is held: not "nothing chosen
+  // yet", which is what would put the page's section back on screen.
+  const [chosen, setChosen] = useState<RailSection | "closed" | null>(null);
+  const open = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
+  const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
   return (
     <aside className="rail">
       <RailBrand href="/" />
       <div className="rail-sections">
-        <Section id="projects" title="Projects" open={open === "projects"} onOpen={setChosen}>
+        <Section id="projects" title="Projects" open={open === "projects"} onToggle={toggle}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/plan">
               + New project
@@ -199,7 +204,7 @@ export function Sidebar({
             })}
           </nav>
         </Section>
-        <Section id="workflows" title="Workflows" open={open === "workflows"} onOpen={setChosen}>
+        <Section id="workflows" title="Workflows" open={open === "workflows"} onToggle={toggle}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/runs/new">
               + New workflow
@@ -256,7 +261,7 @@ export function Sidebar({
             ))}
           </nav>
         </Section>
-        <Section id="chats" title="Chats" open={open === "chats"} onOpen={setChosen}>
+        <Section id="chats" title="Chats" open={open === "chats"} onToggle={toggle}>
           <ThreadListPrimitive.Root className="rail-list">
             <div className="rail-nav">
               {linkChats ? (
