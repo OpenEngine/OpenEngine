@@ -135,19 +135,25 @@ export function Sidebar({
 }: {
   projects?: ApiProject[];
   runs: ApiWorkflowRun[];
-  /** Which section the page on screen belongs to. */
+  /** Which section the page on screen belongs to, followed until the reader
+   *  opens one themselves. */
   initialSection: RailSection;
   linkChats?: boolean;
   activeRunId?: string;
   activeConversationUrl?: string;
   activeView?: "runs" | "new";
 }) {
-  const [open, setOpen] = useState<RailSection>(initialSection);
+  // Where the page belongs is not always known at the first paint: a
+  // conversation is only recognized as a project's once the projects load. The
+  // rail follows that until the reader opens a section themselves, after which
+  // it is their choice on screen and nothing else moves it.
+  const [chosen, setChosen] = useState<RailSection | null>(null);
+  const open = chosen ?? initialSection;
   return (
     <aside className="rail">
       <RailBrand href="/" />
       <div className="rail-sections">
-        <Section id="projects" title="Projects" open={open === "projects"} onOpen={setOpen}>
+        <Section id="projects" title="Projects" open={open === "projects"} onOpen={setChosen}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/plan">
               New Project
@@ -158,32 +164,42 @@ export function Sidebar({
               is still listed -- it says the project exists -- but there is
               nowhere to send a click, so it stays the plain row it reads as. */}
           <nav className="rail-scroll" aria-label="Projects">
-            {projects.map((project) => (
-              <div
-                className="rail-item"
-                data-active={
-                  activeConversationUrl === project.conversationUrl || undefined
-                }
-                key={project.projectId}
-              >
-                {project.conversationUrl ? (
-                  <a className="rail-item-trigger" href={project.conversationUrl}>
-                    <span className="rail-item-title" data-clamp="">
-                      {project.name}
-                    </span>
-                  </a>
-                ) : (
-                  <div className="rail-item-trigger">
-                    <span className="rail-item-title" data-clamp="">
-                      {project.name}
-                    </span>
-                  </div>
-                )}
-              </div>
-            ))}
+            {projects.map((project) => {
+              // A row with nowhere to go is never the page you are reading. Both
+              // sides are optional here, so comparing them alone would call two
+              // absent URLs a match and mark every such row on every page.
+              const active =
+                project.conversationUrl !== undefined &&
+                project.conversationUrl === activeConversationUrl;
+              return (
+                <div
+                  className="rail-item"
+                  data-active={active || undefined}
+                  key={project.projectId}
+                >
+                  {project.conversationUrl ? (
+                    <a
+                      aria-current={active ? "page" : undefined}
+                      className="rail-item-trigger"
+                      href={project.conversationUrl}
+                    >
+                      <span className="rail-item-title" data-clamp="">
+                        {project.name}
+                      </span>
+                    </a>
+                  ) : (
+                    <div className="rail-item-trigger">
+                      <span className="rail-item-title" data-clamp="">
+                        {project.name}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </nav>
         </Section>
-        <Section id="workflows" title="Workflows" open={open === "workflows"} onOpen={setOpen}>
+        <Section id="workflows" title="Workflows" open={open === "workflows"} onOpen={setChosen}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/runs/new">
               + New workflow
@@ -240,7 +256,7 @@ export function Sidebar({
             ))}
           </nav>
         </Section>
-        <Section id="chats" title="Chats" open={open === "chats"} onOpen={setOpen}>
+        <Section id="chats" title="Chats" open={open === "chats"} onOpen={setChosen}>
           <ThreadListPrimitive.Root className="rail-list">
             <div className="rail-nav">
               {linkChats ? (

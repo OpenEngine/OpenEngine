@@ -289,10 +289,12 @@ function currentRoute(): Route {
 }
 
 /** Which section of the rail the page on screen came from, so the rail opens
- *  showing where you are. A workflow's own conversation belongs to its run. */
-function sectionFor(route: Route): RailSection {
+ *  showing where you are. A workflow's own conversation belongs to its run, and
+ *  a plan belongs to the project it was named after -- which is what
+ *  `projectPage` settles, since a plan's URL is an ordinary chat's. */
+function sectionFor(route: Route, projectPage: boolean): RailSection {
   if (route.kind === "chat")
-    return route.runId ? "workflows" : route.plan ? "projects" : "chats";
+    return route.runId ? "workflows" : route.plan || projectPage ? "projects" : "chats";
   return "workflows";
 }
 
@@ -375,6 +377,13 @@ function App() {
   // chat" there has to leave rather than quietly start a second planner.
   const standaloneChat = chat && !route.runId && !plan;
   const activeRunId = route.kind === "run" || route.kind === "chat" ? route.runId : undefined;
+  // The conversation on screen, and the only thing that says whether it is a
+  // project's: a plan's URL is an ordinary chat's, so the projects list is what
+  // tells them apart. It arrives after the first paint, and the rail follows.
+  const conversationUrl = chat ? window.location.pathname.replace(/\/$/, "") : undefined;
+  const projectPage =
+    conversationUrl !== undefined &&
+    projects.some((project) => project.conversationUrl === conversationUrl);
   return (
     <EngineRuntimeProvider
       defaults={{ agentId, runner, createProject: plan }}
@@ -390,16 +399,14 @@ function App() {
         <Sidebar
           projects={projects}
           runs={runs}
-          initialSection={sectionFor(route)}
+          initialSection={sectionFor(route, projectPage)}
           linkChats={!standaloneChat}
           activeRunId={activeRunId}
           // Every conversation page, not just a workflow's: a project is one of
           // these too, and the rail marks the one you are in. A standalone
           // chat's path can equal no step's conversation URL, so widening this
           // leaves the workflow rows reading exactly as they did.
-          activeConversationUrl={
-            chat ? window.location.pathname.replace(/\/$/, "") : undefined
-          }
+          activeConversationUrl={conversationUrl}
           activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
         />
         {route.kind === "runs" ? (

@@ -1120,9 +1120,14 @@ def create_app(
         projects = await session.state_store.list_projects()
         # A project is reached through the planning conversation it was named
         # after, which is the only page it has. Resolved against the threads
-        # that exist rather than spelled from the id alone: a project recorded
-        # some other way has the same shape and no conversation to open.
-        conversations = {thread.instance_id for thread in await service.list()}
+        # that can be opened rather than spelled from the id alone: a project
+        # recorded some other way has the same shape and no conversation, and
+        # an archived plan's page is a blank new chat rather than the plan.
+        conversations = {
+            thread.instance_id
+            for thread in await service.list()
+            if not thread.archived
+        }
         return JSONResponse(
             {
                 "projects": [
@@ -1139,7 +1144,8 @@ def create_app(
             return _error(str(error), 400)
         project = Project(ProjectId(f"project-{uuid4().hex[:12]}"), name[:80])
         await session.state_store.save_project(project)
-        return JSONResponse(_project_json(project), status_code=201)
+        # Recorded rather than planned, so it owns no conversation to link to.
+        return JSONResponse(_project_json(project, ()), status_code=201)
 
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
@@ -1647,12 +1653,18 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
 
 
 def _project_json(
-    project: Project, conversations: Container[AgentInstanceId] = ()
+    project: Project, conversations: Container[AgentInstanceId]
 ) -> dict[str, str]:
+    """Render a project, linked to its plan when that conversation is open.
+
+    `conversations` is required rather than defaulted: a caller that forgot it
+    would quietly emit the linkless rows this link exists to replace.
+    """
+
     result = {"projectId": str(project.project_id), "name": project.name}
     instance_id = instance_id_for_project(project.project_id)
     if instance_id is not None and instance_id in conversations:
-        result["conversationUrl"] = f"/conversations/{quote(str(instance_id))}"
+        result["conversationUrl"] = f"/conversations/{quote(str(instance_id), safe='')}"
     return result
 
 

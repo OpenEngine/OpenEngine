@@ -3225,6 +3225,45 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
     ]
 
 
+def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
+    """Archiving is one click away in the rail, and the archived conversation
+    opens as a blank new chat. The project is still listed -- it exists -- but
+    without a link, which is the row a project with no conversation already
+    gets. Restoring the chat gives the link back."""
+
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test", "createProject": True},
+            )
+            thread_id = created.json()["id"]
+            await client.post(f"/api/threads/{thread_id}/archive")
+            archived = await client.get("/api/projects")
+            await client.post(f"/api/threads/{thread_id}/unarchive")
+            restored = await client.get("/api/projects")
+            return thread_id, archived, restored
+
+    thread_id, archived, restored = asyncio.run(scenario())
+
+    assert archived.json()["projects"] == [
+        {"projectId": f"project-{thread_id}", "name": "New project"}
+    ]
+    assert restored.json()["projects"] == [
+        {
+            "projectId": f"project-{thread_id}",
+            "name": "New project",
+            "conversationUrl": f"/conversations/{thread_id}",
+        }
+    ]
+
+
 def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn() -> None:
     """Naming happens before the message it names is sent, so it cannot fail it.
 
