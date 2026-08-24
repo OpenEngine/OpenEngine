@@ -37,7 +37,7 @@ from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 from engine.ports import AgentRunner
 from engine.runtime import (
-    PLANNER,
+    PLANNING_TOOL_NAMES,
     AgentSession,
     Capabilities,
     EngineConfig,
@@ -287,7 +287,7 @@ def build_session(
         runners=runners,
         workspace_repository=repository,
         read_only_runners=read_only_runners,
-        mcp_brokers={PLANNER.agent_id: PlanningMcpBroker},
+        mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
     )
 
 

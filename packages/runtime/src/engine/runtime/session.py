@@ -55,7 +55,7 @@ class AgentMcpBroker(Protocol):
     async def __aexit__(self, *_exc: object) -> None: ...
 
 
-McpBrokerFactory = Callable[[StateStore], AgentMcpBroker]
+McpBrokerFactory = Callable[[StateStore, Sequence[str]], AgentMcpBroker]
 
 #: What the single wired runner is called when the composition root does not
 #: name several.
@@ -133,7 +133,7 @@ class AgentSession:
         workspace_repository: str | None = None,
         workspace_base_ref: str = "HEAD",
         read_only_runners: Mapping[str, AgentRunner] | None = None,
-        mcp_brokers: Mapping[AgentId, McpBrokerFactory] | None = None,
+        mcp_brokers: Mapping[str, McpBrokerFactory] | None = None,
     ) -> None:
         """`runners` lets one process offer a choice of agent runner.
 
@@ -151,6 +151,11 @@ class AgentSession:
         only reads is answered by. Composed without it, such a profile runs on
         the runner that was picked and only its instructions hold it -- so a
         process that wants the restriction wires both maps.
+
+        `mcp_brokers` maps capability names to broker factories. Every grant is
+        resolved before the turn starts, and the capabilities sharing one
+        broker are passed to its factory so the stdio server can expose only
+        that profile's granted subset.
         """
         self._capabilities = capabilities
         self._profiles = profiles
@@ -376,8 +381,7 @@ class AgentSession:
             if not isinstance(selected_runner, InteractiveAgentRunner):
                 raise ApprovalsUnsupportedError(runner_name)
             interactive = selected_runner
-        mcp_factory = self._mcp_brokers.get(profile.agent_id)
-        tools = () if mcp_factory is not None else self._tools_for(profile)
+        tools, mcp_factory, mcp_capabilities = self._tools_for(profile)
 
         question = Message.user(text)
         await store.append_messages(instance_id, (question,))
@@ -404,7 +408,7 @@ class AgentSession:
 
         try:
             if mcp_factory is not None:
-                async with mcp_factory(store) as broker:
+                async with mcp_factory(store, mcp_capabilities) as broker:
                     turn = await self._run_with_mcp(
                         selected_runner,
                         agent_run,
@@ -556,11 +560,38 @@ class AgentSession:
             return self._read_only_runners[runner_name]
         return self._runners[runner_name]
 
-    def _tools_for(self, profile: AgentProfile) -> tuple[ToolSpec, ...]:
-        missing = [grant for grant in profile.capabilities if grant not in self._tools]
+    def _tools_for(
+        self, profile: AgentProfile
+    ) -> tuple[tuple[ToolSpec, ...], McpBrokerFactory | None, tuple[str, ...]]:
+        missing = [
+            grant
+            for grant in profile.capabilities
+            if grant not in self._tools and grant not in self._mcp_brokers
+        ]
         if missing:
             raise UnknownToolGrantError(profile.agent_id, missing)
-        return tuple(self._tools[grant] for grant in profile.capabilities)
+        tools = tuple(
+            self._tools[grant]
+            for grant in profile.capabilities
+            if grant in self._tools
+        )
+        mcp_capabilities = tuple(
+            grant
+            for grant in profile.capabilities
+            if grant in self._mcp_brokers
+        )
+        factories = tuple(
+            dict.fromkeys(self._mcp_brokers[grant] for grant in mcp_capabilities)
+        )
+        if len(factories) > 1:
+            raise RuntimeError(
+                f"profile {profile.agent_id!r} grants tools from multiple MCP brokers"
+            )
+        if tools and factories:
+            raise RuntimeError(
+                f"profile {profile.agent_id!r} mixes MCP and direct tool grants"
+            )
+        return tools, factories[0] if factories else None, mcp_capabilities
 
 
 def _interrupted_transcript(partial: Sequence[Message]) -> tuple[Message, ...]:

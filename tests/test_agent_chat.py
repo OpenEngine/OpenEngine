@@ -630,6 +630,7 @@ def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> N
     store = InMemoryStateStore()
     planner = AgentId("planner")
     seen: list[McpServerConfig] = []
+    granted: list[tuple[str, ...]] = []
 
     class Broker:
         config = McpServerConfig("planning", "python", ("planning-server",))
@@ -662,13 +663,51 @@ def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> N
                 planner, "Plan it.", capabilities=("add_milestone",)
             )
         },
-        mcp_brokers={planner: lambda _store: Broker()},
+        mcp_brokers={
+            "add_milestone": lambda _store, capabilities: (
+                granted.append(tuple(capabilities)) or Broker()
+            )
+        },
     )
     instance = asyncio.run(session.start(planner))
 
     asyncio.run(session.say(instance.instance_id, "Add the foundation."))
 
     assert seen == [Broker.config]
+    assert granted == [("add_milestone",)]
+
+
+def test_an_unknown_mcp_grant_is_rejected_before_the_runner_starts() -> None:
+    store = InMemoryStateStore()
+    planner = AgentId("planner")
+    runner = ScriptedRunner()
+
+    def broker_must_not_start(_store, _capabilities):
+        raise AssertionError("an unresolved grant must fail before broker creation")
+
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=runner,
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles={
+            planner: AgentProfile(
+                planner, "Plan it.", capabilities=("add_milestone_typo",)
+            )
+        },
+        mcp_brokers={"add_milestone": broker_must_not_start},
+    )
+    instance = asyncio.run(session.start(planner))
+
+    with pytest.raises(UnknownToolGrantError) as raised:
+        asyncio.run(session.say(instance.instance_id, "Add the foundation."))
+
+    assert raised.value.missing == ("add_milestone_typo",)
+    assert runner.seen == []
 
 
 # --- choosing a runner -------------------------------------------------------

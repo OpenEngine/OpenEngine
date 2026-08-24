@@ -18,6 +18,12 @@ from engine.ports import McpServerConfig, StateStore
 McpRequestId = str | int
 _PROTOCOL_VERSION = "2025-06-18"
 _SERVER_NAME = "planning"
+PLANNING_TOOL_NAMES = (
+    "add_milestone",
+    "list_milestones",
+    "update_milestone",
+    "delete_milestone",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,8 +189,9 @@ class PlanningTools:
 class PlanningMcpBroker:
     """Expose one process-local planning tool set to a provider CLI."""
 
-    def __init__(self, store: StateStore) -> None:
+    def __init__(self, store: StateStore, capabilities: Sequence[str]) -> None:
         self._tools = PlanningTools(store)
+        self._capabilities = _validated_capabilities(capabilities)
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
 
@@ -216,6 +223,11 @@ class PlanningMcpBroker:
                 str(port),
                 "--token",
                 self._token,
+                *(
+                    argument
+                    for capability in self._capabilities
+                    for argument in ("--capability", capability)
+                ),
             ),
         )
 
@@ -239,6 +251,8 @@ class PlanningMcpBroker:
             return {"ok": False, "error": "invalid planning credential"}
         name = request.get("name")
         arguments = request.get("arguments")
+        if name not in self._capabilities:
+            return {"ok": False, "error": f"planning tool is not granted: {name}"}
         if not isinstance(arguments, dict):
             return {"ok": False, "error": f"{name} arguments must be an object"}
         try:
@@ -301,10 +315,10 @@ class PlanningMcpBroker:
         raise ValueError(f"unknown planning tool: {name}")
 
 
-def _tool_specs() -> list[dict[str, object]]:
+def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
     identifier = {"type": "string", "minLength": 1}
     dependencies = {"type": "array", "items": identifier, "default": []}
-    return [
+    specs = [
         {
             "name": "add_milestone",
             "description": "Add a milestone to a project plan.",
@@ -356,6 +370,8 @@ def _tool_specs() -> list[dict[str, object]]:
             },
         },
     ]
+    granted = set(capabilities)
+    return [spec for spec in specs if spec["name"] in granted]
 
 
 async def _forward_call(
@@ -388,7 +404,11 @@ async def _forward_call(
 
 
 async def _mcp_response(
-    host: str, port: int, token: str, request: object
+    host: str,
+    port: int,
+    token: str,
+    capabilities: Sequence[str],
+    request: object,
 ) -> dict[str, object] | None:
     if not isinstance(request, dict):
         return _rpc_error(None, -32600, "Invalid Request")
@@ -414,7 +434,7 @@ async def _mcp_response(
     if method == "ping":
         return _rpc_result(request_id, {})
     if method == "tools/list":
-        return _rpc_result(request_id, {"tools": _tool_specs()})
+        return _rpc_result(request_id, {"tools": _tool_specs(capabilities)})
     if method != "tools/call":
         return _rpc_error(request_id, -32601, "Method not found")
     if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
@@ -447,10 +467,14 @@ async def _mcp_response(
     )
 
 
-async def _serve_stdio(host: str, port: int, token: str) -> None:
+async def _serve_stdio(
+    host: str, port: int, token: str, capabilities: Sequence[str]
+) -> None:
     while line := await asyncio.to_thread(sys.stdin.buffer.readline):
         try:
-            response = await _mcp_response(host, port, token, json.loads(line))
+            response = await _mcp_response(
+                host, port, token, capabilities, json.loads(line)
+            )
             if response is None:
                 continue
         except Exception as error:
@@ -518,6 +542,14 @@ def _unique_dependencies(
     return tuple(dict.fromkeys(dependencies))
 
 
+def _validated_capabilities(capabilities: Sequence[str]) -> tuple[str, ...]:
+    missing = [name for name in capabilities if name not in PLANNING_TOOL_NAMES]
+    if missing:
+        raise ValueError(f"unknown planning capabilities: {missing}")
+    granted = set(capabilities)
+    return tuple(name for name in PLANNING_TOOL_NAMES if name in granted)
+
+
 def _dependency_order(milestones: Sequence[Milestone]) -> tuple[Milestone, ...]:
     by_id = {item.milestone_id: item for item in milestones}
     ordered: list[Milestone] = []
@@ -552,8 +584,21 @@ def main() -> None:
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--token", required=True)
+    parser.add_argument("--capability", action="append", default=[])
     arguments = parser.parse_args()
-    asyncio.run(_serve_stdio(arguments.host, arguments.port, arguments.token))
+    asyncio.run(
+        _serve_stdio(
+            arguments.host,
+            arguments.port,
+            arguments.token,
+            _validated_capabilities(arguments.capability),
+        )
+    )
 
 
-__all__ = ["PlanningMcpBroker", "PlanningTools", "ProjectPlan"]
+__all__ = [
+    "PLANNING_TOOL_NAMES",
+    "PlanningMcpBroker",
+    "PlanningTools",
+    "ProjectPlan",
+]

@@ -1,17 +1,22 @@
 """Planner milestone tools, their data objects, and MCP presentation."""
 
 import asyncio
+import json
 
 import pytest
 
 from engine.adapters.state_store.memory import InMemoryStateStore
-from engine.domain import MilestoneId, Project, ProjectId
+from engine.domain import AgentId, AgentProfile, Message, MilestoneId, Project, ProjectId
+from engine.ports import AgentTurn
+from engine.runtime import AgentSession, Capabilities
 from engine.runtime.planning_tools import (
+    PLANNING_TOOL_NAMES,
     PlanningMcpBroker,
     PlanningTools,
     ProjectPlan,
     _mcp_response,
 )
+from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 
 def test_planning_tools_create_present_update_and_delete_milestone_objects() -> None:
@@ -111,12 +116,13 @@ def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> N
         store = InMemoryStateStore()
         project = Project(ProjectId("project-engine"), "OpenEngine")
         await store.save_project(project)
-        broker = PlanningMcpBroker(store)
+        broker = PlanningMcpBroker(store, PLANNING_TOOL_NAMES)
         async with broker:
             listed = await _mcp_response(
                 "127.0.0.1",
                 1,
                 "unused",
+                PLANNING_TOOL_NAMES,
                 {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"},
             )
             config = broker.config
@@ -126,6 +132,7 @@ def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> N
                 "127.0.0.1",
                 port,
                 token,
+                PLANNING_TOOL_NAMES,
                 {
                     "jsonrpc": "2.0",
                     "id": "add-1",
@@ -154,5 +161,142 @@ def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> N
         assert result["content"][0]["text"].startswith("Added milestone")
         assert result["structuredContent"]["name"] == "Launch"
         assert result["structuredContent"]["dependencies"] == []
+
+    asyncio.run(scenario())
+
+
+def test_planner_turn_launches_scoped_stdio_mcp_and_forwards_a_call() -> None:
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        project = Project(ProjectId("project-engine"), "OpenEngine")
+        await store.save_project(project)
+        advertised: list[str] = []
+
+        class StdioMcpRunner:
+            permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+            async def run_turn(
+                self, agent_run_id, profile, messages, tools=(), workspace_id=None
+            ):
+                raise AssertionError("the MCP runner method should be used")
+
+            async def cancel(self, agent_run_id) -> None:
+                pass
+
+            async def run_turn_with_mcp(
+                self,
+                agent_run_id,
+                profile,
+                messages,
+                mcp_server,
+                workspace_id=None,
+            ):
+                process = await asyncio.create_subprocess_exec(
+                    mcp_server.command,
+                    *mcp_server.args,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                assert process.stdin is not None
+                assert process.stdout is not None
+                assert process.stderr is not None
+
+                async def exchange(request: dict[str, object]) -> dict[str, object]:
+                    process.stdin.write(
+                        json.dumps(request, separators=(",", ":")).encode() + b"\n"
+                    )
+                    await process.stdin.drain()
+                    line = await asyncio.wait_for(process.stdout.readline(), timeout=5)
+                    assert line, "the stdio MCP server exited without a response"
+                    return json.loads(line)
+
+                try:
+                    initialized = await exchange(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "initialize-1",
+                            "method": "initialize",
+                            "params": {
+                                "protocolVersion": "2025-06-18",
+                                "capabilities": {},
+                                "clientInfo": {"name": "test-runner", "version": "1"},
+                            },
+                        }
+                    )
+                    assert initialized["result"]["serverInfo"]["name"] == (
+                        "engine-planning"
+                    )
+                    listed = await exchange(
+                        {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"}
+                    )
+                    advertised.extend(
+                        tool["name"] for tool in listed["result"]["tools"]
+                    )
+                    denied = await exchange(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "delete-1",
+                            "method": "tools/call",
+                            "params": {
+                                "name": "delete_milestone",
+                                "arguments": {"milestone_id": "milestone-anything"},
+                            },
+                        }
+                    )
+                    assert denied["result"]["isError"] is True
+                    added = await exchange(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "add-1",
+                            "method": "tools/call",
+                            "params": {
+                                "name": "add_milestone",
+                                "arguments": {
+                                    "project_id": project.project_id,
+                                    "name": "Foundation",
+                                    "description": "Build the planning model.",
+                                },
+                            },
+                        }
+                    )
+                    assert added["result"]["structuredContent"]["name"] == (
+                        "Foundation"
+                    )
+                finally:
+                    process.stdin.close()
+                    await process.stdin.wait_closed()
+                    return_code = await asyncio.wait_for(process.wait(), timeout=5)
+                    stderr = (await process.stderr.read()).decode()
+                    assert return_code == 0, stderr
+                return AgentTurn(Message.assistant("Foundation milestone added."))
+
+        planner = AgentId("planner")
+        session = AgentSession(
+            Capabilities(
+                workflow_runtime=None,
+                source_control=None,
+                agent_runner=StdioMcpRunner(),
+                communications=None,
+                workspace_provider=None,
+                state_store=store,
+            ),
+            profiles={
+                planner: AgentProfile(
+                    planner,
+                    "Plan it.",
+                    capabilities=("add_milestone",),
+                )
+            },
+            mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
+        )
+        instance = await session.start(planner)
+
+        turn = await session.say(instance.instance_id, "Add the foundation.")
+
+        assert turn.message.content == "Foundation milestone added."
+        assert advertised == ["add_milestone"]
+        milestones = await store.list_milestones(project.project_id)
+        assert [milestone.name for milestone in milestones] == ["Foundation"]
 
     asyncio.run(scenario())
