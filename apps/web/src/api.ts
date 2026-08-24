@@ -28,7 +28,7 @@ export type EngineConfig = {
   agents: AgentOption[];
   runners: RunnerOption[];
   defaultAgent: string;
-  /** The agent the Plan button talks to, empty when none is composed. */
+  /** The agent the New Project button talks to, empty when none is composed. */
   planAgent: string;
   defaultRunner: string;
   workflowRunners: string[];
@@ -61,6 +61,19 @@ export type ApiThread = {
   editable?: boolean;
   autoApprove?: boolean;
 };
+
+export type ApiProject = {
+  projectId: string;
+  name: string;
+};
+
+export function createProject(name: string, signal?: AbortSignal): Promise<ApiProject> {
+  return api<ApiProject>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+    signal,
+  });
+}
 
 export type ApiRunStep = {
   stepId: string;

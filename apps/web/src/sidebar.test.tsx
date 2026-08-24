@@ -141,22 +141,26 @@ describe("Sidebar", () => {
       "/runs/new",
     );
     expect(within(body("Chats")).getByRole("button", { name: "+ New chat" })).toBeInTheDocument();
-    expect(within(body("Projects")).getByRole("link", { name: "Plan" })).toHaveAttribute(
+    expect(within(body("Projects")).getByRole("link", { name: "New Project" })).toHaveAttribute(
       "href",
       "/plan",
     );
-    expect(within(body("Projects")).getByText(/in progress/i)).toBeInTheDocument();
   });
 
-  /** Planning is a conversation, and the button that starts one leads its
-   *  section like the other two -- in amber rather than the flame accent, so a
-   *  plan does not read as a third of the same control. */
-  it("leads the projects section with the amber plan button", () => {
-    render(<Sidebar runs={[run]} initialSection="projects" />);
+  it("matches the new workflow button and lists projects by generated name", () => {
+    render(
+      <Sidebar
+        projects={[{ projectId: "project-1", name: "Engine roadmap" }]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
 
-    const plan = within(body("Projects")).getByRole("link", { name: "Plan" });
-    expect(plan).toHaveClass("rail-button", "rail-button-plan");
-    expect(plan).not.toHaveClass("rail-button-primary");
+    const newProject = within(body("Projects")).getByRole("link", {
+      name: "New Project",
+    });
+    expect(newProject).toHaveClass("rail-button", "rail-button-primary");
+    expect(within(body("Projects")).getByText("Engine roadmap")).toBeInTheDocument();
   });
 
   it("lists runs with their conversations and marks the one on screen", () => {

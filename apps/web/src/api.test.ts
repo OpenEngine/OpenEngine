@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   answerQuestion,
   api,
+  createProject,
   messageText,
   newChatAgent,
   setThreadAutoApprove,
@@ -108,6 +109,27 @@ describe("setThreadAutoApprove", () => {
     expect(fetch).toHaveBeenCalledWith(
       "/api/threads/thread-1",
       expect.objectContaining({ method: "PATCH", body: '{"autoApprove":true}' }),
+    );
+  });
+});
+
+describe("createProject", () => {
+  it("creates a project with the generated name", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ projectId: "project-1", name: "Engine roadmap" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(createProject("Engine roadmap")).resolves.toEqual({
+      projectId: "project-1",
+      name: "Engine roadmap",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects",
+      expect.objectContaining({ method: "POST", body: '{"name":"Engine roadmap"}' }),
     );
   });
 });

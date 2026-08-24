@@ -36,6 +36,8 @@ import { publishApproval } from "./approvals";
 type NewChatDefaults = {
   agentId: string;
   runner: string;
+  /** The first message starts a project named by the same agent-generated title. */
+  createProject?: boolean;
 };
 
 type ThreadInitializer = {
@@ -365,13 +367,14 @@ function EngineRuntime({
           // named is still a chat to send to. Anything but an abort is
           // swallowed: the alternative is reporting "the run could not be
           // started" for a run nothing has tried to start yet.
-          await api(`/api/threads/${threadId}/title`, {
+          await api<{ title: string }>(`/api/threads/${threadId}/title`, {
             method: "POST",
             body: JSON.stringify({ text }),
             signal: abortSignal,
-          }).catch((failure: unknown) => {
-            if (failure instanceof Error && failure.name === "AbortError") throw failure;
-          });
+          })
+            .catch((failure: unknown) => {
+              if (failure instanceof Error && failure.name === "AbortError") throw failure;
+            });
           await reloadThreadsRef.current?.();
 
           response = await fetch(`/api/threads/${threadId}/runs`, {
