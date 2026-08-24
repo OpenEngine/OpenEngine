@@ -348,7 +348,7 @@ class ThreadService:
                 if instance.runner in self.session.runners
                 else self.session.default_runner
             ),
-            title=instance.title,
+            title=await self._instance_title(instance),
             archived=instance.archived,
             workflow_run_id=instance.workflow_run_id,
             workflow_step_id=instance.workflow_step_id,
@@ -766,7 +766,7 @@ class ThreadService:
                         if instance.runner in self.session.runners
                         else self.session.default_runner
                     ),
-                    title=instance.title,
+                    title=await self._instance_title(instance),
                     archived=instance.archived,
                     workflow_run_id=instance.workflow_run_id,
                     workflow_step_id=instance.workflow_step_id,
@@ -791,6 +791,15 @@ class ThreadService:
         if definition is None and self._workflow_catalog is not None:
             definition = self._workflow_catalog.get(state.workflow_id)
         return _workflow_step_editable(definition, instance.workflow_step_id)
+
+    async def _instance_title(self, instance: AgentInstance) -> str:
+        """Name workflow conversations after their owning run."""
+        if instance.workflow_run_id is None:
+            return instance.title
+        state = await self.session.state_store.load(instance.workflow_run_id)
+        if state is None:
+            return instance.title
+        return state.name or state.prompt or str(state.run_id)
 
 
 def create_app(

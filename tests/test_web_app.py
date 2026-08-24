@@ -1044,9 +1044,23 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
                 )
                 for instance in instances
             }
-            return created, reopened, listed, await store.history(run_id), conversations
+            threads = {
+                step["stepId"]: (
+                    await client.get(f"/api/threads/{step['agentInstanceId']}")
+                ).json()
+                for step in reopened.json()["steps"]
+                if step["agentInstanceId"]
+            }
+            return (
+                created,
+                reopened,
+                listed,
+                await store.history(run_id),
+                conversations,
+                threads,
+            )
 
-    created, reopened, listed, history, conversations = asyncio.run(scenario())
+    created, reopened, listed, history, conversations, threads = asyncio.run(scenario())
     body = reopened.json()
 
     assert created.status_code == 201
@@ -1087,6 +1101,7 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     # Two conversations, kept apart: the review is its own durable instance.
     assert set(conversations) == {IMPLEMENTATION_STEP, REVIEW_STEP}
     assert all(conversation.messages for conversation in conversations.values())
+    assert {thread["title"] for thread in threads.values()} == {"Named workflow"}
     assert "Name this workflow" in implementer.seen[0][-1].content
     assert "`complete_step`" in implementer.seen[1][0].content
     assert "JSON" not in implementer.seen[1][0].content
