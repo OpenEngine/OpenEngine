@@ -16,11 +16,15 @@ from engine.domain.ids import (
     AgentRunId,
     ApprovalId,
     ConversationId,
+    MilestoneId,
+    ProjectId,
     RunId,
     StepId,
     TaskId,
+    WorkstreamId,
     WorkspaceId,
 )
+from engine.domain.planning import Milestone, Project, Workstream
 from engine.domain.state import RunState
 
 
@@ -40,7 +44,9 @@ class PostgresStateStore:
     async def save(self, state: RunState) -> None:
         raise NotImplementedError("Postgres writes land with the state-store ticket")
 
-    async def list_runs(self) -> Sequence[RunState]:
+    async def list_runs(
+        self, workstream_id: WorkstreamId | None = None
+    ) -> Sequence[RunState]:
         raise NotImplementedError("Postgres reads land with the state-store ticket")
 
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
@@ -48,6 +54,37 @@ class PostgresStateStore:
 
     async def history(self, run_id: RunId) -> Sequence[Event]:
         raise NotImplementedError("History reads land with the state-store ticket")
+
+    async def save_project(self, project: Project) -> None:
+        raise NotImplementedError("Project writes land with the state-store ticket")
+
+    async def load_project(self, project_id: ProjectId) -> Project | None:
+        raise NotImplementedError("Project reads land with the state-store ticket")
+
+    async def list_projects(self) -> Sequence[Project]:
+        raise NotImplementedError("Project reads land with the state-store ticket")
+
+    async def save_milestone(self, milestone: Milestone) -> None:
+        raise NotImplementedError("Milestone writes land with the state-store ticket")
+
+    async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
+        raise NotImplementedError("Milestone reads land with the state-store ticket")
+
+    async def list_milestones(
+        self, project_id: ProjectId | None = None
+    ) -> Sequence[Milestone]:
+        raise NotImplementedError("Milestone reads land with the state-store ticket")
+
+    async def save_workstream(self, workstream: Workstream) -> None:
+        raise NotImplementedError("Workstream writes land with the state-store ticket")
+
+    async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
+        raise NotImplementedError("Workstream reads land with the state-store ticket")
+
+    async def list_workstreams(
+        self, milestone_id: MilestoneId | None = None
+    ) -> Sequence[Workstream]:
+        raise NotImplementedError("Workstream reads land with the state-store ticket")
 
     async def create_instance(
         self,

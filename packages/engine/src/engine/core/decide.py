@@ -13,16 +13,11 @@ Ticket 1 ships the signature and one representative branch; the full state
 machine follows in a later ticket.
 """
 
-from collections.abc import Callable
-
-from engine.core.workflows.implementation_review import (
-    WORKFLOW_ID,
-    decide_implementation_review,
-)
+from engine.core.workflow_interpreter import decide_workflow
 from engine.domain.commands import Command
 from engine.domain.events import Event, RunRequested, StepReactivated
-from engine.domain.ids import WorkflowId
 from engine.domain.state import RunState
+from engine.domain.workflow import WorkflowDefinition
 
 
 class Decision(tuple[RunState, tuple[Command, ...]]):
@@ -47,14 +42,11 @@ class Decision(tuple[RunState, tuple[Command, ...]]):
         return self[1]
 
 
-WorkflowDecider = Callable[[RunState, Event], tuple[RunState, tuple[Command, ...]]]
-
-WORKFLOW_DECIDERS: dict[WorkflowId, WorkflowDecider] = {
-    WORKFLOW_ID: decide_implementation_review,
-}
-
-
-def decide(state: RunState, event: Event) -> Decision:
+def decide(
+    state: RunState,
+    event: Event,
+    workflow: WorkflowDefinition | None = None,
+) -> Decision:
     """Fold one event into the run, returning the next state and any commands.
 
     Total by construction: an unrecognised event is a no-op rather than an
@@ -68,15 +60,16 @@ def decide(state: RunState, event: Event) -> Decision:
     if event.run_id != state.run_id:
         return Decision(state, ())
 
-    workflow_id = (
+    definition = workflow or state.workflow_definition
+    if definition is None:
+        raise ValueError(f"workflow definition required for run {state.run_id}")
+    expected_workflow_id = (
         event.workflow_id if isinstance(event, RunRequested) else state.workflow_id
     )
-    decider = WORKFLOW_DECIDERS.get(workflow_id)
-    if decider is None:
+    if definition.workflow_id != expected_workflow_id:
         return Decision(state, ())
-
-    next_state, commands = decider(state, event)
+    next_state, commands = decide_workflow(definition, state, event)
     return Decision(next_state, commands)
 
 
-__all__ = ["Decision", "WORKFLOW_DECIDERS", "decide"]
+__all__ = ["Decision", "decide"]

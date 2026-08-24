@@ -30,12 +30,16 @@ from engine.domain.ids import (
     ApprovalId,
     ConversationId,
     MessageId,
+    MilestoneId,
+    ProjectId,
     RunId,
     SessionGrantId,
     StepId,
     TaskId,
+    WorkstreamId,
     WorkspaceId,
 )
+from engine.domain.planning import Milestone, Project, Workstream
 from engine.domain.state import RunState
 
 
@@ -52,6 +56,9 @@ class InMemoryStateStore:
         self._lock = Lock()
         self._states: dict[RunId, RunState] = {}
         self._events: dict[RunId, list[Event]] = {}
+        self._projects: dict[ProjectId, Project] = {}
+        self._milestones: dict[MilestoneId, Milestone] = {}
+        self._workstreams: dict[WorkstreamId, Workstream] = {}
         self._instances: dict[AgentInstanceId, AgentInstance] = {}
         self._conversations: dict[AgentInstanceId, Conversation] = {}
         self._agent_runs: dict[AgentRunId, AgentRun] = {}
@@ -67,11 +74,21 @@ class InMemoryStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock:
+            if (
+                state.workstream_id is not None
+                and state.workstream_id not in self._workstreams
+            ):
+                raise KeyError(f"no workstream {state.workstream_id!r}")
             self._states[state.run_id] = state
 
-    async def list_runs(self) -> Sequence[RunState]:
+    async def list_runs(
+        self, workstream_id: WorkstreamId | None = None
+    ) -> Sequence[RunState]:
         with self._lock:
-            return tuple(reversed(self._states.values()))
+            states = list(self._states.values())
+        if workstream_id is not None:
+            states = [state for state in states if state.workstream_id == workstream_id]
+        return tuple(reversed(states))
 
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         with self._lock:
@@ -80,6 +97,60 @@ class InMemoryStateStore:
     async def history(self, run_id: RunId) -> Sequence[Event]:
         with self._lock:
             return tuple(self._events.get(run_id, ()))
+
+    # --- planning hierarchy ---------------------------------------------
+
+    async def save_project(self, project: Project) -> None:
+        with self._lock:
+            self._projects[project.project_id] = project
+
+    async def load_project(self, project_id: ProjectId) -> Project | None:
+        with self._lock:
+            return self._projects.get(project_id)
+
+    async def list_projects(self) -> Sequence[Project]:
+        with self._lock:
+            return tuple(reversed(self._projects.values()))
+
+    async def save_milestone(self, milestone: Milestone) -> None:
+        with self._lock:
+            if milestone.project_id not in self._projects:
+                raise KeyError(f"no project {milestone.project_id!r}")
+            self._milestones[milestone.milestone_id] = milestone
+
+    async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
+        with self._lock:
+            return self._milestones.get(milestone_id)
+
+    async def list_milestones(
+        self, project_id: ProjectId | None = None
+    ) -> Sequence[Milestone]:
+        with self._lock:
+            milestones = list(self._milestones.values())
+        if project_id is not None:
+            milestones = [item for item in milestones if item.project_id == project_id]
+        return tuple(reversed(milestones))
+
+    async def save_workstream(self, workstream: Workstream) -> None:
+        with self._lock:
+            if workstream.milestone_id not in self._milestones:
+                raise KeyError(f"no milestone {workstream.milestone_id!r}")
+            self._workstreams[workstream.workstream_id] = workstream
+
+    async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
+        with self._lock:
+            return self._workstreams.get(workstream_id)
+
+    async def list_workstreams(
+        self, milestone_id: MilestoneId | None = None
+    ) -> Sequence[Workstream]:
+        with self._lock:
+            workstreams = list(self._workstreams.values())
+        if milestone_id is not None:
+            workstreams = [
+                item for item in workstreams if item.milestone_id == milestone_id
+            ]
+        return tuple(reversed(workstreams))
 
     # --- agent identity and conversation ---------------------------------
 

@@ -46,6 +46,7 @@ def test_instructions_require_a_valid_tool_call_without_a_json_fallback() -> Non
     instructions = step_result_instructions(STEP)
 
     assert "`complete_step`" in instructions
+    assert "`clarify`" in instructions
     assert "`fail_step`" in instructions
     assert "clarification or escalation tool" in instructions
     assert "revision" in instructions
@@ -56,6 +57,7 @@ def test_instructions_require_a_valid_tool_call_without_a_json_fallback() -> Non
     "tool_name",
     [
         "AskUserQuestion",
+        "mcp__workflow__clarify",
         "request_user_input",
         "functions.request_clarification",
         "mcp__workflow__request_human_review",

@@ -42,10 +42,18 @@ class ApprovalConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkflowsConfig:
+    """Where trusted repository-owned Python workflow definitions live."""
+
+    directory: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     """All configuration understood by this version of Engine."""
 
     approvals: ApprovalConfig = ApprovalConfig()
+    workflows: WorkflowsConfig = WorkflowsConfig()
     attribution: bool = True
 
 
@@ -55,6 +63,14 @@ class LoadedEngineConfig:
 
     config: EngineConfig = EngineConfig()
     path: Path | None = None
+
+    @property
+    def workflows_directory(self) -> Path | None:
+        configured = self.config.workflows.directory
+        if not configured:
+            return None
+        base = self.path.parent if self.path is not None else Path.cwd()
+        return _relative_to(Path(configured), base).resolve()
 
 
 def load_engine_config(
@@ -103,11 +119,10 @@ def load_engine_config(
 def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     """Validate a decoded TOML document and return immutable settings."""
 
-    _reject_unknown(document, {"attribution", "approvals"}, "configuration")
+    _reject_unknown(document, {"attribution", "approvals", "workflows"}, "configuration")
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
         raise EngineConfigError("attribution must be a boolean")
-
     approvals = _table(document.get("approvals", {}), "approvals")
     _reject_unknown(approvals, {"auto_approve", "allow", "bash"}, "approvals")
 
@@ -129,6 +144,14 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     bash = _table(approvals.get("bash", {}), "approvals.bash")
     _reject_unknown(bash, {"allow", "ask", "deny"}, "approvals.bash")
 
+    workflows = _table(document.get("workflows", {}), "workflows")
+    _reject_unknown(workflows, {"directory"}, "workflows")
+    workflow_directory = workflows.get("directory", "")
+    if not isinstance(workflow_directory, str):
+        raise EngineConfigError("workflows.directory must be a string")
+    if workflow_directory and not workflow_directory.strip():
+        raise EngineConfigError("workflows.directory must not be blank")
+
     return EngineConfig(
         attribution=attribution,
         approvals=ApprovalConfig(
@@ -139,7 +162,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                 ask=_patterns(bash.get("ask", ()), "approvals.bash.ask"),
                 deny=_patterns(bash.get("deny", ()), "approvals.bash.deny"),
             ),
-        )
+        ),
+        workflows=WorkflowsConfig(directory=workflow_directory),
     )
 
 
@@ -154,10 +178,16 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
         for patterns in (approvals.bash.allow, approvals.bash.ask, approvals.bash.deny)
     )
     auto_approve = "on" if approvals.auto_approve else "off"
+    workflows = (
+        str(loaded.workflows_directory)
+        if loaded.workflows_directory is not None
+        else "disabled"
+    )
     attribution = "on" if loaded.config.attribution else "off"
     return (
         f"configuration: {source}; attribution={attribution}; approvals enforced "
-        f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules})"
+        f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
+        f"workflows={workflows}"
     )
 
 
@@ -205,6 +235,7 @@ __all__ = [
     "EngineConfig",
     "EngineConfigError",
     "LoadedEngineConfig",
+    "WorkflowsConfig",
     "describe_loaded_config",
     "load_engine_config",
     "parse_engine_config",

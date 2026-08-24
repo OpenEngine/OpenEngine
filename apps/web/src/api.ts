@@ -31,6 +31,7 @@ export type EngineConfig = {
   defaultRunner: string;
   workflowRunners: string[];
   defaultWorkflowRunner: string;
+  workflows: { id: string; name: string; version: string }[];
 };
 
 export type ApiThread = {
@@ -74,6 +75,7 @@ export type ApiWorkflowRun = {
   workflowName: string;
   workflowVersion: string;
   taskId: string;
+  workstreamId: string | null;
   taskPrompt: string;
   repository: string;
   repositoryContext: { repository: string };
@@ -90,6 +92,23 @@ export type ApiWorkflowRun = {
     summary: string;
   } | null;
 };
+
+/** Record the decision a run stopped for, and get the finished run back.
+ *
+ *  The response is the whole run rather than the decision, because approving is
+ *  the transition that ends it: the phase, the terminal outcome, and the human
+ *  step all change together, and re-reading them separately would show a page
+ *  half-decided. */
+export function completeHumanReview(
+  runId: string,
+  approved: boolean,
+  summary: string,
+): Promise<ApiWorkflowRun> {
+  return api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}/human-review`, {
+    method: "POST",
+    body: JSON.stringify({ approved, summary }),
+  });
+}
 
 /** Choose the runner that answers this conversation from now on. */
 export function setThreadRunner(threadId: string, runner: string): Promise<ApiThread> {

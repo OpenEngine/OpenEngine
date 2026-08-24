@@ -237,7 +237,7 @@ function ConversationHeader({
           {error && <span className="field-error">{error}</span>}
         </label>
       )}
-      {implementationConversation && (
+      {workflowConversation && (
         <label className="field">
           <span>Approvals</span>
           <span className="field-box auto-approve-control">

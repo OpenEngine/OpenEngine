@@ -1,14 +1,19 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
-import { api, type ApiRunStep, type ApiWorkflowRun, type EngineConfig } from "./api";
+import {
+  api,
+  completeHumanReview,
+  type ApiRunStep,
+  type ApiWorkflowRun,
+  type EngineConfig,
+} from "./api";
 import { Stat, StatStrip } from "./brand";
 import { WorkspaceControl } from "./workspace";
 
 export const IN_PROGRESS_PHASES = new Set([
   "pending",
   "preparing_workspace",
-  "implementing",
-  "reviewing",
+  "running_agent",
 ]);
 
 /** Where the unsent task prompt waits between visits to the new-workflow form.
@@ -18,6 +23,16 @@ const WORKFLOW_DRAFT_KEY = "engine.workflowDraft";
 
 export function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
+}
+
+/** Prefer the workflow's vocabulary while a run is active. The engine phase
+ *  still drives behavior, but an operator cares which step is doing the work. */
+export function runStatusLabel(run: ApiWorkflowRun) {
+  if (run.phase !== "succeeded" && run.phase !== "failed") {
+    const current = run.steps.find((step) => step.stepId === run.currentStepId);
+    if (current) return current.name;
+  }
+  return phaseLabel(run.phase);
 }
 
 /** How loudly a run's phase should read. Failure is the only thing that gets
@@ -139,7 +154,7 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
               >
                 <div className="card-top">
                   <span className={`chip ${run.phase === "pending" ? "chip-flame" : ""}`}>
-                    {phaseLabel(run.phase)}
+                    {runStatusLabel(run)}
                   </span>
                   <code className="card-id">{run.runId}</code>
                 </div>
@@ -181,6 +196,7 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
   );
   const [repository, setRepository] = useState(".");
   const [runner, setRunner] = useState(config.defaultWorkflowRunner);
+  const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -197,7 +213,7 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
       const run = await api<ApiWorkflowRun>("/api/runs", {
         method: "POST",
         body: JSON.stringify({
-          workflowId: "implementation-review-v1",
+          workflowId,
           prompt,
           repository,
           runner,
@@ -225,8 +241,16 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
       <form className="form" onSubmit={submit}>
         <label>
           <span>Workflow definition</span>
-          <select disabled value="implementation-review-v1">
-            <option value="implementation-review-v1">Implementation review · v1</option>
+          <select
+            required
+            value={workflowId}
+            onChange={(event) => setWorkflowId(event.target.value)}
+          >
+            {config.workflows.map((workflow) => (
+              <option key={workflow.id} value={workflow.id}>
+                {workflow.name} · {workflow.version}
+              </option>
+            ))}
           </select>
         </label>
         <label>
@@ -271,7 +295,11 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
           <a className="back-link" href="/runs">
             Cancel
           </a>
-          <button className="btn btn-primary" disabled={submitting || !runner} type="submit">
+          <button
+            className="btn btn-primary"
+            disabled={submitting || !runner || !workflowId}
+            type="submit"
+          >
             {submitting ? "Creating…" : "Create workflow run"}
           </button>
         </div>
@@ -311,6 +339,75 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+/** The decision that ends a run, on the run it ends.
+ *
+ *  A run stops at human review and waits there indefinitely, and this is the
+ *  only thing that moves it -- so it sits inside the callout that presents what
+ *  the decision is made from rather than on a page of its own. The note is
+ *  optional, because the button already says what was decided; it is where the
+ *  reason goes, and the run keeps it as the decision's summary. */
+function HumanReviewDecision({
+  run,
+  onDecided,
+}: {
+  run: ApiWorkflowRun;
+  onDecided: (decided: ApiWorkflowRun) => void;
+}) {
+  const [note, setNote] = useState("");
+  // Which button was pressed, so the one that is working says so and neither
+  // can be pressed twice into two decisions on one run.
+  const [deciding, setDeciding] = useState<"approve" | "reject">();
+  const [error, setError] = useState("");
+
+  async function decide(approved: boolean) {
+    setDeciding(approved ? "approve" : "reject");
+    setError("");
+    try {
+      onDecided(await completeHumanReview(run.runId, approved, note.trim()));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+      setDeciding(undefined);
+    }
+  }
+
+  return (
+    <div className="decision">
+      <label>
+        <span>Decision note</span>
+        <textarea
+          rows={3}
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          placeholder="Optional — why this run was approved or rejected."
+        />
+      </label>
+      {error && (
+        <p className="notice" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="decision-actions">
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={deciding !== undefined}
+          onClick={() => void decide(true)}
+        >
+          {deciding === "approve" ? "Approving…" : "Approve"}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={deciding !== undefined}
+          onClick={() => void decide(false)}
+        >
+          {deciding === "reject" ? "Rejecting…" : "Reject"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -417,7 +514,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 <p className="lede">{run.taskPrompt}</p>
               </div>
               <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
-                {phaseLabel(run.phase)}
+                {runStatusLabel(run)}
               </span>
             </div>
           </header>
@@ -441,6 +538,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 The implementation and agent review are complete. A human approval or rejection
                 is the final decision.
               </p>
+              <HumanReviewDecision run={run} onDecided={setRun} />
             </section>
           )}
           {run.humanDecision && (

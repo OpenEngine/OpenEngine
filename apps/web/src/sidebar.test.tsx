@@ -44,14 +44,15 @@ vi.mock("@assistant-ui/react", () => {
 const run: ApiWorkflowRun = {
   runId: "run-1",
   name: "First run",
-  workflowId: "implementation-review-v1",
-  workflowName: "Implementation review",
+  workflowId: "work-v1",
+  workflowName: "Work",
   workflowVersion: "v1",
   taskId: "task-1",
+  workstreamId: null,
   taskPrompt: "Do the work",
   repository: ".",
   repositoryContext: { repository: "." },
-  phase: "implementing",
+  phase: "running_agent",
   currentStepId: "implement",
   terminalOutcome: null,
   failureReason: "",
@@ -148,6 +149,7 @@ describe("Sidebar", () => {
 
     const entry = within(body("Workflows")).getByRole("link", { name: /First run/ });
     expect(entry).toHaveAttribute("href", "/runs/run-1");
+    expect(entry).toHaveTextContent("Implementation · v1");
     expect(entry.closest(".rail-item")).toHaveAttribute("data-active", "true");
     expect(
       within(body("Workflows")).getByRole("link", { name: "Implementation conversation" }),
