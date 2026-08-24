@@ -157,7 +157,7 @@ describe("Sidebar", () => {
       "/runs/new",
     );
     expect(within(body("Chats")).getByRole("button", { name: "+ New chat" })).toBeInTheDocument();
-    expect(within(body("Projects")).getByRole("link", { name: "New Project" })).toHaveAttribute(
+    expect(within(body("Projects")).getByRole("link", { name: "+ New project" })).toHaveAttribute(
       "href",
       "/plan",
     );
@@ -173,7 +173,7 @@ describe("Sidebar", () => {
     );
 
     const newProject = within(body("Projects")).getByRole("link", {
-      name: "New Project",
+      name: "+ New project",
     });
     expect(newProject).toHaveClass("rail-button", "rail-button-primary");
     expect(within(body("Projects")).getByText("Engine roadmap")).toBeInTheDocument();

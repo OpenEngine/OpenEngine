@@ -156,7 +156,7 @@ export function Sidebar({
         <Section id="projects" title="Projects" open={open === "projects"} onOpen={setChosen}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/plan">
-              New Project
+              + New project
             </a>
           </div>
           {/* A project opens the planning conversation it was named after,
