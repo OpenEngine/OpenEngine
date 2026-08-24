@@ -24,6 +24,7 @@ from engine.adapters.agent_runner.codex import (
     _app_server_thread_params,
     approval_request_from_app_server,
     app_server_sandbox_policy,
+    messages_from_app_server_event,
     parse_events,
     render_prompt,
     thread_id_of,
@@ -36,6 +37,7 @@ from engine.domain import (
     AgentRunId,
     Message,
     Role,
+    ToolCall,
     ToolSpec,
     WorkspaceId,
 )
@@ -600,6 +602,31 @@ def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:
     assert turn.usage is not None and turn.usage.cached_prompt_tokens == 4
     assert observed == list(turn.transcript)
     assert runner.app_server_command_line()[1:] == ["app-server"]
+
+
+def test_app_server_mcp_call_preserves_the_bound_tool_name() -> None:
+    call, result = messages_from_app_server_event(
+        {
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "id": "tool-1",
+                    "type": "mcpToolCall",
+                    "server": "workflow",
+                    "tool": "clarify",
+                    "arguments": "{}",
+                    "status": "completed",
+                    "result": "clarified",
+                }
+            },
+        },
+        thread_id="thread-1",
+    )
+
+    assert call.tool_calls == (
+        ToolCall("thread-1:tool-1", "mcp__workflow__clarify", "{}"),
+    )
+    assert result == Message.tool_result("thread-1:tool-1", "clarified")
 
 
 # --- how long a turn may take -----------------------------------------------
