@@ -42,6 +42,7 @@ from engine.runtime import (
     Capabilities,
     EngineConfig,
     PlanningMcpBroker,
+    project_chat_capabilities,
 )
 
 
@@ -288,6 +289,7 @@ def build_session(
         workspace_repository=repository,
         read_only_runners=read_only_runners,
         mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
+        capability_resolver=project_chat_capabilities,
     )
 
 

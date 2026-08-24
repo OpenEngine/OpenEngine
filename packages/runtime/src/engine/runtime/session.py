@@ -12,7 +12,7 @@ conversation is.
 """
 
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Protocol
 from uuid import uuid4
@@ -57,6 +57,9 @@ class AgentMcpBroker(Protocol):
 
 McpBrokerFactory = Callable[
     [StateStore, Sequence[str], AgentInstance], AgentMcpBroker
+]
+CapabilityResolver = Callable[
+    [StateStore, AgentInstance], Awaitable[Sequence[str]]
 ]
 
 #: What the single wired runner is called when the composition root does not
@@ -136,6 +139,7 @@ class AgentSession:
         workspace_base_ref: str = "HEAD",
         read_only_runners: Mapping[str, AgentRunner] | None = None,
         mcp_brokers: Mapping[str, McpBrokerFactory] | None = None,
+        capability_resolver: CapabilityResolver | None = None,
     ) -> None:
         """`runners` lets one process offer a choice of agent runner.
 
@@ -159,6 +163,11 @@ class AgentSession:
         broker are passed to its factory so the stdio server can expose only
         that profile's granted subset. The current instance is also passed so
         tools can bind operations to durable conversation context.
+
+        `capability_resolver` adds grants owned by a conversation's durable
+        context rather than its agent role. It runs before anything from the
+        turn is stored, and its grants are resolved by the same rules as the
+        profile's.
         """
         self._capabilities = capabilities
         self._profiles = profiles
@@ -170,6 +179,7 @@ class AgentSession:
         )
         self._read_only_runners: Mapping[str, AgentRunner] = dict(read_only_runners or {})
         self._mcp_brokers = dict(mcp_brokers or {})
+        self._capability_resolver = capability_resolver
 
     @property
     def profiles(self) -> Mapping[AgentId, AgentProfile]:
@@ -375,6 +385,14 @@ class AgentSession:
             raise UnknownInstanceError(instance_id)
 
         profile = profile_for(instance.agent_id, self._profiles)
+        if self._capability_resolver is not None:
+            contextual = await self._capability_resolver(store, instance)
+            profile = replace(
+                profile,
+                capabilities=tuple(
+                    dict.fromkeys((*profile.capabilities, *contextual))
+                ),
+            )
         # After the profile, because which runner answers depends on it -- and
         # still before anything is written, so a turn nobody can run leaves the
         # transcript as it was.

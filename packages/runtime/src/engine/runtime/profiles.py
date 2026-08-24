@@ -54,12 +54,7 @@ PLANNER = AgentProfile(
         "unsure of. The plan is the deliverable -- do not change the workspace, "
         "and say what you would do rather than implying anything has been done."
     ),
-    capabilities=(
-        "add_milestone",
-        "list_milestones",
-        "update_milestone",
-        "delete_milestone",
-    ),
+    capabilities=(),
     description="Reads the code and writes the plan for a change.",
     # What holds it to reading is the runner it gets and the approvals it is
     # refused, neither of which is the paragraph above. Stated here so both can

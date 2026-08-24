@@ -39,6 +39,7 @@ from engine.domain import (
     ConversationId,
     HumanReviewCompleted,
     Message,
+    Project,
     Role,
     RunFailed,
     RunId,
@@ -55,6 +56,7 @@ from engine.domain import (
     WorkflowId,
     WorkspaceId,
     WorkspaceProvisioned,
+    project_id_for_instance,
 )
 from engine.ports import (
     AgentTurn,
@@ -280,6 +282,76 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
     assert "Edit" in coder_argv[coder_argv.index("--allowedTools") + 1 :]
     codex_argv = session.runner_for(PLANNER.agent_id, "codex").command_line(PLANNER)
     assert codex_argv[codex_argv.index("--sandbox") + 1] == "read-only"
+
+
+def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:
+    class CapturingRunner:
+        permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+        def __init__(self) -> None:
+            self.mcp_servers: list[McpServerConfig] = []
+            self.direct_turns = 0
+
+        async def run_turn(
+            self, agent_run_id, profile, messages, tools=(), workspace_id=None
+        ):
+            self.direct_turns += 1
+            return AgentTurn(Message.assistant("ordinary chat"))
+
+        async def run_turn_with_mcp(
+            self,
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            workspace_id=None,
+        ):
+            self.mcp_servers.append(mcp_server)
+            return AgentTurn(Message.assistant("project chat"))
+
+        async def cancel(self, agent_run_id) -> None:
+            pass
+
+    async def scenario() -> tuple[CapturingRunner, AgentProfile]:
+        store = InMemoryStateStore()
+        runner = CapturingRunner()
+        session = build_session(
+            Capabilities(
+                workflow_runtime=None,
+                source_control=None,
+                agent_runner=runner,
+                communications=None,
+                workspace_provider=ConversationWorkspaces(),
+                state_store=store,
+            ),
+            {"test": runner},
+        )
+        project_chat = await session.start(CODER, runner="test")
+        await store.save_project(
+            Project(project_id_for_instance(project_chat.instance_id), "OpenEngine")
+        )
+        await session.say(project_chat.instance_id, "Plan this.", runner="test")
+
+        ordinary_planner = await session.start(PLANNER.agent_id, runner="test")
+        await session.say(ordinary_planner.instance_id, "Plan this.", runner="test")
+        return runner, session.profiles[PLANNER.agent_id]
+
+    runner, planner_profile = asyncio.run(scenario())
+    config = runner.mcp_servers[0]
+    advertised = tuple(
+        config.args[index + 1]
+        for index, argument in enumerate(config.args)
+        if argument == "--capability"
+    )
+
+    assert advertised == (
+        "add_milestone",
+        "list_milestones",
+        "update_milestone",
+        "delete_milestone",
+    )
+    assert runner.direct_turns == 1
+    assert planner_profile.capabilities == ()
 
 
 def test_review_comments_are_left_with_the_gh_the_composition_names(tmp_path) -> None:

@@ -42,6 +42,7 @@ from engine.runtime.planning_tools import (
     PlanningMcpBroker,
     PlanningTools,
     ProjectPlan,
+    project_chat_capabilities,
 )
 from engine.runtime.run_read_model import RunReader, WorkflowRunView
 from engine.runtime.session import (
@@ -115,6 +116,7 @@ __all__ = [
     "PlanningMcpBroker",
     "PlanningTools",
     "ProjectPlan",
+    "project_chat_capabilities",
     "RunReader",
     "TerminalMcpBroker",
     "TerminalResultAlreadySubmittedError",
