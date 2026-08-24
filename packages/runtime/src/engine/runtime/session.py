@@ -55,7 +55,9 @@ class AgentMcpBroker(Protocol):
     async def __aexit__(self, *_exc: object) -> None: ...
 
 
-McpBrokerFactory = Callable[[StateStore, Sequence[str]], AgentMcpBroker]
+McpBrokerFactory = Callable[
+    [StateStore, Sequence[str], AgentInstance], AgentMcpBroker
+]
 
 #: What the single wired runner is called when the composition root does not
 #: name several.
@@ -155,7 +157,8 @@ class AgentSession:
         `mcp_brokers` maps capability names to broker factories. Every grant is
         resolved before the turn starts, and the capabilities sharing one
         broker are passed to its factory so the stdio server can expose only
-        that profile's granted subset.
+        that profile's granted subset. The current instance is also passed so
+        tools can bind operations to durable conversation context.
         """
         self._capabilities = capabilities
         self._profiles = profiles
@@ -408,7 +411,7 @@ class AgentSession:
 
         try:
             if mcp_factory is not None:
-                async with mcp_factory(store, mcp_capabilities) as broker:
+                async with mcp_factory(store, mcp_capabilities, instance) as broker:
                     turn = await self._run_with_mcp(
                         selected_runner,
                         agent_run,

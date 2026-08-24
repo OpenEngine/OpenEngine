@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from engine.domain.ids import MilestoneId, ProjectId, WorkstreamId
+from engine.domain.ids import AgentInstanceId, MilestoneId, ProjectId, WorkstreamId
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,6 +11,11 @@ class Project:
 
     project_id: ProjectId
     name: str
+
+
+def project_id_for_instance(instance_id: AgentInstanceId) -> ProjectId:
+    """Return the durable project owned by a New Project conversation."""
+    return ProjectId(f"project-{instance_id}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,4 +38,4 @@ class Workstream:
     name: str
 
 
-__all__ = ["Milestone", "Project", "Workstream"]
+__all__ = ["Milestone", "Project", "Workstream", "project_id_for_instance"]

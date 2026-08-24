@@ -664,7 +664,7 @@ def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> N
             )
         },
         mcp_brokers={
-            "add_milestone": lambda _store, capabilities: (
+            "add_milestone": lambda _store, capabilities, _instance: (
                 granted.append(tuple(capabilities)) or Broker()
             )
         },
@@ -682,7 +682,7 @@ def test_an_unknown_mcp_grant_is_rejected_before_the_runner_starts() -> None:
     planner = AgentId("planner")
     runner = ScriptedRunner()
 
-    def broker_must_not_start(_store, _capabilities):
+    def broker_must_not_start(_store, _capabilities, _instance):
         raise AssertionError("an unresolved grant must fail before broker creation")
 
     session = AgentSession(

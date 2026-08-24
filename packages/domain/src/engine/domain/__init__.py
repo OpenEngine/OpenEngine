@@ -54,7 +54,12 @@ from engine.domain.ids import (
     WorkstreamId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project, Workstream
+from engine.domain.planning import (
+    Milestone,
+    Project,
+    Workstream,
+    project_id_for_instance,
+)
 from engine.domain.state import RunPhase, RunState
 from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
 from engine.domain.workflow import (
@@ -108,6 +113,7 @@ __all__ = [
     "ProvisionWorkspace",
     "Project",
     "ProjectId",
+    "project_id_for_instance",
     "PublishChanges",
     "RequestHumanReview",
     "Role",

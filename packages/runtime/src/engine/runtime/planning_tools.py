@@ -12,7 +12,14 @@ import secrets
 import sys
 from uuid import uuid4
 
-from engine.domain import Milestone, MilestoneId, Project, ProjectId
+from engine.domain import (
+    AgentInstance,
+    Milestone,
+    MilestoneId,
+    Project,
+    ProjectId,
+    project_id_for_instance,
+)
 from engine.ports import McpServerConfig, StateStore
 
 McpRequestId = str | int
@@ -189,9 +196,15 @@ class PlanningTools:
 class PlanningMcpBroker:
     """Expose one process-local planning tool set to a provider CLI."""
 
-    def __init__(self, store: StateStore, capabilities: Sequence[str]) -> None:
+    def __init__(
+        self,
+        store: StateStore,
+        capabilities: Sequence[str],
+        instance: AgentInstance,
+    ) -> None:
         self._tools = PlanningTools(store)
         self._capabilities = _validated_capabilities(capabilities)
+        self._project_id = project_id_for_instance(instance.instance_id)
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
 
@@ -267,11 +280,11 @@ class PlanningMcpBroker:
         if name == "add_milestone":
             _exact_arguments(
                 arguments,
-                required={"project_id", "name", "description"},
+                required={"name", "description"},
                 optional={"dependencies"},
             )
             milestone = await self._tools.add_milestone(
-                ProjectId(_string(arguments, "project_id")),
+                self._project_id,
                 _string(arguments, "name"),
                 _string(arguments, "description"),
                 _dependency_arguments(arguments),
@@ -321,16 +334,17 @@ def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
     specs = [
         {
             "name": "add_milestone",
-            "description": "Add a milestone to a project plan.",
+            "description": (
+                "Add a milestone to the project owned by this planning conversation."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "project_id": identifier,
                     "name": identifier,
                     "description": identifier,
                     "dependencies": dependencies,
                 },
-                "required": ["project_id", "name", "description"],
+                "required": ["name", "description"],
                 "additionalProperties": False,
             },
         },

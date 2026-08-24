@@ -6,7 +6,18 @@ import json
 import pytest
 
 from engine.adapters.state_store.memory import InMemoryStateStore
-from engine.domain import AgentId, AgentProfile, Message, MilestoneId, Project, ProjectId
+from engine.domain import (
+    AgentId,
+    AgentInstance,
+    AgentInstanceId,
+    AgentProfile,
+    ConversationId,
+    Message,
+    MilestoneId,
+    Project,
+    ProjectId,
+    project_id_for_instance,
+)
 from engine.ports import AgentTurn
 from engine.runtime import AgentSession, Capabilities
 from engine.runtime.planning_tools import (
@@ -114,9 +125,16 @@ def test_planning_tools_reject_dangling_cross_project_and_cyclic_dependencies() 
 def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> None:
     async def scenario() -> None:
         store = InMemoryStateStore()
-        project = Project(ProjectId("project-engine"), "OpenEngine")
+        instance = AgentInstance(
+            AgentInstanceId("planner-1"),
+            AgentId("planner"),
+            ConversationId("conversation-1"),
+        )
+        project = Project(
+            project_id_for_instance(instance.instance_id), "OpenEngine"
+        )
         await store.save_project(project)
-        broker = PlanningMcpBroker(store, PLANNING_TOOL_NAMES)
+        broker = PlanningMcpBroker(store, PLANNING_TOOL_NAMES, instance)
         async with broker:
             listed = await _mcp_response(
                 "127.0.0.1",
@@ -140,7 +158,6 @@ def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> N
                     "params": {
                         "name": "add_milestone",
                         "arguments": {
-                            "project_id": project.project_id,
                             "name": "Launch",
                             "description": "Ship it.",
                             "dependencies": [],
@@ -168,8 +185,6 @@ def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> N
 def test_planner_turn_launches_scoped_stdio_mcp_and_forwards_a_call() -> None:
     async def scenario() -> None:
         store = InMemoryStateStore()
-        project = Project(ProjectId("project-engine"), "OpenEngine")
-        await store.save_project(project)
         advertised: list[str] = []
 
         class StdioMcpRunner:
@@ -253,7 +268,6 @@ def test_planner_turn_launches_scoped_stdio_mcp_and_forwards_a_call() -> None:
                             "params": {
                                 "name": "add_milestone",
                                 "arguments": {
-                                    "project_id": project.project_id,
                                     "name": "Foundation",
                                     "description": "Build the planning model.",
                                 },
@@ -291,6 +305,10 @@ def test_planner_turn_launches_scoped_stdio_mcp_and_forwards_a_call() -> None:
             mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
         )
         instance = await session.start(planner)
+        project = Project(
+            project_id_for_instance(instance.instance_id), "OpenEngine"
+        )
+        await store.save_project(project)
 
         turn = await session.say(instance.instance_id, "Add the foundation.")
 

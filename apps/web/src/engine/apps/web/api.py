@@ -50,6 +50,7 @@ from engine.domain import (
     WorkflowDefinition,
     WorkstreamId,
     WorkspaceId,
+    project_id_for_instance,
 )
 from engine.ports import (
     AgentRunner,
@@ -665,7 +666,7 @@ class ThreadService:
     ) -> str:
         """Ask the thread's agent for a title without changing its transcript."""
         thread = await self._require(instance_id)
-        project_id = _thread_project_id(instance_id)
+        project_id = project_id_for_instance(instance_id)
         project = await self.session.state_store.load_project(project_id)
         names_project = thread.title == "New project" and project is not None
         if thread.title != "New chat" and not names_project:
@@ -1258,7 +1259,7 @@ def create_app(
                 thread.instance_id, title="New project"
             )
             await session.state_store.save_project(
-                Project(_thread_project_id(thread.instance_id), thread.title)
+                Project(project_id_for_instance(thread.instance_id), thread.title)
             )
         return JSONResponse(_thread_json(thread), status_code=201)
 
@@ -1636,11 +1637,6 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
 
 def _project_json(project: Project) -> dict[str, str]:
     return {"projectId": str(project.project_id), "name": project.name}
-
-
-def _thread_project_id(instance_id: AgentInstanceId) -> ProjectId:
-    """The durable project owned by a New Project conversation."""
-    return ProjectId(f"project-{instance_id}")
 
 
 def _workflow_step_editable(
