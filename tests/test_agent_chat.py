@@ -26,6 +26,7 @@ from engine.ports import (
     ApprovalDecision,
     ApprovalKind,
     ApprovalRequest,
+    McpServerConfig,
     StateStore,
 )
 from engine.runtime import (
@@ -625,6 +626,90 @@ def test_a_resolvable_grant_reaches_the_runner() -> None:
     assert captured == [(dispatch,)]
 
 
+def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> None:
+    store = InMemoryStateStore()
+    planner = AgentId("planner")
+    seen: list[McpServerConfig] = []
+    granted: list[tuple[str, ...]] = []
+
+    class Broker:
+        config = McpServerConfig("planning", "python", ("planning-server",))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+    class McpRunner(ScriptedRunner):
+        async def run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+        ):
+            seen.append(mcp_server)
+            return await super().run_turn(agent_run_id, profile, messages)
+
+    runner = McpRunner()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=runner,
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles={
+            planner: AgentProfile(
+                planner, "Plan it.", capabilities=("add_milestone",)
+            )
+        },
+        mcp_brokers={
+            "add_milestone": lambda _store, capabilities, _instance: (
+                granted.append(tuple(capabilities)) or Broker()
+            )
+        },
+    )
+    instance = asyncio.run(session.start(planner))
+
+    asyncio.run(session.say(instance.instance_id, "Add the foundation."))
+
+    assert seen == [Broker.config]
+    assert granted == [("add_milestone",)]
+
+
+def test_an_unknown_mcp_grant_is_rejected_before_the_runner_starts() -> None:
+    store = InMemoryStateStore()
+    planner = AgentId("planner")
+    runner = ScriptedRunner()
+
+    def broker_must_not_start(_store, _capabilities, _instance):
+        raise AssertionError("an unresolved grant must fail before broker creation")
+
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=runner,
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles={
+            planner: AgentProfile(
+                planner, "Plan it.", capabilities=("add_milestone_typo",)
+            )
+        },
+        mcp_brokers={"add_milestone": broker_must_not_start},
+    )
+    instance = asyncio.run(session.start(planner))
+
+    with pytest.raises(UnknownToolGrantError) as raised:
+        asyncio.run(session.say(instance.instance_id, "Add the foundation."))
+
+    assert raised.value.missing == ("add_milestone_typo",)
+    assert runner.seen == []
+
+
 # --- choosing a runner -------------------------------------------------------
 
 
@@ -777,12 +862,18 @@ def test_an_unknown_runner_stops_before_anything_is_stored() -> None:
 
 
 def test_shipped_profiles_grant_nothing_they_cannot_honour() -> None:
-    """The foreman's dispatch and workflow-authoring grants go in when the tools
-    do; declaring them now would make every conversation raise."""
+    """Every shipped grant is backed by a tool in the web composition."""
     from engine.runtime import BUILT_IN
 
     assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder"), AgentId("planner")}
-    assert all(profile.capabilities == () for profile in BUILT_IN.values())
+    assert BUILT_IN[AgentId("foreman")].capabilities == ()
+    assert BUILT_IN[AgentId("coder")].capabilities == ()
+    assert BUILT_IN[AgentId("planner")].capabilities == (
+        "add_milestone",
+        "list_milestones",
+        "update_milestone",
+        "delete_milestone",
+    )
     assert all(profile.instructions.strip() for profile in BUILT_IN.values())
 
 

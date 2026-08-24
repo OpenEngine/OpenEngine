@@ -12,20 +12,25 @@ conversation is.
 """
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from typing import Protocol
 from uuid import uuid4
 
 from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRunStatus
 from engine.domain.chat import Message, Role
-from engine.domain.ids import AgentId, AgentInstanceId, AgentRunId, TaskId
+from engine.domain.ids import AgentId, AgentInstanceId, AgentRunId, TaskId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.agent_runner import (
     AgentRunner,
     AgentTurn,
     ApprovalHandler,
     InteractiveAgentRunner,
+    InteractiveMcpAgentRunner,
+    McpAgentRunner,
+    McpServerConfig,
     StreamingAgentRunner,
+    StreamingMcpAgentRunner,
     TurnObserver,
 )
 from engine.ports.workspace_provider import WorkspaceState
@@ -37,6 +42,22 @@ from engine.runtime.profiles import BUILT_IN, profile_for
 #: Grant name -> the tool it resolves to. Empty until tools exist; a profile
 #: granting anything therefore fails loudly, which is the intended behaviour.
 NO_TOOLS: Mapping[str, ToolSpec] = {}
+
+
+class AgentMcpBroker(Protocol):
+    """One turn-scoped MCP server supplied by the runtime."""
+
+    @property
+    def config(self) -> McpServerConfig: ...
+
+    async def __aenter__(self) -> "AgentMcpBroker": ...
+
+    async def __aexit__(self, *_exc: object) -> None: ...
+
+
+McpBrokerFactory = Callable[
+    [StateStore, Sequence[str], AgentInstance], AgentMcpBroker
+]
 
 #: What the single wired runner is called when the composition root does not
 #: name several.
@@ -114,6 +135,7 @@ class AgentSession:
         workspace_repository: str | None = None,
         workspace_base_ref: str = "HEAD",
         read_only_runners: Mapping[str, AgentRunner] | None = None,
+        mcp_brokers: Mapping[str, McpBrokerFactory] | None = None,
     ) -> None:
         """`runners` lets one process offer a choice of agent runner.
 
@@ -131,6 +153,12 @@ class AgentSession:
         only reads is answered by. Composed without it, such a profile runs on
         the runner that was picked and only its instructions hold it -- so a
         process that wants the restriction wires both maps.
+
+        `mcp_brokers` maps capability names to broker factories. Every grant is
+        resolved before the turn starts, and the capabilities sharing one
+        broker are passed to its factory so the stdio server can expose only
+        that profile's granted subset. The current instance is also passed so
+        tools can bind operations to durable conversation context.
         """
         self._capabilities = capabilities
         self._profiles = profiles
@@ -141,6 +169,7 @@ class AgentSession:
             dict(runners) if runners else {DEFAULT_RUNNER: capabilities.agent_runner}
         )
         self._read_only_runners: Mapping[str, AgentRunner] = dict(read_only_runners or {})
+        self._mcp_brokers = dict(mcp_brokers or {})
 
     @property
     def profiles(self) -> Mapping[AgentId, AgentProfile]:
@@ -355,7 +384,7 @@ class AgentSession:
             if not isinstance(selected_runner, InteractiveAgentRunner):
                 raise ApprovalsUnsupportedError(runner_name)
             interactive = selected_runner
-        tools = self._tools_for(profile)
+        tools, mcp_factory, mcp_capabilities = self._tools_for(profile)
 
         question = Message.user(text)
         await store.append_messages(instance_id, (question,))
@@ -381,7 +410,20 @@ class AgentSession:
                 on_message(message)
 
         try:
-            if interactive is not None and on_approval is not None:
+            if mcp_factory is not None:
+                async with mcp_factory(store, mcp_capabilities, instance) as broker:
+                    turn = await self._run_with_mcp(
+                        selected_runner,
+                        agent_run,
+                        profile,
+                        (*conversation.messages, question),
+                        broker.config,
+                        instance.workspace_id,
+                        record,
+                        on_message,
+                        on_approval,
+                    )
+            elif interactive is not None and on_approval is not None:
                 turn = await interactive.run_turn_interactive(
                     agent_run.agent_run_id,
                     profile,
@@ -453,6 +495,56 @@ class AgentSession:
         )
         return turn
 
+    async def _run_with_mcp(
+        self,
+        runner: AgentRunner,
+        agent_run: AgentRun,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None,
+        record: TurnObserver,
+        on_message: TurnObserver | None,
+        on_approval: ApprovalHandler | None,
+    ) -> AgentTurn:
+        if on_approval is not None:
+            if not isinstance(runner, InteractiveMcpAgentRunner):
+                raise ApprovalsUnsupportedError(agent_run.runner)
+            return await runner.run_turn_with_mcp_interactive(
+                agent_run.agent_run_id,
+                profile,
+                messages,
+                mcp_server,
+                on_approval,
+                on_message=record,
+                workspace_id=workspace_id,
+            )
+        if on_message is not None and isinstance(runner, StreamingMcpAgentRunner):
+            return await runner.run_turn_with_mcp_streamed(
+                agent_run.agent_run_id,
+                profile,
+                messages,
+                mcp_server,
+                record,
+                workspace_id=workspace_id,
+            )
+        if not isinstance(runner, McpAgentRunner):
+            raise RuntimeError(
+                f"runner {agent_run.runner!r} cannot provide the MCP tools granted "
+                f"to profile {profile.agent_id!r}"
+            )
+        turn = await runner.run_turn_with_mcp(
+            agent_run.agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            workspace_id=workspace_id,
+        )
+        if on_message is not None:
+            for message in turn.transcript:
+                on_message(message)
+        return turn
+
     def runner_for(self, agent_id: AgentId, runner: str = "") -> AgentRunner:
         """Which runner answers for this agent, under the name that was picked.
 
@@ -471,11 +563,38 @@ class AgentSession:
             return self._read_only_runners[runner_name]
         return self._runners[runner_name]
 
-    def _tools_for(self, profile: AgentProfile) -> tuple[ToolSpec, ...]:
-        missing = [grant for grant in profile.capabilities if grant not in self._tools]
+    def _tools_for(
+        self, profile: AgentProfile
+    ) -> tuple[tuple[ToolSpec, ...], McpBrokerFactory | None, tuple[str, ...]]:
+        missing = [
+            grant
+            for grant in profile.capabilities
+            if grant not in self._tools and grant not in self._mcp_brokers
+        ]
         if missing:
             raise UnknownToolGrantError(profile.agent_id, missing)
-        return tuple(self._tools[grant] for grant in profile.capabilities)
+        tools = tuple(
+            self._tools[grant]
+            for grant in profile.capabilities
+            if grant in self._tools
+        )
+        mcp_capabilities = tuple(
+            grant
+            for grant in profile.capabilities
+            if grant in self._mcp_brokers
+        )
+        factories = tuple(
+            dict.fromkeys(self._mcp_brokers[grant] for grant in mcp_capabilities)
+        )
+        if len(factories) > 1:
+            raise RuntimeError(
+                f"profile {profile.agent_id!r} grants tools from multiple MCP brokers"
+            )
+        if tools and factories:
+            raise RuntimeError(
+                f"profile {profile.agent_id!r} mixes MCP and direct tool grants"
+            )
+        return tools, factories[0] if factories else None, mcp_capabilities
 
 
 def _interrupted_transcript(partial: Sequence[Message]) -> tuple[Message, ...]:

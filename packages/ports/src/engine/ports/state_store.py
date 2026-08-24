@@ -85,6 +85,10 @@ class StateStore(Protocol):
         """Return milestones newest first, optionally for one project."""
         ...
 
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        """Delete one milestone, returning whether it existed."""
+        ...
+
     async def save_workstream(self, workstream: Workstream) -> None:
         ...
 

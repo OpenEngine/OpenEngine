@@ -276,15 +276,6 @@ ul, ol { padding: 0; list-style: none; }
   border-color: var(--flame);
 }
 .rail-button-primary:hover { background: var(--flame-deep); border-color: var(--flame-deep); }
-/* The section lead that starts a plan. Orange rather than flame so it is not
-   read as a third instance of the same control, and dark on it because white
-   on orange is not a contrast this system would print. */
-.rail-button-plan {
-  color: var(--night);
-  background: var(--amber);
-  border-color: var(--amber);
-}
-.rail-button-plan:hover { background: var(--amber-deep); border-color: var(--amber-deep); }
 
 .rail-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 

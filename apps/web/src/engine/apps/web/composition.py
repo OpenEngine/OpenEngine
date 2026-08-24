@@ -36,7 +36,13 @@ from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 from engine.ports import AgentRunner
-from engine.runtime import AgentSession, Capabilities, EngineConfig
+from engine.runtime import (
+    PLANNING_TOOL_NAMES,
+    AgentSession,
+    Capabilities,
+    EngineConfig,
+    PlanningMcpBroker,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +287,7 @@ def build_session(
         runners=runners,
         workspace_repository=repository,
         read_only_runners=read_only_runners,
+        mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
     )
 
 
