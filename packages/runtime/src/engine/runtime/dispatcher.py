@@ -221,20 +221,26 @@ class Dispatcher:
                 )
             )
             raise
-        # Streaming runners have already persisted the observed prefix. The
+        # Streaming runners have already persisted what they observed. The
         # returned turn remains authoritative for anything only synthesized at
-        # completion, while terminal cancellation may leave a longer observed
-        # prefix than the partial turn returned by the provider.
-        unseen = transcript
-        if observed:
-            if transcript[: len(observed)] == tuple(observed):
-                unseen = transcript[len(observed) :]
-            elif tuple(observed[: len(transcript)]) == transcript:
-                unseen = ()
+        # completion, while terminal cancellation may leave more observed than
+        # the partial turn returned by the provider.
+        #
+        # Matched by identity rather than by position, because a turn is
+        # assembled with its last spoken text as the answer -- so narration that
+        # streamed before a tool call is reordered to the end, and a streamed
+        # message need not sit at the same index in the finished turn. That is
+        # presentation, not divergence: those messages are already stored, in
+        # the order they were really emitted. Comparing positionally instead
+        # read the reorder as a mismatch and failed steps that had completed.
+        already_stored = list(observed)
+        fresh: list[Message] = []
+        for message in transcript:
+            if message in already_stored:
+                already_stored.remove(message)
             else:
-                raise RuntimeError(
-                    "streamed workflow transcript does not match completed turn"
-                )
+                fresh.append(message)
+        unseen = tuple(fresh)
         if unseen:
             await caps.state_store.append_messages(instance.instance_id, unseen)
         if result is not None:

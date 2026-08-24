@@ -75,18 +75,20 @@ Codex -- spawn it as given, and make a real JSON-RPC `tools/call`. A completion
 missing a declared output is refused by the runtime and the turn is corrected,
 which `tests/test_workflow_integration.py` covers at the faster tier.
 
-**End a workflow scenario with a `say`.** The runtime cancels the CLI as soon as
-it accepts a terminal result, so the step usually ends mid-turn -- but when the
-CLI finishes first, both adapters assemble the turn with its *last spoken text*
-as the answer, which moves narration to the end. A turn whose last item is a
-tool call therefore no longer matches what was streamed, and the runtime refuses
-it (`streamed workflow transcript does not match completed turn`) even though
-the result was accepted. A closing message is what a real CLI sends anyway, and
-it keeps that race off these tests.
+**End a workflow scenario on its terminal call.** That is the shape the step
+instructions ask for, and it used to be the one that broke: the runtime cancels
+the CLI as soon as it accepts a terminal result, but when the CLI finishes first
+both adapters assemble the turn with its *last spoken text* as the answer, which
+moves narration to the end. The runtime compared that against what it had
+streamed by position and refused a step it had already accepted
+(`streamed workflow transcript does not match completed turn`). It now matches
+streamed messages by identity, so reassembly order is not load-bearing -- see
+`test_a_turn_ending_in_its_terminal_call_is_kept_in_streamed_order` in
+`tests/test_workflow_mcp_execution.py`, which covers it without the race.
 
-That is a workaround, and it is only here until #105 is fixed -- which is also
-where the deterministic reproduction lives, since the race itself has never been
-observed end to end. Take the closing `say` out with that ticket, not before.
+Scenarios here used to carry a closing `say` to keep that race out of the tests.
+They no longer do, and adding one back would hide the shape this tier is best
+placed to exercise.
 
 A failing test keeps its directory and prints the path, and attaches whatever
 the server said to the report. `npx playwright show-trace test-results/…` opens
