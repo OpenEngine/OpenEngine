@@ -163,6 +163,56 @@ describe("Sidebar", () => {
     expect(within(body("Projects")).getByText("Engine roadmap")).toBeInTheDocument();
   });
 
+  /** A project's only page is the planning conversation it was named after, so
+   *  the row is a link to it and the rail marks the one you are reading. */
+  it("opens a project's planning conversation and marks the one on screen", () => {
+    render(
+      <Sidebar
+        projects={[
+          {
+            projectId: "project-agi-1",
+            name: "Engine roadmap",
+            conversationUrl: "/conversations/agi-1",
+          },
+          {
+            projectId: "project-agi-2",
+            name: "Second roadmap",
+            conversationUrl: "/conversations/agi-2",
+          },
+        ]}
+        runs={[run]}
+        initialSection="projects"
+        activeConversationUrl="/conversations/agi-1"
+      />,
+    );
+
+    const open = within(body("Projects")).getByRole("link", { name: "Engine roadmap" });
+    expect(open).toHaveAttribute("href", "/conversations/agi-1");
+    expect(open.closest(".rail-item")).toHaveAttribute("data-active", "true");
+    expect(
+      within(body("Projects"))
+        .getByRole("link", { name: "Second roadmap" })
+        .closest(".rail-item"),
+    ).not.toHaveAttribute("data-active");
+  });
+
+  /** A project recorded some other way still says it exists, but a row that
+   *  leads nowhere should not dress up as something to click. */
+  it("lists a project with no conversation as plain text", () => {
+    render(
+      <Sidebar
+        projects={[{ projectId: "project-1", name: "Engine roadmap" }]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
+
+    expect(
+      within(body("Projects")).queryByRole("link", { name: "Engine roadmap" }),
+    ).not.toBeInTheDocument();
+    expect(within(body("Projects")).getByText("Engine roadmap")).toBeInTheDocument();
+  });
+
   it("lists runs with their conversations and marks the one on screen", () => {
     render(<Sidebar runs={[run]} initialSection="workflows" activeRunId="run-1" />);
 

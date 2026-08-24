@@ -153,14 +153,32 @@ export function Sidebar({
               New Project
             </a>
           </div>
+          {/* A project opens the planning conversation it was named after,
+              which is the only page it has so far. One without a conversation
+              is still listed -- it says the project exists -- but there is
+              nowhere to send a click, so it stays the plain row it reads as. */}
           <nav className="rail-scroll" aria-label="Projects">
             {projects.map((project) => (
-              <div className="rail-item" key={project.projectId}>
-                <div className="rail-item-trigger">
-                  <span className="rail-item-title" data-clamp="">
-                    {project.name}
-                  </span>
-                </div>
+              <div
+                className="rail-item"
+                data-active={
+                  activeConversationUrl === project.conversationUrl || undefined
+                }
+                key={project.projectId}
+              >
+                {project.conversationUrl ? (
+                  <a className="rail-item-trigger" href={project.conversationUrl}>
+                    <span className="rail-item-title" data-clamp="">
+                      {project.name}
+                    </span>
+                  </a>
+                ) : (
+                  <div className="rail-item-trigger">
+                    <span className="rail-item-title" data-clamp="">
+                      {project.name}
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </nav>

@@ -3171,6 +3171,12 @@ def test_projects_api_creates_and_lists_projects_newest_first() -> None:
         "Second project",
         "First project",
     ]
+    # Recorded directly rather than by planning, so there is no conversation to
+    # open and the rail has nowhere to send a click.
+    assert all(
+        "conversationUrl" not in project
+        for project in listed.json()["projects"]
+    )
 
 
 def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
@@ -3206,6 +3212,7 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
         {
             "projectId": f"project-{created.json()['id']}",
             "name": "New project",
+            "conversationUrl": f"/conversations/{created.json()['id']}",
         }
     ]
     assert titled.json() == {"title": "Durable project intent"}
@@ -3213,6 +3220,7 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
         {
             "projectId": f"project-{created.json()['id']}",
             "name": "Durable project intent",
+            "conversationUrl": f"/conversations/{created.json()['id']}",
         }
     ]
 

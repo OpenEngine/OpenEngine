@@ -13,9 +13,26 @@ class Project:
     name: str
 
 
+_INSTANCE_PROJECT_PREFIX = "project-"
+
+
 def project_id_for_instance(instance_id: AgentInstanceId) -> ProjectId:
     """Return the durable project owned by a New Project conversation."""
-    return ProjectId(f"project-{instance_id}")
+    return ProjectId(f"{_INSTANCE_PROJECT_PREFIX}{instance_id}")
+
+
+def instance_id_for_project(project_id: ProjectId) -> AgentInstanceId | None:
+    """Return the conversation `project_id` was named after, if it was.
+
+    The inverse of `project_id_for_instance`, and a guess rather than a lookup:
+    a project recorded some other way can share the shape without owning a
+    conversation, so callers must confirm the instance exists before trusting
+    it.
+    """
+    if not project_id.startswith(_INSTANCE_PROJECT_PREFIX):
+        return None
+    instance_id = project_id[len(_INSTANCE_PROJECT_PREFIX) :]
+    return AgentInstanceId(instance_id) if instance_id else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,4 +55,10 @@ class Workstream:
     name: str
 
 
-__all__ = ["Milestone", "Project", "Workstream", "project_id_for_instance"]
+__all__ = [
+    "Milestone",
+    "Project",
+    "Workstream",
+    "instance_id_for_project",
+    "project_id_for_instance",
+]
