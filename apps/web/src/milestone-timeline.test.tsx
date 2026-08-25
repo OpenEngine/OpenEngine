@@ -21,6 +21,13 @@ const launch: ApiMilestone = {
   dependencies: ["foundation"],
 };
 const project: ApiProject = { projectId: "project-1", name: "Engine roadmap" };
+// A space is not something the store puts in an id, but it is what pins the
+// path this component asks for to the one `getProjectMilestones` builds.
+const other: ApiProject = { projectId: "project 2", name: "Second plan" };
+
+function milestonesUrl(id: string) {
+  return `/api/projects/${encodeURIComponent(id)}/milestones`;
+}
 
 /** A fresh response per call: a poll reads more than one of them. */
 function plan(milestones: ApiMilestone[]) {
@@ -144,5 +151,106 @@ describe("MilestoneTimeline", () => {
     expect(
       screen.getByText("Could not load milestones: store unavailable"),
     ).toBeInTheDocument();
+  });
+
+  it("says so when it has stopped following the plan, and stops saying so", async () => {
+    vi.useFakeTimers();
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(plan([foundation]))
+      .mockImplementationOnce(unavailable())
+      .mockImplementationOnce(unavailable())
+      .mockImplementationOnce(unavailable())
+      .mockImplementation(plan([foundation, launch]));
+    vi.stubGlobal("fetch", fetch);
+
+    render(<MilestoneTimeline project={project} />);
+    await act(async () => {});
+
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    // One failure is a blip, and the timeline is still believed to be current.
+    expect(screen.queryByText(/Not updating/)).toBeNull();
+
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+
+    // A run of them is an outage: the last known plan stays on screen, but it
+    // no longer claims to be following anything.
+    expect(screen.getByText("Not updating: store unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Foundation")).toBeInTheDocument();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+    expect(screen.queryByText(/Not updating/)).toBeNull();
+    expect(screen.getByText("Launch")).toBeInTheDocument();
+  });
+
+  it("polls the project it was given, and follows a switch to another", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn().mockImplementation(async (url: string) =>
+      url === milestonesUrl(other.projectId)
+        ? await plan([launch])()
+        : await plan([foundation])(),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const { rerender } = render(<MilestoneTimeline project={project} />);
+    await act(async () => {});
+
+    expect(fetch.mock.lastCall?.[0]).toBe("/api/projects/project-1/milestones");
+    expect(screen.getByText("Foundation")).toBeInTheDocument();
+
+    rerender(<MilestoneTimeline project={other} />);
+
+    // The first project's plan is not left standing under the second project's
+    // name while the new one is being read.
+    expect(screen.queryByText("Foundation")).toBeNull();
+    expect(screen.getByText("Loading milestones…")).toBeInTheDocument();
+
+    await act(async () => {});
+
+    expect(fetch.mock.lastCall?.[0]).toBe("/api/projects/project%202/milestones");
+    expect(screen.getByText("Launch")).toBeInTheDocument();
+    expect(screen.queryByText("Foundation")).toBeNull();
+  });
+
+  it("stops polling once it leaves the page", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn().mockImplementation(plan([foundation]));
+    vi.stubGlobal("fetch", fetch);
+
+    const { unmount } = render(<MilestoneTimeline project={project} />);
+    await act(async () => {});
+    const answered = fetch.mock.calls.length;
+
+    unmount();
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+
+    expect(fetch).toHaveBeenCalledTimes(answered);
+  });
+
+  it("stops polling when it leaves the page mid-request", async () => {
+    vi.useFakeTimers();
+    let answer = () => {};
+    const held = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const fetch = vi.fn().mockImplementation(async () => {
+      await held;
+      return plan([foundation])();
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const { unmount } = render(<MilestoneTimeline project={project} />);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // Unmounted with the first request still open, so there is no timer left to
+    // clear: only the abort keeps the answer from scheduling the next poll.
+    unmount();
+    await act(async () => {
+      answer();
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

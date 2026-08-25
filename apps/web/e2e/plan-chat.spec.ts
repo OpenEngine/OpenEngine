@@ -109,7 +109,17 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await expect(page).toHaveURL(`/conversations/${threads[0].id}`);
   await page.reload();
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  // What the poll showed was written down: every milestone, including the one
+  // added mid-conversation, is read back from the store on a cold load.
   await expect(page.getByText("Planning foundation", { exact: true })).toBeVisible();
+  await expect(page.getByText("First release", { exact: true })).toBeVisible();
+  await expect(page.getByText("Wider rollout", { exact: true })).toBeVisible();
+  await page.getByText("Planning foundation", { exact: true }).hover();
+  await expect(
+    page.getByRole("tooltip", {
+      name: "Establish the project structure and shared planning model.",
+    }),
+  ).toBeVisible();
 
   // Leave the plan behind, then come back to it the way the rail offers: the
   // project row opens the conversation it was named after.
