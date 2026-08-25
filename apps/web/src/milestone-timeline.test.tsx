@@ -20,10 +20,18 @@ const launch: ApiMilestone = {
   description: "Ship the project to users.",
   dependencies: ["foundation"],
 };
-const project: ApiProject = { projectId: "project-1", name: "Engine roadmap" };
+const project: ApiProject = {
+  projectId: "project-1",
+  name: "Engine roadmap",
+  archived: false,
+};
 // A space is not something the store puts in an id, but it is what pins the
 // path this component asks for to the one `getProjectMilestones` builds.
-const other: ApiProject = { projectId: "project 2", name: "Second plan" };
+const other: ApiProject = {
+  projectId: "project 2",
+  name: "Second plan",
+  archived: false,
+};
 
 function milestonesUrl(id: string) {
   return `/api/projects/${encodeURIComponent(id)}/milestones`;

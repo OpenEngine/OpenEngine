@@ -161,16 +161,18 @@ class SQLiteStateStore:
         with self._lock, self._connection:
             self._connection.execute(
                 """
-                INSERT INTO projects (project_id, name) VALUES (?, ?)
-                ON CONFLICT(project_id) DO UPDATE SET name = excluded.name
+                INSERT INTO projects (project_id, name, archived) VALUES (?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    name = excluded.name,
+                    archived = excluded.archived
                 """,
-                (project.project_id, project.name),
+                (project.project_id, project.name, int(project.archived)),
             )
 
     async def load_project(self, project_id: ProjectId) -> Project | None:
         with self._lock:
             row = self._connection.execute(
-                "SELECT project_id, name FROM projects WHERE project_id = ?",
+                "SELECT project_id, name, archived FROM projects WHERE project_id = ?",
                 (project_id,),
             ).fetchone()
         return _project_from_row(row) if row is not None else None
@@ -178,7 +180,7 @@ class SQLiteStateStore:
     async def list_projects(self) -> Sequence[Project]:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT project_id, name FROM projects ORDER BY sequence DESC"
+                "SELECT project_id, name, archived FROM projects ORDER BY sequence DESC"
             ).fetchall()
         return tuple(_project_from_row(row) for row in rows)
 
@@ -669,7 +671,11 @@ class SQLiteStateStore:
 
 
 def _project_from_row(row: sqlite3.Row) -> Project:
-    return Project(project_id=ProjectId(row["project_id"]), name=row["name"])
+    return Project(
+        project_id=ProjectId(row["project_id"]),
+        name=row["name"],
+        archived=bool(row["archived"]),
+    )
 
 
 def _milestone_from_row(row: sqlite3.Row) -> Milestone:

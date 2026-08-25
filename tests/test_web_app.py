@@ -3358,6 +3358,46 @@ def test_projects_api_creates_and_lists_projects_newest_first() -> None:
     )
 
 
+def test_a_project_is_archived_and_restored_the_way_a_chat_is() -> None:
+    """Archiving puts a project away rather than deleting it: it stays listed,
+    marked so the rail can file it under its own heading, and restoring is the
+    same click back. The plan it was named after is untouched by either."""
+
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test", "createProject": True},
+            )
+            project_id = f"project-{created.json()['id']}"
+            archived = await client.post(f"/api/projects/{project_id}/archive")
+            listed = await client.get("/api/projects")
+            restored = await client.post(f"/api/projects/{project_id}/unarchive")
+            missing = await client.post("/api/projects/project-missing/archive")
+            return created, archived, listed, restored, missing
+
+    created, archived, listed, restored, missing = asyncio.run(scenario())
+
+    thread_id = created.json()["id"]
+    assert archived.status_code == 200
+    assert archived.json() == {
+        "projectId": f"project-{thread_id}",
+        "name": "New project",
+        "archived": True,
+        # The plan is still open, and restoring has to give the link back.
+        "conversationUrl": f"/conversations/{thread_id}",
+    }
+    assert listed.json()["projects"] == [archived.json()]
+    assert restored.json()["archived"] is False
+    assert missing.status_code == 404
+
+
 def test_project_milestones_api_lists_the_active_projects_dependency_data() -> None:
     runner = ConcurrentRunner()
     session = _session(runner)
@@ -3394,7 +3434,11 @@ def test_project_milestones_api_lists_the_active_projects_dependency_data() -> N
     listed, missing = asyncio.run(scenario())
 
     assert listed.json() == {
-        "project": {"projectId": project.project_id, "name": "Engine"},
+        "project": {
+            "projectId": project.project_id,
+            "name": "Engine",
+            "archived": False,
+        },
         "milestones": [
             {
                 "milestoneId": "milestone-launch",
@@ -3446,6 +3490,7 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
         {
             "projectId": f"project-{created.json()['id']}",
             "name": "New project",
+            "archived": False,
             "conversationUrl": f"/conversations/{created.json()['id']}",
         }
     ]
@@ -3454,6 +3499,7 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
         {
             "projectId": f"project-{created.json()['id']}",
             "name": "Durable project intent",
+            "archived": False,
             "conversationUrl": f"/conversations/{created.json()['id']}",
         }
     ]
@@ -3487,12 +3533,17 @@ def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
     thread_id, archived, restored = asyncio.run(scenario())
 
     assert archived.json()["projects"] == [
-        {"projectId": f"project-{thread_id}", "name": "New project"}
+        {
+            "projectId": f"project-{thread_id}",
+            "name": "New project",
+            "archived": False,
+        }
     ]
     assert restored.json()["projects"] == [
         {
             "projectId": f"project-{thread_id}",
             "name": "New project",
+            "archived": False,
             "conversationUrl": f"/conversations/{thread_id}",
         }
     ]

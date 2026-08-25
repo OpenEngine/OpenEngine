@@ -65,6 +65,8 @@ export type ApiThread = {
 export type ApiProject = {
   projectId: string;
   name: string;
+  /** Put away rather than deleted: listed under Archived, and restorable. */
+  archived: boolean;
   /** The planning conversation this project was named after, when it still has
    *  one. A project with none is listed but has nothing to open. */
   conversationUrl?: string;
@@ -97,6 +99,17 @@ export function createProject(name: string, signal?: AbortSignal): Promise<ApiPr
     body: JSON.stringify({ name }),
     signal,
   });
+}
+
+/** Put a project away, or take it back out. */
+export function setProjectArchived(
+  projectId: string,
+  archived: boolean,
+): Promise<ApiProject> {
+  return api<ApiProject>(
+    `/api/projects/${encodeURIComponent(projectId)}/${archived ? "archive" : "unarchive"}`,
+    { method: "POST" },
+  );
 }
 
 export type ApiRunStep = {

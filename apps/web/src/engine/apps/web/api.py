@@ -721,9 +721,11 @@ class ThreadService:
             # client receives the permalink. Rename that durable placeholder
             # before consuming the sentinel title so an interrupted request is
             # always safe to retry after a reload.
-            if names_project:
+            if project is not None and names_project:
+                # Renamed rather than rewritten, so a project put away while it
+                # was still being named comes back still put away.
                 await self.session.state_store.save_project(
-                    Project(project_id, title)
+                    replace(project, name=title)
                 )
             thread.title = title
             await self._persist_metadata(thread)
@@ -1166,6 +1168,28 @@ def create_app(
         # Recorded rather than planned, so it owns no conversation to link to.
         return JSONResponse(_project_json(project, ()), status_code=201)
 
+    async def archive_project(request: Request) -> JSONResponse:
+        """Put a project away, or take it back out, from one pair of routes.
+
+        Which one was asked for is read from the path, the way archiving a chat
+        already is: the two differ only in the flag they record.
+        """
+        project_id = ProjectId(request.path_params["project_id"])
+        project = await session.state_store.load_project(project_id)
+        if project is None:
+            return _error("project not found", 404)
+        archived = request.url.path.rsplit("/", 1)[-1] == "archive"
+        project = replace(project, archived=archived)
+        await session.state_store.save_project(project)
+        # An archived project keeps its plan: restoring puts the link back
+        # rather than leaving a row that has forgotten where it went.
+        conversations = {
+            thread.instance_id
+            for thread in await service.list()
+            if not thread.archived
+        }
+        return JSONResponse(_project_json(project, conversations))
+
     async def list_project_milestones(request: Request) -> JSONResponse:
         project_id = ProjectId(request.path_params["project_id"])
         project = await session.state_store.load_project(project_id)
@@ -1579,6 +1603,18 @@ def create_app(
         Route("/api/config", config),
         Route("/api/projects", list_projects),
         Route("/api/projects", create_project, methods=["POST"]),
+        Route(
+            "/api/projects/{project_id}/archive",
+            archive_project,
+            methods=["POST"],
+            name="archive_project",
+        ),
+        Route(
+            "/api/projects/{project_id}/unarchive",
+            archive_project,
+            methods=["POST"],
+            name="unarchive_project",
+        ),
         Route("/api/projects/{project_id}/milestones", list_project_milestones),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
@@ -1687,14 +1723,18 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
 
 def _project_json(
     project: Project, conversations: Container[AgentInstanceId]
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Render a project, linked to its plan when that conversation is open.
 
     `conversations` is required rather than defaulted: a caller that forgot it
     would quietly emit the linkless rows this link exists to replace.
     """
 
-    result = {"projectId": str(project.project_id), "name": project.name}
+    result: dict[str, object] = {
+        "projectId": str(project.project_id),
+        "name": project.name,
+        "archived": project.archived,
+    }
     instance_id = instance_id_for_project(project.project_id)
     if instance_id is not None and instance_id in conversations:
         result["conversationUrl"] = f"/conversations/{quote(str(instance_id), safe='')}"

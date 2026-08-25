@@ -155,6 +155,53 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await shot(page, testInfo, "3 the project reopens its plan");
 });
 
+test("a project is archived into its own list and restored from it", async ({
+  page,
+  engine,
+}, testInfo) => {
+  engine.script({
+    title: PROJECT_NAME,
+    scenarios: [{ steps: [{ type: "say", text: "Here is what I would change." }] }],
+  });
+
+  await page.goto("/plan");
+  await page.getByLabel("Message the agent").fill("How would you add a greeting file?");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Here is what I would change.")).toBeVisible();
+
+  const rail = page.getByRole("navigation", { name: "Projects" });
+  await expect(rail.getByRole("link", { name: PROJECT_NAME })).toBeVisible();
+  await expect(page.getByText("Archived projects")).toHaveCount(0);
+
+  await rail.getByRole("button", { name: `Archive ${PROJECT_NAME}` }).click();
+
+  // Put away, not deleted: the row leaves the list for a submenu that is shut
+  // until it is asked for, which is where the project has gone rather than
+  // where it is on screen.
+  await expect(page.getByText("Archived projects")).toBeVisible();
+  await expect(rail.getByText(PROJECT_NAME)).toBeHidden();
+  await shot(page, testInfo, "4 the project is archived");
+
+  const archived = await (await page.request.get("/api/projects")).json();
+  expect(archived.projects[0].archived).toBe(true);
+
+  await page.getByText("Archived projects").click();
+
+  // Open, the row is the plain one a project with no conversation gets: an
+  // archived project is not somewhere to click through to.
+  await expect(rail.getByText(PROJECT_NAME)).toBeVisible();
+  await expect(rail.getByRole("link", { name: PROJECT_NAME })).toHaveCount(0);
+  await shot(page, testInfo, "5 the archived projects submenu");
+
+  await rail.getByRole("button", { name: `Restore ${PROJECT_NAME}` }).click();
+
+  await expect(rail.getByRole("link", { name: PROJECT_NAME })).toBeVisible();
+  await expect(page.getByText("Archived projects")).toHaveCount(0);
+  // Written down rather than only redrawn, so a reload finds it back as well.
+  await page.reload();
+  await expect(rail.getByRole("link", { name: PROJECT_NAME })).toBeVisible();
+});
+
 test("a new chat started from the plan page is not another plan", async ({
   page,
   engine,

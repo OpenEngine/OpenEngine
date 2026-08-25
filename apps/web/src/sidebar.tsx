@@ -126,6 +126,64 @@ function ThreadListItem({
   );
 }
 
+/** One project in the rail, with the click that puts it away or brings it back.
+ *
+ *  An archived one is the plain row a project with no conversation already
+ *  gets: it is not what you are reading, and restoring is the thing to do with
+ *  it. That is how an archived chat reads too. */
+function ProjectItem({
+  project,
+  active,
+  onArchive,
+}: {
+  project: ApiProject;
+  active: boolean;
+  onArchive?: (project: ApiProject, archived: boolean) => void;
+}) {
+  const copy = (
+    <span className="rail-item-title" data-clamp="">
+      {project.name}
+    </span>
+  );
+  return (
+    <div className="rail-item" data-active={active || undefined}>
+      {project.conversationUrl && !project.archived ? (
+        <a
+          aria-current={active ? "page" : undefined}
+          className="rail-item-trigger"
+          href={project.conversationUrl}
+        >
+          {copy}
+        </a>
+      ) : (
+        <div className="rail-item-trigger">{copy}</div>
+      )}
+      {onArchive &&
+        (project.archived ? (
+          <button
+            aria-label={`Restore ${project.name}`}
+            className="rail-item-action"
+            onClick={() => onArchive(project, false)}
+            title="Restore project"
+            type="button"
+          >
+            Restore
+          </button>
+        ) : (
+          <button
+            aria-label={`Archive ${project.name}`}
+            className="rail-item-action"
+            onClick={() => onArchive(project, true)}
+            title="Archive project"
+            type="button"
+          >
+            ×
+          </button>
+        ))}
+    </div>
+  );
+}
+
 export function Sidebar({
   projects = [],
   runs,
@@ -134,6 +192,7 @@ export function Sidebar({
   activeRunId,
   activeConversationUrl,
   activeView,
+  onArchiveProject,
 }: {
   projects?: ApiProject[];
   runs: ApiWorkflowRun[];
@@ -144,6 +203,9 @@ export function Sidebar({
   activeRunId?: string;
   activeConversationUrl?: string;
   activeView?: "runs" | "new";
+  /** Omitted where nothing owns the projects list, which leaves the rows
+   *  readable and drops a button that could not have worked. */
+  onArchiveProject?: (project: ApiProject, archived: boolean) => void;
 }) {
   // Where the page belongs is not always known at the first paint: a
   // conversation is only recognized as a project's once the projects load. The
@@ -154,6 +216,13 @@ export function Sidebar({
   const [chosen, setChosen] = useState<RailSection | "closed" | null>(null);
   const open = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
   const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
+  // A row with nowhere to go is never the page you are reading. Both sides are
+  // optional here, so comparing them alone would call two absent URLs a match
+  // and mark every such row on every page.
+  const isActive = (project: ApiProject) =>
+    project.conversationUrl !== undefined &&
+    project.conversationUrl === activeConversationUrl;
+  const archivedProjects = projects.filter((project) => project.archived);
   return (
     <aside className="rail">
       <RailBrand href="/" />
@@ -169,39 +238,29 @@ export function Sidebar({
               is still listed -- it says the project exists -- but there is
               nowhere to send a click, so it stays the plain row it reads as. */}
           <nav className="rail-scroll" aria-label="Projects">
-            {projects.map((project) => {
-              // A row with nowhere to go is never the page you are reading. Both
-              // sides are optional here, so comparing them alone would call two
-              // absent URLs a match and mark every such row on every page.
-              const active =
-                project.conversationUrl !== undefined &&
-                project.conversationUrl === activeConversationUrl;
-              return (
-                <div
-                  className="rail-item"
-                  data-active={active || undefined}
+            {projects
+              .filter((project) => !project.archived)
+              .map((project) => (
+                <ProjectItem
+                  active={isActive(project)}
                   key={project.projectId}
-                >
-                  {project.conversationUrl ? (
-                    <a
-                      aria-current={active ? "page" : undefined}
-                      className="rail-item-trigger"
-                      href={project.conversationUrl}
-                    >
-                      <span className="rail-item-title" data-clamp="">
-                        {project.name}
-                      </span>
-                    </a>
-                  ) : (
-                    <div className="rail-item-trigger">
-                      <span className="rail-item-title" data-clamp="">
-                        {project.name}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                  onArchive={onArchiveProject}
+                  project={project}
+                />
+              ))}
+            {archivedProjects.length > 0 && (
+              <details className="rail-archive">
+                <summary>Archived projects</summary>
+                {archivedProjects.map((project) => (
+                  <ProjectItem
+                    active={false}
+                    key={project.projectId}
+                    onArchive={onArchiveProject}
+                    project={project}
+                  />
+                ))}
+              </details>
+            )}
           </nav>
         </Section>
         <Section id="workflows" title="Workflows" open={open === "workflows"} onToggle={toggle}>

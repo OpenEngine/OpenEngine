@@ -52,7 +52,7 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0002",)
+    assert revision == ("sqlite_0003",)
 
 
 def test_milestone_details_migration_preserves_existing_records(tmp_path: Path) -> None:
@@ -84,6 +84,31 @@ def test_milestone_details_migration_preserves_existing_records(tmp_path: Path) 
             ("milestone-foundation",),
         ).fetchone()
     assert row == ("Foundation", "", "[]")
+
+
+def test_project_archive_migration_leaves_existing_projects_listed(
+    tmp_path: Path,
+) -> None:
+    """Archiving is new, so nothing recorded before it is put away by it."""
+
+    database = tmp_path / "state.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "sqlite_0002")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO projects (project_id, name) VALUES (?, ?)",
+            ("project-engine", "OpenEngine"),
+        )
+        connection.commit()
+
+    upgrade(url)
+
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT name, archived FROM projects WHERE project_id = ?",
+            ("project-engine",),
+        ).fetchone()
+    assert row == ("OpenEngine", 0)
 
 
 def test_postgres_history_is_a_placeholder(capsys) -> None:
