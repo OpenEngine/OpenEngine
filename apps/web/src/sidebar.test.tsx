@@ -190,7 +190,7 @@ describe("Sidebar", () => {
   it("matches the new workflow button and lists projects by generated name", () => {
     render(
       <Sidebar
-        projects={[{ projectId: "project-1", name: "Engine roadmap" }]}
+        projects={[{ projectId: "project-1", name: "Engine roadmap", archived: false }]}
         runs={[run]}
         initialSection="projects"
       />,
@@ -212,11 +212,13 @@ describe("Sidebar", () => {
           {
             projectId: "project-agi-1",
             name: "Engine roadmap",
+            archived: false,
             conversationUrl: "/conversations/agi-1",
           },
           {
             projectId: "project-agi-2",
             name: "Second roadmap",
+            archived: false,
             conversationUrl: "/conversations/agi-2",
           },
         ]}
@@ -244,9 +246,10 @@ describe("Sidebar", () => {
           {
             projectId: "project-agi-1",
             name: "Engine roadmap",
+            archived: false,
             conversationUrl: "/conversations/agi-1",
           },
-          { projectId: "project-2", name: "Recorded roadmap" },
+          { projectId: "project-2", name: "Recorded roadmap", archived: false },
         ]}
         runs={[run]}
         initialSection="projects"
@@ -264,7 +267,7 @@ describe("Sidebar", () => {
   it("lists a project with no conversation as plain text", () => {
     render(
       <Sidebar
-        projects={[{ projectId: "project-1", name: "Engine roadmap" }]}
+        projects={[{ projectId: "project-1", name: "Engine roadmap", archived: false }]}
         runs={[run]}
         initialSection="projects"
       />,
@@ -278,6 +281,77 @@ describe("Sidebar", () => {
     // Two absent URLs are not a match: without this the row reads as the page
     // you are on, on every page that is not a conversation.
     expect(row.closest(".rail-item")).not.toHaveAttribute("data-active");
+  });
+
+  /** Archiving is the same one click a chat gets, and it moves the row into a
+   *  list of its own rather than deleting anything. */
+  it("archives a project from the rail and lists it under Archived projects", async () => {
+    const user = userEvent.setup();
+    const archive = vi.fn();
+    const active = {
+      projectId: "project-agi-1",
+      name: "Engine roadmap",
+      archived: false,
+      conversationUrl: "/conversations/agi-1",
+    };
+    const { rerender } = render(
+      <Sidebar
+        projects={[active]}
+        runs={[run]}
+        initialSection="projects"
+        onArchiveProject={archive}
+      />,
+    );
+
+    expect(within(body("Projects")).queryByText("Archived projects")).not.toBeInTheDocument();
+    await user.click(
+      within(body("Projects")).getByRole("button", { name: "Archive Engine roadmap" }),
+    );
+    expect(archive).toHaveBeenCalledWith(active, true);
+
+    rerender(
+      <Sidebar
+        projects={[{ ...active, archived: true }]}
+        runs={[run]}
+        initialSection="projects"
+        onArchiveProject={archive}
+      />,
+    );
+
+    const archived = within(body("Projects")).getByText("Engine roadmap");
+    expect(archived.closest(".rail-archive")).not.toBeNull();
+    expect(within(body("Projects")).getByText("Archived projects")).toBeInTheDocument();
+    // Put away is not the page you are reading, so the row stops being a link.
+    expect(
+      within(body("Projects")).queryByRole("link", {
+        name: "Engine roadmap",
+        hidden: true,
+      }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(body("Projects")).getByRole("button", {
+        name: "Restore Engine roadmap",
+        hidden: true,
+      }),
+    );
+    expect(archive).toHaveBeenLastCalledWith({ ...active, archived: true }, false);
+  });
+
+  /** Nothing owns the list on a rail drawn without a handler, so the button is
+   *  left out rather than left there doing nothing. */
+  it("omits the archive control when no handler is given", () => {
+    render(
+      <Sidebar
+        projects={[{ projectId: "project-1", name: "Engine roadmap", archived: false }]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
+
+    expect(
+      within(body("Projects")).queryByRole("button", { name: "Archive Engine roadmap" }),
+    ).not.toBeInTheDocument();
   });
 
   it("lists runs with their conversations and marks the one on screen", () => {

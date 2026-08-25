@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import {
   api,
   newChatAgent,
+  setProjectArchived,
   setThreadAutoApprove,
   setThreadRunner,
   type ApiThread,
@@ -350,7 +351,18 @@ function useProjects() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, []);
-  return projects;
+  // The row moves on the click rather than a second later, when the poll next
+  // reads the list -- and that same poll is what puts it back if the write
+  // failed, so a click that did not take undoes itself.
+  const archive = (project: ApiProject, archived: boolean) => {
+    setProjects((current) =>
+      current.map((item) =>
+        item.projectId === project.projectId ? { ...item, archived } : item,
+      ),
+    );
+    void setProjectArchived(project.projectId, archived).catch(() => {});
+  };
+  return { projects, archive };
 }
 
 /** One shell for every screen: the rail, and the page beside it.
@@ -364,7 +376,7 @@ function App() {
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
   const { runs, error: runsError } = useRuns();
-  const projects = useProjects();
+  const { projects, archive: archiveProject } = useProjects();
 
   // Settled for this mount: the route is read once, and every move between
   // pages here is a full page load.
@@ -424,6 +436,7 @@ function App() {
           // leaves the workflow rows reading exactly as they did.
           activeConversationUrl={conversationUrl}
           activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
+          onArchiveProject={archiveProject}
         />
         {route.kind === "runs" ? (
           <RunsPage runs={runs} error={runsError} />

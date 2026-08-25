@@ -11,6 +11,9 @@ class Project:
 
     project_id: ProjectId
     name: str
+    archived: bool = False
+    """Put away rather than deleted: still listed, under its own heading, and
+    restored by the same click that put it there."""
 
 
 _INSTANCE_PROJECT_PREFIX = "project-"
