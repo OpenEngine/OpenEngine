@@ -10,6 +10,7 @@ import engine.apps.worker.__main__ as worker_main
 from engine.runtime import (
     ApprovalCapability,
     EngineConfigError,
+    ResponseStyle,
     describe_loaded_config,
     load_engine_config,
     parse_engine_config,
@@ -21,6 +22,7 @@ def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
 
     assert loaded.path is None
     assert loaded.config.attribution is True
+    assert loaded.config.output_style is None
     assert loaded.config.approvals.allow == (ApprovalCapability.READ,)
     assert loaded.config.approvals.auto_approve is False
     assert loaded.config.approvals.bash.allow == ()
@@ -93,6 +95,9 @@ def test_selection_is_explicit_then_environment_then_working_directory(
         ({"approvals": {"automatic": True}}, "unknown key in approvals: automatic"),
         ({"approvals": {"auto_approve": "yes"}}, "must be a boolean"),
         ({"attribution": "no"}, "attribution must be a boolean"),
+        ({"output_style": True}, "output_style must be a string"),
+        ({"output_style": "Concise"}, "output_style is unknown: 'Concise'"),
+        ({"output_style": "terse"}, "expected one of: concise, explanatory, learning"),
         ({"approvals": {"allow": "read"}}, "must be an array of strings"),
         ({"approvals": {"allow": ["Read"]}}, "unknown capability 'Read'"),
         ({"approvals": {"allow": ["read", "read"]}}, "must not contain duplicates"),
@@ -127,6 +132,15 @@ def test_attribution_can_be_disabled(tmp_path: Path) -> None:
     assert loaded.config.attribution is False
 
 
+def test_output_style_is_engine_vocabulary(tmp_path: Path) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text('output_style = "concise"\n')
+
+    loaded = load_engine_config(path, environ={}, cwd=tmp_path)
+
+    assert loaded.config.output_style is ResponseStyle.CONCISE
+
+
 def test_invalid_toml_names_its_source(tmp_path: Path) -> None:
     path = tmp_path / "broken.toml"
     path.write_text("[approvals\n")
@@ -151,6 +165,7 @@ def test_startup_description_reports_the_policy_being_enforced(
     assert "allow=read, mcp" in description
     assert "bash_rules=2" in description
     assert "approvals enforced" in description
+    assert "output_style=provider default" in description
 
 
 def test_web_entrypoint_puts_explicit_config_in_composition_settings(

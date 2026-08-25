@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from engine.ports.agent_runner import ResponseStyle
 from engine.ports.permissions import ApprovalCapability
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
@@ -55,6 +56,12 @@ class EngineConfig:
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
     attribution: bool = True
+    output_style: ResponseStyle | None = None
+    """How agents should write, or ``None`` to leave each provider's default.
+
+    Named for the vocabulary rather than for a provider: runners that expose a
+    style select it before the turn, and runners that do not leave it alone.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,10 +126,15 @@ def load_engine_config(
 def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     """Validate a decoded TOML document and return immutable settings."""
 
-    _reject_unknown(document, {"attribution", "approvals", "workflows"}, "configuration")
+    _reject_unknown(
+        document,
+        {"attribution", "approvals", "output_style", "workflows"},
+        "configuration",
+    )
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
         raise EngineConfigError("attribution must be a boolean")
+    output_style = _output_style(document.get("output_style", ""))
     approvals = _table(document.get("approvals", {}), "approvals")
     _reject_unknown(approvals, {"auto_approve", "allow", "bash"}, "approvals")
 
@@ -154,6 +166,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     return EngineConfig(
         attribution=attribution,
+        output_style=output_style,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -184,11 +197,32 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
         else "disabled"
     )
     attribution = "on" if loaded.config.attribution else "off"
+    style = loaded.config.output_style
+    output_style = style.value if style is not None else "provider default"
     return (
-        f"configuration: {source}; attribution={attribution}; approvals enforced "
+        f"configuration: {source}; attribution={attribution}; "
+        f"output_style={output_style}; approvals enforced "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
         f"workflows={workflows}"
     )
+
+
+def _output_style(value: object) -> ResponseStyle | None:
+    """Validated here rather than passed through, because a provider that does
+    not recognize a style name may ignore it instead of refusing it -- and a
+    misspelled style that quietly does nothing is the one failure a strict
+    configuration file exists to prevent."""
+    if not isinstance(value, str):
+        raise EngineConfigError("output_style must be a string")
+    if not value:
+        return None
+    try:
+        return ResponseStyle(value)
+    except ValueError as error:
+        choices = ", ".join(style.value for style in ResponseStyle)
+        raise EngineConfigError(
+            f"output_style is unknown: {value!r}; expected one of: {choices}"
+        ) from error
 
 
 def _relative_to(path: Path, directory: Path) -> Path:
@@ -235,6 +269,7 @@ __all__ = [
     "EngineConfig",
     "EngineConfigError",
     "LoadedEngineConfig",
+    "ResponseStyle",
     "WorkflowsConfig",
     "describe_loaded_config",
     "load_engine_config",

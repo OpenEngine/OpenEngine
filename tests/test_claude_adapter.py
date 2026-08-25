@@ -13,6 +13,7 @@ import pytest
 
 from engine.adapters.agent_runner.claude_code import (
     CLAUDE_PERMISSION_TRANSLATOR,
+    OUTPUT_STYLES,
     ClaudeCodeAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
@@ -41,6 +42,7 @@ from engine.ports import (
     StreamingMcpAgentRunner,
     PermissionScope,
     PermissionTranslator,
+    ResponseStyle,
     UserInputAnswer,
     UserInputResponse,
 )
@@ -86,6 +88,37 @@ def test_attribution_can_be_disabled_for_commits_and_pull_requests() -> None:
 
     settings = json.loads(argv[argv.index("--settings") + 1])
     assert settings == {"attribution": {"commit": "", "pr": "", "sessionUrl": False}}
+
+
+def test_response_style_selects_claude_s_own_output_style() -> None:
+    argv = ClaudeCodeAgentRunner(output_style=ResponseStyle.CONCISE).command_line(PROFILE)
+
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings == {"outputStyle": "Concise"}
+
+
+def test_every_provider_setting_travels_in_one_settings_document() -> None:
+    """A second `--settings` would replace the first rather than add to it."""
+    argv = ClaudeCodeAgentRunner(
+        attribution=False, output_style=ResponseStyle.LEARNING
+    ).command_line(PROFILE)
+
+    assert argv.count("--settings") == 1
+    assert json.loads(argv[argv.index("--settings") + 1]) == {
+        "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+        "outputStyle": "Learning",
+    }
+
+
+def test_no_configured_style_leaves_claude_s_default_alone() -> None:
+    assert "--settings" not in ClaudeCodeAgentRunner().command_line(PROFILE)
+
+
+def test_every_engine_style_has_an_exactly_spelled_provider_name() -> None:
+    """Claude keeps its default for a style name it does not recognize, so a
+    style Engine accepts must never reach the CLI mistranslated."""
+    assert set(OUTPUT_STYLES) == set(ResponseStyle)
+    assert OUTPUT_STYLES[ResponseStyle.EXPLANATORY] == "Explanatory"
 
 
 @pytest.mark.parametrize(

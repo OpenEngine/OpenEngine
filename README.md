@@ -60,10 +60,12 @@ the v1 DSL. Workflow files are trusted configuration and execute once during
 startup. A compiled definition is snapshotted onto every run so editing or
 removing a file does not change an in-flight run.
 
-Engine also supports agent attribution and provider-neutral approval policy:
+Engine also supports agent attribution, response style, and provider-neutral
+approval policy:
 
 ```toml
 attribution = false
+output_style = "concise"
 
 [approvals]
 auto_approve = false
@@ -80,6 +82,12 @@ deny = ["sudo **"]
 
 Set `attribution = false` to keep both Codex and Claude Code from adding agent
 attribution to commits and pull requests. Attribution is enabled by default.
+
+Set `output_style` to `concise`, `explanatory`, or `learning` to fix how agents
+write their answers. Every Claude Code runner this composes — chat, read-only,
+and workflow — selects the matching Claude output style before the turn starts.
+Runners whose provider has no such setting leave it alone, and omitting the key
+leaves every provider's own default in place.
 
 Capabilities are `read`, `edit`, `bash`, `web`, and `mcp`. Configuration is
 strict: unknown keys, unknown capabilities, duplicate entries, and incorrectly

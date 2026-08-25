@@ -1,4 +1,5 @@
 attribution = false
+output_style = "concise"
 
 [approvals]
 auto_approve = false

@@ -82,6 +82,7 @@ from engine.runtime import (
     ApprovalConfig,
     Capabilities,
     EngineConfig,
+    ResponseStyle,
     WorkflowCatalog,
 )
 from engine.runtime.terminal_mcp import _mcp_response
@@ -207,6 +208,17 @@ def test_engine_config_disables_attribution_for_every_workflow_runner() -> None:
     assert json.loads(claude_argv[claude_argv.index("--settings") + 1])[
         "attribution"
     ]["commit"] == ""
+
+
+def test_engine_config_styles_every_claude_runner_this_process_offers() -> None:
+    """Chat, review, and workflow alike: a style is a property of the runner
+    rather than of the errand it is sent on."""
+    settings = Settings(engine_config=EngineConfig(output_style=ResponseStyle.CONCISE))
+
+    for build in (build_runners, build_read_only_runners, build_workflow_runners):
+        argv = build(settings)["claude"].command_line(PROFILES[CODER])
+        settings_document = json.loads(argv[argv.index("--settings") + 1])
+        assert settings_document["outputStyle"] == "Concise"
 
 
 def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:
