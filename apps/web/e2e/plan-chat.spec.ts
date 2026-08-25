@@ -1,6 +1,12 @@
 import { expect, shot, test, type Script } from "./harness";
 
 const PROJECT_NAME = "Planning the greeting file";
+// Long enough to be several lines of tooltip, which is what a planner writes
+// and what the band above a milestone cannot hold.
+const FOUNDATION_DESCRIPTION =
+  "Establish the project structure and the shared planning model every later " +
+  "milestone hangs off, including the store, the API, and the timeline the " +
+  "plan is written into.";
 const SCRIPT: Script = {
   title: PROJECT_NAME,
   scenarios: [
@@ -27,7 +33,7 @@ const SCRIPT: Script = {
           name: "add_milestone",
           arguments: {
             name: "Planning foundation",
-            description: "Establish the project structure and shared planning model.",
+            description: FOUNDATION_DESCRIPTION,
           },
         },
         {
@@ -103,11 +109,11 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await shot(page, testInfo, "2 the planner answers");
 
   await page.getByText("Planning foundation", { exact: true }).hover();
-  await expect(
-    page.getByRole("tooltip", {
-      name: "Establish the project structure and shared planning model.",
-    }),
-  ).toBeVisible();
+  const description = page.getByRole("tooltip", { name: FOUNDATION_DESCRIPTION });
+  await expect(description).toBeVisible();
+  // Whole, not merely rendered: the tooltip hangs off a node inside a box that
+  // scrolls, and used to be cut off by it -- which `toBeVisible` still allows.
+  await expect(description).toBeInViewport({ ratio: 1 });
 
   // The timeline follows the plan as it is written: a milestone added to a
   // project already on screen arrives without the page being reloaded.
@@ -142,11 +148,7 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await expect(page.getByText("First release", { exact: true })).toBeVisible();
   await expect(page.getByText("Wider rollout", { exact: true })).toBeVisible();
   await page.getByText("Planning foundation", { exact: true }).hover();
-  await expect(
-    page.getByRole("tooltip", {
-      name: "Establish the project structure and shared planning model.",
-    }),
-  ).toBeVisible();
+  await expect(page.getByRole("tooltip", { name: FOUNDATION_DESCRIPTION })).toBeVisible();
 
   // Leave the plan behind, then come back to it the way the rail offers: the
   // project row opens the conversation it was named after.
