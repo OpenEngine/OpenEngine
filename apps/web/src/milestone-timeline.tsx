@@ -13,6 +13,12 @@ const TOOLTIP_EDGE_SPACE = 152;
 // Keep a 280px tooltip plus a 12px gutter inside the smallest graph.
 const SIDE_PADDING = (TOOLTIP_EDGE_SPACE / MIN_GRAPH_WIDTH) * GRAPH_WIDTH;
 const NODE_Y = 96;
+const POLL_MS = 1000;
+
+/** Whether two polls returned the same plan, compared as the server sent it. */
+function sameMilestones(a: ApiMilestone[], b: ApiMilestone[]) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 /** Keep every dependency to the left of the milestone that needs it.
  *
@@ -137,30 +143,50 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
   );
 }
 
+/** The timeline of the project this conversation is planning, kept current.
+ *
+ *  Milestones are written by the planning tools in whatever process is running
+ *  the agent, so the page re-reads the list rather than waiting to be told --
+ *  the same poll the shell already runs for projects and workflow runs. */
 export function MilestoneTimeline({ project }: { project?: ApiProject }) {
   const [milestones, setMilestones] = useState<ApiMilestone[]>([]);
-  const [loading, setLoading] = useState(Boolean(project));
+  // Held apart from an empty list so a failed poll can keep showing the last
+  // good timeline rather than replace it with an error.
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    setLoaded(false);
+    setError("");
     if (!project) {
       setMilestones([]);
-      setLoading(false);
-      setError("");
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    void getProjectMilestones(project.projectId, controller.signal)
-      .then((value) => setMilestones(value.milestones))
-      .catch((reason: Error) => {
-        if (!controller.signal.aborted) setError(reason.message);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
+    let timer: number | undefined;
+    const load = () => {
+      void getProjectMilestones(project.projectId, controller.signal)
+        .then((value) => {
+          // Keep the previous array when the plan has not moved: the ordering
+          // and position memos hold, and so does an open tooltip.
+          setMilestones((current) =>
+            sameMilestones(current, value.milestones) ? current : value.milestones,
+          );
+          setLoaded(true);
+          setError("");
+        })
+        .catch((reason: Error) => {
+          if (!controller.signal.aborted) setError(reason.message);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) timer = window.setTimeout(load, POLL_MS);
+        });
+    };
+    load();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [project?.projectId]);
 
   return (
@@ -175,12 +201,14 @@ export function MilestoneTimeline({ project }: { project?: ApiProject }) {
       <div className="milestone-viewport">
         {!project ? (
           <p className="milestone-empty">Milestones will appear after this project is created.</p>
-        ) : loading ? (
-          <p className="milestone-empty">Loading milestones…</p>
+        ) : loaded ? (
+          <MilestoneTimelineVisual milestones={milestones} />
         ) : error ? (
+          // Only reached before the first answer; after that a failed poll is
+          // left for the next one to clear.
           <p className="milestone-empty milestone-error">Could not load milestones: {error}</p>
         ) : (
-          <MilestoneTimelineVisual milestones={milestones} />
+          <p className="milestone-empty">Loading milestones…</p>
         )}
       </div>
     </section>

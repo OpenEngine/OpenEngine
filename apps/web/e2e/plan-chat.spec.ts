@@ -4,6 +4,22 @@ const PROJECT_NAME = "Planning the greeting file";
 const SCRIPT: Script = {
   title: PROJECT_NAME,
   scenarios: [
+    // Listed first: the scenario below matches any turn, this one only the
+    // second message.
+    {
+      when: "one more",
+      steps: [
+        {
+          type: "tool",
+          name: "add_milestone",
+          arguments: {
+            name: "Wider rollout",
+            description: "Offer the greeting file to every team.",
+          },
+        },
+        { type: "say", text: "Added one more." },
+      ],
+    },
     {
       steps: [
         {
@@ -55,7 +71,24 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  await expect(page.getByText("Planning foundation", { exact: true })).toBeVisible();
+  await expect(page.getByText("First release", { exact: true })).toBeVisible();
   await shot(page, testInfo, "2 the planner answers");
+
+  await page.getByText("Planning foundation", { exact: true }).hover();
+  await expect(
+    page.getByRole("tooltip", {
+      name: "Establish the project structure and shared planning model.",
+    }),
+  ).toBeVisible();
+
+  // The timeline follows the plan as it is written: a milestone added to a
+  // project already on screen arrives without the page being reloaded.
+  await page.getByLabel("Message the agent").fill("Could you add one more milestone?");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  await expect(page.getByText("Added one more.")).toBeVisible();
+  await expect(page.getByText("Wider rollout", { exact: true })).toBeVisible();
 
   const { projects } = await (await page.request.get("/api/projects")).json();
   expect(projects).toHaveLength(1);
@@ -77,13 +110,6 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await page.reload();
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
   await expect(page.getByText("Planning foundation", { exact: true })).toBeVisible();
-  await expect(page.getByText("First release", { exact: true })).toBeVisible();
-  await page.getByText("Planning foundation", { exact: true }).hover();
-  await expect(
-    page.getByRole("tooltip", {
-      name: "Establish the project structure and shared planning model.",
-    }),
-  ).toBeVisible();
 
   // Leave the plan behind, then come back to it the way the rail offers: the
   // project row opens the conversation it was named after.
