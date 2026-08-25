@@ -37,6 +37,7 @@ from engine.domain import (
     ApprovalRecord,
     HumanReviewCompleted,
     Message,
+    Milestone,
     Project,
     ProjectId,
     Role,
@@ -1147,6 +1148,19 @@ def create_app(
         # Recorded rather than planned, so it owns no conversation to link to.
         return JSONResponse(_project_json(project, ()), status_code=201)
 
+    async def list_project_milestones(request: Request) -> JSONResponse:
+        project_id = ProjectId(request.path_params["project_id"])
+        project = await session.state_store.load_project(project_id)
+        if project is None:
+            return _error("project not found", 404)
+        milestones = await session.state_store.list_milestones(project_id)
+        return JSONResponse(
+            {
+                "project": _project_json(project, ()),
+                "milestones": [_milestone_json(milestone) for milestone in milestones],
+            }
+        )
+
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
         body = await _json_body(request)
@@ -1547,6 +1561,7 @@ def create_app(
         Route("/api/config", config),
         Route("/api/projects", list_projects),
         Route("/api/projects", create_project, methods=["POST"]),
+        Route("/api/projects/{project_id}/milestones", list_project_milestones),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
@@ -1666,6 +1681,15 @@ def _project_json(
     if instance_id is not None and instance_id in conversations:
         result["conversationUrl"] = f"/conversations/{quote(str(instance_id), safe='')}"
     return result
+
+
+def _milestone_json(milestone: Milestone) -> dict[str, object]:
+    return {
+        "milestoneId": str(milestone.milestone_id),
+        "name": milestone.name,
+        "description": milestone.description,
+        "dependencies": [str(dependency) for dependency in milestone.dependencies],
+    }
 
 
 def _workflow_step_editable(

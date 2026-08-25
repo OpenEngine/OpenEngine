@@ -3,7 +3,29 @@ import { expect, shot, test, type Script } from "./harness";
 const PROJECT_NAME = "Planning the greeting file";
 const SCRIPT: Script = {
   title: PROJECT_NAME,
-  scenarios: [{ steps: [{ type: "say", text: "Here is what I would change." }] }],
+  scenarios: [
+    {
+      steps: [
+        {
+          type: "tool",
+          name: "add_milestone",
+          arguments: {
+            name: "Planning foundation",
+            description: "Establish the project structure and shared planning model.",
+          },
+        },
+        {
+          type: "tool",
+          name: "add_milestone",
+          arguments: {
+            name: "First release",
+            description: "Deliver the planned experience to its first users.",
+          },
+        },
+        { type: "say", text: "Here is what I would change." },
+      ],
+    },
+  ],
 };
 
 test("a new project opens a planning conversation and appears in the rail", async ({
@@ -25,6 +47,8 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   // whole name, and hence not `getByLabel("Agent")`, which the composer's
   // "Message the agent" also answers to.
   await expect(page.getByRole("combobox", { name: /^Agent/ })).toHaveValue("planner");
+  await expect(page.getByText("Turns", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Milestone timeline" })).toBeVisible();
   await shot(page, testInfo, "1 the plan page");
 
   await page.getByLabel("Message the agent").fill("How would you add a greeting file?");
@@ -52,6 +76,14 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await expect(page).toHaveURL(`/conversations/${threads[0].id}`);
   await page.reload();
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  await expect(page.getByText("Planning foundation", { exact: true })).toBeVisible();
+  await expect(page.getByText("First release", { exact: true })).toBeVisible();
+  await page.getByText("Planning foundation", { exact: true }).hover();
+  await expect(
+    page.getByRole("tooltip", {
+      name: "Establish the project structure and shared planning model.",
+    }),
+  ).toBeVisible();
 
   // Leave the plan behind, then come back to it the way the rail offers: the
   // project row opens the conversation it was named after.

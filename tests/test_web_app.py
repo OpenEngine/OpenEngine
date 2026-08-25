@@ -39,6 +39,8 @@ from engine.domain import (
     ConversationId,
     HumanReviewCompleted,
     Message,
+    Milestone,
+    MilestoneId,
     Project,
     Role,
     RunFailed,
@@ -3249,6 +3251,61 @@ def test_projects_api_creates_and_lists_projects_newest_first() -> None:
         "conversationUrl" not in project
         for project in listed.json()["projects"]
     )
+
+
+def test_project_milestones_api_lists_the_active_projects_dependency_data() -> None:
+    runner = ConcurrentRunner()
+    session = _session(runner)
+    project = Project(project_id_for_instance(AgentInstanceId("agi-plan")), "Engine")
+    foundation = Milestone(
+        MilestoneId("milestone-foundation"),
+        project.project_id,
+        "Foundation",
+        "Build the shared planning model.",
+    )
+    launch = Milestone(
+        MilestoneId("milestone-launch"),
+        project.project_id,
+        "Launch",
+        "Put the project in users' hands.",
+        (foundation.milestone_id,),
+    )
+
+    async def scenario():
+        await session.state_store.save_project(project)
+        await session.state_store.save_milestone(foundation)
+        await session.state_store.save_milestone(launch)
+        app = create_app(session, {"test": runner})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            listed = await client.get(
+                f"/api/projects/{project.project_id}/milestones"
+            )
+            missing = await client.get("/api/projects/project-missing/milestones")
+            return listed, missing
+
+    listed, missing = asyncio.run(scenario())
+
+    assert listed.json() == {
+        "project": {"projectId": project.project_id, "name": "Engine"},
+        "milestones": [
+            {
+                "milestoneId": "milestone-launch",
+                "name": "Launch",
+                "description": "Put the project in users' hands.",
+                "dependencies": ["milestone-foundation"],
+            },
+            {
+                "milestoneId": "milestone-foundation",
+                "name": "Foundation",
+                "description": "Build the shared planning model.",
+                "dependencies": [],
+            },
+        ],
+    }
+    assert missing.status_code == 404
 
 
 def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
