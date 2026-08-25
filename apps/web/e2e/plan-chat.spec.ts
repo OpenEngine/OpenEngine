@@ -79,6 +79,11 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  await expect(page.getByText("This project", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: PROJECT_NAME })).toBeVisible();
+  await expect(
+    page.getByText("This runner answers here until you pick another.", { exact: true }),
+  ).toHaveCount(0);
   await expect(timeline).toHaveClass(/milestone-timeline-expanded/);
   await expect(page.getByText("Planning foundation", { exact: true })).toBeVisible();
   await expect(page.getByText("First release", { exact: true })).toBeVisible();

@@ -174,7 +174,10 @@ function ConversationHeader({
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
   const workflowConversation = Boolean(thread?.workflowRunId);
   const autoApprove = chosenAutoApprove ?? thread?.autoApprove ?? false;
-  const title = fetched?.title || listedTitle || "New chat";
+  // Title generation refreshes the thread list after the first message. That
+  // refreshed value can be newer than the conversation snapshot fetched when
+  // this header first mounted.
+  const title = listedTitle || fetched?.title || "New chat";
 
   useEffect(() => {
     let current = true;
@@ -220,15 +223,15 @@ function ConversationHeader({
       className={`panel-head ${workflowConversation ? "panel-head-workflow" : ""} ${compact ? "panel-head-compact" : ""}`}
     >
       <div className="panel-head-copy">
-        <p className="eyebrow">This conversation</p>
+        <p className="eyebrow">{compact ? "This project" : "This conversation"}</p>
         <h1>{title}</h1>
-        <p className="lede">
-          {workflowConversation
-            ? thread?.editable
+        {workflowConversation && (
+          <p className="lede">
+            {thread?.editable
               ? "A workflow step owns this transcript; sending guidance reactivates it if it has closed."
-              : "A workflow step owns this transcript; its run chose the runner."
-            : "This runner answers here until you pick another."}
-        </p>
+              : "A workflow step owns this transcript; its run chose the runner."}
+          </p>
+        )}
       </div>
       <div className="field">
         <span>Agent</span>
