@@ -53,6 +53,9 @@ def test_only_project_backed_chats_receive_milestone_capabilities() -> None:
             "list_milestones",
             "update_milestone",
             "delete_milestone",
+            "add_workstream",
+            "update_workstream",
+            "delete_workstream",
         )
         assert await project_chat_capabilities(store, ordinary_chat) == ()
 
@@ -151,7 +154,7 @@ def test_planning_tools_reject_dangling_cross_project_and_cyclic_dependencies() 
     asyncio.run(scenario())
 
 
-def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> None:
+def test_planning_mcp_lists_every_tool_and_returns_structured_objects() -> None:
     async def scenario() -> None:
         store = InMemoryStateStore()
         instance = AgentInstance(
@@ -201,6 +204,9 @@ def test_planning_mcp_lists_the_four_tools_and_returns_structured_objects() -> N
             "list_milestones",
             "update_milestone",
             "delete_milestone",
+            "add_workstream",
+            "update_workstream",
+            "delete_workstream",
         ]
         assert added is not None
         result = added["result"]
@@ -262,6 +268,7 @@ def test_planning_mcp_rejects_cross_project_milestone_access() -> None:
                 "name": "First",
             },
             "milestones": [],
+            "workstreams": [],
         }
         with pytest.raises(ValueError, match="unexpected arguments: project_id"):
             await broker._call(
@@ -277,6 +284,135 @@ def test_planning_mcp_rejects_cross_project_milestone_access() -> None:
                 "delete_milestone", {"milestone_id": foreign.milestone_id}
             )
         assert await store.load_milestone(foreign.milestone_id) == foreign
+
+    asyncio.run(scenario())
+
+
+def test_planning_tools_create_present_update_and_delete_workstream_objects() -> None:
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        project = Project(ProjectId("project-engine"), "OpenEngine")
+        await store.save_project(project)
+        tools = PlanningTools(store)
+        foundation = await tools.add_milestone(
+            project.project_id, "Foundation", "Persist the planning hierarchy."
+        )
+
+        data = await tools.add_workstream(
+            foundation.milestone_id, "Data model", "The store and its migrations."
+        )
+        interface = await tools.add_workstream(
+            foundation.milestone_id, "Interface", "The timeline the plan is read in."
+        )
+
+        plan = await tools.list_milestones(project.project_id)
+        assert plan.workstreams == (interface, data)
+        rendered = plan.render()
+        assert f"- **Data model** (`{data.workstream_id}`)" in rendered
+        assert "    The store and its migrations." in rendered
+        assert plan.to_dict()["workstreams"] == [
+            {
+                "workstream_id": interface.workstream_id,
+                "milestone_id": foundation.milestone_id,
+                "name": "Interface",
+                "scope": "The timeline the plan is read in.",
+            },
+            {
+                "workstream_id": data.workstream_id,
+                "milestone_id": foundation.milestone_id,
+                "name": "Data model",
+                "scope": "The store and its migrations.",
+            },
+        ]
+
+        updated = await tools.update_workstream(
+            data.workstream_id, scope="The store, its migrations, and its ports."
+        )
+        assert updated.name == "Data model"
+        assert updated.scope == "The store, its migrations, and its ports."
+        with pytest.raises(ValueError, match="at least one changed field"):
+            await tools.update_workstream(data.workstream_id)
+        with pytest.raises(KeyError, match="no milestone"):
+            await tools.add_workstream(
+                MilestoneId("milestone-missing"), "Orphan", "Belongs to nothing."
+            )
+        assert await tools.delete_workstream(data.workstream_id) == updated
+        assert await store.load_workstream(data.workstream_id) is None
+
+    asyncio.run(scenario())
+
+
+def test_planning_mcp_scopes_workstream_tools_to_the_owning_project() -> None:
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        instance = AgentInstance(
+            AgentInstanceId("planner-own"),
+            AgentId("planner"),
+            ConversationId("conversation-own"),
+        )
+        project = Project(project_id_for_instance(instance.instance_id), "Own")
+        foreign_project = Project(ProjectId("project-foreign"), "Foreign")
+        await store.save_project(project)
+        await store.save_project(foreign_project)
+        tools = PlanningTools(store)
+        milestone = await tools.add_milestone(
+            project.project_id, "Foundation", "Persist the planning hierarchy."
+        )
+        foreign_milestone = await tools.add_milestone(
+            foreign_project.project_id, "Foreign", "Another project's goal."
+        )
+        foreign_workstream = await tools.add_workstream(
+            foreign_milestone.milestone_id, "Foreign work", "Not ours to touch."
+        )
+
+        broker = PlanningMcpBroker(store, PLANNING_TOOL_NAMES, instance)
+        text, added = await broker._call(
+            "add_workstream",
+            {
+                "milestone_id": milestone.milestone_id,
+                "name": "Data model",
+                "scope": "The store and its migrations.",
+            },
+        )
+        assert text.startswith("Added workstream")
+        assert added["scope"] == "The store and its migrations."
+        _, updated = await broker._call(
+            "update_workstream",
+            {"workstream_id": added["workstream_id"], "name": "Persistence"},
+        )
+        assert updated["name"] == "Persistence"
+        _, deleted = await broker._call(
+            "delete_workstream", {"workstream_id": added["workstream_id"]}
+        )
+        assert deleted["workstream_id"] == added["workstream_id"]
+        assert await store.load_workstream(added["workstream_id"]) is None
+
+        with pytest.raises(ValueError, match="another project"):
+            await broker._call(
+                "add_workstream",
+                {
+                    "milestone_id": foreign_milestone.milestone_id,
+                    "name": "Smuggled",
+                    "scope": "Recorded under someone else's plan.",
+                },
+            )
+        with pytest.raises(ValueError, match="another project"):
+            await broker._call(
+                "update_workstream",
+                {
+                    "workstream_id": foreign_workstream.workstream_id,
+                    "name": "Compromised",
+                },
+            )
+        with pytest.raises(ValueError, match="another project"):
+            await broker._call(
+                "delete_workstream",
+                {"workstream_id": foreign_workstream.workstream_id},
+            )
+        assert (
+            await store.load_workstream(foreign_workstream.workstream_id)
+            == foreign_workstream
+        )
 
     asyncio.run(scenario())
 

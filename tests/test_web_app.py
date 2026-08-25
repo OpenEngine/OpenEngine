@@ -58,6 +58,8 @@ from engine.domain import (
     WorkflowId,
     WorkspaceId,
     WorkspaceProvisioned,
+    Workstream,
+    WorkstreamId,
     project_id_for_instance,
 )
 from engine.ports import (
@@ -366,6 +368,9 @@ def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> Non
         "list_milestones",
         "update_milestone",
         "delete_milestone",
+        "add_workstream",
+        "update_workstream",
+        "delete_workstream",
     )
     assert runner.direct_turns == 1
     assert planner_profile.capabilities == ()
@@ -3430,11 +3435,18 @@ def test_project_milestones_api_lists_the_active_projects_dependency_data() -> N
         "Put the project in users' hands.",
         (foundation.milestone_id,),
     )
+    data_model = Workstream(
+        WorkstreamId("workstream-data"),
+        foundation.milestone_id,
+        "Data model",
+        "The store, its ports, and its migrations.",
+    )
 
     async def scenario():
         await session.state_store.save_project(project)
         await session.state_store.save_milestone(foundation)
         await session.state_store.save_milestone(launch)
+        await session.state_store.save_workstream(data_model)
         app = create_app(session, {"test": runner})
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -3460,12 +3472,20 @@ def test_project_milestones_api_lists_the_active_projects_dependency_data() -> N
                 "name": "Launch",
                 "description": "Put the project in users' hands.",
                 "dependencies": ["milestone-foundation"],
+                "workstreams": [],
             },
             {
                 "milestoneId": "milestone-foundation",
                 "name": "Foundation",
                 "description": "Build the shared planning model.",
                 "dependencies": [],
+                "workstreams": [
+                    {
+                        "workstreamId": "workstream-data",
+                        "name": "Data model",
+                        "scope": "The store, its ports, and its migrations.",
+                    }
+                ],
             },
         ],
     }

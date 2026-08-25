@@ -72,11 +72,19 @@ export type ApiProject = {
   conversationUrl?: string;
 };
 
+export type ApiWorkstream = {
+  workstreamId: string;
+  name: string;
+  /** The part of the milestone this workstream covers. */
+  scope: string;
+};
+
 export type ApiMilestone = {
   milestoneId: string;
   name: string;
   description: string;
   dependencies: string[];
+  workstreams: ApiWorkstream[];
 };
 
 export type ApiProjectMilestones = {

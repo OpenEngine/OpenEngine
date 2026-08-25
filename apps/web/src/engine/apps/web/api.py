@@ -25,6 +25,7 @@ from collections.abc import (
     Container,
     Iterable,
     Mapping,
+    Sequence,
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -57,6 +58,7 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkflowDefinition,
+    Workstream,
     WorkstreamId,
     WorkspaceId,
     instance_id_for_project,
@@ -1199,7 +1201,15 @@ def create_app(
         return JSONResponse(
             {
                 "project": _project_json(project, ()),
-                "milestones": [_milestone_json(milestone) for milestone in milestones],
+                "milestones": [
+                    _milestone_json(
+                        milestone,
+                        await session.state_store.list_workstreams(
+                            milestone.milestone_id
+                        ),
+                    )
+                    for milestone in milestones
+                ],
             }
         )
 
@@ -1741,12 +1751,23 @@ def _project_json(
     return result
 
 
-def _milestone_json(milestone: Milestone) -> dict[str, object]:
+def _milestone_json(
+    milestone: Milestone, workstreams: Sequence[Workstream]
+) -> dict[str, object]:
     return {
         "milestoneId": str(milestone.milestone_id),
         "name": milestone.name,
         "description": milestone.description,
         "dependencies": [str(dependency) for dependency in milestone.dependencies],
+        "workstreams": [_workstream_json(workstream) for workstream in workstreams],
+    }
+
+
+def _workstream_json(workstream: Workstream) -> dict[str, object]:
+    return {
+        "workstreamId": str(workstream.workstream_id),
+        "name": workstream.name,
+        "scope": workstream.scope,
     }
 
 

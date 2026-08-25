@@ -56,6 +56,9 @@ class Workstream:
     workstream_id: WorkstreamId
     milestone_id: MilestoneId
     name: str
+    scope: str = ""
+    """What the work covers and, by omission, what it leaves to the sibling
+    workstreams: the boundary a run started here is expected to stay inside."""
 
 
 __all__ = [

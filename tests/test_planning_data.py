@@ -54,7 +54,10 @@ def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
         (milestone.milestone_id,),
     )
     workstream = Workstream(
-        WorkstreamId("workstream-data"), milestone.milestone_id, "Data model"
+        WorkstreamId("workstream-data"),
+        milestone.milestone_id,
+        "Data model",
+        "The store, its ports, and its migrations.",
     )
     other_workstream = Workstream(
         WorkstreamId("workstream-ui"), milestone.milestone_id, "User interface"
@@ -88,6 +91,10 @@ def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
         assert await store.delete_milestone(launch.milestone_id) is False
         with pytest.raises(ValueError, match="still has workstreams"):
             await store.delete_milestone(milestone.milestone_id)
+        with pytest.raises(ValueError, match="still has runs"):
+            await store.delete_workstream(workstream.workstream_id)
+        assert await store.delete_workstream(other_workstream.workstream_id) is True
+        assert await store.delete_workstream(other_workstream.workstream_id) is False
 
     asyncio.run(scenario())
 
@@ -106,7 +113,10 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
         (foundation.milestone_id,),
     )
     workstream = Workstream(
-        WorkstreamId("workstream-runtime"), milestone.milestone_id, "Runtime"
+        WorkstreamId("workstream-runtime"),
+        milestone.milestone_id,
+        "Runtime",
+        "The planning tools and their MCP bridge.",
     )
     run = RunState(
         run_id=RunId("run-runtime"),

@@ -52,7 +52,7 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0003",)
+    assert revision == ("sqlite_0004",)
 
 
 def test_milestone_details_migration_preserves_existing_records(tmp_path: Path) -> None:
@@ -109,6 +109,45 @@ def test_project_archive_migration_leaves_existing_projects_listed(
             ("project-engine",),
         ).fetchone()
     assert row == ("OpenEngine", 0)
+
+
+def test_workstream_scope_migration_leaves_existing_workstreams_named(
+    tmp_path: Path,
+) -> None:
+    """Scope is new, so what was recorded without one reads back unscoped."""
+
+    database = tmp_path / "state.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "sqlite_0003")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO projects (project_id, name) VALUES (?, ?)",
+            ("project-engine", "OpenEngine"),
+        )
+        connection.execute(
+            """
+            INSERT INTO milestones (milestone_id, project_id, name)
+            VALUES (?, ?, ?)
+            """,
+            ("milestone-foundation", "project-engine", "Foundation"),
+        )
+        connection.execute(
+            """
+            INSERT INTO workstreams (workstream_id, milestone_id, name)
+            VALUES (?, ?, ?)
+            """,
+            ("workstream-data", "milestone-foundation", "Data model"),
+        )
+        connection.commit()
+
+    upgrade(url)
+
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT name, scope FROM workstreams WHERE workstream_id = ?",
+            ("workstream-data",),
+        ).fetchone()
+    assert row == ("Data model", "")
 
 
 def test_postgres_history_is_a_placeholder(capsys) -> None:

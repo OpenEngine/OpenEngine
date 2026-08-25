@@ -161,6 +161,14 @@ class InMemoryStateStore:
             ]
         return tuple(reversed(workstreams))
 
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
+        with self._lock:
+            if any(
+                state.workstream_id == workstream_id for state in self._states.values()
+            ):
+                raise ValueError(f"workstream {workstream_id!r} still has runs")
+            return self._workstreams.pop(workstream_id, None) is not None
+
     # --- agent identity and conversation ---------------------------------
 
     async def create_instance(
