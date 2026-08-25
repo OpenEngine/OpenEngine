@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MilestoneTimeline,
   MilestoneTimelineVisual,
+  mapMinHeight,
   orderMilestones,
 } from "./milestone-timeline";
 import type { ApiMilestone, ApiProject } from "./api";
@@ -15,6 +16,16 @@ const foundation: ApiMilestone = {
   dependencies: [],
   workstreams: [
     { workstreamId: "workstream-data", name: "Data model", scope: "Persist the plan." },
+  ],
+};
+// The same milestone once the planner has hung more work off it, kept apart so
+// the single-workstream case above stays the plain one.
+const staffed: ApiMilestone = {
+  ...foundation,
+  workstreams: [
+    ...foundation.workstreams,
+    { workstreamId: "workstream-web", name: "Timeline view", scope: "Draw the plan." },
+    { workstreamId: "workstream-tools", name: "Planner tools", scope: "Record the plan." },
   ],
 };
 const launch: ApiMilestone = {
@@ -90,6 +101,52 @@ describe("milestone timeline", () => {
     expect(width - lastCenter).toBeGreaterThanOrEqual(140);
   });
 
+  it("lists each milestone's workstreams beneath it, in the order the API sent", () => {
+    render(<MilestoneTimelineVisual milestones={[staffed, launch]} />);
+
+    const list = screen.getByRole("list", { name: "Foundation" });
+    const items = screen.getAllByRole("listitem");
+
+    expect(list).toContainElement(items[0]);
+    // Newest first is decided by the store (`ORDER BY sequence DESC`), so the
+    // component may not re-sort what it was handed.
+    expect(items.map((item) => item.querySelector("span")?.textContent)).toEqual([
+      "Data model",
+      "Timeline view",
+      "Planner tools",
+    ]);
+    // A milestone with no workstreams gets no empty list under its name.
+    expect(screen.queryByRole("list", { name: "Launch" })).toBeNull();
+  });
+
+  it("gives a workstream's scope the tooltip the description already uses", () => {
+    render(<MilestoneTimelineVisual milestones={[foundation]} />);
+
+    const item = screen.getByRole("listitem");
+    const scope = screen.getByRole("tooltip", { name: "Persist the plan." });
+
+    // Reachable by keyboard, not only by a hover a touch device cannot make.
+    expect(item).toHaveAttribute("tabindex", "0");
+    expect(item).toHaveAccessibleDescription("Persist the plan.");
+    expect(item).toContainElement(scope);
+    expect(item).not.toHaveAttribute("title");
+  });
+
+  it("grows the map so the deepest node's bullets stay inside it", () => {
+    const { container, rerender } = render(<MilestoneTimelineVisual milestones={[staffed]} />);
+    const height = () =>
+      Number.parseFloat(container.querySelector<HTMLElement>(".milestone-map")!.style.minHeight);
+
+    // The node is out of flow, so nothing but this reserves room for it: top
+    // 83 + dot/name 66 + grid gap 9 + three 15px bullets + two 4px gaps.
+    expect(mapMinHeight([staffed])).toBe(height());
+    expect(height()).toBeGreaterThanOrEqual(83 + 66 + 9 + 3 * 15 + 2 * 4);
+
+    // A plan without workstreams is left on the floor the map already had.
+    rerender(<MilestoneTimelineVisual milestones={[launch]} />);
+    expect(height()).toBe(180);
+  });
+
   it("renders an empty state without inventing milestones", () => {
     render(<MilestoneTimelineVisual milestones={[]} />);
 
@@ -155,6 +212,27 @@ describe("MilestoneTimeline", () => {
 
     expect(screen.queryByText("Foundation")).toBeNull();
     expect(screen.getByText("Launch")).toBeInTheDocument();
+  });
+
+  it("follows a workstream hung off a milestone that did not otherwise change", async () => {
+    vi.useFakeTimers();
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(plan([foundation]))
+      .mockImplementation(plan([staffed]));
+    vi.stubGlobal("fetch", fetch);
+
+    render(<MilestoneTimeline project={project} />);
+    await act(async () => {});
+
+    expect(screen.getByText("Data model")).toBeInTheDocument();
+    expect(screen.queryByText("Timeline view")).toBeNull();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+    // The milestone itself is untouched, so only the workstreams tell the two
+    // polls apart -- which is what `sameMilestones` has to notice.
+    expect(screen.getByText("Timeline view")).toBeInTheDocument();
   });
 
   it("holds the last good timeline through a failed poll", async () => {
