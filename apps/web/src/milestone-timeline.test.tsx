@@ -1,8 +1,19 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MilestoneTimelineVisual, orderMilestones } from "./milestone-timeline";
-import type { ApiMilestone } from "./api";
+import {
+  MilestoneTimeline,
+  MilestoneTimelineVisual,
+  orderMilestones,
+} from "./milestone-timeline";
+import type { ApiMilestone, ApiProject } from "./api";
+
+const getProjectMilestones = vi.hoisted(() => vi.fn());
+
+vi.mock("./api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api")>()),
+  getProjectMilestones,
+}));
 
 const foundation: ApiMilestone = {
   milestoneId: "foundation",
@@ -16,6 +27,13 @@ const launch: ApiMilestone = {
   description: "Ship the project to users.",
   dependencies: ["foundation"],
 };
+const project: ApiProject = {
+  projectId: "project-1",
+  name: "A new project",
+  conversationUrl: "/conversations/thread-1",
+};
+
+beforeEach(() => getProjectMilestones.mockReset());
 
 describe("milestone timeline", () => {
   it("places dependencies before the milestones that need them", () => {
@@ -56,5 +74,27 @@ describe("milestone timeline", () => {
     expect(
       screen.getByText("No milestones have been added to this project yet."),
     ).toBeInTheDocument();
+  });
+
+  it("expands a new project's collapsed timeline when its first milestone appears", async () => {
+    getProjectMilestones.mockResolvedValue({ project, milestones: [foundation] });
+    const { rerender } = render(<MilestoneTimeline collapsedUntilMilestone />);
+    const timeline = screen.getByRole("region", { name: "Milestone timeline" });
+
+    expect(timeline).toHaveClass("milestone-timeline-collapsed");
+
+    rerender(<MilestoneTimeline project={project} collapsedUntilMilestone />);
+
+    await waitFor(() => expect(timeline).toHaveClass("milestone-timeline-expanded"));
+  });
+
+  it("opens an existing project's timeline by default", () => {
+    getProjectMilestones.mockResolvedValue({ project, milestones: [] });
+
+    render(<MilestoneTimeline project={project} />);
+
+    expect(screen.getByRole("region", { name: "Milestone timeline" })).toHaveClass(
+      "milestone-timeline-expanded",
+    );
   });
 });

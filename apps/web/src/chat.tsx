@@ -271,7 +271,7 @@ export function QueuedMessagePersistence({ draftRestored }: { draftRestored: boo
   return null;
 }
 
-export function Composer() {
+export function Composer({ project = false }: { project?: boolean } = {}) {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const canSend = useAuiState((state) => state.composer.canSend);
@@ -372,7 +372,9 @@ export function Composer() {
           placeholder={
             isRunning
               ? "Queue a message for when the agent is done…"
-              : "Ask the agent about this repository…"
+              : project
+                ? "Tell the agent about the project you're working on.."
+                : "Ask the agent about this repository…"
           }
           aria-label="Message the agent"
           rows={1}
@@ -1010,19 +1012,21 @@ export function ConversationStats() {
   );
 }
 
-export function ChatThread() {
+export function ChatThread({ project = false }: { project?: boolean }) {
   return (
     <ThreadPrimitive.Root className="thread">
       <ThreadPrimitive.Viewport className="stream">
         <WorkflowBacklink />
         <ThreadPrimitive.Empty>
-          <div className="welcome">
-            <div className="welcome-copy">
-              <p className="eyebrow">OpenEngine / Chat</p>
-              <h1>Start a conversation.</h1>
-              <p className="lede">Each chat has its own agent history and Git worktree.</p>
+          {!project && (
+            <div className="welcome">
+              <div className="welcome-copy">
+                <p className="eyebrow">OpenEngine / Chat</p>
+                <h1>Start a conversation.</h1>
+                <p className="lede">Each chat has its own agent history and Git worktree.</p>
+              </div>
             </div>
-          </div>
+          )}
         </ThreadPrimitive.Empty>
         {/* Renders no element of its own, so the viewport's children are still
             the messages. Held above them so the rescan happens once per chunk
@@ -1035,13 +1039,13 @@ export function ChatThread() {
           </ThreadPrimitive.Messages>
           <UnanchoredApprovals />
         </ToolCallIndex>
-        <Dock />
+        <Dock project={project} />
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
   );
 }
 
-function Dock() {
+function Dock({ project }: { project: boolean }) {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
     | undefined;
@@ -1057,7 +1061,7 @@ function Dock() {
           This transcript belongs to a workflow step. Return to the run for status and actions.
         </p>
       ) : (
-        <Composer />
+        <Composer project={project} />
       )}
       <div className="dock-foot">
         {/* Under the composer or workflow note rather than in the heading: a

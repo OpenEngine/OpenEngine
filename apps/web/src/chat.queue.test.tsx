@@ -1,5 +1,5 @@
 import { act, render, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Composer, QueuedMessagePersistence } from "./chat";
@@ -50,7 +50,7 @@ vi.mock("@assistant-ui/react", async () => {
   return {
     ComposerPrimitive: {
       Root,
-      Input: () => <textarea aria-label="Message the agent" />,
+      Input: (props: ComponentProps<"textarea">) => <textarea {...props} />,
       Cancel: Root,
       Queue: () => null,
     },
@@ -73,6 +73,7 @@ beforeEach(() => {
   runtime.sending = false;
   runtime.state.threadListItem.remoteId = "thread-queue";
   runtime.state.thread.isLoading = false;
+  runtime.state.thread.isRunning = true;
   runtime.state.composer.canSend = false;
   runtime.state.composer.text = "";
   runtime.state.composer.queue = [];
@@ -105,6 +106,17 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("QueuedMessagePersistence", () => {
+  it("prompts for project context in project conversations", () => {
+    runtime.state.thread.isRunning = false;
+
+    const { getByLabelText } = render(<Composer project />);
+
+    expect(getByLabelText("Message the agent")).toHaveAttribute(
+      "placeholder",
+      "Tell the agent about the project you're working on..",
+    );
+  });
+
   it("restores queued follow-ups after history has loaded and preserves the draft", async () => {
     runtime.state.thread.isLoading = true;
     window.localStorage.setItem("engine.composerDraft.thread-queue", "unfinished draft");

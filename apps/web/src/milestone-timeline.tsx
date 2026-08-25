@@ -137,10 +137,17 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
   );
 }
 
-export function MilestoneTimeline({ project }: { project?: ApiProject }) {
+export function MilestoneTimeline({
+  project,
+  collapsedUntilMilestone = false,
+}: {
+  project?: ApiProject;
+  collapsedUntilMilestone?: boolean;
+}) {
   const [milestones, setMilestones] = useState<ApiMilestone[]>([]);
   const [loading, setLoading] = useState(Boolean(project));
   const [error, setError] = useState("");
+  const expanded = !collapsedUntilMilestone || milestones.length > 0;
 
   useEffect(() => {
     if (!project) {
@@ -150,21 +157,40 @@ export function MilestoneTimeline({ project }: { project?: ApiProject }) {
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    void getProjectMilestones(project.projectId, controller.signal)
-      .then((value) => setMilestones(value.milestones))
-      .catch((reason: Error) => {
-        if (!controller.signal.aborted) setError(reason.message);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [project?.projectId]);
+    let timer: number | undefined;
+    const load = () => {
+      setLoading(true);
+      setError("");
+      void getProjectMilestones(project.projectId, controller.signal)
+        .then((value) => {
+          setMilestones(value.milestones);
+          if (collapsedUntilMilestone && value.milestones.length === 0) {
+            timer = window.setTimeout(load, 750);
+          }
+        })
+        .catch((reason: Error) => {
+          if (!controller.signal.aborted) {
+            setError(reason.message);
+            if (collapsedUntilMilestone) timer = window.setTimeout(load, 750);
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    };
+    load();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [collapsedUntilMilestone, project?.projectId]);
 
   return (
-    <section className="milestone-timeline" aria-labelledby="milestone-timeline-title">
+    <section
+      className={`milestone-timeline milestone-timeline-${expanded ? "expanded" : "collapsed"}`}
+      aria-labelledby="milestone-timeline-title"
+      aria-expanded={expanded}
+    >
       <header className="milestone-timeline-head">
         <div>
           <p className="eyebrow">Active project</p>
