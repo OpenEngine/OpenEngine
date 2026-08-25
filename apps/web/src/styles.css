@@ -515,6 +515,8 @@ select:disabled { cursor: default; }
 .milestone-timeline-head > div { display: grid; gap: 5px; }
 .milestone-timeline-head h2 { font-size: 18px; line-height: 1.15; }
 .milestone-timeline-head .micro { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.milestone-timeline-status { justify-items: end; min-width: 0; text-align: right; }
+.milestone-stale { color: var(--flame-deep); }
 .milestone-viewport { min-width: 0; min-height: 0; overflow: auto; }
 .milestone-map { position: relative; width: 100%; min-height: 180px; height: 100%; }
 .milestone-lines { position: absolute; inset: 0; width: 100%; height: 180px; overflow: visible; }
