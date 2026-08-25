@@ -13,6 +13,7 @@ import {
   type RunnerOption,
 } from "./api";
 import { ChatThread, ConversationStats } from "./chat";
+import { MilestoneTimeline } from "./milestone-timeline";
 import { EngineRuntimeProvider } from "./runtime";
 import { NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
 import { Sidebar, type RailSection } from "./sidebar";
@@ -22,26 +23,32 @@ function ChatPanel({
   config,
   agentId,
   runner,
+  planning,
+  project,
   onAgentChange,
   onRunnerChange,
 }: {
   config: EngineConfig;
   agentId: string;
   runner: string;
+  planning: boolean;
+  project?: ApiProject;
   onAgentChange: (agentId: string) => void;
   onRunnerChange: (runner: string) => void;
 }) {
   return (
-    <main className="panel">
+    <main className={`panel ${planning ? "panel-project" : ""}`}>
       <ChatHeader
         config={config}
         agentId={agentId}
         runner={runner}
+        compact={planning}
         onAgentChange={onAgentChange}
         onRunnerChange={onRunnerChange}
       />
-      <ConversationStats />
+      {!planning && <ConversationStats />}
       <ChatThread />
+      {planning && <MilestoneTimeline project={project} />}
     </main>
   );
 }
@@ -60,12 +67,14 @@ function ChatHeader({
   config,
   agentId,
   runner,
+  compact,
   onAgentChange,
   onRunnerChange,
 }: {
   config: EngineConfig;
   agentId: string;
   runner: string;
+  compact: boolean;
   onAgentChange: (agentId: string) => void;
   onRunnerChange: (runner: string) => void;
 }) {
@@ -84,11 +93,12 @@ function ChatHeader({
         listed={custom}
         runners={config.runners}
         fallbackRunner={runner}
+        compact={compact}
       />
     );
 
   return (
-    <header className="panel-head">
+    <header className={`panel-head ${compact ? "panel-head-compact" : ""}`}>
       <div className="panel-head-copy">
         <p className="eyebrow">New chat defaults</p>
         <h1>New conversation</h1>
@@ -134,11 +144,13 @@ function ConversationHeader({
   listed,
   runners,
   fallbackRunner,
+  compact,
 }: {
   threadId: string;
   listed?: ThreadCustom;
   runners: RunnerOption[];
   fallbackRunner: string;
+  compact: boolean;
 }) {
   const aui = useAui();
   const listedTitle = useAuiState((state) => state.threadListItem.title);
@@ -199,7 +211,7 @@ function ConversationHeader({
 
   return (
     <header
-      className={`panel-head ${workflowConversation ? "panel-head-workflow" : ""}`}
+      className={`panel-head ${workflowConversation ? "panel-head-workflow" : ""} ${compact ? "panel-head-compact" : ""}`}
     >
       <div className="panel-head-copy">
         <p className="eyebrow">This conversation</p>
@@ -380,9 +392,8 @@ function App() {
   // project's: a plan's URL is an ordinary chat's, so the projects list is what
   // tells them apart. It arrives after the first paint, and the rail follows.
   const conversationUrl = chat ? window.location.pathname.replace(/\/$/, "") : undefined;
-  const projectPage =
-    conversationUrl !== undefined &&
-    projects.some((project) => project.conversationUrl === conversationUrl);
+  const activeProject = projects.find((project) => project.conversationUrl === conversationUrl);
+  const projectPage = activeProject !== undefined;
   return (
     <EngineRuntimeProvider
       defaults={{ agentId, runner, createProject: plan }}
@@ -419,6 +430,8 @@ function App() {
             config={config}
             agentId={agentId}
             runner={runner}
+            planning={plan || projectPage}
+            project={activeProject}
             onAgentChange={setAgentId}
             onRunnerChange={setRunner}
           />

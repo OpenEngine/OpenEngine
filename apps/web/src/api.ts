@@ -70,6 +70,27 @@ export type ApiProject = {
   conversationUrl?: string;
 };
 
+export type ApiMilestone = {
+  milestoneId: string;
+  name: string;
+  description: string;
+  dependencies: string[];
+};
+
+export type ApiProjectMilestones = {
+  project: ApiProject;
+  milestones: ApiMilestone[];
+};
+
+export function getProjectMilestones(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ApiProjectMilestones> {
+  return api<ApiProjectMilestones>(`/api/projects/${encodeURIComponent(projectId)}/milestones`, {
+    signal,
+  });
+}
+
 export function createProject(name: string, signal?: AbortSignal): Promise<ApiProject> {
   return api<ApiProject>("/api/projects", {
     method: "POST",

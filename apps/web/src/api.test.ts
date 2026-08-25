@@ -4,6 +4,7 @@ import {
   answerQuestion,
   api,
   createProject,
+  getProjectMilestones,
   messageText,
   newChatAgent,
   setThreadAutoApprove,
@@ -130,6 +131,27 @@ describe("createProject", () => {
     expect(fetch).toHaveBeenCalledWith(
       "/api/projects",
       expect.objectContaining({ method: "POST", body: '{"name":"Engine roadmap"}' }),
+    );
+  });
+});
+
+describe("getProjectMilestones", () => {
+  it("reads the selected project's timeline data", async () => {
+    const response = {
+      project: { projectId: "project/one", name: "Engine roadmap" },
+      milestones: [],
+    };
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(getProjectMilestones("project/one")).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects/project%2Fone/milestones",
+      expect.objectContaining({}),
     );
   });
 });
