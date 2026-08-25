@@ -44,6 +44,10 @@ type ThreadInitializer = {
   current: (() => Promise<{ remoteId: string }>) | null;
 };
 
+type ActiveThreadTitleUpdater = {
+  current: ((remoteId: string, title: string) => Promise<void>) | null;
+};
+
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
@@ -82,13 +86,19 @@ function useInitialThreadId(forcedThreadId?: string, restore = true) {
 function ThreadInitializationBridge({
   initializer,
   reloadThreads,
+  updateActiveTitle,
 }: {
   initializer: ThreadInitializer;
   reloadThreads: { current: (() => Promise<void>) | null };
+  updateActiveTitle: ActiveThreadTitleUpdater;
 }) {
   const aui = useAui();
   initializer.current = () => aui.threadListItem.initialize();
   reloadThreads.current = () => aui.threads.reload();
+  updateActiveTitle.current = async (remoteId, title) => {
+    if (aui.threadListItem.getState().remoteId === remoteId)
+      await aui.threadListItem.rename(title);
+  };
   return null;
 }
 
@@ -340,6 +350,7 @@ function EngineRuntime({
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
+  const updateActiveTitleRef = useRef<ActiveThreadTitleUpdater["current"]>(null);
   defaultsRef.current = defaults;
 
   const modelAdapter = useMemo<ChatModelAdapter>(
@@ -367,14 +378,21 @@ function EngineRuntime({
           // named is still a chat to send to. Anything but an abort is
           // swallowed: the alternative is reporting "the run could not be
           // started" for a run nothing has tried to start yet.
-          await api<{ title: string }>(`/api/threads/${threadId}/title`, {
-            method: "POST",
-            body: JSON.stringify({ text }),
-            signal: abortSignal,
-          })
-            .catch((failure: unknown) => {
-              if (failure instanceof Error && failure.name === "AbortError") throw failure;
-            });
+          const generated = await api<{ title: string }>(
+            `/api/threads/${threadId}/title`,
+            {
+              method: "POST",
+              body: JSON.stringify({ text }),
+              signal: abortSignal,
+            },
+          ).catch((failure: unknown) => {
+            if (failure instanceof Error && failure.name === "AbortError") throw failure;
+          });
+          // A newly initialized thread remains active under assistant-ui's
+          // optimistic local ID. Updating that item directly makes its title
+          // visible immediately; reloading only adds the remote-ID list item.
+          if (generated)
+            await updateActiveTitleRef.current?.(threadId, generated.title).catch(() => {});
           await reloadThreadsRef.current?.();
 
           response = await fetch(`/api/threads/${threadId}/runs`, {
@@ -469,6 +487,7 @@ function EngineRuntime({
         <ThreadInitializationBridge
           initializer={threadInitializerRef}
           reloadThreads={reloadThreadsRef}
+          updateActiveTitle={updateActiveTitleRef}
         />
         {children}
       </AssistantRuntimeProvider>

@@ -75,10 +75,28 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await expect(timeline).toHaveClass(/milestone-timeline-collapsed/);
   await shot(page, testInfo, "1 the plan page");
 
+  let releaseTitle!: () => void;
+  const titleBlocked = new Promise<void>((resolve) => {
+    releaseTitle = resolve;
+  });
+  await page.route(/\/api\/threads\/[^/]+\/title$/, async (route) => {
+    await titleBlocked;
+    await route.continue();
+  });
+
   await page.getByLabel("Message the agent").fill("How would you add a greeting file?");
   await page.getByRole("button", { name: "Send" }).click();
 
+  // Force the header GET to win the race with title generation. The active
+  // assistant-ui item still has its optimistic local ID at this point.
+  await expect(page.getByRole("heading", { name: "New project" })).toBeVisible();
+  releaseTitle();
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  await expect(page.getByText("This project", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: PROJECT_NAME })).toBeVisible();
+  await expect(
+    page.getByText("This runner answers here until you pick another.", { exact: true }),
+  ).toHaveCount(0);
   await expect(timeline).toHaveClass(/milestone-timeline-expanded/);
   await expect(page.getByText("Planning foundation", { exact: true })).toBeVisible();
   await expect(page.getByText("First release", { exact: true })).toBeVisible();
