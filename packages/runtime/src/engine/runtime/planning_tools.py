@@ -1,4 +1,4 @@
-"""Milestone planning operations and their MCP bridge."""
+"""Milestone and workstream planning operations, and their MCP bridge."""
 
 from __future__ import annotations
 
@@ -18,7 +18,10 @@ from engine.domain import (
     MilestoneId,
     Project,
     ProjectId,
+    Workstream,
+    WorkstreamId,
     project_id_for_instance,
+    workstreams_by_milestone,
 )
 from engine.ports import McpServerConfig, StateStore
 
@@ -30,23 +33,27 @@ PLANNING_TOOL_NAMES = (
     "list_milestones",
     "update_milestone",
     "delete_milestone",
+    "add_workstream",
+    "update_workstream",
+    "delete_workstream",
 )
 
 
 async def project_chat_capabilities(
     store: StateStore, instance: AgentInstance
 ) -> tuple[str, ...]:
-    """Grant milestone tools only when this conversation owns a project."""
+    """Grant planning tools only when this conversation owns a project."""
     project = await store.load_project(project_id_for_instance(instance.instance_id))
     return PLANNING_TOOL_NAMES if project is not None else ()
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectPlan:
-    """One project and its milestones, shaped for tool responses."""
+    """One project, its milestones, and their workstreams, shaped for tools."""
 
     project: Project
     milestones: tuple[Milestone, ...]
+    workstreams: tuple[Workstream, ...] = ()
 
     def render(self) -> str:
         """Present the plan compactly while keeping every usable identifier."""
@@ -62,17 +69,31 @@ class ProjectPlan:
                 f"`{dependency}`" for dependency in milestone.dependencies
             )
             lines.append(f"  Depends on: {dependencies or 'nothing'}")
+            for workstream in self._workstreams_of(milestone.milestone_id):
+                lines.append(
+                    f"  - **{workstream.name}** (`{workstream.workstream_id}`)"
+                )
+                if workstream.scope:
+                    lines.append(f"    {workstream.scope}")
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "project": _project_dict(self.project),
             "milestones": [_milestone_dict(item) for item in self.milestones],
+            "workstreams": [_workstream_dict(item) for item in self.workstreams],
         }
+
+    def _workstreams_of(self, milestone_id: MilestoneId) -> tuple[Workstream, ...]:
+        return tuple(
+            workstream
+            for workstream in self.workstreams
+            if workstream.milestone_id == milestone_id
+        )
 
 
 class PlanningTools:
-    """Validated milestone mutations over the state-store boundary."""
+    """Validated milestone and workstream mutations over the store boundary."""
 
     def __init__(self, store: StateStore) -> None:
         self._store = store
@@ -99,8 +120,19 @@ class PlanningTools:
 
     async def list_milestones(self, project_id: ProjectId) -> ProjectPlan:
         project = await self._require_project(project_id)
-        milestones = tuple(await self._store.list_milestones(project.project_id))
-        return ProjectPlan(project, _dependency_order(milestones))
+        milestones = _dependency_order(
+            tuple(await self._store.list_milestones(project.project_id))
+        )
+        # The plan carries the workstreams too: a planner that cannot see the
+        # ids it recorded cannot update or remove one. One read for the lot,
+        # grouped in memory, keeps that at two queries however long the plan is.
+        by_milestone = workstreams_by_milestone(await self._store.list_workstreams())
+        workstreams = tuple(
+            workstream
+            for milestone in milestones
+            for workstream in by_milestone.get(milestone.milestone_id, ())
+        )
+        return ProjectPlan(project, milestones, workstreams)
 
     async def update_milestone(
         self,
@@ -149,6 +181,52 @@ class PlanningTools:
         await self._store.delete_milestone(milestone.milestone_id)
         return milestone
 
+    async def add_workstream(
+        self, milestone_id: MilestoneId, name: str, scope: str
+    ) -> Workstream:
+        milestone = await self._require_milestone(milestone_id)
+        workstream = Workstream(
+            workstream_id=WorkstreamId(f"workstream-{uuid4().hex[:12]}"),
+            milestone_id=milestone.milestone_id,
+            name=_non_empty(name, "name"),
+            scope=_non_empty(scope, "scope"),
+        )
+        await self._store.save_workstream(workstream)
+        return workstream
+
+    async def update_workstream(
+        self,
+        workstream_id: WorkstreamId,
+        *,
+        milestone_id: MilestoneId | None = None,
+        name: str | None = None,
+        scope: str | None = None,
+    ) -> Workstream:
+        workstream = await self._require_workstream(workstream_id)
+        if milestone_id is None and name is None and scope is None:
+            raise ValueError("update_workstream requires at least one changed field")
+        if milestone_id is not None:
+            # Re-cutting a plan moves work between goals, and deleting to
+            # recreate is refused once a run points at the workstream.
+            await self._require_sibling_milestone(workstream, milestone_id)
+        updated = replace(
+            workstream,
+            milestone_id=(
+                workstream.milestone_id if milestone_id is None else milestone_id
+            ),
+            name=workstream.name if name is None else _non_empty(name, "name"),
+            scope=workstream.scope if scope is None else _non_empty(scope, "scope"),
+        )
+        await self._store.save_workstream(updated)
+        return updated
+
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> Workstream:
+        # The store refuses one that still has runs, the way deleting a
+        # milestone with workstreams is refused.
+        workstream = await self._require_workstream(workstream_id)
+        await self._store.delete_workstream(workstream.workstream_id)
+        return workstream
+
     async def _require_project(self, project_id: ProjectId) -> Project:
         project = await self._store.load_project(project_id)
         if project is None:
@@ -160,6 +238,22 @@ class PlanningTools:
         if milestone is None:
             raise KeyError(f"no milestone {milestone_id!r}")
         return milestone
+
+    async def _require_workstream(self, workstream_id: WorkstreamId) -> Workstream:
+        workstream = await self._store.load_workstream(workstream_id)
+        if workstream is None:
+            raise KeyError(f"no workstream {workstream_id!r}")
+        return workstream
+
+    async def _require_sibling_milestone(
+        self, workstream: Workstream, milestone_id: MilestoneId
+    ) -> Milestone:
+        """A workstream moves within its project, never into another one."""
+        current = await self._require_milestone(workstream.milestone_id)
+        target = await self._require_milestone(milestone_id)
+        if target.project_id != current.project_id:
+            raise ValueError(f"milestone {milestone_id!r} belongs to another project")
+        return target
 
     async def _validate_dependencies(
         self,
@@ -332,6 +426,45 @@ class PlanningMcpBroker:
             return f"Deleted milestone `{milestone.milestone_id}`.", _milestone_dict(
                 milestone
             )
+        if name == "add_workstream":
+            _exact_arguments(arguments, required={"milestone_id", "name", "scope"})
+            workstream = await self._tools.add_workstream(
+                await self._require_owned_milestone(arguments),
+                _string(arguments, "name"),
+                _string(arguments, "scope"),
+            )
+            return f"Added workstream `{workstream.workstream_id}`.", _workstream_dict(
+                workstream
+            )
+        if name == "update_workstream":
+            _exact_arguments(
+                arguments,
+                required={"workstream_id"},
+                optional={"milestone_id", "name", "scope"},
+            )
+            workstream_id = await self._require_owned_workstream(arguments)
+            workstream = await self._tools.update_workstream(
+                workstream_id,
+                milestone_id=(
+                    await self._require_owned_milestone(arguments)
+                    if "milestone_id" in arguments
+                    else None
+                ),
+                name=_optional_string(arguments, "name"),
+                scope=_optional_string(arguments, "scope"),
+            )
+            return (
+                f"Updated workstream `{workstream.workstream_id}`.",
+                _workstream_dict(workstream),
+            )
+        if name == "delete_workstream":
+            _exact_arguments(arguments, required={"workstream_id"})
+            workstream_id = await self._require_owned_workstream(arguments)
+            workstream = await self._tools.delete_workstream(workstream_id)
+            return (
+                f"Deleted workstream `{workstream.workstream_id}`.",
+                _workstream_dict(workstream),
+            )
         raise ValueError(f"unknown planning tool: {name}")
 
     async def _require_owned_milestone(
@@ -344,6 +477,24 @@ class PlanningMcpBroker:
         if milestone.project_id != self._project_id:
             raise ValueError(f"milestone {milestone_id!r} belongs to another project")
         return milestone_id
+
+    async def _require_owned_workstream(
+        self, arguments: dict[str, object]
+    ) -> WorkstreamId:
+        """A workstream is this conversation's when its milestone is.
+
+        Ownership is a fact about the project, and a workstream names only the
+        milestone it hangs from, so the check is the milestone's own one made
+        one step further down.
+        """
+        workstream_id = WorkstreamId(_string(arguments, "workstream_id"))
+        workstream = await self._store.load_workstream(workstream_id)
+        if workstream is None:
+            raise KeyError(f"no workstream {workstream_id!r}")
+        milestone = await self._store.load_milestone(workstream.milestone_id)
+        if milestone is None or milestone.project_id != self._project_id:
+            raise ValueError(f"workstream {workstream_id!r} belongs to another project")
+        return workstream_id
 
 
 def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
@@ -394,11 +545,60 @@ def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
         },
         {
             "name": "delete_milestone",
-            "description": "Delete an unused milestone from a project plan.",
+            "description": (
+                "Delete a milestone from a project plan. Refused while another "
+                "milestone depends on it, or while it still has workstreams: "
+                "delete those first."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {"milestone_id": identifier},
                 "required": ["milestone_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "add_workstream",
+            "description": (
+                "Add a workstream to one of this project's milestones, scoped to "
+                "the part of the milestone it covers."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "milestone_id": identifier,
+                    "name": identifier,
+                    "scope": identifier,
+                },
+                "required": ["milestone_id", "name", "scope"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "update_workstream",
+            "description": (
+                "Update a workstream's name or scope, or move it to another "
+                "milestone of the same project."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workstream_id": identifier,
+                    "milestone_id": identifier,
+                    "name": identifier,
+                    "scope": identifier,
+                },
+                "required": ["workstream_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "delete_workstream",
+            "description": "Delete a workstream that has no workflow runs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"workstream_id": identifier},
+                "required": ["workstream_id"],
                 "additionalProperties": False,
             },
         },
@@ -610,6 +810,10 @@ def _milestone_dict(milestone: Milestone) -> dict[str, object]:
     value = asdict(milestone)
     value["dependencies"] = list(milestone.dependencies)
     return value
+
+
+def _workstream_dict(workstream: Workstream) -> dict[str, object]:
+    return asdict(workstream)
 
 
 def main() -> None:

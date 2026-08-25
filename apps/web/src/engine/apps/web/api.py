@@ -25,6 +25,7 @@ from collections.abc import (
     Container,
     Iterable,
     Mapping,
+    Sequence,
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -57,10 +58,12 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkflowDefinition,
+    Workstream,
     WorkstreamId,
     WorkspaceId,
     instance_id_for_project,
     project_id_for_instance,
+    workstreams_by_milestone,
 )
 from engine.ports import (
     AgentRunner,
@@ -1196,10 +1199,22 @@ def create_app(
         if project is None:
             return _error("project not found", 404)
         milestones = await session.state_store.list_milestones(project_id)
+        # Read every workstream once and group here rather than asking per
+        # milestone: the timeline polls this route every second per open
+        # project, and a query per milestone makes that cost grow with the plan
+        # while holding the store's lock.
+        by_milestone = workstreams_by_milestone(
+            await session.state_store.list_workstreams()
+        )
         return JSONResponse(
             {
                 "project": _project_json(project, ()),
-                "milestones": [_milestone_json(milestone) for milestone in milestones],
+                "milestones": [
+                    _milestone_json(
+                        milestone, by_milestone.get(milestone.milestone_id, ())
+                    )
+                    for milestone in milestones
+                ],
             }
         )
 
@@ -1741,12 +1756,23 @@ def _project_json(
     return result
 
 
-def _milestone_json(milestone: Milestone) -> dict[str, object]:
+def _milestone_json(
+    milestone: Milestone, workstreams: Sequence[Workstream]
+) -> dict[str, object]:
     return {
         "milestoneId": str(milestone.milestone_id),
         "name": milestone.name,
         "description": milestone.description,
         "dependencies": [str(dependency) for dependency in milestone.dependencies],
+        "workstreams": [_workstream_json(workstream) for workstream in workstreams],
+    }
+
+
+def _workstream_json(workstream: Workstream) -> dict[str, object]:
+    return {
+        "workstreamId": str(workstream.workstream_id),
+        "name": workstream.name,
+        "scope": workstream.scope,
     }
 
 

@@ -60,6 +60,7 @@ from engine.domain.planning import (
     Workstream,
     instance_id_for_project,
     project_id_for_instance,
+    workstreams_by_milestone,
 )
 from engine.domain.state import RunPhase, RunState
 from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
@@ -149,6 +150,7 @@ __all__ = [
     "WorkflowTemplate",
     "Workstream",
     "WorkstreamId",
+    "workstreams_by_milestone",
     "WorkspaceAccess",
     "WorkspaceId",
     "WorkspaceSpec",

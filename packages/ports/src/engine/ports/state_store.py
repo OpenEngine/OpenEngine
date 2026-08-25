@@ -101,6 +101,16 @@ class StateStore(Protocol):
         """Return workstreams newest first, optionally for one milestone."""
         ...
 
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
+        """Delete one workstream, returning whether it existed.
+
+        Refused while runs still point at it, for the reason deleting a
+        milestone with workstreams is: the run is the record of work done under
+        this heading, and a run whose workstream is gone cannot say what it was
+        part of.
+        """
+        ...
+
     # --- agent identity and conversation ---------------------------------
 
     async def create_instance(

@@ -1,5 +1,6 @@
 """Planning hierarchy that groups workflow runs into product delivery work."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from engine.domain.ids import AgentInstanceId, MilestoneId, ProjectId, WorkstreamId
@@ -56,6 +57,25 @@ class Workstream:
     workstream_id: WorkstreamId
     milestone_id: MilestoneId
     name: str
+    scope: str = ""
+    """What the work covers and, by omission, what it leaves to the sibling
+    workstreams: the boundary a run started here is expected to stay inside."""
+
+
+def workstreams_by_milestone(
+    workstreams: Iterable[Workstream],
+) -> dict[MilestoneId, tuple[Workstream, ...]]:
+    """Group workstreams under the milestone each hangs from, order preserved.
+
+    Anything showing a whole plan wants every milestone's workstreams at once,
+    which is one store read and this grouping rather than a read per milestone:
+    the plan is displayed far more often than it is written, and the per-
+    milestone form charges a round trip for every goal on it.
+    """
+    grouped: dict[MilestoneId, list[Workstream]] = {}
+    for workstream in workstreams:
+        grouped.setdefault(workstream.milestone_id, []).append(workstream)
+    return {milestone_id: tuple(items) for milestone_id, items in grouped.items()}
 
 
 __all__ = [
@@ -64,4 +84,5 @@ __all__ = [
     "Workstream",
     "instance_id_for_project",
     "project_id_for_instance",
+    "workstreams_by_milestone",
 ]

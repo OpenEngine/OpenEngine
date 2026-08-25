@@ -90,6 +90,9 @@ class PostgresStateStore:
     ) -> Sequence[Workstream]:
         raise NotImplementedError("Workstream reads land with the state-store ticket")
 
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
+        raise NotImplementedError("Workstream writes land with the state-store ticket")
+
     async def create_instance(
         self,
         agent_id: AgentId,
