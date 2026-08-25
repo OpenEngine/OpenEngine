@@ -13,6 +13,7 @@ mismatch surfaces during capability negotiation, with a name attached, rather
 than as a prompt that quietly does less than the workflow assumed.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 
@@ -42,11 +43,11 @@ class ACPConfig:
     identifier, which is precise and correspondingly unportable.
     """
 
-    by_category: dict[str, JSONValue] = field(default_factory=dict)
+    by_category: Mapping[str, JSONValue] = field(default_factory=dict)
     """Requested settings, keyed by semantic category."""
-    by_id: dict[str, JSONValue] = field(default_factory=dict)
+    by_id: Mapping[str, JSONValue] = field(default_factory=dict)
     """Requested settings, keyed by an agent's own option id."""
-    unsupported: UnsupportedOption = UnsupportedOption.ERROR
+    unsupported: UnsupportedOption | str = UnsupportedOption.ERROR
     """How to treat a requested setting the agent does not advertise."""
 
     def __post_init__(self) -> None:

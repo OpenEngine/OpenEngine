@@ -42,6 +42,13 @@ Python than the rest of the tree, and is intended to be published on its own.
 ```bash
 cd langgraph-acp
 uv run pytest
+uv run mypy    # strict, over src/ and tests/
 ```
 
-CI runs this suite only when something under `langgraph-acp/` changes.
+The package ships `py.typed`, so its annotations are a promise to a downstream
+type checker; `mypy --strict` runs in CI on both supported interpreters to keep
+it. Each field is annotated with what the constructor accepts, since
+`__post_init__` normalizes — a `Path` becomes a `str`, `"reuse"` becomes
+`ACPSessionStrategy.REUSE`.
+
+CI runs both only when something under `langgraph-acp/` changes.

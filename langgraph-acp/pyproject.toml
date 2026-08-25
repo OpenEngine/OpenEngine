@@ -18,8 +18,16 @@ build-backend = "hatchling.build"
 packages = ["src/langgraph_acp"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["mypy>=1.15", "pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.mypy]
+# `py.typed` promises a downstream type checker that these annotations are
+# true, and only a type checker run against them keeps that promise. The tests
+# are checked too: they are where the spellings this package documents are
+# written out, so an annotation that rejects a documented call fails here.
+strict = true
+files = ["src", "tests"]

@@ -18,6 +18,17 @@ that does not need looking up. Types that leave the process serialize:
 into a store. Types that only configure a node -- `ACPSession`, `ACPWorkspace`,
 `ACPConfig`, `ACPRequirements` -- do not: they are written in Python beside the
 graph, and a graph definition is code rather than data.
+
+Every field is annotated with what the constructor *accepts*, not with what it
+stores: `__post_init__` normalizes, so a `Path` becomes a `str`, a list becomes
+a tuple, and `"reuse"` becomes `ACPSessionStrategy.REUSE`. The stored value is
+always an instance of the declared type but usually a narrower one. A stdlib
+dataclass has no way to declare the two separately, and since `py.typed` ships
+here, the spelling a caller writes is the one the annotation has to admit.
+
+Containers handed in are copied, and so are containers handed back out by
+`to_dict`. The copy is deep, because ACP payloads are nested and a shallow one
+would leave the interesting part shared.
 """
 
 from langgraph_acp._json import JSONObject, JSONValue

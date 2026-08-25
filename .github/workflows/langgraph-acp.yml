@@ -59,3 +59,9 @@ jobs:
       - name: Run tests
         # `--locked` fails on a stale lockfile rather than resolving around it.
         run: uv run --locked pytest
+
+      # The package ships `py.typed`, so its annotations are a promise to every
+      # downstream type checker. Run on both interpreters: what `str | Path`
+      # resolves to is a property of the version doing the checking.
+      - name: Type check
+        run: uv run --locked mypy

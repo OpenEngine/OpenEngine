@@ -15,11 +15,19 @@ consumer intact; a version of this library that crashes on an ACP addition
 would be worse than one that passes it along uninterpreted.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from langgraph_acp._json import JSONObject, JSONValue, copied_mapping
+from langgraph_acp._json import (
+    JSONObject,
+    JSONValue,
+    as_mapping,
+    as_optional_str,
+    as_str,
+    copied_mapping,
+)
 
 #: Prefix distinguishing this package's events in a shared stream.
 EVENT_NAMESPACE = "acp"
@@ -76,8 +84,8 @@ class ACPEvent:
     node: str | None = None
     """The LangGraph node that produced it."""
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
-    data: dict[str, JSONValue] = field(default_factory=dict)
-    """The payload, shaped by `type`."""
+    data: Mapping[str, JSONValue] = field(default_factory=dict)
+    """The payload, shaped by `type`. Copied, nested containers included."""
 
     def __post_init__(self) -> None:
         # Accept either spelling of the name. A consumer matching on `acp.error`
@@ -107,19 +115,23 @@ class ACPEvent:
             "thread_id": self.thread_id,
             "node": self.node,
             "timestamp": self.timestamp.isoformat(),
-            "data": dict(self.data),
+            # Copied, so a consumer that redacts or normalizes what it was
+            # handed cannot rewrite an event that has already been emitted.
+            "data": copied_mapping(self.data),
         }
 
     @classmethod
-    def from_dict(cls, data: JSONObject) -> "ACPEvent":
+    def from_dict(cls, data: Mapping[str, object]) -> "ACPEvent":
         return cls(
-            agent=str(data["agent"]),
-            type=str(data["type"]),
-            session_id=data.get("session_id"),
-            thread_id=data.get("thread_id"),
-            node=data.get("node"),
-            timestamp=datetime.fromisoformat(str(data["timestamp"])),
-            data=data.get("data") or {},
+            agent=as_str(data["agent"], field="agent"),
+            type=as_str(data["type"], field="type"),
+            session_id=as_optional_str(data.get("session_id"), field="session_id"),
+            thread_id=as_optional_str(data.get("thread_id"), field="thread_id"),
+            node=as_optional_str(data.get("node"), field="node"),
+            timestamp=datetime.fromisoformat(
+                as_str(data["timestamp"], field="timestamp")
+            ),
+            data=as_mapping(data.get("data"), field="data"),
         )
 
 

@@ -6,6 +6,9 @@ unreported rather than becoming zero.
 """
 
 import json
+from dataclasses import fields
+
+import pytest
 
 from langgraph_acp import ACPResult, ACPSessionRef, ACPUsage
 
@@ -46,6 +49,19 @@ def test_usage_survives_a_round_trip() -> None:
     )
 
     assert ACPUsage.from_dict(usage.to_dict()) == usage
+
+
+def test_every_usage_field_survives_the_round_trip() -> None:
+    """Driven off the dataclass, so a field added to only one side is caught."""
+    reported = {f.name: 3 for f in fields(ACPUsage)}
+
+    assert ACPUsage.from_dict(reported).to_dict() == reported
+
+
+def test_usage_that_is_not_a_number_is_refused_where_it_is_read() -> None:
+    """A store handing back `"1200"` should fail here, not in whatever sums it."""
+    with pytest.raises(TypeError, match="input_tokens"):
+        ACPUsage.from_dict({"input_tokens": "1200"})
 
 
 def test_a_zero_reported_by_the_agent_is_kept() -> None:
@@ -89,6 +105,45 @@ def test_a_result_does_not_share_the_containers_it_was_given() -> None:
 
     assert result.metadata == {"attempt": 1}
     assert result.content == ({"type": "text", "text": "hello"},)
+
+
+def test_a_result_does_not_share_a_nested_container_either() -> None:
+    """Content blocks are nested, so a one-level copy would isolate nothing."""
+    block = {"type": "text", "text": "hello"}
+    result = ACPResult(message="hello", content=[block])
+
+    block["text"] = "MUTATED"
+
+    assert result.content == ({"type": "text", "text": "hello"},)
+
+
+def test_the_state_view_shares_nothing_back() -> None:
+    """A caller that normalizes the dict it was handed is not editing the result."""
+    result = ACPResult(message="hello", content=[{"type": "text", "text": "hello"}])
+
+    content = result.to_dict()["content"]
+    assert isinstance(content, list)
+    block = content[0]
+    assert isinstance(block, dict)
+    block["text"] = "MUTATED"
+
+    assert result.content == ({"type": "text", "text": "hello"},)
+
+
+def test_a_lone_string_is_refused_where_content_blocks_belong() -> None:
+    """A `str` is a sequence, so without the guard it becomes one block per character."""
+    with pytest.raises(TypeError, match="content"):
+        ACPResult(content="Reviewed the change.")
+
+
+def test_a_lone_string_is_refused_where_tool_calls_belong() -> None:
+    with pytest.raises(TypeError, match="tool_calls"):
+        ACPResult(tool_calls="read_file")
+
+
+def test_a_lone_string_read_back_from_state_is_refused_too() -> None:
+    with pytest.raises(TypeError, match="content"):
+        ACPResult.from_dict({"content": "Reviewed the change."})
 
 
 def test_results_compare_by_value() -> None:

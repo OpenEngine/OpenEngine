@@ -21,10 +21,11 @@ reviewers on the same pull request -- and none of them may resume another's
 conversation.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from langgraph_acp._json import JSONObject
+from langgraph_acp._json import JSONObject, as_str
 
 
 class ACPSessionStrategy(StrEnum):
@@ -57,7 +58,8 @@ class ACPSession:
     is given explicitly.
     """
 
-    strategy: ACPSessionStrategy = ACPSessionStrategy.REUSE
+    strategy: ACPSessionStrategy | str = ACPSessionStrategy.REUSE
+    """`ACPSessionStrategy.REUSE` or its spelling, `"reuse"`. Stored as the enum."""
     key: str | None = None
     """Logical name of the conversation within its thread."""
     session_id: str | None = None
@@ -89,11 +91,11 @@ class ACPSessionRef:
         return {"agent": self.agent, "session_id": self.session_id, "key": self.key}
 
     @classmethod
-    def from_dict(cls, data: JSONObject) -> "ACPSessionRef":
+    def from_dict(cls, data: Mapping[str, object]) -> "ACPSessionRef":
         return cls(
-            agent=str(data["agent"]),
-            session_id=str(data["session_id"]),
-            key=str(data["key"]),
+            agent=as_str(data["agent"], field="agent"),
+            session_id=as_str(data["session_id"], field="session_id"),
+            key=as_str(data["key"], field="key"),
         )
 
 
@@ -131,12 +133,12 @@ class ACPSessionBinding:
         }
 
     @classmethod
-    def from_dict(cls, data: JSONObject) -> "ACPSessionBinding":
+    def from_dict(cls, data: Mapping[str, object]) -> "ACPSessionBinding":
         return cls(
-            thread_id=str(data["thread_id"]),
-            session_key=str(data["session_key"]),
-            agent=str(data["agent"]),
-            acp_session_id=str(data["acp_session_id"]),
+            thread_id=as_str(data["thread_id"], field="thread_id"),
+            session_key=as_str(data["session_key"], field="session_key"),
+            agent=as_str(data["agent"], field="agent"),
+            acp_session_id=as_str(data["acp_session_id"], field="acp_session_id"),
         )
 
 

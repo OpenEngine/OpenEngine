@@ -44,7 +44,10 @@ def test_an_unknown_type_is_carried_rather_than_rejected() -> None:
 
 
 def test_an_event_type_is_the_string_it_names() -> None:
-    assert ACPEventType.PERMISSION_REQUESTED == "permission.requested"
+    """A `StrEnum`, so a member goes wherever its spelling would."""
+    name: str = ACPEventType.PERMISSION_REQUESTED
+
+    assert name == "permission.requested"
 
 
 def test_the_documented_vocabulary_is_present() -> None:
@@ -124,3 +127,35 @@ def test_an_event_does_not_share_the_payload_it_was_given() -> None:
     payload["text"] = "hello"
 
     assert event.data == {"text": "hel"}
+
+
+def test_an_event_does_not_share_a_nested_payload_either() -> None:
+    """`{"update": {...}}` is the shape an ACP session update actually has.
+
+    A one-level copy would isolate the wrapper and leave everything worth
+    reading shared.
+    """
+    update = {"sessionUpdate": "tool_call", "status": "pending"}
+    event = ACPEvent(agent="codex", type="raw", data={"update": update}, timestamp=STAMP)
+
+    update["status"] = "completed"
+
+    assert event.data == {"update": {"sessionUpdate": "tool_call", "status": "pending"}}
+
+
+def test_the_wire_form_shares_nothing_back() -> None:
+    """A consumer that redacts what it was handed is not editing the event."""
+    event = ACPEvent(
+        agent="codex",
+        type="raw",
+        data={"update": {"sessionUpdate": "tool_call"}},
+        timestamp=STAMP,
+    )
+
+    payload = event.to_dict()["data"]
+    assert isinstance(payload, dict)
+    update = payload["update"]
+    assert isinstance(update, dict)
+    update["sessionUpdate"] = "REDACTED"
+
+    assert event.data == {"update": {"sessionUpdate": "tool_call"}}
