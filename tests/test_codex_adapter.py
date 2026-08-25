@@ -41,6 +41,7 @@ from engine.domain import (
     ToolSpec,
     WorkspaceId,
 )
+from engine.runtime import GRANTED_TOOLS_NOTE, with_granted_tools
 from engine.ports import (
     AgentRunner,
     ApprovalCapability,
@@ -286,6 +287,21 @@ def test_the_first_message_carries_the_instructions() -> None:
 
     assert "You are terse." in prompt
     assert prompt.endswith("User: hello")
+
+
+def test_the_granted_tools_note_carries_with_them() -> None:
+    """Codex has no system-prompt channel, so the note rides the same block.
+
+    `with_granted_tools` writes into `instructions`, and this is where a codex
+    agent finds out what it holds.
+    """
+    prompt = render_prompt(
+        with_granted_tools(PROFILE, ("add_milestone",)), (Message.user("hello"),)
+    )
+
+    assert GRANTED_TOOLS_NOTE in prompt
+    assert "- add_milestone" in prompt
+    assert prompt.index(GRANTED_TOOLS_NOTE) < prompt.index("User: hello")
 
 
 def test_history_is_labelled_by_role() -> None:

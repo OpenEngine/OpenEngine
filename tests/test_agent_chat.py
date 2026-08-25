@@ -31,6 +31,7 @@ from engine.ports import (
 )
 from engine.runtime import (
     DEFAULT_RUNNER,
+    GRANTED_TOOLS_NOTE,
     INTERRUPTED_TOOL_RESULT,
     INTERRUPTED_TURN_NOTE,
     AgentSession,
@@ -39,6 +40,7 @@ from engine.runtime import (
     UnknownInstanceError,
     UnknownRunnerError,
     UnknownToolGrantError,
+    with_granted_tools,
 )
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
@@ -624,6 +626,115 @@ def test_a_resolvable_grant_reaches_the_runner() -> None:
     asyncio.run(session.say(instance.instance_id, "dispatch ENG-42"))
 
     assert captured == [(dispatch,)]
+
+
+def test_the_instructions_name_every_tool_the_turn_serves() -> None:
+    """Handing the tools over is not the same as saying so.
+
+    A conversation that receives tools from its durable context has to be told
+    about those too, or the agent answers from its role description alone and
+    describes work it could have done.
+    """
+    store = InMemoryStateStore()
+    planner = AgentId("planner")
+
+    async def contextual_grants(_store, _instance):
+        return ("add_milestone",)
+
+    class Broker:
+        config = McpServerConfig("planning", "python", ("planning-server",))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+    runner = ScriptedRunner()
+
+    class McpRunner(ScriptedRunner):
+        async def run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+        ):
+            return await runner.run_turn(agent_run_id, profile, messages)
+
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=McpRunner(),
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles={
+            planner: AgentProfile(
+                planner, "Plan it.", capabilities=("list_milestones",)
+            )
+        },
+        mcp_brokers=dict.fromkeys(
+            ("list_milestones", "add_milestone"), lambda *_args: Broker()
+        ),
+        capability_resolver=contextual_grants,
+    )
+    instance = asyncio.run(session.start(planner))
+
+    asyncio.run(session.say(instance.instance_id, "What is the plan?"))
+
+    _, profile, _ = runner.seen[0]
+    assert profile.instructions.startswith("Plan it.")
+    assert GRANTED_TOOLS_NOTE in profile.instructions
+    assert "- list_milestones" in profile.instructions
+    assert "- add_milestone" in profile.instructions
+    assert "mcp__" not in profile.instructions, "provider spelling is the adapter's"
+
+
+def test_a_profile_granted_nothing_is_told_about_nothing() -> None:
+    store = InMemoryStateStore()
+    runner = ScriptedRunner()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=runner,
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles=PROFILES,
+    )
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "Read it."))
+
+    _, profile, _ = runner.seen[0]
+    assert profile.instructions == "Be terse."
+
+
+def test_announcing_twice_says_it_once() -> None:
+    """No path applies this twice today -- `say` and the dispatcher are
+    disjoint, and both rebuild from an unmodified source profile each turn -- but
+    the function is exported, so the next caller has only this stopping it."""
+    profile = AgentProfile(CODER, "Be terse.", capabilities=("add_milestone",))
+
+    once = with_granted_tools(profile, ("add_milestone",))
+    twice = with_granted_tools(once, ("add_milestone",))
+
+    assert twice is once
+    assert once.instructions.count(GRANTED_TOOLS_NOTE) == 1
+
+
+def test_a_grant_is_announced_only_once_it_resolves() -> None:
+    """The list is what the caller serves, not what the profile declares.
+
+    They coincide on the `say` path -- `_tools_for` raises rather than let an
+    unresolvable grant through -- so the distinction is only visible here, and
+    it is the one that keeps the dispatcher's paths honest.
+    """
+    profile = AgentProfile(CODER, "Be terse.", capabilities=("dispatch",))
+
+    assert with_granted_tools(profile, ()) is profile
+    assert "- dispatch" not in with_granted_tools(profile, ("clarify",)).instructions
 
 
 def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> None:

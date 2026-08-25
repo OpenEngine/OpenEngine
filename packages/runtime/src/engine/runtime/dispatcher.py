@@ -14,7 +14,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 
-from engine.domain.agents import AgentRun, AgentRunStatus
+from engine.domain.agents import AgentProfile, AgentRun, AgentRunStatus
 from engine.domain.chat import Message
 from engine.domain.commands import (
     Command,
@@ -39,6 +39,7 @@ from engine.ports import (
     TurnObserver,
 )
 from engine.runtime.capabilities import Capabilities
+from engine.runtime.profiles import with_granted_tools
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
     requests_clarification_or_escalation,
@@ -48,6 +49,7 @@ from engine.runtime.terminal_mcp import (
     TerminalEvent,
     TerminalMcpBroker,
     TerminalResultRegistry,
+    terminal_tool_names,
 )
 
 
@@ -87,6 +89,13 @@ class Dispatcher:
                 await caps.workspace_provider.provision(command.repository, command.base_ref)
             case StartAgentRun():
                 if command.step is None:
+                    # No `tools=`, so this path turns a profile's grants into
+                    # nothing callable and has nothing to announce.
+                    # `AgentSession` refuses such a profile outright rather than
+                    # run it (`UnknownToolGrantError`); dispatch has no
+                    # equivalent, and until it does, silence is the lesser of
+                    # the two failures -- an agent told it holds a tool nobody
+                    # served reaches for it and gets nowhere.
                     await caps.agent_runner.run_turn(
                         command.agent_run_id,
                         command.profile,
@@ -126,6 +135,20 @@ class Dispatcher:
         caps = self._capabilities
         selected_runner = runner or caps.agent_runner
         assert command.step is not None
+        # What the chosen branch will actually serve, which is what the step is
+        # told it holds. Only the MCP branch serves anything: the other two pass
+        # no `tools=`, so a profile's grants resolve to nothing callable there.
+        #
+        # The terminal tools belong on this list even though no profile grants
+        # them -- the broker is what offers them, and `step_result_instructions`
+        # naming them in the user prompt does not stop a note introduced as an
+        # enumeration from reading as a complete one.
+        served: tuple[str, ...] = ()
+        if isinstance(selected_runner, McpAgentRunner):
+            served = terminal_tool_names(self._serves_repo_comments(command.profile))
+        command = replace(
+            command, profile=with_granted_tools(command.profile, served)
+        )
         instance = await caps.state_store.create_instance(
             command.profile.agent_id,
             workspace_id=command.workspace_id,
@@ -264,6 +287,18 @@ class Dispatcher:
         )
         return turn
 
+    def _serves_repo_comments(self, profile: AgentProfile) -> bool:
+        """Whether a step's broker will offer `add_comment`.
+
+        Asked twice -- once to enable it, once to say so in the system prompt --
+        which is the reason it is a method rather than a condition written out
+        at each site: the announcement and the listing have to agree, and two
+        copies of this are two things to keep in step.
+        """
+        return "add_comment" in profile.capabilities and callable(
+            getattr(self._capabilities.source_control, "add_comment", None)
+        )
+
     async def _run_with_terminal_mcp(
         self,
         runner: McpAgentRunner,
@@ -282,12 +317,7 @@ class Dispatcher:
             registry=self._terminal_results,
             deliver=deliver,
         )
-        if (
-            "add_comment" in command.profile.capabilities
-            and callable(
-                getattr(self._capabilities.source_control, "add_comment", None)
-            )
-        ):
+        if self._serves_repo_comments(command.profile):
             # Older transport fakes may model only terminal delivery. The real
             # broker exposes this hook; keeping it optional preserves those
             # focused tests while granting the reviewer its repository tool.

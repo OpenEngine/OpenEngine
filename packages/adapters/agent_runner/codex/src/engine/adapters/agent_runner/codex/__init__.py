@@ -201,9 +201,12 @@ def render_prompt(profile: AgentProfile, messages: Sequence[Message]) -> str:
     """Flatten a profile and a conversation into one prompt.
 
     `codex exec` has no channel for a system prompt, so the instructions go in
-    ahead of the conversation. They are first and never change, which keeps the
-    whole prompt append-only -- see `engine.runtime.transcript`, which owns that
-    invariant and the rendering that maintains it.
+    ahead of the conversation. They are first, which keeps the whole prompt
+    append-only for as long as they are the same on every turn -- see
+    `engine.runtime.transcript`, which owns that invariant and the rendering
+    that maintains it. Holding to that is the caller's, not this function's: a
+    caller that varies what it puts here between turns of one conversation
+    breaks the shared prefix at the first line.
     """
     if not messages:
         raise ValueError("cannot run a turn with no messages")

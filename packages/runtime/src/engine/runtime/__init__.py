@@ -33,9 +33,11 @@ from engine.runtime.profiles import (
     BUILT_IN,
     CODER,
     FOREMAN,
+    GRANTED_TOOLS_NOTE,
     PLANNER,
     UnknownAgentError,
     profile_for,
+    with_granted_tools,
 )
 from engine.runtime.planning_tools import (
     PLANNING_TOOL_NAMES,
@@ -77,6 +79,7 @@ from engine.runtime.terminal_mcp import (
     TerminalMcpBroker,
     TerminalResultAlreadySubmittedError,
     TerminalResultRegistry,
+    terminal_tool_names,
 )
 from engine.runtime.workflow_execution import WorkflowExecutionError, WorkflowExecutor
 from engine.runtime.workflows import (
@@ -86,6 +89,7 @@ from engine.runtime.workflows import (
 )
 
 __all__ = [
+    "GRANTED_TOOLS_NOTE",
     "INTERRUPTED_TOOL_RESULT",
     "INTERRUPTED_TURN_NOTE",
     "INVALID_COMPLETION_ERROR",
@@ -152,4 +156,6 @@ __all__ = [
     "step_completed_from_arguments",
     "step_result_instructions",
     "step_result_from_tool_call",
+    "terminal_tool_names",
+    "with_granted_tools",
 ]

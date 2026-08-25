@@ -26,6 +26,7 @@ from engine.adapters.agent_runner.claude_code import (
     turn_from_events,
 )
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolSpec, WorkspaceId
+from engine.runtime import GRANTED_TOOLS_NOTE, with_granted_tools
 from engine.ports import (
     AgentRunner,
     ApprovalCapability,
@@ -294,6 +295,23 @@ def test_instructions_go_to_the_system_prompt_not_the_conversation() -> None:
     argv = ClaudeCodeAgentRunner().command_line(PROFILE)
 
     assert argv[argv.index("--append-system-prompt") + 1] == "You are terse."
+
+
+def test_the_granted_tools_note_reaches_the_system_prompt() -> None:
+    """This flag is the whole reason the runtime appends the note.
+
+    `with_granted_tools` writes into `instructions`, and `instructions` reaching
+    the model through this channel is what turns that into an agent that knows
+    what it holds.
+    """
+    argv = ClaudeCodeAgentRunner().command_line(
+        with_granted_tools(PROFILE, ("add_milestone",))
+    )
+
+    system_prompt = argv[argv.index("--append-system-prompt") + 1]
+    assert system_prompt.startswith("You are terse.")
+    assert GRANTED_TOOLS_NOTE in system_prompt
+    assert "- add_milestone" in system_prompt
 
 
 def test_chat_gets_read_only_tools_by_default() -> None:
