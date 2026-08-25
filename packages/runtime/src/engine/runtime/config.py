@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from engine.ports.agent_runner import ResponseStyle
 from engine.ports.permissions import ApprovalCapability
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
@@ -49,11 +50,29 @@ class WorkflowsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ClaudeConfig:
+    """Settings that only apply when Claude Code is the runner.
+
+    A table of its own because these have no counterpart elsewhere: written at
+    the top level they would read as promises Engine cannot keep for every
+    provider, and a reader could not tell which of the two they were.
+    """
+
+    output_style: ResponseStyle | None = None
+    """How Claude should write, or ``None`` to leave its own default.
+
+    Still Engine's vocabulary rather than Claude's spelling -- the adapter owns
+    that translation -- but scoped to the one runner that can honour it.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     """All configuration understood by this version of Engine."""
 
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
+    claude: ClaudeConfig = ClaudeConfig()
     attribution: bool = True
 
 
@@ -119,10 +138,19 @@ def load_engine_config(
 def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     """Validate a decoded TOML document and return immutable settings."""
 
-    _reject_unknown(document, {"attribution", "approvals", "workflows"}, "configuration")
+    _reject_unknown(
+        document,
+        {"attribution", "approvals", "claude", "workflows"},
+        "configuration",
+    )
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
         raise EngineConfigError("attribution must be a boolean")
+
+    claude = _table(document.get("claude", {}), "claude")
+    _reject_unknown(claude, {"output_style"}, "claude")
+    output_style = _output_style(claude.get("output_style", ""))
+
     approvals = _table(document.get("approvals", {}), "approvals")
     _reject_unknown(approvals, {"auto_approve", "allow", "bash"}, "approvals")
 
@@ -154,6 +182,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     return EngineConfig(
         attribution=attribution,
+        claude=ClaudeConfig(output_style=output_style),
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -184,11 +213,32 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
         else "disabled"
     )
     attribution = "on" if loaded.config.attribution else "off"
+    style = loaded.config.claude.output_style
+    output_style = style.value if style is not None else "provider default"
     return (
-        f"configuration: {source}; attribution={attribution}; approvals enforced "
+        f"configuration: {source}; attribution={attribution}; "
+        f"claude.output_style={output_style}; approvals enforced "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
         f"workflows={workflows}"
     )
+
+
+def _output_style(value: object) -> ResponseStyle | None:
+    """Validated here rather than passed through, because a provider that does
+    not recognize a style name may ignore it instead of refusing it -- and a
+    misspelled style that quietly does nothing is the one failure a strict
+    configuration file exists to prevent."""
+    if not isinstance(value, str):
+        raise EngineConfigError("claude.output_style must be a string")
+    if not value:
+        return None
+    try:
+        return ResponseStyle(value)
+    except ValueError as error:
+        choices = ", ".join(style.value for style in ResponseStyle)
+        raise EngineConfigError(
+            f"claude.output_style is unknown: {value!r}; expected one of: {choices}"
+        ) from error
 
 
 def _relative_to(path: Path, directory: Path) -> Path:
@@ -231,10 +281,12 @@ __all__ = [
     "ApprovalConfig",
     "BashApprovalConfig",
     "CONFIG_ENVIRONMENT_VARIABLE",
+    "ClaudeConfig",
     "DEFAULT_CONFIG_NAME",
     "EngineConfig",
     "EngineConfigError",
     "LoadedEngineConfig",
+    "ResponseStyle",
     "WorkflowsConfig",
     "describe_loaded_config",
     "load_engine_config",

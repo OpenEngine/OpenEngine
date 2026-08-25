@@ -21,7 +21,7 @@ neither capability.
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Protocol, runtime_checkable
 
 from engine.domain.agents import AgentProfile
@@ -30,6 +30,21 @@ from engine.domain.chat import Message, ToolCall
 from engine.domain.ids import AgentRunId, WorkspaceId
 from engine.domain.tools import ToolSpec
 from engine.ports.permissions import PermissionTranslator
+
+
+class ResponseStyle(StrEnum):
+    """Engine's provider-neutral vocabulary for how an agent should answer.
+
+    About the shape of the prose, never about what the agent is allowed to do,
+    so a style is safe to apply to every turn a runner takes. Runners that have
+    no such knob ignore it rather than approximating one: a style silently
+    turned into an instruction would be indistinguishable, in a transcript,
+    from something a person asked for.
+    """
+
+    CONCISE = "concise"
+    EXPLANATORY = "explanatory"
+    LEARNING = "learning"
 
 
 class FinishReason(Enum):
@@ -332,6 +347,7 @@ __all__ = [
     "InteractiveMcpAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
+    "ResponseStyle",
     "StreamingMcpAgentRunner",
     "PermissionTranslator",
     "StreamingAgentRunner",

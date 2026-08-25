@@ -62,6 +62,7 @@ from engine.ports.agent_runner import (
     ApprovalRequest,
     FinishReason,
     McpServerConfig,
+    ResponseStyle,
     TokenUsage,
     TurnObserver,
     UserInputOption,
@@ -88,6 +89,17 @@ WORKSPACE_WRITE_TOOLS = (*READ_ONLY_TOOLS, "Edit", "Write")
 IGNORED_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 
 CLAUDE_FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit"})
+
+#: Claude Code's own output-style names, by the Engine style that selects them.
+#: The capitalization is part of the name: the CLI matches a style by its exact
+#: title and silently keeps its default for anything else, so this table is the
+#: only place a style name is spelled and an untranslatable style is never
+#: guessed at.
+OUTPUT_STYLES: dict[ResponseStyle, str] = {
+    ResponseStyle.CONCISE: "Concise",
+    ResponseStyle.EXPLANATORY: "Explanatory",
+    ResponseStyle.LEARNING: "Learning",
+}
 
 
 class ClaudeUnavailableError(RuntimeError):
@@ -484,6 +496,7 @@ class ClaudeCodeAgentRunner:
         model: str = "",
         workspace_provider: WorkspaceProvider | None = None,
         attribution: bool = True,
+        output_style: ResponseStyle | None = None,
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
@@ -492,6 +505,7 @@ class ClaudeCodeAgentRunner:
         self._working_directory = working_directory
         self._model = model
         self._attribution = attribution
+        self._output_style = output_style
         self._workspace_provider = workspace_provider
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
@@ -501,20 +515,16 @@ class ClaudeCodeAgentRunner:
         """The argv this runner would use. Public so the wiring is inspectable
         without running anything."""
         argv = [self._binary_path, "-p", "--output-format", "stream-json", "--verbose"]
+        # One `--settings` for every provider setting Engine configures: the
+        # flag takes a whole document, so a second occurrence would replace the
+        # first rather than add to it.
+        settings: dict[str, Any] = {}
         if not self._attribution:
-            argv += [
-                "--settings",
-                json.dumps(
-                    {
-                        "attribution": {
-                            "commit": "",
-                            "pr": "",
-                            "sessionUrl": False,
-                        }
-                    },
-                    separators=(",", ":"),
-                ),
-            ]
+            settings["attribution"] = {"commit": "", "pr": "", "sessionUrl": False}
+        if self._output_style is not None:
+            settings["outputStyle"] = OUTPUT_STYLES[self._output_style]
+        if settings:
+            argv += ["--settings", json.dumps(settings, separators=(",", ":"))]
         if profile.instructions.strip():
             # A real system-prompt channel, unlike `codex exec` -- so the
             # instructions never enter the conversation text.
@@ -940,6 +950,7 @@ def _tail(text: str, lines: int = 5) -> str:
 
 __all__ = [
     "CLAUDE_PERMISSION_TRANSLATOR",
+    "OUTPUT_STYLES",
     "READ_ONLY_TOOLS",
     "WORKSPACE_WRITE_TOOLS",
     "ClaudeCodeAgentRunner",

@@ -1,5 +1,8 @@
 attribution = false
 
+[claude]
+output_style = "concise"
+
 [approvals]
 auto_approve = false
 allow = ["read", "edit"]
