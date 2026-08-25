@@ -1,0 +1,67 @@
+name: langgraph-acp
+
+# Its own workflow rather than a job in `tests.yml` because `langgraph-acp` is
+# its own distribution: outside the root uv workspace, no OpenEngine
+# dependencies, and a newer Python floor than the rest of the tree. The path
+# filter is the point -- a change to the engine cannot break a package that
+# imports nothing from it, so this suite runs only when the package itself does.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "langgraph-acp/**"
+      - ".github/workflows/langgraph-acp.yml"
+  pull_request:
+    paths:
+      - "langgraph-acp/**"
+      - ".github/workflows/langgraph-acp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a uv release cannot change what CI means without a commit saying so.
+  UV_VERSION: "0.9.28"
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every version's result; one failure should not hide the other.
+      fail-fast: false
+      matrix:
+        # The range `requires-python` claims: the floor, and the current release.
+        python-version: ["3.13", "3.14"]
+    env:
+      # Set at job level so every uv command agrees on the interpreter. Without
+      # it, the package's `.python-version` would win and both legs would test
+      # the same thing.
+      UV_PYTHON: ${{ matrix.python-version }}
+    defaults:
+      run:
+        working-directory: langgraph-acp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Run tests
+        # `--locked` fails on a stale lockfile rather than resolving around it.
+        run: uv run --locked pytest
+
+      # The package ships `py.typed`, so its annotations are a promise to every
+      # downstream type checker. Run on both interpreters: what `str | Path`
+      # resolves to is a property of the version doing the checking.
+      - name: Type check
+        run: uv run --locked mypy

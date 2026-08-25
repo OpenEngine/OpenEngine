@@ -31,6 +31,15 @@ database on startup and can also be upgraded explicitly:
 DATABASE_URL=sqlite:///conversations.sqlite3 uv run engine-migrate
 ```
 
+[`langgraph-acp/`](langgraph-acp/README.md) is a separate distribution, outside
+this workspace on purpose: it depends on nothing OpenEngine ships and targets a
+newer Python. `uv sync --all-packages` does not install it, and its suite is its
+own -- CI runs it only when that directory changes.
+
+```bash
+cd langgraph-acp && uv run pytest
+```
+
 ## Configuration
 
 Each entrypoint accepts one provider-neutral TOML configuration file:
