@@ -18,7 +18,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable, Container, Mapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Container,
+    Iterable,
+    Mapping,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -119,9 +126,19 @@ class ActiveRun:
     the question rather than left watching a stream that has gone quiet.
     """
 
-    def __init__(self, agent_run_id: AgentRunId) -> None:
+    def __init__(
+        self,
+        agent_run_id: AgentRunId,
+        known_tool_call_ids: Iterable[str] = (),
+    ) -> None:
         self.agent_run_id = agent_run_id
         self.content: list[dict[str, object]] = []
+        # assistant-ui registers tool calls as resources by id and throws when
+        # one occurs twice. Providers can replay an already completed item, so
+        # keep the ids from earlier turns as well as the parts in this one.
+        self._tool_calls: dict[str, dict[str, object]] = {
+            call_id: {} for call_id in known_tool_call_ids
+        }
         self.approvals: dict[str, dict[str, object]] = {}
         """The latest snapshot of every request this run has raised, by id.
 
@@ -198,7 +215,7 @@ class ActiveRun:
             raise
 
     async def observe(self, message: Message) -> None:
-        if not _merge_message(self.content, message):
+        if not _merge_message(self.content, message, self._tool_calls):
             return
         async with self._changed:
             self._revision += 1
@@ -470,7 +487,8 @@ class ThreadService:
     ) -> ActiveRun:
         thread = await self._require(instance_id)
         await self.require_somewhere_to_run(instance_id)
-        initial_message_count = len(await self.session.history(instance_id))
+        history = await self.session.history(instance_id)
+        initial_message_count = len(history)
         current = self.active_run(instance_id)
         if current is not None:
             raise RuntimeError("this chat already has a run in progress")
@@ -480,7 +498,7 @@ class ThreadService:
         # against this run and a decision has to be able to name it too.
         agent_run_id = _new_agent_run_id()
         selected_runner = runner or thread.runner
-        run = ActiveRun(agent_run_id)
+        run = ActiveRun(agent_run_id, _tool_call_ids(history))
         self._active_runs[instance_id] = run
         on_approval = None
         # The runner the session will hand this turn to, not the one the name
@@ -1822,6 +1840,7 @@ def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     assistant_content: list[dict[str, object]] = []
     assistant_id = ""
+    tool_calls: dict[str, dict[str, object]] = {}
 
     def flush_assistant() -> None:
         nonlocal assistant_content, assistant_id
@@ -1850,7 +1869,7 @@ def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:
             continue
         if not assistant_id and message.message_id:
             assistant_id = str(message.message_id)
-        _merge_message(assistant_content, message)
+        _merge_message(assistant_content, message, tool_calls)
     flush_assistant()
     return result
 
@@ -1867,45 +1886,77 @@ def _latest_assistant_content(
     messages: tuple[Message, ...],
 ) -> list[dict[str, object]]:
     """Build the current assistant snapshot after the latest user message."""
+    suffix_start = 0
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role is Role.USER:
+            suffix_start = index + 1
+            break
+
     content: list[dict[str, object]] = []
-    for message in messages[len(_through_latest_user(messages)) :]:
-        _merge_message(content, message)
+    tool_calls: dict[str, dict[str, object]] = {
+        call_id: {} for call_id in _tool_call_ids(messages[:suffix_start])
+    }
+    for message in messages[suffix_start:]:
+        _merge_message(content, message, tool_calls)
     return content
 
 
-def _merge_message(content: list[dict[str, object]], message: Message) -> bool:
+def _tool_call_ids(messages: Iterable[Message]) -> set[str]:
+    """Every provider call id already present in a transcript."""
+    return {
+        call.call_id
+        for message in messages
+        for call in message.tool_calls
+    }
+
+
+def _merge_message(
+    content: list[dict[str, object]],
+    message: Message,
+    tool_calls: dict[str, dict[str, object]] | None = None,
+) -> bool:
     """Fold one engine message into one assistant-ui assistant response."""
+    if tool_calls is None:
+        tool_calls = {
+            str(part["toolCallId"]): part
+            for part in content
+            if part.get("type") == "tool-call" and "toolCallId" in part
+        }
     changed = False
     if message.role is Role.ASSISTANT:
         if message.content:
             content.append({"type": "text", "text": message.content})
             changed = True
         for call in message.tool_calls:
+            # Provider streams and resumed sessions can replay the same item.
+            # It is one call semantically, and assistant-ui requires it to be
+            # one resource structurally, so retain the first occurrence.
+            if call.call_id in tool_calls:
+                continue
             try:
                 arguments = json.loads(call.arguments)
             except json.JSONDecodeError:
                 arguments = {}
             if not isinstance(arguments, dict):
                 arguments = {"value": arguments}
-            content.append(
-                {
-                    "type": "tool-call",
-                    "toolCallId": call.call_id,
-                    "toolName": call.name,
-                    "args": arguments,
-                    "argsText": call.arguments,
-                }
-            )
+            part: dict[str, object] = {
+                "type": "tool-call",
+                "toolCallId": call.call_id,
+                "toolName": call.name,
+                "args": arguments,
+                "argsText": call.arguments,
+            }
+            content.append(part)
+            tool_calls[call.call_id] = part
             clarification = _clarification_context(call.name, arguments)
             if clarification:
                 content.append({"type": "text", "text": clarification})
             changed = True
     elif message.role is Role.TOOL and message.tool_call_id:
-        for part in reversed(content):
-            if part.get("toolCallId") == message.tool_call_id:
-                part["result"] = message.content
-                changed = True
-                break
+        part = tool_calls.get(message.tool_call_id)
+        if part is not None:
+            part["result"] = message.content
+            changed = any(candidate is part for candidate in content)
     return changed
 
 
