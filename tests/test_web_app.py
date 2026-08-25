@@ -3497,6 +3497,63 @@ def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
     ]
 
 
+def test_replayed_tool_call_id_is_only_exposed_once() -> None:
+    """Provider reconnects may repeat a completed item with its original id.
+
+    assistant-ui treats the id as a resource key across the whole thread, so a
+    replay must remain one displayed call rather than crashing the chat view.
+    """
+    call = ToolCall(
+        call_id="call-replayed",
+        name="Read",
+        arguments='{"path":"README.md"}',
+    )
+
+    class ReplayRunner(ConcurrentRunner):
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            return AgentTurn(
+                Message.assistant("Found it."),
+                steps=(
+                    Message.assistant(tool_calls=(call,)),
+                    Message.tool_result(call.call_id, "engine"),
+                ),
+            )
+
+    runner = ReplayRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test"},
+            )
+            thread_id = created.json()["id"]
+            await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "inspect"}
+            )
+            replayed = await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "inspect again"}
+            )
+            history = await client.get(f"/api/threads/{thread_id}/messages")
+            return replayed, history
+
+    replayed, history = asyncio.run(scenario())
+
+    assert "call-replayed" not in replayed.text
+    parts = [
+        part
+        for message in history.json()["messages"]
+        for part in message["content"]
+        if part["type"] == "tool-call"
+    ]
+    assert [part["toolCallId"] for part in parts] == ["call-replayed"]
+    assert parts[0]["result"] == "engine"
+
+
 def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript() -> None:
     """Pressing stop ends the turn, not the record of it. What the agent had
     already done is on disk whatever the button does, so a reload that showed
