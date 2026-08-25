@@ -26,6 +26,7 @@ from engine.runtime.planning_tools import (
     PlanningTools,
     ProjectPlan,
     _mcp_response,
+    _tool_specs,
     project_chat_capabilities,
 )
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
@@ -386,6 +387,10 @@ def test_planning_mcp_scopes_workstream_tools_to_the_owning_project() -> None:
         )
         assert deleted["workstream_id"] == added["workstream_id"]
         assert await store.load_workstream(added["workstream_id"]) is None
+        # The plan reads every workstream at once and groups them, so a
+        # neighbouring project's must not arrive with this project's.
+        _, plan = await broker._call("list_milestones", {})
+        assert plan["workstreams"] == []
 
         with pytest.raises(ValueError, match="another project"):
             await broker._call(
@@ -415,6 +420,130 @@ def test_planning_mcp_scopes_workstream_tools_to_the_owning_project() -> None:
         )
 
     asyncio.run(scenario())
+
+
+def test_update_workstream_moves_work_between_milestones_of_one_project() -> None:
+    """Re-cutting a plan moves a workstream; deleting to recreate may be refused."""
+
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        instance = AgentInstance(
+            AgentInstanceId("planner-move"),
+            AgentId("planner"),
+            ConversationId("conversation-move"),
+        )
+        project = Project(project_id_for_instance(instance.instance_id), "OpenEngine")
+        foreign_project = Project(ProjectId("project-foreign"), "Foreign")
+        await store.save_project(project)
+        await store.save_project(foreign_project)
+        tools = PlanningTools(store)
+        foundation = await tools.add_milestone(
+            project.project_id, "Foundation", "Persist the planning hierarchy."
+        )
+        launch = await tools.add_milestone(
+            project.project_id, "Launch", "Put the project in users' hands."
+        )
+        foreign = await tools.add_milestone(
+            foreign_project.project_id, "Foreign", "Another project's goal."
+        )
+        workstream = await tools.add_workstream(
+            foundation.milestone_id, "Data model", "The store and its migrations."
+        )
+
+        moved = await tools.update_workstream(
+            workstream.workstream_id, milestone_id=launch.milestone_id
+        )
+        assert moved.milestone_id == launch.milestone_id
+        assert (moved.name, moved.scope) == (workstream.name, workstream.scope)
+        assert await store.list_workstreams(foundation.milestone_id) == ()
+        assert await store.list_workstreams(launch.milestone_id) == (moved,)
+
+        with pytest.raises(ValueError, match="another project"):
+            await tools.update_workstream(
+                workstream.workstream_id, milestone_id=foreign.milestone_id
+            )
+        with pytest.raises(KeyError, match="no milestone"):
+            await tools.update_workstream(
+                workstream.workstream_id, milestone_id=MilestoneId("milestone-missing")
+            )
+
+        broker = PlanningMcpBroker(store, PLANNING_TOOL_NAMES, instance)
+        _, back = await broker._call(
+            "update_workstream",
+            {
+                "workstream_id": workstream.workstream_id,
+                "milestone_id": foundation.milestone_id,
+                "name": "Persistence",
+            },
+        )
+        assert back["milestone_id"] == foundation.milestone_id
+        assert back["name"] == "Persistence"
+        with pytest.raises(ValueError, match="another project"):
+            await broker._call(
+                "update_workstream",
+                {
+                    "workstream_id": workstream.workstream_id,
+                    "milestone_id": foreign.milestone_id,
+                },
+            )
+
+    asyncio.run(scenario())
+
+
+def test_deleting_a_milestone_is_refused_while_it_still_has_workstreams() -> None:
+    """A planner reorganizing its own plan is the first caller that can hit this.
+
+    `delete_milestone` names the milestones depending on the one being deleted,
+    but leaves this refusal to the store, so pin the message that reaches the
+    model and the description that should stop it getting there.
+    """
+
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        instance = AgentInstance(
+            AgentInstanceId("planner-delete"),
+            AgentId("planner"),
+            ConversationId("conversation-delete"),
+        )
+        project = Project(project_id_for_instance(instance.instance_id), "OpenEngine")
+        await store.save_project(project)
+        tools = PlanningTools(store)
+        foundation = await tools.add_milestone(
+            project.project_id, "Foundation", "Persist the planning hierarchy."
+        )
+        workstream = await tools.add_workstream(
+            foundation.milestone_id, "Data model", "The store and its migrations."
+        )
+
+        with pytest.raises(ValueError, match="still has workstreams"):
+            await tools.delete_milestone(foundation.milestone_id)
+
+        broker = PlanningMcpBroker(store, PLANNING_TOOL_NAMES, instance)
+        refused = await broker._submit(
+            {
+                "token": broker._token,
+                "name": "delete_milestone",
+                "arguments": {"milestone_id": foundation.milestone_id},
+            }
+        )
+        assert refused == {
+            "ok": False,
+            "error": f"milestone '{foundation.milestone_id}' still has workstreams",
+        }
+        assert await store.load_milestone(foundation.milestone_id) == foundation
+
+        await tools.delete_workstream(workstream.workstream_id)
+        assert await tools.delete_milestone(foundation.milestone_id) == foundation
+        assert await store.load_milestone(foundation.milestone_id) is None
+
+    asyncio.run(scenario())
+
+    description = next(
+        tool["description"]
+        for tool in _tool_specs(PLANNING_TOOL_NAMES)
+        if tool["name"] == "delete_milestone"
+    )
+    assert "workstreams" in description
 
 
 def test_planner_turn_launches_scoped_stdio_mcp_and_forwards_a_call() -> None:

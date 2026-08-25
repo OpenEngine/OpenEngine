@@ -948,6 +948,7 @@ def _session(runner: ConcurrentRunner) -> AgentSession:
 def _session_with(
     runners: Mapping[str, ConcurrentRunner],
     profiles: Mapping[AgentId, AgentProfile] = PROFILES,
+    state_store: InMemoryStateStore | None = None,
 ) -> AgentSession:
     unused = object()
     return AgentSession(
@@ -957,7 +958,7 @@ def _session_with(
             agent_runner=next(iter(runners.values())),
             communications=unused,
             workspace_provider=unused,
-            state_store=InMemoryStateStore(),
+            state_store=state_store or InMemoryStateStore(),
         ),
         profiles=profiles,
         runners=dict(runners),
@@ -3490,6 +3491,61 @@ def test_project_milestones_api_lists_the_active_projects_dependency_data() -> N
         ],
     }
     assert missing.status_code == 404
+
+
+def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() -> None:
+    """The timeline polls this route every second, per open project.
+
+    A read per milestone would make each poll cost the length of the plan, and
+    the SQLite store serializes every query behind one connection, so the plan
+    is read whole and grouped in the handler instead.
+    """
+
+    class CountingStore(InMemoryStateStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.workstream_reads = 0
+
+        async def list_workstreams(self, milestone_id=None):
+            self.workstream_reads += 1
+            return await super().list_workstreams(milestone_id)
+
+    runner = ConcurrentRunner()
+    store = CountingStore()
+    session = _session_with({"test": runner}, state_store=store)
+    project = Project(project_id_for_instance(AgentInstanceId("agi-long")), "Engine")
+
+    async def scenario():
+        await store.save_project(project)
+        for index in range(12):
+            milestone = Milestone(
+                MilestoneId(f"milestone-{index}"), project.project_id, f"Goal {index}"
+            )
+            await store.save_milestone(milestone)
+            await store.save_workstream(
+                Workstream(
+                    WorkstreamId(f"workstream-{index}"),
+                    milestone.milestone_id,
+                    f"Work {index}",
+                    "One workstream per goal.",
+                )
+            )
+        store.workstream_reads = 0
+        app = create_app(session, {"test": runner})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/projects/{project.project_id}/milestones")
+
+    listed = asyncio.run(scenario())
+
+    assert store.workstream_reads == 1
+    milestones = listed.json()["milestones"]
+    assert len(milestones) == 12
+    assert [milestone["workstreams"][0]["name"] for milestone in milestones] == [
+        f"Work {index}" for index in reversed(range(12))
+    ]
 
 
 def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:

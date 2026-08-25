@@ -21,6 +21,7 @@ from engine.domain import (
     Workstream,
     WorkstreamId,
     project_id_for_instance,
+    workstreams_by_milestone,
 )
 from engine.ports import McpServerConfig, StateStore
 
@@ -123,13 +124,15 @@ class PlanningTools:
             tuple(await self._store.list_milestones(project.project_id))
         )
         # The plan carries the workstreams too: a planner that cannot see the
-        # ids it recorded cannot update or remove one.
-        workstreams: list[Workstream] = []
-        for milestone in milestones:
-            workstreams.extend(
-                await self._store.list_workstreams(milestone.milestone_id)
-            )
-        return ProjectPlan(project, milestones, tuple(workstreams))
+        # ids it recorded cannot update or remove one. One read for the lot,
+        # grouped in memory, keeps that at two queries however long the plan is.
+        by_milestone = workstreams_by_milestone(await self._store.list_workstreams())
+        workstreams = tuple(
+            workstream
+            for milestone in milestones
+            for workstream in by_milestone.get(milestone.milestone_id, ())
+        )
+        return ProjectPlan(project, milestones, workstreams)
 
     async def update_milestone(
         self,
@@ -195,14 +198,22 @@ class PlanningTools:
         self,
         workstream_id: WorkstreamId,
         *,
+        milestone_id: MilestoneId | None = None,
         name: str | None = None,
         scope: str | None = None,
     ) -> Workstream:
         workstream = await self._require_workstream(workstream_id)
-        if name is None and scope is None:
+        if milestone_id is None and name is None and scope is None:
             raise ValueError("update_workstream requires at least one changed field")
+        if milestone_id is not None:
+            # Re-cutting a plan moves work between goals, and deleting to
+            # recreate is refused once a run points at the workstream.
+            await self._require_sibling_milestone(workstream, milestone_id)
         updated = replace(
             workstream,
+            milestone_id=(
+                workstream.milestone_id if milestone_id is None else milestone_id
+            ),
             name=workstream.name if name is None else _non_empty(name, "name"),
             scope=workstream.scope if scope is None else _non_empty(scope, "scope"),
         )
@@ -233,6 +244,16 @@ class PlanningTools:
         if workstream is None:
             raise KeyError(f"no workstream {workstream_id!r}")
         return workstream
+
+    async def _require_sibling_milestone(
+        self, workstream: Workstream, milestone_id: MilestoneId
+    ) -> Milestone:
+        """A workstream moves within its project, never into another one."""
+        current = await self._require_milestone(workstream.milestone_id)
+        target = await self._require_milestone(milestone_id)
+        if target.project_id != current.project_id:
+            raise ValueError(f"milestone {milestone_id!r} belongs to another project")
+        return target
 
     async def _validate_dependencies(
         self,
@@ -417,11 +438,18 @@ class PlanningMcpBroker:
             )
         if name == "update_workstream":
             _exact_arguments(
-                arguments, required={"workstream_id"}, optional={"name", "scope"}
+                arguments,
+                required={"workstream_id"},
+                optional={"milestone_id", "name", "scope"},
             )
             workstream_id = await self._require_owned_workstream(arguments)
             workstream = await self._tools.update_workstream(
                 workstream_id,
+                milestone_id=(
+                    await self._require_owned_milestone(arguments)
+                    if "milestone_id" in arguments
+                    else None
+                ),
                 name=_optional_string(arguments, "name"),
                 scope=_optional_string(arguments, "scope"),
             )
@@ -517,7 +545,11 @@ def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
         },
         {
             "name": "delete_milestone",
-            "description": "Delete an unused milestone from a project plan.",
+            "description": (
+                "Delete a milestone from a project plan. Refused while another "
+                "milestone depends on it, or while it still has workstreams: "
+                "delete those first."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {"milestone_id": identifier},
@@ -544,11 +576,15 @@ def _tool_specs(capabilities: Sequence[str]) -> list[dict[str, object]]:
         },
         {
             "name": "update_workstream",
-            "description": "Update a workstream's name or scope.",
+            "description": (
+                "Update a workstream's name or scope, or move it to another "
+                "milestone of the same project."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "workstream_id": identifier,
+                    "milestone_id": identifier,
                     "name": identifier,
                     "scope": identifier,
                 },

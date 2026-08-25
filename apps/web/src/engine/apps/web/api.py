@@ -63,6 +63,7 @@ from engine.domain import (
     WorkspaceId,
     instance_id_for_project,
     project_id_for_instance,
+    workstreams_by_milestone,
 )
 from engine.ports import (
     AgentRunner,
@@ -1198,15 +1199,19 @@ def create_app(
         if project is None:
             return _error("project not found", 404)
         milestones = await session.state_store.list_milestones(project_id)
+        # Read every workstream once and group here rather than asking per
+        # milestone: the timeline polls this route every second per open
+        # project, and a query per milestone makes that cost grow with the plan
+        # while holding the store's lock.
+        by_milestone = workstreams_by_milestone(
+            await session.state_store.list_workstreams()
+        )
         return JSONResponse(
             {
                 "project": _project_json(project, ()),
                 "milestones": [
                     _milestone_json(
-                        milestone,
-                        await session.state_store.list_workstreams(
-                            milestone.milestone_id
-                        ),
+                        milestone, by_milestone.get(milestone.milestone_id, ())
                     )
                     for milestone in milestones
                 ],
