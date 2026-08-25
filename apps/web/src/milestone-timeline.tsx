@@ -13,6 +13,15 @@ const TOOLTIP_EDGE_SPACE = 152;
 // Keep a 280px tooltip plus a 12px gutter inside the smallest graph.
 const SIDE_PADDING = (TOOLTIP_EDGE_SPACE / MIN_GRAPH_WIDTH) * GRAPH_WIDTH;
 const NODE_Y = 96;
+const POLL_MS = 1000;
+// One failed poll is a blip and is kept quiet; a run of them is an outage, and
+// a timeline that has stopped following the plan has to say so.
+const STALE_AFTER_FAILURES = 3;
+
+/** Whether two polls returned the same plan, compared as the server sent it. */
+function sameMilestones(a: ApiMilestone[], b: ApiMilestone[]) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 /** Keep every dependency to the left of the milestone that needs it.
  *
@@ -137,31 +146,66 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
   );
 }
 
+/** The timeline of the project this conversation is planning, kept current.
+ *
+ *  Milestones are written by the planning tools in whatever process is running
+ *  the agent, so the page re-reads the list rather than waiting to be told --
+ *  the same poll the shell already runs for projects and workflow runs. */
 export function MilestoneTimeline({ project }: { project?: ApiProject }) {
   const [milestones, setMilestones] = useState<ApiMilestone[]>([]);
-  const [loading, setLoading] = useState(Boolean(project));
+  // Held apart from an empty list so a failed poll can keep showing the last
+  // good timeline rather than replace it with an error. It also gates the
+  // previous project's plan on a switch, which is deliberately not cleared.
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
+  const [failures, setFailures] = useState(0);
 
   useEffect(() => {
+    setLoaded(false);
+    setError("");
+    setFailures(0);
     if (!project) {
       setMilestones([]);
-      setLoading(false);
-      setError("");
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    void getProjectMilestones(project.projectId, controller.signal)
-      .then((value) => setMilestones(value.milestones))
-      .catch((reason: Error) => {
-        if (!controller.signal.aborted) setError(reason.message);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
+    let timer: number | undefined;
+    const load = () => {
+      void getProjectMilestones(project.projectId, controller.signal)
+        .then((value) => {
+          // Guarded like the two handlers below: whatever this poll answers
+          // belongs to the project that asked for it, not the one now shown.
+          if (controller.signal.aborted) return;
+          // Keep the previous array when the plan has not moved, so the
+          // ordering and position memos hold and a steady-state poll re-renders
+          // nothing rather than redrawing the whole graph once a second.
+          setMilestones((current) =>
+            sameMilestones(current, value.milestones) ? current : value.milestones,
+          );
+          setLoaded(true);
+          setError("");
+          setFailures(0);
+        })
+        .catch((reason: Error) => {
+          if (controller.signal.aborted) return;
+          setError(reason.message);
+          setFailures((count) => count + 1);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) timer = window.setTimeout(load, POLL_MS);
+        });
+    };
+    load();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [project?.projectId]);
+
+  // A timeline that looks live but has stopped following the plan is the worst
+  // thing this can be, so a run of failures is said out loud beside a render
+  // that is now only the last known plan.
+  const stale = loaded && failures >= STALE_AFTER_FAILURES;
 
   return (
     <section className="milestone-timeline" aria-labelledby="milestone-timeline-title">
@@ -170,17 +214,26 @@ export function MilestoneTimeline({ project }: { project?: ApiProject }) {
           <p className="eyebrow">Active project</p>
           <h2 id="milestone-timeline-title">Milestone timeline</h2>
         </div>
-        <span className="micro">{project?.name ?? "Waiting for the first turn"}</span>
+        <div className="milestone-timeline-status">
+          <span className="micro">{project?.name ?? "Waiting for the first turn"}</span>
+          {stale && (
+            <span className="micro milestone-stale" role="status">
+              Not updating: {error}
+            </span>
+          )}
+        </div>
       </header>
       <div className="milestone-viewport">
         {!project ? (
           <p className="milestone-empty">Milestones will appear after this project is created.</p>
-        ) : loading ? (
-          <p className="milestone-empty">Loading milestones…</p>
+        ) : loaded ? (
+          <MilestoneTimelineVisual milestones={milestones} />
         ) : error ? (
+          // Only reached before the first answer; once there is a timeline to
+          // show, a failure is reported by the header note instead.
           <p className="milestone-empty milestone-error">Could not load milestones: {error}</p>
         ) : (
-          <MilestoneTimelineVisual milestones={milestones} />
+          <p className="milestone-empty">Loading milestones…</p>
         )}
       </div>
     </section>
