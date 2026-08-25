@@ -218,6 +218,15 @@ class TerminalMcpBroker:
         return {"ok": True, "acknowledgement": "accepted"}
 
 
+def terminal_tool_names(repo_comments: bool = False) -> tuple[str, ...]:
+    """The tools a step's server serves, in the order it lists them.
+
+    Read off the listing rather than restated beside it, so a tool added to
+    `_tools` cannot end up served without the step being told it holds one.
+    """
+    return tuple(str(tool["name"]) for tool in _tools(repo_comments))
+
+
 def _tools(repo_comments: bool = False) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = [
         {
@@ -462,4 +471,5 @@ __all__ = [
     "TerminalMcpBroker",
     "TerminalResultAlreadySubmittedError",
     "TerminalResultRegistry",
+    "terminal_tool_names",
 ]

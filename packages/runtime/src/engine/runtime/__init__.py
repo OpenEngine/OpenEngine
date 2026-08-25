@@ -79,6 +79,7 @@ from engine.runtime.terminal_mcp import (
     TerminalMcpBroker,
     TerminalResultAlreadySubmittedError,
     TerminalResultRegistry,
+    terminal_tool_names,
 )
 from engine.runtime.workflow_execution import WorkflowExecutionError, WorkflowExecutor
 from engine.runtime.workflows import (
@@ -155,5 +156,6 @@ __all__ = [
     "step_completed_from_arguments",
     "step_result_instructions",
     "step_result_from_tool_call",
+    "terminal_tool_names",
     "with_granted_tools",
 ]

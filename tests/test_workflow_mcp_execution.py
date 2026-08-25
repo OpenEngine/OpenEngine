@@ -26,6 +26,7 @@ from engine.runtime import (
     Dispatcher,
     GRANTED_TOOLS_NOTE,
     INVALID_COMPLETION_ERROR,
+    terminal_tool_names,
 )
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
@@ -41,11 +42,11 @@ COMMAND = StartAgentRun(
 )
 
 
-def _capabilities(runner: object) -> Capabilities:
+def _capabilities(runner: object, source_control: object | None = None) -> Capabilities:
     missing = object()
     return Capabilities(
         workflow_runtime=missing,
-        source_control=missing,
+        source_control=source_control if source_control is not None else missing,
         agent_runner=runner,
         communications=missing,
         workspace_provider=missing,
@@ -53,8 +54,26 @@ def _capabilities(runner: object) -> Capabilities:
     )
 
 
-async def _report_completion(mcp_server: McpServerConfig) -> None:
-    """Call `complete_step` on the run-bound server the way a real CLI would."""
+class CommentingSourceControl:
+    """Enough of the port for the broker to serve `add_comment`."""
+
+    async def add_comment(
+        self,
+        pr_url: str,
+        comment: str,
+        file: str | None = None,
+        line: int | None = None,
+    ) -> None:  # pragma: no cover - presence is what the broker checks
+        pass
+
+
+async def _call_tool(
+    mcp_server: McpServerConfig,
+    name: str,
+    arguments: dict[str, object],
+    request_id: str = "tool-call-7",
+) -> dict[str, object]:
+    """Call one tool on the run-bound server the way a real CLI would."""
     host = mcp_server.args[mcp_server.args.index("--host") + 1]
     port = int(mcp_server.args[mcp_server.args.index("--port") + 1])
     token = mcp_server.args[mcp_server.args.index("--token") + 1]
@@ -63,21 +82,39 @@ async def _report_completion(mcp_server: McpServerConfig) -> None:
         json.dumps(
             {
                 "token": token,
-                "request_id": "tool-call-7",
-                "name": "complete_step",
-                "arguments": {
-                    "outcome": "success",
-                    "summary": "Done.",
-                    "outputs": {},
-                },
+                "request_id": request_id,
+                "name": name,
+                "arguments": arguments,
             }
         ).encode()
         + b"\n"
     )
     await writer.drain()
-    acknowledgement = json.loads(await reader.readline())
+    response = json.loads(await reader.readline())
     writer.close()
     await writer.wait_closed()
+    return response
+
+
+async def _report_completion(mcp_server: McpServerConfig) -> None:
+    """Call `complete_step`, having commented first if the step is a review.
+
+    The broker refuses to complete a commenting step that left no comment, so
+    a runner that skips it is not modelling what a reviewer does.
+    """
+    if "--repo-comments" in mcp_server.args:
+        commented = await _call_tool(
+            mcp_server,
+            "add_comment",
+            {"pr_url": "https://example.invalid/pr/1", "comment": "Looks right."},
+            request_id="tool-call-6",
+        )
+        assert commented["acknowledgement"] == "comment added"
+    acknowledgement = await _call_tool(
+        mcp_server,
+        "complete_step",
+        {"outcome": "success", "summary": "Done.", "outputs": {}},
+    )
     assert acknowledgement["acknowledgement"] == "accepted"
 
 
@@ -134,46 +171,113 @@ def test_accepted_result_is_delivered_then_the_cli_is_cancelled() -> None:
     asyncio.run(scenario())
 
 
-def test_a_workflow_step_is_told_which_tools_its_profile_grants() -> None:
-    """The step instructions name the terminal tools; nothing named the rest.
+class ProfileCapturingRunner(CallingMcpRunner):
+    """Keeps the profile each turn was actually run with."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.profiles: list[AgentProfile] = []
+
+    async def run_turn_with_mcp(
+        self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+    ):
+        self.profiles.append(profile)
+        return await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
+REVIEWER = AgentProfile(
+    AgentId("reviewer"), "Review the change.", capabilities=("add_comment",)
+)
+REVIEW_COMMAND = replace(
+    COMMAND, profile=REVIEWER, step=StepSpec(StepId("review"), REVIEWER.agent_id)
+)
+
+
+def test_a_workflow_step_is_told_every_tool_its_server_serves() -> None:
+    """Everything the broker lists, not everything the profile declares.
 
     A reviewer granted `add_comment` and never told it holds one reports the
     comment it would have left, which is the same failure as a planner that
-    describes a milestone instead of recording it.
+    describes a milestone instead of recording it. The terminal tools are on
+    the same footing: the broker serves them, so a note introduced as an
+    enumeration has to name them too or it is one the model can read as
+    complete and be wrong.
     """
-
-    class ProfileCapturingRunner(CallingMcpRunner):
-        def __init__(self) -> None:
-            super().__init__()
-            self.profiles: list[AgentProfile] = []
-
-        async def run_turn_with_mcp(
-            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
-        ):
-            self.profiles.append(profile)
-            return await super().run_turn_with_mcp(
-                agent_run_id, profile, messages, mcp_server, workspace_id
-            )
 
     async def scenario() -> None:
         runner = ProfileCapturingRunner()
-        reviewer = AgentProfile(
-            AgentId("reviewer"), "Review the change.", capabilities=("add_comment",)
-        )
-        command = replace(
-            COMMAND,
-            profile=reviewer,
-            step=StepSpec(StepId("review"), reviewer.agent_id),
-        )
+        capabilities = _capabilities(runner, CommentingSourceControl())
 
-        await Dispatcher(_capabilities(runner)).run_workflow_agent(
-            command, runner=runner
+        await Dispatcher(capabilities).run_workflow_agent(
+            REVIEW_COMMAND, runner=runner
         )
 
         instructions = runner.profiles[0].instructions
         assert instructions.startswith("Review the change.")
         assert GRANTED_TOOLS_NOTE in instructions
-        assert "- add_comment" in instructions
+        listed = {line[2:] for line in instructions.splitlines() if line.startswith("- ")}
+        assert listed == set(terminal_tool_names(repo_comments=True))
+        assert "add_comment" in listed
+
+    asyncio.run(scenario())
+
+
+def test_a_grant_the_broker_cannot_serve_is_not_announced() -> None:
+    """`add_comment` is served only when source control can honour it.
+
+    Granting it against a source control that cannot comment leaves the tool
+    off the MCP listing, and a system prompt naming it anyway would send the
+    reviewer after a tool that is not there -- ending turns without a terminal
+    result until the correction budget runs out.
+    """
+
+    async def scenario() -> None:
+        runner = ProfileCapturingRunner()
+
+        # `_capabilities` defaults source control to a bare `object()`, which
+        # is exactly the case: granted, and unservable.
+        await Dispatcher(_capabilities(runner)).run_workflow_agent(
+            REVIEW_COMMAND, runner=runner
+        )
+
+        instructions = runner.profiles[0].instructions
+        assert "add_comment" not in instructions
+        listed = {line[2:] for line in instructions.splitlines() if line.startswith("- ")}
+        assert listed == set(terminal_tool_names())
+
+    asyncio.run(scenario())
+
+
+def test_a_non_mcp_step_announces_nothing_because_it_serves_nothing() -> None:
+    """The plain `run_turn` branch passes no `tools=` and has no broker."""
+
+    class PlainRunner:
+        permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+        def __init__(self) -> None:
+            self.profiles: list[AgentProfile] = []
+
+        async def run_turn(
+            self,
+            agent_run_id: AgentRunId,
+            profile: AgentProfile,
+            messages: Sequence[Message],
+            tools: Sequence[ToolSpec] = (),
+            workspace_id: str | None = None,
+        ) -> AgentTurn:
+            self.profiles.append(profile)
+            return AgentTurn(Message.assistant("Reviewed."))
+
+    async def scenario() -> None:
+        runner = PlainRunner()
+
+        await Dispatcher(_capabilities(runner, CommentingSourceControl())).run_workflow_agent(
+            REVIEW_COMMAND, runner=runner
+        )
+
+        assert runner.profiles[0].instructions == "Review the change."
 
     asyncio.run(scenario())
 

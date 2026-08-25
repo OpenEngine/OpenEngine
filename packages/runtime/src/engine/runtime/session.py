@@ -386,6 +386,15 @@ class AgentSession:
 
         profile = profile_for(instance.agent_id, self._profiles)
         if self._capability_resolver is not None:
+            # A resolver is read per turn, so a profile's `instructions` are no
+            # longer static configuration for these conversations -- they are a
+            # function of durable state. `engine.runtime.transcript` and the
+            # codex adapter's `render_prompt` both rest on turn N's prompt being
+            # a strict prefix of turn N+1's, and the instruction block sits
+            # first. A resolver whose answer changes mid-conversation breaks
+            # that prefix for every turn after it. `project_chat_capabilities`
+            # does not -- a project chat's grants are fixed from its first turn
+            # -- and a future resolver has to hold to the same, or say why.
             contextual = await self._capability_resolver(store, instance)
             profile = replace(
                 profile,
@@ -393,9 +402,6 @@ class AgentSession:
                     dict.fromkeys((*profile.capabilities, *contextual))
                 ),
             )
-        # After the contextual grants, so the agent is told about everything
-        # this turn hands over rather than only what its role declares.
-        profile = with_granted_tools(profile)
         # After the profile, because which runner answers depends on it -- and
         # still before anything is written, so a turn nobody can run leaves the
         # transcript as it was.
@@ -406,6 +412,15 @@ class AgentSession:
                 raise ApprovalsUnsupportedError(runner_name)
             interactive = selected_runner
         tools, mcp_factory, mcp_capabilities = self._tools_for(profile)
+        # After resolution rather than after the contextual grants: `_tools_for`
+        # is what turns a grant into something the model can call, so its answer
+        # -- not the declaration it started from -- is what this turn serves.
+        # The two agree here, since a grant that resolves to nothing raises
+        # rather than reaching this line, but saying it in terms of the resolved
+        # set is what keeps them agreeing.
+        profile = with_granted_tools(
+            profile, (*(tool.name for tool in tools), *mcp_capabilities)
+        )
 
         question = Message.user(text)
         await store.append_messages(instance_id, (question,))

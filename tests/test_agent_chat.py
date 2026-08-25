@@ -40,6 +40,7 @@ from engine.runtime import (
     UnknownInstanceError,
     UnknownRunnerError,
     UnknownToolGrantError,
+    with_granted_tools,
 )
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
@@ -627,7 +628,7 @@ def test_a_resolvable_grant_reaches_the_runner() -> None:
     assert captured == [(dispatch,)]
 
 
-def test_the_instructions_name_every_tool_the_turn_grants() -> None:
+def test_the_instructions_name_every_tool_the_turn_serves() -> None:
     """Handing the tools over is not the same as saying so.
 
     A conversation that receives tools from its durable context has to be told
@@ -708,6 +709,32 @@ def test_a_profile_granted_nothing_is_told_about_nothing() -> None:
 
     _, profile, _ = runner.seen[0]
     assert profile.instructions == "Be terse."
+
+
+def test_announcing_twice_says_it_once() -> None:
+    """No path applies this twice today -- `say` and the dispatcher are
+    disjoint, and both rebuild from an unmodified source profile each turn -- but
+    the function is exported, so the next caller has only this stopping it."""
+    profile = AgentProfile(CODER, "Be terse.", capabilities=("add_milestone",))
+
+    once = with_granted_tools(profile, ("add_milestone",))
+    twice = with_granted_tools(once, ("add_milestone",))
+
+    assert twice is once
+    assert once.instructions.count(GRANTED_TOOLS_NOTE) == 1
+
+
+def test_a_grant_is_announced_only_once_it_resolves() -> None:
+    """The list is what the caller serves, not what the profile declares.
+
+    They coincide on the `say` path -- `_tools_for` raises rather than let an
+    unresolvable grant through -- so the distinction is only visible here, and
+    it is the one that keeps the dispatcher's paths honest.
+    """
+    profile = AgentProfile(CODER, "Be terse.", capabilities=("dispatch",))
+
+    assert with_granted_tools(profile, ()) is profile
+    assert "- dispatch" not in with_granted_tools(profile, ("clarify",)).instructions
 
 
 def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> None:

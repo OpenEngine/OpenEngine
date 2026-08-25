@@ -7,7 +7,6 @@ that possible, because collapsing any two of them is the easy mistake.
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import replace
 
 import pytest
 
@@ -33,7 +32,7 @@ from engine.domain import (
     ToolSpec,
 )
 from engine.ports import AgentRunner, AgentTurn, FinishReason
-from engine.runtime import Capabilities, Dispatcher
+from engine.runtime import Capabilities, Dispatcher, GRANTED_TOOLS_NOTE
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 FOREMAN = AgentProfile(
@@ -242,11 +241,33 @@ def test_dispatch_routes_a_start_to_the_agent_runner() -> None:
 
     agent_run_id, profile, messages, _ = runner.calls[0]
     assert agent_run_id == AgentRunId("ar-1")
-    # The command's profile, plus the note telling the agent what it holds --
-    # dispatch adds that and changes nothing else about the role.
-    assert replace(profile, instructions=FOREMAN.instructions) == FOREMAN
-    assert profile.instructions.startswith(FOREMAN.instructions)
+    assert profile is FOREMAN
     assert messages == (Message.user("status?"),)
+
+
+def test_a_standalone_run_announces_no_tools_because_it_serves_none() -> None:
+    """This arm calls `run_turn` with no `tools=`, so a profile's grants become
+    nothing the model can call. Announcing them would trade dispatch's silence
+    for an agent reaching for a tool nobody served it."""
+    runner = FakeAgentRunner()
+    granted = AgentProfile(
+        agent_id=AgentId("foreman"),
+        instructions="Coordinate.",
+        capabilities=("dispatch",),
+    )
+    command = StartAgentRun(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("ar-1"),
+        instance_id=AgentInstanceId("agi-1"),
+        profile=granted,
+        prompt="status?",
+    )
+
+    asyncio.run(Dispatcher(_capabilities(runner)).dispatch(command))
+
+    _, profile, _, _ = runner.calls[0]
+    assert profile.instructions == "Coordinate."
+    assert GRANTED_TOOLS_NOTE not in profile.instructions
 
 
 def test_the_command_carries_the_profile_so_dispatch_needs_no_registry() -> None:
