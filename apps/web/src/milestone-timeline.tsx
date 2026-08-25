@@ -8,7 +8,10 @@ import {
 
 const NODE_GAP = 210;
 const GRAPH_WIDTH = 1000;
-const SIDE_PADDING = 120;
+const MIN_GRAPH_WIDTH = 640;
+const TOOLTIP_EDGE_SPACE = 152;
+// Keep a 280px tooltip plus a 12px gutter inside the smallest graph.
+const SIDE_PADDING = (TOOLTIP_EDGE_SPACE / MIN_GRAPH_WIDTH) * GRAPH_WIDTH;
 const NODE_Y = 96;
 
 /** Keep every dependency to the left of the milestone that needs it.
@@ -58,7 +61,7 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
     [ordered],
   );
   const minWidth = Math.max(
-    640,
+    MIN_GRAPH_WIDTH,
     (Math.max(0, ordered.length - 1) * NODE_GAP * GRAPH_WIDTH) /
       (GRAPH_WIDTH - SIDE_PADDING * 2),
   );

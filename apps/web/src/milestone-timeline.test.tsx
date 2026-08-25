@@ -36,6 +36,20 @@ describe("milestone timeline", () => {
     expect(container.querySelector('[data-from="foundation"][data-to="launch"]')).not.toBeNull();
   });
 
+  it("keeps edge tooltips inside the minimum-width timeline", () => {
+    const { container } = render(
+      <MilestoneTimelineVisual milestones={[foundation, launch]} />,
+    );
+    const map = container.querySelector<HTMLElement>(".milestone-map")!;
+    const nodes = container.querySelectorAll<HTMLElement>(".milestone-node");
+    const width = Number.parseFloat(map.style.minWidth);
+    const firstCenter = (Number.parseFloat(nodes[0].style.left) / 100) * width;
+    const lastCenter = (Number.parseFloat(nodes[1].style.left) / 100) * width;
+
+    expect(firstCenter).toBeGreaterThanOrEqual(140);
+    expect(width - lastCenter).toBeGreaterThanOrEqual(140);
+  });
+
   it("renders an empty state without inventing milestones", () => {
     render(<MilestoneTimelineVisual milestones={[]} />);
 
