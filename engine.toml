@@ -1,4 +1,6 @@
 attribution = false
+
+[claude]
 output_style = "concise"
 
 [approvals]

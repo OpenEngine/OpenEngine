@@ -181,7 +181,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,
-            output_style=settings.engine_config.output_style,
+            output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
     }
@@ -222,7 +222,7 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,
-            output_style=settings.engine_config.output_style,
+            output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
     }
@@ -260,7 +260,7 @@ def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,
-            output_style=settings.engine_config.output_style,
+            output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
     }

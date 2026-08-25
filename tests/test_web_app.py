@@ -81,6 +81,7 @@ from engine.runtime import (
     ApprovalCapability,
     ApprovalConfig,
     Capabilities,
+    ClaudeConfig,
     EngineConfig,
     ResponseStyle,
     WorkflowCatalog,
@@ -213,7 +214,9 @@ def test_engine_config_disables_attribution_for_every_workflow_runner() -> None:
 def test_engine_config_styles_every_claude_runner_this_process_offers() -> None:
     """Chat, review, and workflow alike: a style is a property of the runner
     rather than of the errand it is sent on."""
-    settings = Settings(engine_config=EngineConfig(output_style=ResponseStyle.CONCISE))
+    settings = Settings(
+        engine_config=EngineConfig(claude=ClaudeConfig(output_style=ResponseStyle.CONCISE))
+    )
 
     for build in (build_runners, build_read_only_runners, build_workflow_runners):
         argv = build(settings)["claude"].command_line(PROFILES[CODER])
