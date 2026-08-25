@@ -15,6 +15,7 @@ import {
 } from "./api";
 import { ChatThread, ConversationStats } from "./chat";
 import { MilestoneTimeline } from "./milestone-timeline";
+import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
 import { NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
 import { Sidebar, type RailSection } from "./sidebar";
@@ -283,6 +284,9 @@ type Route =
   | { kind: "runs" }
   | { kind: "new-run" }
   | { kind: "run"; runId: string }
+  /** One project's plan in full, which is the only page a project has that is
+   *  not the conversation it was named after. */
+  | { kind: "project"; projectId: string }
   /** `plan` is the same chat page, opened on the agent that plans rather than
    *  on the one that codes -- and always on a new conversation, because a
    *  button that offered you the last one back would not be a plan. */
@@ -293,6 +297,9 @@ function currentRoute(): Route {
   if (path === "/" || path === "/runs") return { kind: "runs" };
   if (path === "/runs/new") return { kind: "new-run" };
   if (path === "/plan") return { kind: "chat", plan: true };
+  const projectMilestones = path.match(/^\/projects\/([^/]+)\/milestones$/);
+  if (projectMilestones)
+    return { kind: "project", projectId: decodeURIComponent(projectMilestones[1]) };
   const workflowConversation = path.match(
     /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
   );
@@ -316,7 +323,7 @@ function currentRoute(): Route {
 function sectionFor(route: Route, projectPage: boolean): RailSection {
   if (route.kind === "chat")
     return route.runId ? "workflows" : route.plan || projectPage ? "projects" : "chats";
-  return "workflows";
+  return route.kind === "project" ? "projects" : "workflows";
 }
 
 /** `/plan` is where a plan starts, not where it lives.
@@ -438,6 +445,7 @@ function App() {
           // chat's path can equal no step's conversation URL, so widening this
           // leaves the workflow rows reading exactly as they did.
           activeConversationUrl={conversationUrl}
+          activeProjectId={route.kind === "project" ? route.projectId : undefined}
           activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
           onArchiveProject={archiveProject}
         />
@@ -447,6 +455,8 @@ function App() {
           <NewWorkflowPage config={config} />
         ) : route.kind === "run" ? (
           <RunDetailPage runId={route.runId} />
+        ) : route.kind === "project" ? (
+          <ProjectMilestonesPage projectId={route.projectId} />
         ) : (
           <ChatPanel
             config={config}

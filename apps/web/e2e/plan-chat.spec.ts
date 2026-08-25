@@ -171,6 +171,30 @@ test("a new project opens a planning conversation and appears in the rail", asyn
       .getByRole("link", { name: PROJECT_NAME }),
   ).toHaveAttribute("aria-current", "page");
   await shot(page, testInfo, "3 the project reopens its plan");
+
+  // A plan is more than the conversation that wrote it. The project offers its
+  // milestones under its own row, and the page they open reads the timeline
+  // first and then says what each goal actually is.
+  const rail = page.getByRole("navigation", { name: "Projects" });
+  await rail.getByRole("link", { name: "Milestones · 3" }).click();
+
+  await expect(page).toHaveURL(/\/projects\/[^/]+\/milestones$/);
+  await expect(page.getByRole("heading", { name: "Milestones", level: 1 })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Milestone timeline" })).toBeVisible();
+  await expect(page.getByRole("article", { name: "Planning foundation" })).toContainText(
+    "Establish the project structure and shared planning model.",
+  );
+  await expect(page.getByRole("article", { name: "First release" })).toBeVisible();
+  await expect(page.getByRole("article", { name: "Wider rollout" })).toBeVisible();
+  await expect(rail.getByRole("link", { name: "Milestones · 3" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await shot(page, testInfo, "4 the project's milestones");
+
+  // And the way back to the conversation the plan was written in.
+  await page.getByRole("link", { name: "← Planning conversation" }).click();
+  await expect(page).toHaveURL(`/conversations/${threads[0].id}`);
 });
 
 test("a project is archived into its own list and restored from it", async ({
@@ -198,7 +222,7 @@ test("a project is archived into its own list and restored from it", async ({
   // where it is on screen.
   await expect(page.getByText("Archived projects")).toBeVisible();
   await expect(rail.getByText(PROJECT_NAME)).toBeHidden();
-  await shot(page, testInfo, "4 the project is archived");
+  await shot(page, testInfo, "5 the project is archived");
 
   const archived = await (await page.request.get("/api/projects")).json();
   expect(archived.projects[0].archived).toBe(true);
@@ -209,7 +233,7 @@ test("a project is archived into its own list and restored from it", async ({
   // archived project is not somewhere to click through to.
   await expect(rail.getByText(PROJECT_NAME)).toBeVisible();
   await expect(rail.getByRole("link", { name: PROJECT_NAME })).toHaveCount(0);
-  await shot(page, testInfo, "5 the archived projects submenu");
+  await shot(page, testInfo, "6 the archived projects submenu");
 
   await rail.getByRole("button", { name: `Restore ${PROJECT_NAME}` }).click();
 

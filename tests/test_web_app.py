@@ -42,6 +42,7 @@ from engine.domain import (
     Milestone,
     MilestoneId,
     Project,
+    ProjectId,
     Role,
     RunFailed,
     RunId,
@@ -3411,6 +3412,7 @@ def test_a_project_is_archived_and_restored_the_way_a_chat_is() -> None:
         "projectId": f"project-{thread_id}",
         "name": "New project",
         "archived": True,
+        "milestoneCount": 0,
         # The plan is still open, and restoring has to give the link back.
         "conversationUrl": f"/conversations/{thread_id}",
     }
@@ -3491,6 +3493,90 @@ def test_project_milestones_api_lists_the_active_projects_dependency_data() -> N
         ],
     }
     assert missing.status_code == 404
+
+
+def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
+    """The milestones page is reached from the rail rather than from the plan,
+    so the way back to the conversation has to come with the answer."""
+
+    runner = ConcurrentRunner()
+    session = _session(runner)
+    app = create_app(session, {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test", "createProject": True},
+            )
+            thread_id = created.json()["id"]
+            project_id = ProjectId(f"project-{thread_id}")
+            await session.state_store.save_milestone(
+                Milestone(MilestoneId("milestone-1"), project_id, "Foundation")
+            )
+            listed = await client.get(f"/api/projects/{project_id}/milestones")
+            return thread_id, listed
+
+    thread_id, listed = asyncio.run(scenario())
+
+    assert listed.json()["project"]["conversationUrl"] == f"/conversations/{thread_id}"
+    assert [milestone["name"] for milestone in listed.json()["milestones"]] == [
+        "Foundation"
+    ]
+
+
+def test_projects_api_says_how_many_milestones_each_project_has() -> None:
+    """The rail offers a project's plan only where there is one to offer.
+
+    Counted from one read of every milestone rather than a query per project:
+    the shell polls this route every second, and the cost of that must not grow
+    with the number of projects listed.
+    """
+
+    class CountingStore(InMemoryStateStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.milestone_reads = 0
+
+        async def list_milestones(self, project_id=None):
+            self.milestone_reads += 1
+            return await super().list_milestones(project_id)
+
+    runner = ConcurrentRunner()
+    store = CountingStore()
+    session = _session_with({"test": runner}, state_store=store)
+    planned = Project(ProjectId("project-planned"), "Engine roadmap")
+    empty = Project(ProjectId("project-empty"), "Nothing planned yet")
+
+    async def scenario():
+        await store.save_project(planned)
+        await store.save_project(empty)
+        for index in range(3):
+            await store.save_milestone(
+                Milestone(
+                    MilestoneId(f"milestone-{index}"),
+                    planned.project_id,
+                    f"Goal {index}",
+                )
+            )
+        store.milestone_reads = 0
+        app = create_app(session, {"test": runner})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.get("/api/projects")
+
+    listed = asyncio.run(scenario())
+
+    assert store.milestone_reads == 1
+    assert {
+        project["name"]: project["milestoneCount"]
+        for project in listed.json()["projects"]
+    } == {"Engine roadmap": 3, "Nothing planned yet": 0}
 
 
 def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() -> None:
@@ -3582,6 +3668,7 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
             "projectId": f"project-{created.json()['id']}",
             "name": "New project",
             "archived": False,
+            "milestoneCount": 0,
             "conversationUrl": f"/conversations/{created.json()['id']}",
         }
     ]
@@ -3591,6 +3678,7 @@ def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
             "projectId": f"project-{created.json()['id']}",
             "name": "Durable project intent",
             "archived": False,
+            "milestoneCount": 0,
             "conversationUrl": f"/conversations/{created.json()['id']}",
         }
     ]
@@ -3628,6 +3716,7 @@ def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
             "projectId": f"project-{thread_id}",
             "name": "New project",
             "archived": False,
+            "milestoneCount": 0,
         }
     ]
     assert restored.json()["projects"] == [
@@ -3635,6 +3724,7 @@ def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
             "projectId": f"project-{thread_id}",
             "name": "New project",
             "archived": False,
+            "milestoneCount": 0,
             "conversationUrl": f"/conversations/{thread_id}",
         }
     ]

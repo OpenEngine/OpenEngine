@@ -15,7 +15,7 @@ import {
 } from "@assistant-ui/react";
 import { useState, type ReactNode } from "react";
 
-import type { ApiProject, ApiWorkflowRun } from "./api";
+import { projectMilestonesUrl, type ApiProject, type ApiWorkflowRun } from "./api";
 import { RailBrand, RailFoot } from "./brand";
 import { conversationCount, IN_PROGRESS_PHASES, runStatusLabel } from "./runs";
 
@@ -134,10 +134,13 @@ function ThreadListItem({
 function ProjectItem({
   project,
   active,
+  showingMilestones = false,
   onArchive,
 }: {
   project: ApiProject;
   active: boolean;
+  /** Whether this project's milestones are the page on screen. */
+  showingMilestones?: boolean;
   onArchive?: (project: ApiProject, archived: boolean) => void;
 }) {
   const copy = (
@@ -145,41 +148,58 @@ function ProjectItem({
       {project.name}
     </span>
   );
+  // A project that has planned nothing has no page of milestones to offer, and
+  // an archived one has been put away along with its plan -- the same reason
+  // its row stops being a link to the conversation.
+  const milestones = !project.archived && (project.milestoneCount ?? 0) > 0;
   return (
-    <div className="rail-item" data-active={active || undefined}>
-      {project.conversationUrl && !project.archived ? (
-        <a
-          aria-current={active ? "page" : undefined}
-          className="rail-item-trigger"
-          href={project.conversationUrl}
-        >
-          {copy}
-        </a>
-      ) : (
-        <div className="rail-item-trigger">{copy}</div>
-      )}
-      {onArchive &&
-        (project.archived ? (
-          <button
-            aria-label={`Restore ${project.name}`}
-            className="rail-item-action"
-            onClick={() => onArchive(project, false)}
-            title="Restore project"
-            type="button"
+    <div>
+      <div className="rail-item" data-active={active || undefined}>
+        {project.conversationUrl && !project.archived ? (
+          <a
+            aria-current={active ? "page" : undefined}
+            className="rail-item-trigger"
+            href={project.conversationUrl}
           >
-            Restore
-          </button>
+            {copy}
+          </a>
         ) : (
-          <button
-            aria-label={`Archive ${project.name}`}
-            className="rail-item-action"
-            onClick={() => onArchive(project, true)}
-            title="Archive project"
-            type="button"
+          <div className="rail-item-trigger">{copy}</div>
+        )}
+        {onArchive &&
+          (project.archived ? (
+            <button
+              aria-label={`Restore ${project.name}`}
+              className="rail-item-action"
+              onClick={() => onArchive(project, false)}
+              title="Restore project"
+              type="button"
+            >
+              Restore
+            </button>
+          ) : (
+            <button
+              aria-label={`Archive ${project.name}`}
+              className="rail-item-action"
+              onClick={() => onArchive(project, true)}
+              title="Archive project"
+              type="button"
+            >
+              ×
+            </button>
+          ))}
+      </div>
+      {milestones && (
+        <div className="rail-sub" aria-label={`Milestones for ${project.name}`}>
+          <a
+            aria-current={showingMilestones ? "page" : undefined}
+            data-active={showingMilestones || undefined}
+            href={projectMilestonesUrl(project.projectId)}
           >
-            ×
-          </button>
-        ))}
+            Milestones · {project.milestoneCount}
+          </a>
+        </div>
+      )}
     </div>
   );
 }
@@ -191,6 +211,7 @@ export function Sidebar({
   linkChats = false,
   activeRunId,
   activeConversationUrl,
+  activeProjectId,
   activeView,
   onArchiveProject,
 }: {
@@ -202,6 +223,8 @@ export function Sidebar({
   linkChats?: boolean;
   activeRunId?: string;
   activeConversationUrl?: string;
+  /** The project whose milestones are on screen, when that is the page. */
+  activeProjectId?: string;
   activeView?: "runs" | "new";
   /** Omitted where nothing owns the projects list, which leaves the rows
    *  readable and drops a button that could not have worked. */
@@ -246,6 +269,7 @@ export function Sidebar({
                   key={project.projectId}
                   onArchive={onArchiveProject}
                   project={project}
+                  showingMilestones={activeProjectId === project.projectId}
                 />
               ))}
             {archivedProjects.length > 0 && (

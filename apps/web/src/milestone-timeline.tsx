@@ -38,8 +38,8 @@ export function mapMinHeight(milestones: ApiMilestone[]): number {
   return Math.max(MAP_FLOOR, NODE_TOP + NODE_HEAD + list + MAP_FOOT);
 }
 
-/** Whether two polls returned the same plan, compared as the server sent it. */
-function sameMilestones(a: ApiMilestone[], b: ApiMilestone[]) {
+/** Whether two polls returned the same thing, compared as the server sent it. */
+function same(a: unknown, b: unknown) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
@@ -199,49 +199,59 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
   );
 }
 
-/** The timeline of the project this conversation is planning, kept current.
+export type ProjectPlan = {
+  /** The project the store answered with, for a page named after it. */
+  project?: ApiProject;
+  milestones: ApiMilestone[];
+  /** Whether a first answer has arrived, which is what tells an empty plan
+   *  from one that has not been read yet. */
+  loaded: boolean;
+  error: string;
+  /** Whether this has stopped following the plan and is now only the last
+   *  known one. */
+  stale: boolean;
+};
+
+/** One project's plan, kept current.
  *
  *  Milestones are written by the planning tools in whatever process is running
- *  the agent, so the page re-reads the list rather than waiting to be told --
- *  the same poll the shell already runs for projects and workflow runs. */
-export function MilestoneTimeline({
-  project,
-  collapsedUntilMilestone = false,
-}: {
-  project?: ApiProject;
-  collapsedUntilMilestone?: boolean;
-}) {
+ *  the agent, so a screen showing them re-reads the list rather than waiting to
+ *  be told -- the same poll the shell already runs for projects and workflow
+ *  runs. */
+export function useProjectMilestones(projectId?: string): ProjectPlan {
+  const [project, setProject] = useState<ApiProject>();
   const [milestones, setMilestones] = useState<ApiMilestone[]>([]);
   // Held apart from an empty list so a failed poll can keep showing the last
-  // good timeline rather than replace it with an error. It also gates the
+  // good plan rather than replace it with an error. It also gates the
   // previous project's plan on a switch, which is deliberately not cleared.
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [failures, setFailures] = useState(0);
-  const expanded = !collapsedUntilMilestone || milestones.length > 0;
 
   useEffect(() => {
     setLoaded(false);
     setError("");
     setFailures(0);
-    if (!project) {
+    if (!projectId) {
       setMilestones([]);
+      setProject(undefined);
       return;
     }
     const controller = new AbortController();
     let timer: number | undefined;
     const load = () => {
-      void getProjectMilestones(project.projectId, controller.signal)
+      void getProjectMilestones(projectId, controller.signal)
         .then((value) => {
           // Guarded like the two handlers below: whatever this poll answers
           // belongs to the project that asked for it, not the one now shown.
           if (controller.signal.aborted) return;
-          // Keep the previous array when the plan has not moved, so the
+          // Keep the previous values when the plan has not moved, so the
           // ordering and position memos hold and a steady-state poll re-renders
           // nothing rather than redrawing the whole graph once a second.
           setMilestones((current) =>
-            sameMilestones(current, value.milestones) ? current : value.milestones,
+            same(current, value.milestones) ? current : value.milestones,
           );
+          setProject((current) => (same(current, value.project) ? current : value.project));
           setLoaded(true);
           setError("");
           setFailures(0);
@@ -260,12 +270,30 @@ export function MilestoneTimeline({
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [project?.projectId]);
+  }, [projectId]);
 
-  // A timeline that looks live but has stopped following the plan is the worst
-  // thing this can be, so a run of failures is said out loud beside a render
-  // that is now only the last known plan.
-  const stale = loaded && failures >= STALE_AFTER_FAILURES;
+  return {
+    project,
+    milestones,
+    loaded,
+    error,
+    // A plan that looks live but has stopped following the store is the worst
+    // thing this can be, so a run of failures is said out loud beside a render
+    // that is now only the last known plan.
+    stale: loaded && failures >= STALE_AFTER_FAILURES,
+  };
+}
+
+/** The timeline of the project this conversation is planning, kept current. */
+export function MilestoneTimeline({
+  project,
+  collapsedUntilMilestone = false,
+}: {
+  project?: ApiProject;
+  collapsedUntilMilestone?: boolean;
+}) {
+  const { milestones, loaded, error, stale } = useProjectMilestones(project?.projectId);
+  const expanded = !collapsedUntilMilestone || milestones.length > 0;
 
   return (
     <section

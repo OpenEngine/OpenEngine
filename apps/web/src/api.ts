@@ -70,7 +70,15 @@ export type ApiProject = {
   /** The planning conversation this project was named after, when it still has
    *  one. A project with none is listed but has nothing to open. */
   conversationUrl?: string;
+  /** How many milestones the plan holds, from the responses that counted them.
+   *  Absent where nothing counted, which is not the same as a plan of none. */
+  milestoneCount?: number;
 };
+
+/** The page listing one project's plan in full. */
+export function projectMilestonesUrl(projectId: string): string {
+  return `/projects/${encodeURIComponent(projectId)}/milestones`;
+}
 
 export type ApiWorkstream = {
   workstreamId: string;
