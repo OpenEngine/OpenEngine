@@ -999,25 +999,51 @@ def create_app(
             and thread.workflow_run_id in workflow_tasks
         )
 
+    async def workflow_step_is_active(thread: ChatThread) -> bool:
+        """Whether this conversation, rather than a sibling step, is working.
+
+        One task drives every step a run takes, so "this run is executing"
+        says nothing about the conversation being read: an implementation
+        chat whose step finished would otherwise report itself as running for
+        as long as the review took, and offer a stop button that could only
+        answer with a conflict.
+
+        A run between steps is left to its task, because a step reactivated by
+        a message records nothing durable until its turn produces a result --
+        so what the task is working on is this conversation right up until the
+        run names another step.
+        """
+
+        if not workflow_is_active(thread):
+            return False
+        assert thread.workflow_run_id is not None
+        state = await session.state_store.load(thread.workflow_run_id)
+        return not _runs_another_agent_step(state, thread)
+
     async def interrupt_workflow(thread: ChatThread) -> None:
         """Stop the active process for an editable step without failing its run."""
 
         if not thread.editable or thread.workflow_run_id is None:
             raise RuntimeError("this workflow conversation is read-only")
         state = await session.state_store.load(thread.workflow_run_id)
-        if (
-            state is None
-            or state.phase is not RunPhase.RUNNING_AGENT
-            or state.current_step_id != thread.workflow_step_id
-        ):
-            raise RuntimeError("this workflow step is no longer active")
-        if state.current_agent_run_id is not None:
+        if _runs_another_agent_step(state, thread):
+            # The run has moved on: its current step belongs to another
+            # conversation, and this one already stopped. Stopping what has
+            # stopped is the state the user asked for, not a conflict.
+            return
+        if state is not None and state.current_agent_run_id is not None:
             await service.approvals.cancel_run(state.current_agent_run_id)
         task = workflow_tasks.get(thread.workflow_run_id)
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         assert thread.workflow_step_id is not None
+        # Only a step the run is durably executing has a pause to record. A
+        # turn that completed on its way down, or one that reactivated a
+        # finished step and never got to say so, leaves nothing to mark.
+        state = await session.state_store.load(thread.workflow_run_id)
+        if not _running_agent_step(state, thread):
+            return
         await workflow_executor.pause_agent_step(
             thread.workflow_run_id, thread.workflow_step_id
         )
@@ -1064,9 +1090,10 @@ def create_app(
             raise RuntimeError(str(task.exception()))
 
     async def stream_workflow_conversation(
-        instance_id: AgentInstanceId, run_id: RunId
+        thread: ChatThread,
     ) -> AsyncIterator[bytes]:
         """Poll durable workflow progress into the chat client's snapshot stream."""
+        instance_id = thread.instance_id
         previous: list[dict[str, object]] | None = None
         previous_approvals: dict[str, dict[str, object]] = {}
         while True:
@@ -1075,7 +1102,7 @@ def create_app(
             approvals = await session.state_store.list_approvals(
                 instance_id=instance_id
             )
-            active = run_id in workflow_tasks
+            active = await workflow_step_is_active(thread)
             for record in approvals:
                 approval = _approval_json(record)
                 approval_id = str(record.approval_id)
@@ -1372,7 +1399,7 @@ def create_app(
             return _error("thread not found", 404)
         history = await service.history(instance_id)
         active = service.active_run(instance_id)
-        workflow_active = workflow_is_active(thread)
+        workflow_active = await workflow_step_is_active(thread)
         visible_history = _through_latest_user(history) if workflow_active else history
         # What a conversation was asked to allow is part of the transcript, and
         # is loaded with it. The run stream replays these too, but it is only
@@ -1483,7 +1510,7 @@ def create_app(
                     return _error("a workflow run chooses its runner", 400)
                 await continue_workflow(thread, text)
                 return StreamingResponse(
-                    stream_workflow_conversation(instance_id, thread.workflow_run_id),
+                    stream_workflow_conversation(thread),
                     media_type="application/x-ndjson",
                 )
             run = await service.start_run(instance_id, text, runner)
@@ -1503,7 +1530,7 @@ def create_app(
             return StreamingResponse(run.stream(), media_type="application/x-ndjson")
         if thread.workflow_run_id is not None:
             return StreamingResponse(
-                stream_workflow_conversation(instance_id, thread.workflow_run_id),
+                stream_workflow_conversation(thread),
                 media_type="application/x-ndjson",
             )
         return Response(status_code=204)
@@ -1708,6 +1735,26 @@ def _milestone_json(milestone: Milestone) -> dict[str, object]:
         "description": milestone.description,
         "dependencies": [str(dependency) for dependency in milestone.dependencies],
     }
+
+
+def _running_agent_step(state: RunState | None, thread: ChatThread) -> bool:
+    """Whether the run durably says it is executing this conversation's step."""
+
+    return (
+        state is not None
+        and state.phase is RunPhase.RUNNING_AGENT
+        and state.current_step_id == thread.workflow_step_id
+    )
+
+
+def _runs_another_agent_step(state: RunState | None, thread: ChatThread) -> bool:
+    """Whether the run has moved on to a step this conversation does not own."""
+
+    return (
+        state is not None
+        and state.phase is RunPhase.RUNNING_AGENT
+        and state.current_step_id != thread.workflow_step_id
+    )
 
 
 def _workflow_step_editable(

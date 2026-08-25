@@ -1610,6 +1610,65 @@ def test_editable_implementation_conversation_can_interrupt_and_continue() -> No
     ]
 
 
+def test_a_finished_step_conversation_is_idle_while_the_run_reviews_it() -> None:
+    """A step's chat answers for its own step, not for the run around it.
+
+    One task carries a run through every step it takes, so a conversation that
+    reads "is this run executing?" is still busy long after its own work ended.
+    The implementation chat would keep its transcript hidden behind a stream
+    with nothing left to say, and offer a stop button for a step it does not
+    own -- which could only ever come back as a conflict.
+    """
+    store = InMemoryStateStore()
+    implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implemented the change.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    reviewer = BlockingWorkflowRunner()
+    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Implement the configurable behavior.",
+                    "repository": "acme/api",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(reviewer.started.wait(), timeout=2)
+            detail = await client.get(f"/api/runs/{run_id}")
+            implementation_id = detail.json()["steps"][0]["agentInstanceId"]
+            loaded = await client.get(f"/api/threads/{implementation_id}/messages")
+            stopped = await client.delete(
+                f"/api/threads/{implementation_id}/runs/current"
+            )
+            still_reviewing = await client.get(f"/api/runs/{run_id}")
+            return loaded, stopped, still_reviewing
+
+    loaded, stopped, still_reviewing = asyncio.run(scenario())
+
+    assert loaded.json()["unstable_resume"] is False
+    assert [message["role"] for message in loaded.json()["messages"]] == [
+        "user",
+        "assistant",
+    ]
+    assert stopped.status_code == 204
+    # Stopping a conversation that has already stopped is not a way to reach
+    # into the step the run moved on to.
+    assert still_reviewing.json()["phase"] == "running_agent"
+    assert still_reviewing.json()["steps"][0]["status"] == "completed"
+    assert still_reviewing.json()["steps"][1]["status"] == "in_progress"
+    assert reviewer.workflow_attempts == 1
+
+
 def test_message_reactivates_a_closed_implementation_step() -> None:
     store = InMemoryStateStore()
     implementer = TerminalToolRunner(
