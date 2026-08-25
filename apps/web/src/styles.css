@@ -556,6 +556,24 @@ select:disabled { cursor: default; }
   line-height: 1.3;
 }
 .milestone-node:focus-visible .milestone-name { border-color: var(--ink); }
+.milestone-workstreams {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 0 2px;
+  text-align: left;
+}
+.milestone-workstream {
+  position: relative;
+  padding-left: 11px;
+  color: var(--muted);
+  font: 500 11px/1.35 var(--mono);
+}
+.milestone-workstream::before {
+  position: absolute;
+  left: 1px;
+  content: "•";
+}
 .milestone-tooltip {
   position: absolute;
   z-index: 2;

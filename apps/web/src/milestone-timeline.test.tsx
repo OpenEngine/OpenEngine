@@ -90,6 +90,18 @@ describe("milestone timeline", () => {
     expect(width - lastCenter).toBeGreaterThanOrEqual(140);
   });
 
+  it("lists each milestone's workstreams beneath it", () => {
+    render(<MilestoneTimelineVisual milestones={[foundation, launch]} />);
+
+    const list = screen.getByRole("list", { name: "Foundation workstreams" });
+    const item = screen.getByText("Data model");
+
+    expect(list).toContainElement(item);
+    expect(item).toHaveAttribute("title", "Persist the plan.");
+    // A milestone with no workstreams gets no empty list under its name.
+    expect(screen.queryByRole("list", { name: "Launch workstreams" })).toBeNull();
+  });
+
   it("renders an empty state without inventing milestones", () => {
     render(<MilestoneTimelineVisual milestones={[]} />);
 

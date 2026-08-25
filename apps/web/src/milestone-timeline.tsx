@@ -139,6 +139,23 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
             )}
             <span className="milestone-dot" aria-hidden="true" />
             <span className="milestone-name">{milestone.name}</span>
+            {milestone.workstreams.length > 0 && (
+              <ul className="milestone-workstreams" aria-label={`${milestone.name} workstreams`}>
+                {milestone.workstreams.map((workstream) => (
+                  <li
+                    key={workstream.workstreamId}
+                    className="milestone-workstream"
+                    // The scope is what separates one workstream from its
+                    // siblings, but it is a sentence and the node is 170px
+                    // wide: it is kept for a hover rather than crowding out
+                    // the names it distinguishes.
+                    title={workstream.scope || undefined}
+                  >
+                    {workstream.name}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         );
       })}
