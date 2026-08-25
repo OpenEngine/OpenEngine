@@ -151,7 +151,13 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
  *  Milestones are written by the planning tools in whatever process is running
  *  the agent, so the page re-reads the list rather than waiting to be told --
  *  the same poll the shell already runs for projects and workflow runs. */
-export function MilestoneTimeline({ project }: { project?: ApiProject }) {
+export function MilestoneTimeline({
+  project,
+  collapsedUntilMilestone = false,
+}: {
+  project?: ApiProject;
+  collapsedUntilMilestone?: boolean;
+}) {
   const [milestones, setMilestones] = useState<ApiMilestone[]>([]);
   // Held apart from an empty list so a failed poll can keep showing the last
   // good timeline rather than replace it with an error. It also gates the
@@ -159,6 +165,7 @@ export function MilestoneTimeline({ project }: { project?: ApiProject }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [failures, setFailures] = useState(0);
+  const expanded = !collapsedUntilMilestone || milestones.length > 0;
 
   useEffect(() => {
     setLoaded(false);
@@ -208,7 +215,11 @@ export function MilestoneTimeline({ project }: { project?: ApiProject }) {
   const stale = loaded && failures >= STALE_AFTER_FAILURES;
 
   return (
-    <section className="milestone-timeline" aria-labelledby="milestone-timeline-title">
+    <section
+      className={`milestone-timeline milestone-timeline-${expanded ? "expanded" : "collapsed"}`}
+      aria-labelledby="milestone-timeline-title"
+      aria-expanded={expanded}
+    >
       <header className="milestone-timeline-head">
         <div>
           <p className="eyebrow">Active project</p>

@@ -85,12 +85,38 @@ describe("milestone timeline", () => {
       screen.getByText("No milestones have been added to this project yet."),
     ).toBeInTheDocument();
   });
+
 });
 
 describe("MilestoneTimeline", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("expands a new project's collapsed timeline when its first milestone appears", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
+    const { rerender } = render(<MilestoneTimeline collapsedUntilMilestone />);
+    const timeline = screen.getByRole("region", { name: "Milestone timeline" });
+
+    expect(timeline).toHaveClass("milestone-timeline-collapsed");
+
+    rerender(<MilestoneTimeline project={project} collapsedUntilMilestone />);
+    await act(async () => {});
+
+    expect(timeline).toHaveClass("milestone-timeline-expanded");
+  });
+
+  it("opens an existing project's timeline by default", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([])));
+
+    render(<MilestoneTimeline project={project} />);
+
+    expect(screen.getByRole("region", { name: "Milestone timeline" })).toHaveClass(
+      "milestone-timeline-expanded",
+    );
   });
 
   it("follows milestones added and removed while the page stays open", async () => {

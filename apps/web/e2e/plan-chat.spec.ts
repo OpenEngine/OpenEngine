@@ -57,20 +57,29 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   // The new conversation page, on the agent that plans rather than the one
   // that codes -- which is the whole of what the button settles.
   await expect(page).toHaveURL(/\/plan$/);
-  await expect(page.getByRole("heading", { name: "New conversation" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Define a new project with milestones" }),
+  ).toBeVisible();
+  await expect(page.getByText("Start a conversation.")).toHaveCount(0);
+  await expect(page.getByLabel("Message the agent")).toHaveAttribute(
+    "placeholder",
+    "Tell the agent about the project you're working on..",
+  );
   // Named by the field's own label, which a browser reads as the label text
   // followed by what the control offers -- hence the anchor rather than a
   // whole name, and hence not `getByLabel("Agent")`, which the composer's
   // "Message the agent" also answers to.
   await expect(page.getByRole("combobox", { name: /^Agent/ })).toHaveValue("planner");
   await expect(page.getByText("Turns", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Milestone timeline" })).toBeVisible();
+  const timeline = page.getByRole("region", { name: "Milestone timeline" });
+  await expect(timeline).toHaveClass(/milestone-timeline-collapsed/);
   await shot(page, testInfo, "1 the plan page");
 
   await page.getByLabel("Message the agent").fill("How would you add a greeting file?");
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByText("Here is what I would change.")).toBeVisible();
+  await expect(timeline).toHaveClass(/milestone-timeline-expanded/);
   await expect(page.getByText("Planning foundation", { exact: true })).toBeVisible();
   await expect(page.getByText("First release", { exact: true })).toBeVisible();
   await shot(page, testInfo, "2 the planner answers");

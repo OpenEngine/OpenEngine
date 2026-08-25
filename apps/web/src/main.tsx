@@ -24,6 +24,7 @@ function ChatPanel({
   agentId,
   runner,
   planning,
+  newProject,
   project,
   onAgentChange,
   onRunnerChange,
@@ -32,6 +33,7 @@ function ChatPanel({
   agentId: string;
   runner: string;
   planning: boolean;
+  newProject: boolean;
   project?: ApiProject;
   onAgentChange: (agentId: string) => void;
   onRunnerChange: (runner: string) => void;
@@ -47,8 +49,10 @@ function ChatPanel({
         onRunnerChange={onRunnerChange}
       />
       {!planning && <ConversationStats />}
-      <ChatThread />
-      {planning && <MilestoneTimeline project={project} />}
+      <ChatThread project={planning} />
+      {planning && (
+        <MilestoneTimeline project={project} collapsedUntilMilestone={newProject} />
+      )}
     </main>
   );
 }
@@ -100,9 +104,11 @@ function ChatHeader({
   return (
     <header className={`panel-head ${compact ? "panel-head-compact" : ""}`}>
       <div className="panel-head-copy">
-        <p className="eyebrow">New chat defaults</p>
-        <h1>New conversation</h1>
-        <p className="lede">Choose what starts the next conversation and which runner answers.</p>
+        <p className="eyebrow">{compact ? "New project" : "New chat defaults"}</p>
+        <h1>{compact ? "Define a new project with milestones" : "New conversation"}</h1>
+        {!compact && (
+          <p className="lede">Choose what starts the next conversation and which runner answers.</p>
+        )}
       </div>
       <label className="field">
         <span>Agent</span>
@@ -431,6 +437,7 @@ function App() {
             agentId={agentId}
             runner={runner}
             planning={plan || projectPage}
+            newProject={plan}
             project={activeProject}
             onAgentChange={setAgentId}
             onRunnerChange={setRunner}
