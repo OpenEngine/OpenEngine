@@ -10,7 +10,7 @@ from dataclasses import fields
 
 import pytest
 
-from langgraph_acp import ACPResult, ACPSessionRef, ACPUsage
+from langgraph_acp import ACPResult, ACPUsage
 
 
 def test_a_result_defaults_to_saying_nothing_happened_yet() -> None:
@@ -18,7 +18,8 @@ def test_a_result_defaults_to_saying_nothing_happened_yet() -> None:
 
     assert result.message == ""
     assert result.content == ()
-    assert result.session is None
+    assert result.agent is None
+    assert result.session_id is None
     assert result.stop_reason is None
     assert result.tool_calls == ()
     assert result.metadata == {}
@@ -73,7 +74,8 @@ def test_a_result_survives_a_round_trip_through_state() -> None:
     result = ACPResult(
         message="Reviewed the change.",
         content=({"type": "text", "text": "Reviewed the change."},),
-        session=ACPSessionRef(agent="codex", session_id="sess_abc123", key="reviewer"),
+        agent="codex",
+        session_id="sess_abc123",
         stop_reason="end_turn",
         usage=ACPUsage(input_tokens=1200, output_tokens=340),
         tool_calls=({"id": "call_1", "name": "read_file"},),
@@ -87,11 +89,12 @@ def test_a_result_serializes_to_json() -> None:
     """LangGraph checkpoints what a node returns, so it has to be JSON-shaped."""
     result = ACPResult(
         message="Done.",
-        session=ACPSessionRef(agent="claude", session_id="sess_1", key="reviewer"),
+        agent="claude",
+        session_id="sess_1",
         usage=ACPUsage(output_tokens=7),
     )
 
-    assert json.loads(json.dumps(result.to_dict()))["session"]["session_id"] == "sess_1"
+    assert json.loads(json.dumps(result.to_dict()))["session_id"] == "sess_1"
 
 
 def test_a_result_does_not_share_the_containers_it_was_given() -> None:

@@ -31,7 +31,7 @@ review_agent = ACPNode(
 
     prompt=lambda state: state["review_prompt"],
 
-    session=ACPSession(
+    session=ACPSessionSpec(
         strategy="reuse",
         key=lambda state, ctx: f"pr:{state['pr_id']}:reviewer",
     ),
@@ -171,12 +171,20 @@ The provider is responsible for things such as:
 - Implementation-specific compatibility behavior.
 - Agent capability discovery.
 
-Example conceptual interface:
+The provider is the only place where one agent implementation may differ from another:
 
 ```python
 class ACPAgentProvider(Protocol):
-    async def connect(self) -> ACPConnection: ...
+
+    @property
+    def name(self) -> str:
+        ...
+
+    async def connect(self) -> "ACPClient":
+        ...
 ```
+
+`connect` returns a fully initialized, ready-to-use client, so a caller never holds a connection whose capabilities are unknown.
 
 `ACPNode` should not contain Codex-specific or Claude-specific logic.
 
@@ -189,8 +197,8 @@ The registry resolves a friendly name into an `ACPAgentProvider`.
 For example:
 
 ```python
-registry.register("codex", CodexACPProvider(...))
-registry.register("claude", ClaudeACPProvider(...))
+registry.register(CodexACPProvider())
+registry.register(ClaudeACPProvider())
 ```
 
 Then:
@@ -201,18 +209,138 @@ ACPNode(agent="codex")
 
 can resolve the provider internally.
 
+A provider carries its own name rather than being registered under one supplied separately. The name travels: it stamps every event and every error raised against that agent, so a provider registered as `"codex"` while calling itself something else would mislabel both. Registering the same agent twice under different settings is a matter of giving the second one a different name:
+
+```python
+registry.register(CodexACPProvider(name="codex-in-container", command=[...]))
+```
+
 The registry keeps the public API simple and gives applications a way to register their own ACP agents.
+
+---
+
+# `ACPClient`
+
+`ACPClient` is one live ACP connection. It exposes the capabilities the agent advertised and creates or resumes sessions on top of it.
+
+```python
+class ACPClient(Protocol):
+
+    @property
+    def agent(self) -> str:
+        ...
+
+    @property
+    def capabilities(self) -> ACPCapabilities:
+        ...
+
+    async def new_session(
+        self,
+        *,
+        cwd: str | None = None,
+        mcp_servers: Sequence[MCPServer] = (),
+    ) -> "ACPSession":
+        ...
+
+    async def resume_session(
+        self,
+        session_id: str,
+        *,
+        cwd: str | None = None,
+        mcp_servers: Sequence[MCPServer] = (),
+    ) -> "ACPSession":
+        ...
+
+    async def close(self) -> None:
+        ...
+```
+
+A client is a connection, not a conversation. Several sessions can share one — which is what makes running an implementer and three reviewers against a single agent process reasonable — and closing the client ends all of them, while closing a session ends none of the others.
 
 ---
 
 # `ACPSession`
 
-`ACPSession` describes how the node identifies and manages a logical agent conversation.
+`ACPSession` is one logical ACP conversation. It owns the `session_id` and the operations scoped to it: prompting, cancelling, configuration changes, and closing.
+
+```python
+class ACPSession(Protocol):
+
+    @property
+    def session_id(self) -> str:
+        ...
+
+    def prompt(
+        self,
+        prompt: ACPPrompt,
+    ) -> AsyncGenerator[ACPEvent, None]:
+        ...
+
+    async def cancel(self) -> None:
+        ...
+
+    async def close(self) -> None:
+        ...
+```
+
+A turn is a stream rather than a return value, because the interesting part of an ACP turn happens while it runs:
+
+```python
+session = await client.resume_session(session_id)
+
+async for event in session.prompt("Review this change"):
+    ...
+```
+
+Completion is simply the last event in that stream:
+
+```text
+acp.message.delta
+acp.tool.started
+acp.tool.updated
+acp.permission.requested
+acp.usage.updated
+...
+acp.prompt.completed
+```
+
+`ACPNode` consumes that stream and:
+
+```text
+ACP protocol events
+      ↓
+normalize
+      ↓
+LangGraph stream events
+      ↓
+accumulate final ACPResult
+```
+
+Stopping early leaves the agent working, so a consumer that abandons a turn either calls `cancel()` or closes the stream — `contextlib.aclosing`, which cancels for it. That closing cancels is why `prompt` returns an `AsyncGenerator` rather than a bare `AsyncIterator`: `aclose` is part of the contract.
+
+Once live approvals arrive, permission responses attach to the running prompt through the same session object:
+
+```python
+async for event in session.prompt("Implement this"):
+    if isinstance(event, ACPPermissionRequested):
+        await session.respond_permission(
+            event.request_id,
+            APPROVE,
+        )
+```
+
+The important point is that `ACPSession` does not contain conversation history. The ACP-backed CLI or agent runtime owns that state.
+
+---
+
+# `ACPSessionSpec`
+
+`ACPSessionSpec` is the configuration side of the same idea: how a node *chooses* the conversation it prompts, before any session object exists.
 
 Example:
 
 ```python
-ACPSession(
+ACPSessionSpec(
     strategy="reuse",
     key="primary-reviewer",
 )
@@ -221,7 +349,7 @@ ACPSession(
 or dynamically:
 
 ```python
-ACPSession(
+ACPSessionSpec(
     strategy="reuse",
     key=lambda state, ctx:
         f"{state['repo']}:{state['pr_number']}:reviewer",
@@ -239,17 +367,13 @@ resume
 In practice, `reuse` should probably be the normal default:
 
 ```text
-binding exists
+session id stored
     → resume ACP session
 
-binding does not exist
+nothing stored
     → create ACP session
     → persist returned session ID
 ```
-
-The important point is that `ACPSession` does not contain conversation history.
-
-The ACP-backed CLI or agent runtime owns that state.
 
 ---
 
@@ -311,16 +435,7 @@ class ACPSessionStore(Protocol):
         ...
 ```
 
-A slightly richer binding type may be useful:
-
-```python
-@dataclass
-class ACPSessionBinding:
-    thread_id: str
-    session_key: str
-    agent: str
-    acp_session_id: str
-```
+The store's whole contents are those three strings and the id they resolve to. A dedicated binding type would add a name without adding a fact, so the interface above is the interface.
 
 Possible implementations:
 
@@ -872,11 +987,9 @@ ACPResult(
 
     content=[...],
 
-    session=ACPSessionRef(
-        agent="codex",
-        session_id="sess_abc123",
-        key="primary-reviewer",
-    ),
+    agent="codex",
+
+    session_id="sess_abc123",
 
     stop_reason="end_turn",
 
@@ -1020,12 +1133,20 @@ langgraph_acp/
     agent.py
         ACPAgentProvider
         ACPAgentRegistry
-        ACPConnection
+        StdioACPProvider
+
+    providers/
+        codex.py
+            CodexACPProvider
+
+    client.py
+        ACPClient
+        ACPCapabilities
 
     session.py
         ACPSession
-        ACPSessionRef
-        ACPSessionBinding
+        ACPSessionSpec
+        ACPSessionStrategy
         ACPSessionStore
 
     workspace.py
@@ -1368,9 +1489,8 @@ Implement:
 ACPResult
 ACPEvent
 ACPUsage
-ACPSession
-ACPSessionRef
-ACPSessionBinding
+ACPSessionSpec
+ACPSessionStrategy
 ACPWorkspace
 ACPConfig
 ACPRequirements
@@ -1399,8 +1519,31 @@ Implement:
 ```text
 ACPAgentProvider
 ACPAgentRegistry
-ACPConnection abstraction
+ACPClient
+ACPSession
 ```
+
+Responsibilities:
+
+```text
+ACPAgentProvider
+    │
+    │ connect()
+    ▼
+ACPClient
+    │
+    ├── new_session(...)
+    │       ↓
+    │    ACPSession
+    │
+    └── resume_session(session_id, ...)
+            ↓
+         ACPSession
+```
+
+- `ACPAgentProvider` — knows how to launch/connect to a specific CLI and returns a fully initialized, ready-to-use `ACPClient`.
+- `ACPClient` — represents one live ACP connection/process. It exposes capabilities and creates/resumes sessions.
+- `ACPSession` — represents one logical ACP conversation. It owns `session_id` and session-scoped operations like prompt, cancel, config changes, and close.
 
 Provide one initial provider, likely Codex.
 
@@ -1494,7 +1637,7 @@ This is the first meaningful end-to-end milestone.
 
 ## Ticket 5 — Session Reuse and Resume
 
-Integrate `ACPSession` and `ACPSessionStore`.
+Integrate `ACPSessionSpec` and `ACPSessionStore`.
 
 Implement:
 

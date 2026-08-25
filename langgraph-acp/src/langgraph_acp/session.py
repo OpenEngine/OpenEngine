@@ -1,39 +1,46 @@
-"""Session identity: which agent conversation a node is talking to.
+"""Session identity, and the live conversation it names.
 
-Three types, and the distinction between them is load-bearing:
+Two types, and the distinction between them is load-bearing:
 
-    ACPSession         configuration -- how a node should choose a conversation
+    ACPSessionSpec  configuration -- how a node should choose a conversation
         |
         v
-    ACPSessionBinding  the persisted fact -- (thread, key) -> ACP session id
-        |
-        v
-    ACPSessionRef      the conversation a completed turn actually used
+    ACPSession      the conversation itself -- an id, and a turn to run in it
 
-None of them holds conversation history. The ACP agent owns that, and asking it
-to resume `sess_abc123` is what restores it; this package only remembers the
-opaque identifier needed to ask. That is the whole reason a reply arriving on a
-webhook days later needs no transcript reconstruction.
+Neither holds conversation history. The ACP agent owns that, and asking it to
+resume `sess_abc123` is what restores it; this package only remembers the opaque
+identifier needed to ask. That is the whole reason a reply arriving on a webhook
+days later needs no transcript reconstruction.
 
-The identity is `(thread_id, session_key)` rather than `thread_id` alone because
-one LangGraph thread routinely runs several agents -- an implementer and three
-reviewers on the same pull request -- and none of them may resume another's
-conversation.
+The identity a store persists is `(thread_id, session_key)` rather than
+`thread_id` alone, because one LangGraph thread routinely runs several agents --
+an implementer and three reviewers on the same pull request -- and none of them
+may resume another's conversation. The store that writes that mapping down
+arrives with its own ticket; what lives here is the session an id names once it
+has been resolved.
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
-from langgraph_acp._json import JSONObject, as_str
+from langgraph_acp._json import JSONValue
+from langgraph_acp.events import ACPEvent
+
+#: What a turn can be prompted with: plain text, or ACP content blocks verbatim.
+#: Text is the case every agent must support, so it is the case worth spelling
+#: `session.prompt("Review this change")`; anything richer -- images, embedded
+#: file context -- is passed through as the blocks the protocol defines.
+type ACPPrompt = str | Sequence[Mapping[str, JSONValue]]
 
 
 class ACPSessionStrategy(StrEnum):
     """How a node decides between starting and continuing a conversation.
 
-    A `StrEnum` so `ACPSession(strategy="reuse")` -- the documented spelling --
-    is the same value as `ACPSessionStrategy.REUSE`, while a typo still fails at
-    construction instead of at the first prompt.
+    A `StrEnum` so `ACPSessionSpec(strategy="reuse")` -- the documented spelling
+    -- is the same value as `ACPSessionStrategy.REUSE`, while a typo still fails
+    at construction instead of at the first prompt.
     """
 
     NEW = "new"
@@ -47,7 +54,7 @@ class ACPSessionStrategy(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class ACPSession:
+class ACPSessionSpec:
     """How a node identifies the conversation it prompts.
 
     `reuse` is the default because it is what a durable agent normally wants:
@@ -74,72 +81,50 @@ class ACPSession:
             )
 
 
-@dataclass(frozen=True, slots=True)
-class ACPSessionRef:
-    """The conversation a turn actually used, reported back with its result.
+@runtime_checkable
+class ACPSession(Protocol):
+    """One live agent conversation, and the operations scoped to it.
 
-    Distinct from `ACPSession`, which only expresses an intent: this names a
-    session that exists, so a caller can record it, display it, or hand it to a
-    later invocation.
+    Obtained from `ACPClient.new_session` or `ACPClient.resume_session`, never
+    constructed directly: a session id is a fact the agent produces, and a
+    session object that invented one would name nothing.
+
+    A turn is a stream rather than a return value, because the interesting part
+    of an ACP turn happens while it runs -- tool calls, message deltas, plan
+    revisions -- and a caller that only sees the end has watched none of it:
+
+        async for event in session.prompt("Review this change"):
+            ...
+
+    The stream ends with `acp.prompt.completed`. Stopping early leaves the agent
+    working, so either `cancel()` first or close the stream -- `async with
+    contextlib.aclosing(session.prompt(...)) as turn:` -- which cancels for you.
+    That closing cancels is why the return type is `AsyncGenerator` rather than
+    the `AsyncIterator` it would otherwise be: `aclose` is part of the contract,
+    not an implementation detail a consumer happens to be able to reach.
     """
-
-    agent: str
-    session_id: str
-    key: str
-
-    def to_dict(self) -> JSONObject:
-        return {"agent": self.agent, "session_id": self.session_id, "key": self.key}
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "ACPSessionRef":
-        return cls(
-            agent=as_str(data["agent"], field="agent"),
-            session_id=as_str(data["session_id"], field="session_id"),
-            key=as_str(data["key"], field="key"),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ACPSessionBinding:
-    """The durable mapping from LangGraph identity to an ACP session id.
-
-    This is the entire contents of an `ACPSessionStore` row. It is not agent
-    memory: no messages, no tool history, no model context. Losing it costs the
-    ability to *find* a conversation, not the conversation itself.
-
-    The field names are the store's vocabulary rather than `ACPSessionRef`'s --
-    a row keyed by `(thread_id, session_key)` reads better under those names --
-    and `ref` bridges the two so no caller has to rename by hand.
-    """
-
-    thread_id: str
-    session_key: str
-    agent: str
-    acp_session_id: str
 
     @property
-    def ref(self) -> ACPSessionRef:
-        """The same session, named the way a result names it."""
-        return ACPSessionRef(
-            agent=self.agent, session_id=self.acp_session_id, key=self.session_key
-        )
+    def session_id(self) -> str:
+        """The opaque identifier the agent gave this conversation."""
+        ...
 
-    def to_dict(self) -> JSONObject:
-        return {
-            "thread_id": self.thread_id,
-            "session_key": self.session_key,
-            "agent": self.agent,
-            "acp_session_id": self.acp_session_id,
-        }
+    def prompt(self, prompt: ACPPrompt) -> AsyncGenerator[ACPEvent, None]:
+        """Run one turn, streaming what happens in it as it happens."""
+        ...
 
-    @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "ACPSessionBinding":
-        return cls(
-            thread_id=as_str(data["thread_id"], field="thread_id"),
-            session_key=as_str(data["session_key"], field="session_key"),
-            agent=as_str(data["agent"], field="agent"),
-            acp_session_id=as_str(data["acp_session_id"], field="acp_session_id"),
-        )
+    async def cancel(self) -> None:
+        """Stop the turn in flight. The conversation itself survives."""
+        ...
+
+    async def close(self) -> None:
+        """Release this conversation's local resources.
+
+        Distinct from `cancel`: cancelling stops a turn, closing gives up the
+        session. Nothing is destroyed on the agent's side -- ACP has no method
+        for that today -- so a closed session id can still be resumed later.
+        """
+        ...
 
 
-__all__ = ["ACPSession", "ACPSessionBinding", "ACPSessionRef", "ACPSessionStrategy"]
+__all__ = ["ACPPrompt", "ACPSession", "ACPSessionSpec", "ACPSessionStrategy"]
