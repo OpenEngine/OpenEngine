@@ -1886,12 +1886,17 @@ def _latest_assistant_content(
     messages: tuple[Message, ...],
 ) -> list[dict[str, object]]:
     """Build the current assistant snapshot after the latest user message."""
+    suffix_start = 0
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role is Role.USER:
+            suffix_start = index + 1
+            break
+
     content: list[dict[str, object]] = []
-    tool_calls: dict[str, dict[str, object]] = {}
-    for message in messages:
-        if message.role is Role.USER:
-            content = []
-            continue
+    tool_calls: dict[str, dict[str, object]] = {
+        call_id: {} for call_id in _tool_call_ids(messages[:suffix_start])
+    }
+    for message in messages[suffix_start:]:
         _merge_message(content, message, tool_calls)
     return content
 

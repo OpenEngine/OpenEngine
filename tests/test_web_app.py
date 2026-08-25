@@ -646,6 +646,51 @@ class WorkflowProgressRunner(TerminalToolRunner):
         return AgentTurn(turn.message, steps=(progress, *turn.steps))
 
 
+class WorkflowToolCallReplayRunner(TerminalToolRunner):
+    """Replay one provider call id after an interrupted workflow is resumed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "complete_step",
+            {
+                "outcome": "success",
+                "summary": "Replay handled.",
+                "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+            },
+        )
+        self.call = ToolCall("provider-call-1", "Read", '{"path":"README.md"}')
+        self.attempts = 0
+        self.first_started = asyncio.Event()
+        self.resumed_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run_turn_with_mcp_streamed(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_message,
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.attempts += 1
+        replay = Message.assistant(tool_calls=(self.call,))
+        on_message(replay)
+        if self.attempts == 1:
+            self.first_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("the first workflow attempt should be interrupted")
+
+        self.cancelled.clear()
+        self.resumed_started.set()
+        await self.release.wait()
+        turn = await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+        on_message(turn.message)
+        return AgentTurn(turn.message, steps=(replay, *turn.steps))
+
+
 class InterruptibleImplementationRunner(TerminalToolRunner):
     """Wait on the first turn, then complete after a human follow-up."""
 
@@ -1424,6 +1469,66 @@ def test_implementation_conversation_periodically_streams_durable_progress() -> 
         "Inspecting the implementation.",
         "Terminal result accepted.",
     ]
+
+
+def test_resumed_workflow_stream_deduplicates_a_restored_tool_call_id() -> None:
+    store = InMemoryStateStore()
+    runner = WorkflowToolCallReplayRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Resume without duplicating tool calls.",
+                    "repository": "acme/api",
+                },
+            )
+            await asyncio.wait_for(runner.first_started.wait(), timeout=1)
+            run_id = created.json()["runId"]
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            stopped = await client.delete(
+                f"/api/threads/{instance_id}/runs/current"
+            )
+            assert stopped.status_code == 204
+
+            resumed = asyncio.create_task(
+                client.post(
+                    f"/api/threads/{instance_id}/runs",
+                    json={"text": "Continue from the saved progress."},
+                )
+            )
+            await asyncio.wait_for(runner.resumed_started.wait(), timeout=1)
+            loaded = await client.get(f"/api/threads/{instance_id}/messages")
+            runner.release.set()
+            response = await asyncio.wait_for(resumed, timeout=2)
+            events = [json.loads(line) for line in response.text.splitlines()]
+            return loaded.json(), events
+
+    loaded, events = asyncio.run(scenario())
+
+    loaded_ids = [
+        part["toolCallId"]
+        for message in loaded["messages"]
+        for part in message["content"]
+        if part["type"] == "tool-call"
+    ]
+    streamed_ids = [
+        part["toolCallId"]
+        for event in events
+        for part in event.get("content", [])
+        if part["type"] == "tool-call"
+    ]
+    assert loaded["unstable_resume"] is True
+    assert loaded_ids == ["provider-call-1"]
+    assert streamed_ids == []
 
 
 def test_editable_implementation_conversation_can_interrupt_and_continue() -> None:
