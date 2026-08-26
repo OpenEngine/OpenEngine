@@ -75,8 +75,32 @@ class ACPAgentCapabilityError(ACPError):
     """
 
 
+class ACPAgentNotFoundError(ACPError):
+    """No provider is registered under the name a node asked for.
+
+    A configuration mistake rather than an agent failure -- the message lists
+    what *is* registered, because the answer is nearly always a typo or an
+    application that forgot to register its own provider.
+    """
+
+
+class ACPConnectionError(ACPError):
+    """The agent could not be reached, or stopped answering.
+
+    Covers launching the process, the ACP handshake, and every later request
+    that went unanswered because the connection died under it. A refusal is not
+    this: an agent that answers "no" is working.
+    """
+
+
 class ACPSessionError(ACPError):
     """A logical conversation could not be created, resumed, or located."""
 
 
-__all__ = ["ACPAgentCapabilityError", "ACPError", "ACPSessionError"]
+__all__ = [
+    "ACPAgentCapabilityError",
+    "ACPAgentNotFoundError",
+    "ACPConnectionError",
+    "ACPError",
+    "ACPSessionError",
+]

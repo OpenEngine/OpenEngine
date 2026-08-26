@@ -4,6 +4,10 @@ A string would lose the parts of a turn a workflow needs to act on: which
 conversation it belonged to, why it stopped, and what it cost. `ACPResult`
 keeps those, and a graph that only wants the text still reads `.message`.
 
+`agent` and `session_id` are kept flat rather than wrapped in a type of their
+own. Between them they name a conversation exactly, which is all a caller needs
+to display it, record it, or hand it to a later invocation.
+
 `content` and `tool_calls` stay JSON-shaped for now. Normalizing them into typed
 blocks is a later ticket's work, and inventing the types early would mean
 guessing at a shape before any agent has been read.
@@ -24,7 +28,6 @@ from langgraph_acp._json import (
     copied_mapping,
     copied_sequence,
 )
-from langgraph_acp.session import ACPSessionRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +85,9 @@ class ACPResult:
     """The agent's final text, flattened for the common case."""
     content: Sequence[JSONValue] = ()
     """The final content blocks, as the agent sent them."""
-    session: ACPSessionRef | None = None
+    agent: str | None = None
+    """The registered name of the agent that ran the turn."""
+    session_id: str | None = None
     """The conversation this turn ran in, once one exists."""
     stop_reason: str | None = None
     """Why the turn ended: `end_turn`, `cancelled`, `max_tokens`, ..."""
@@ -111,7 +116,8 @@ class ACPResult:
         return {
             "message": self.message,
             "content": list(copied_sequence(self.content, field="content")),
-            "session": self.session.to_dict() if self.session is not None else None,
+            "agent": self.agent,
+            "session_id": self.session_id,
             "stop_reason": self.stop_reason,
             "usage": self.usage.to_dict(),
             "tool_calls": list(copied_sequence(self.tool_calls, field="tool_calls")),
@@ -120,15 +126,11 @@ class ACPResult:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "ACPResult":
-        session = data.get("session")
         return cls(
             message=as_str(data.get("message", ""), field="message"),
             content=as_sequence(data.get("content"), field="content"),
-            session=(
-                ACPSessionRef.from_dict(as_mapping(session, field="session"))
-                if session
-                else None
-            ),
+            agent=as_optional_str(data.get("agent"), field="agent"),
+            session_id=as_optional_str(data.get("session_id"), field="session_id"),
             stop_reason=as_optional_str(data.get("stop_reason"), field="stop_reason"),
             usage=ACPUsage.from_dict(as_mapping(data.get("usage"), field="usage")),
             tool_calls=as_sequence(data.get("tool_calls"), field="tool_calls"),

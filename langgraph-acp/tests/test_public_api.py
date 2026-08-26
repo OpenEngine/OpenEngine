@@ -1,10 +1,11 @@
 """The package imports, exports what it says it does, and depends on nothing.
 
-The last of those is the acceptance criterion that is easiest to lose later: the
-first provider ticket adds an ACP client and a Codex process launcher, and the
-temptation to reach for either from a core type will be real. These checks are
-static analysis over the source tree, so an import that only executes on one
-branch still fails them.
+The last of those is the acceptance criterion that is easiest to lose later.
+The ACP client is stdlib asyncio and JSON-RPC written here rather than a
+dependency, precisely so that using an ACP agent from LangGraph does not drag a
+second protocol library into every application that installs this one. These
+checks are static analysis over the source tree, so an import that only
+executes on one branch still fails them.
 """
 
 import ast
@@ -21,9 +22,13 @@ SOURCE_FILES = sorted(SRC.rglob("*.py"))
 
 #: The modules that make up the package's public surface.
 PUBLIC_MODULES = (
+    "langgraph_acp.agent",
+    "langgraph_acp.client",
     "langgraph_acp.config",
     "langgraph_acp.errors",
     "langgraph_acp.events",
+    "langgraph_acp.providers",
+    "langgraph_acp.providers.codex",
     "langgraph_acp.result",
     "langgraph_acp.session",
     "langgraph_acp.workspace",

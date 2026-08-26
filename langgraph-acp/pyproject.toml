@@ -4,9 +4,10 @@ version = "0.0.0"
 description = "Use ACP-compatible agents as first-class LangGraph nodes."
 readme = "README.md"
 requires-python = ">=3.13"
-# INVARIANT: the core types carry no dependencies, and in particular name no
-# ACP agent implementation. LangGraph arrives with the node, an ACP client with
-# the provider; neither is needed to describe a session, an event, or a result.
+# INVARIANT: no dependencies. ACP is JSON-RPC over a pipe, so the client is
+# stdlib asyncio written here rather than a second protocol library in every
+# application that installs this one; LangGraph arrives with the node, and
+# naming an agent is confined to `langgraph_acp.providers`.
 # Enforced by tests/test_public_api.py.
 dependencies = []
 
