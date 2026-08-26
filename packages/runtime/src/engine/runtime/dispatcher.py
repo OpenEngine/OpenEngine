@@ -339,6 +339,7 @@ class Dispatcher:
                     self._capabilities.source_control,
                     repository_tools,
                     command.workspace_id,
+                    on_approval,
                 )
         async with broker:
             transcript: list[Message] = []

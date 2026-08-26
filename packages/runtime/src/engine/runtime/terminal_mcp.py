@@ -11,15 +11,24 @@ import argparse
 import asyncio
 import json
 import secrets
+import shlex
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
-from engine.domain import AgentRunId, RunFailed, RunId, StepCompleted, StepSpec
+from engine.domain import (
+    AgentRunId,
+    ApprovalDecision,
+    ApprovalKind,
+    RunFailed,
+    RunId,
+    StepCompleted,
+    StepSpec,
+)
 from engine.domain.ids import WorkspaceId
-from engine.ports import McpServerConfig, SourceControl
+from engine.ports import ApprovalHandler, ApprovalRequest, McpServerConfig, SourceControl
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -102,10 +111,12 @@ class TerminalMcpBroker:
         # 256 bits, out of an alphabet nothing reads as an option.
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
+        self._connections: set[asyncio.Task[None]] = set()
         self._result: asyncio.Future[TerminalEvent] | None = None
         self._source_control: SourceControl | None = None
         self._repository_tools: tuple[str, ...] = ()
         self._workspace_id: WorkspaceId | None = None
+        self._git_approval: ApprovalHandler | None = None
         self._comments_added = 0
 
     def enable_repository_tools(
@@ -113,6 +124,7 @@ class TerminalMcpBroker:
         source_control: SourceControl,
         names: Sequence[str],
         workspace_id: WorkspaceId | None = None,
+        git_approval: ApprovalHandler | None = None,
     ) -> None:
         """Expose named repository operations through this run-bound server.
 
@@ -127,6 +139,7 @@ class TerminalMcpBroker:
             name for name in REPOSITORY_TOOL_NAMES if name in names
         )
         self._workspace_id = workspace_id
+        self._git_approval = git_approval
 
     async def __aenter__(self) -> TerminalMcpBroker:
         self._result = asyncio.get_running_loop().create_future()
@@ -139,6 +152,11 @@ class TerminalMcpBroker:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        connections = tuple(self._connections)
+        for connection in connections:
+            connection.cancel()
+        if connections:
+            await asyncio.gather(*connections, return_exceptions=True)
         if self._result is not None and not self._result.done():
             self._result.cancel()
 
@@ -173,18 +191,24 @@ class TerminalMcpBroker:
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        connection = asyncio.current_task()
+        assert connection is not None
+        self._connections.add(connection)
         try:
-            raw = await reader.readline()
-            request = json.loads(raw)
-            response = await self._submit(request)
-        except Exception as error:
-            response = {"ok": False, "error": f"invalid terminal request: {error}"}
-        writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
-        with suppress(ConnectionError):
-            await writer.drain()
-        writer.close()
-        with suppress(ConnectionError):
-            await writer.wait_closed()
+            try:
+                raw = await reader.readline()
+                request = json.loads(raw)
+                response = await self._submit(request)
+            except Exception as error:
+                response = {"ok": False, "error": f"invalid terminal request: {error}"}
+            writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
+            with suppress(ConnectionError):
+                await writer.drain()
+            writer.close()
+            with suppress(ConnectionError):
+                await writer.wait_closed()
+        finally:
+            self._connections.discard(connection)
 
     async def _submit(self, request: object) -> dict[str, object]:
         if not isinstance(request, dict) or request.get("token") != self._token:
@@ -201,7 +225,7 @@ class TerminalMcpBroker:
             if isinstance(name, str) and name in REPOSITORY_TOOL_NAMES:
                 if name not in self._repository_tools:
                     return {"ok": False, "error": f"{name} is not enabled for this step"}
-                return await self._repository_call(name, arguments)
+                return await self._repository_call(name, arguments, request_id)
             if name == "clarify":
                 if not isinstance(arguments, dict) or arguments:
                     return {
@@ -246,7 +270,7 @@ class TerminalMcpBroker:
         return {"ok": True, "acknowledgement": "accepted"}
 
     async def _repository_call(
-        self, name: str, arguments: object
+        self, name: str, arguments: object, request_id: McpRequestId
     ) -> dict[str, object]:
         """Run one repository tool against the composed source control.
 
@@ -270,6 +294,9 @@ class TerminalMcpBroker:
 
         if name == "git_subcommand":
             git_arguments = _git_arguments(arguments)
+            approved = await self._approve_git(git_arguments, request_id)
+            if approved is not None:
+                return approved
             try:
                 result = await self._source_control.run_git(
                     self._workspace_id, git_arguments
@@ -302,6 +329,44 @@ class TerminalMcpBroker:
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _approve_git(
+        self, arguments: tuple[str, ...], request_id: McpRequestId
+    ) -> dict[str, object] | None:
+        """Put arbitrary git through Engine's approval broker.
+
+        Provider preapproval only controls whether the MCP request reaches this
+        server. It cannot be the security boundary: git may invoke aliases,
+        helpers and hooks, and the server runs outside the provider sandbox.
+        The approval here is therefore required even when a provider was told
+        that the profile holds `git_subcommand`.
+        """
+
+        if self._git_approval is None:
+            return {
+                "ok": False,
+                "error": "git_subcommand requires approval handling for this step",
+            }
+        request = ApprovalRequest(
+            approval_id=f"terminal:{self._agent_run_id}:{request_id}",
+            kind=ApprovalKind.TOOL_USE,
+            reason="Run git in the step's bound workspace.",
+            command=shlex.join(("git", *arguments)),
+            tool_name=f"mcp__{_SERVER_NAME}__git_subcommand",
+            tool_call_id=str(request_id),
+            arguments=json.dumps({"arguments": arguments}, sort_keys=True),
+            allowed_decisions=(
+                ApprovalDecision.ACCEPT,
+                ApprovalDecision.CANCEL,
+            ),
+        )
+        try:
+            decision = await self._git_approval(request)
+        except Exception as error:
+            return {"ok": False, "error": f"could not approve git: {error}"}
+        if decision is not ApprovalDecision.ACCEPT:
+            return {"ok": False, "error": "git_subcommand was not approved"}
+        return None
 
 
 def terminal_tool_names(repository_tools: Sequence[str] = ()) -> tuple[str, ...]:
@@ -381,11 +446,13 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             '["commit", "-m", "feat: add the thing"]. Any subcommand is '
             "available. No shell is involved, so quoting, globbing, pipes and "
             "redirection do not apply -- a multi-line commit message is simply "
-            "one element. Returns git's output; a non-zero exit is reported as "
-            "an error with whatever git printed. Two refusals: -C, --git-dir "
-            "and --work-tree, because the workspace is not yours to change; "
-            "and pushing Engine's internal engine/ branch, so branch to a "
-            "descriptive name such as agent/<description> before publishing."
+            "one element. Every call requires Engine approval because git can "
+            "invoke external helpers. Returns git's output; a non-zero exit is "
+            "reported as an error with whatever git printed. Global options "
+            "that select config or executables are refused. Pushes must name "
+            "an explicit destination branch; implicit, HEAD, wildcard, --all, "
+            "--branches and --mirror pushes are refused, as is any destination "
+            "under Engine's internal engine/ prefix."
         ),
         "inputSchema": {
             "type": "object",

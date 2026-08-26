@@ -29,6 +29,32 @@ from engine.ports.workspace_provider import WorkspaceProvider
 #: the difference between a rule and a suggestion.
 INTERNAL_BRANCH_PREFIX = "engine/"
 
+#: Git's own options -- the ones before a subcommand -- that this tool will
+#: pass on. An allowlist rather than a list of refusals, because the options
+#: worth refusing cannot be enumerated: `-c` alone reaches `alias.*`,
+#: `core.pager`, `core.sshCommand`, `diff.external`, `credential.helper` and
+#: every other config key whose value git runs as a program, and the next
+#: release may add another. Naming what passes is a rule that stays true.
+#:
+#: Everything here changes how git reads its own arguments or writes its own
+#: output, and none of it runs a program or chooses a repository. `--help` is
+#: absent for that reason: it hands off to a man viewer.
+_PERMITTED_GLOBAL_OPTIONS = frozenset(
+    {
+        "-P",
+        "--no-pager",
+        "--no-advice",
+        "--no-lazy-fetch",
+        "--no-optional-locks",
+        "--no-replace-objects",
+        "--literal-pathspecs",
+        "--glob-pathspecs",
+        "--noglob-pathspecs",
+        "--icase-pathspecs",
+        "--version",
+    }
+)
+
 #: `git push` options that consume the argument after them. Needed only so a
 #: value like `--receive-pack /usr/bin/git-receive-pack` is not mistaken for a
 #: refspec while working out what a push would actually create.
@@ -36,24 +62,23 @@ _PUSH_OPTIONS_TAKING_A_VALUE = frozenset(
     {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
 )
 
-#: Git's own options that would move it to another repository. The tool's one
-#: guarantee is the directory it runs in, and these are how a command line
-#: takes that back.
-_REPOSITORY_REDIRECTING_OPTIONS = frozenset({"-C", "--git-dir", "--work-tree"})
-
-#: Git's own options, the ones that come before a subcommand, that consume the
-#: argument after them. Their `--option=value` spellings need no entry.
-_GIT_OPTIONS_TAKING_A_VALUE = frozenset(
-    {
-        "-C",
-        "-c",
-        "--config-env",
-        "--exec-path",
-        "--git-dir",
-        "--namespace",
-        "--work-tree",
-    }
+#: `git push` options that push every local branch rather than a named one, so
+#: the argument vector names no destination and the refs do.
+_PUSH_OPTIONS_TAKING_EVERY_BRANCH = frozenset(
+    {"--all", "--branches", "--mirror"}
 )
+
+#: The refspecs that mean "the branch that is checked out" rather than naming
+#: one. `git push origin HEAD` creates a remote branch named after the current
+#: one, which is a name only the checkout knows.
+_CHECKED_OUT_REFSPECS = frozenset({"HEAD", "@"})
+
+#: A push whose target is inferred from configuration or the checked-out ref
+#: cannot be proved not to publish Engine's branch. Agents can express every
+#: ordinary publish explicitly (`agent/topic` or `HEAD:agent/topic`), so the
+#: adapter refuses the ambiguous spellings instead of trying to reproduce
+#: git's configuration-dependent refspec resolution.
+_AMBIGUOUS_PUSH_REFSPECS = frozenset({":", "+:"})
 
 
 class GitHubSourceControl:
@@ -79,14 +104,21 @@ class GitHubSourceControl:
     async def run_git(
         self, workspace_id: WorkspaceId, arguments: Sequence[str]
     ) -> GitResult:
-        """Run any git command inside one workspace's checkout."""
+        """Run any git subcommand inside one workspace's checkout.
+
+        The broker obtains approval before this method is called. The adapter
+        still owns two hard invariants: global options may not redirect git's
+        implementation, and a push must explicitly name a non-internal remote
+        branch.
+        """
 
         arguments = tuple(str(argument) for argument in arguments)
         if not arguments:
             raise ValueError("git needs at least one argument")
-        _refuse_leaving_the_workspace(arguments)
+        subcommand = _subcommand_index(arguments)
         root_path = await self._root_path(workspace_id)
-        await self._refuse_internal_publication(root_path, arguments)
+        if subcommand is not None and arguments[subcommand] == "push":
+            self._refuse_internal_publication(arguments[subcommand:])
         return await self._git(root_path, arguments)
 
     async def create_branch(
@@ -202,19 +234,10 @@ class GitHubSourceControl:
             )
         return await self._workspace_provider.root_path(workspace_id)
 
-    async def _refuse_internal_publication(
-        self, root_path: str, arguments: Sequence[str]
-    ) -> None:
+    def _refuse_internal_publication(self, arguments: Sequence[str]) -> None:
         """Stop a push before it puts an Engine branch on somebody's remote."""
 
-        subcommand = _subcommand_index(arguments)
-        if subcommand is None or arguments[subcommand] != "push":
-            return
-        destinations = _push_destinations(arguments[subcommand:])
-        if destinations is None:
-            # No refspec, so git pushes the branch that is checked out.
-            current = await self._git(root_path, ("rev-parse", "--abbrev-ref", "HEAD"))
-            destinations = (current.stdout.strip(),) if current.ok else ()
+        destinations = _push_destinations(arguments)
         for destination in destinations:
             _refuse_internal_branch(destination)
 
@@ -227,7 +250,7 @@ class GitHubSourceControl:
                 *arguments,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self._environment(),
+                env=self._git_environment(),
             )
         except OSError as error:
             raise GitHubSourceControlError(
@@ -255,9 +278,28 @@ class GitHubSourceControl:
     def _environment(self) -> Mapping[str, str] | None:
         if not self._token:
             return None
-        # `GH_TOKEN` also reaches git, which authenticates pushes through
-        # `gh auth git-credential` wherever `gh auth setup-git` has run.
         return {**os.environ, "GH_TOKEN": self._token}
+
+    def _git_environment(self) -> Mapping[str, str]:
+        """The host environment without forge bearer tokens.
+
+        Git authentication belongs to the configured credential helper. A git
+        subprocess does not need the token used by `gh`, and Git can invoke
+        helpers, hooks and aliases, so putting that token in its environment
+        turns any such program into a credential reader.
+        """
+
+        return {
+            name: value
+            for name, value in os.environ.items()
+            if name
+            not in {
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_ENTERPRISE_TOKEN",
+                "GITHUB_ENTERPRISE_TOKEN",
+            }
+        }
 
 
 class GitHubSourceControlError(RuntimeError):
@@ -277,6 +319,19 @@ class InternalBranchPublicationError(GitHubSourceControlError):
         self.branch = branch
 
 
+class UnsafePushSpecificationError(InternalBranchPublicationError):
+    """A push leaves its destination to git configuration or bulk expansion."""
+
+    def __init__(self, refspec: str) -> None:
+        GitHubSourceControlError.__init__(
+            self,
+            f"push target {refspec!r} is not explicit enough to prove that it "
+            "excludes Engine's internal branch; name a concrete destination "
+            "such as agent/<description> or HEAD:agent/<description>",
+        )
+        self.branch = refspec
+
+
 class GitOutsideWorkspaceError(GitHubSourceControlError):
     """A git command tried to point itself at a different repository."""
 
@@ -288,19 +343,16 @@ class GitOutsideWorkspaceError(GitHubSourceControlError):
         self.option = option
 
 
-def _refuse_leaving_the_workspace(arguments: Sequence[str]) -> None:
-    """Keep git in the checkout the caller named.
+class GitGlobalOptionError(GitOutsideWorkspaceError):
+    """A global option could change what executable git runs."""
 
-    The whole argument vector is the agent's, which is the point -- but `-C`,
-    `--git-dir` and `--work-tree` are the three that would make the vector
-    choose the repository too, and the workspace is not the agent's to choose.
-    `git -C a -C b` composes, so a second one is not merely redundant.
-    """
-    subcommand = _subcommand_index(arguments)
-    for argument in arguments[: len(arguments) if subcommand is None else subcommand]:
-        option = argument.partition("=")[0]
-        if option in _REPOSITORY_REDIRECTING_OPTIONS:
-            raise GitOutsideWorkspaceError(option)
+    def __init__(self, option: str) -> None:
+        GitHubSourceControlError.__init__(
+            self,
+            f"git global option {option} is not available through git_subcommand; "
+            "pass an ordinary git subcommand and its arguments instead",
+        )
+        self.option = option
 
 
 def _refuse_internal_branch(branch: str) -> None:
@@ -314,44 +366,72 @@ def _branch_name(ref: str) -> str:
 
 
 def _subcommand_index(arguments: Sequence[str]) -> int | None:
-    """Where the subcommand sits, past whatever global options precede it.
+    """Where the subcommand sits, rejecting executable-selecting options.
 
-    `git -c commit.gpgsign=false push` is still a push, and a guard that only
-    read the first element would let one through.
+    Git's global option surface is security-sensitive: `-c alias.x=!sh` and
+    `--exec-path` both select programs before a subcommand begins. Permit only
+    value-free presentation/pathspec switches whose meaning is closed here.
     """
     index = 0
     while index < len(arguments):
         argument = arguments[index]
         if not argument.startswith("-"):
             return index
-        index += 2 if argument in _GIT_OPTIONS_TAKING_A_VALUE else 1
+        option = argument.partition("=")[0]
+        if option not in _PERMITTED_GLOBAL_OPTIONS:
+            raise GitGlobalOptionError(option)
+        index += 1
     return None
 
 
-def _push_destinations(arguments: Sequence[str]) -> tuple[str, ...] | None:
+def _push_destinations(arguments: Sequence[str]) -> tuple[str, ...]:
     """The branches a `git push` argument vector would write to.
 
-    `None` when the vector names no refspec at all, which is git's own "push
-    whatever is checked out" and something only the checkout can answer.
+    Only explicit, concrete destinations pass. Git otherwise consults the
+    checked-out branch and `remote.*.push`, while bulk and wildcard forms can
+    publish refs absent from argv. Reimplementing that resolver incompletely is
+    exactly how an internal branch escaped the original guard.
     """
     positional: list[str] = []
     skip_next = False
+    repository_from_option = False
     for argument in arguments[1:]:
         if skip_next:
             skip_next = False
             continue
         if argument.startswith("-"):
-            skip_next = argument in _PUSH_OPTIONS_TAKING_A_VALUE
+            option = argument.partition("=")[0]
+            if option in _PUSH_OPTIONS_TAKING_EVERY_BRANCH:
+                raise UnsafePushSpecificationError(option)
+            skip_next = "=" not in argument and option in _PUSH_OPTIONS_TAKING_A_VALUE
+            repository_from_option = repository_from_option or option == "--repo"
             continue
         positional.append(argument)
-    # The first positional is the remote; everything after it is a refspec,
-    # whose destination is the half after the colon when it has one.
-    refspecs = positional[1:]
+
+    # Ordinarily the first positional is the remote. `--repo=<remote>` supplies
+    # it as an option instead, making every positional a refspec.
+    refspecs = positional if repository_from_option else positional[1:]
     if not refspecs:
-        return None
-    return tuple(
-        _branch_name(refspec.rpartition(":")[2] or refspec) for refspec in refspecs
-    )
+        # `--tags` does not publish a branch. Every other refspec-free push is
+        # configuration-dependent and therefore not provably safe.
+        if any(argument.partition("=")[0] == "--tags" for argument in arguments[1:]):
+            return ()
+        raise UnsafePushSpecificationError("implicit push refspec")
+
+    destinations: list[str] = []
+    for refspec in refspecs:
+        undecorated = refspec.lstrip("+")
+        if undecorated in _AMBIGUOUS_PUSH_REFSPECS or "*" in undecorated:
+            raise UnsafePushSpecificationError(refspec)
+        source, separator, destination = undecorated.partition(":")
+        if not separator:
+            if source in _CHECKED_OUT_REFSPECS:
+                raise UnsafePushSpecificationError(source)
+            destination = source
+        elif not destination:
+            raise UnsafePushSpecificationError(refspec)
+        destinations.append(_branch_name(destination))
+    return tuple(destinations)
 
 
 def _base_branch(base_ref: str) -> str:
@@ -403,9 +483,11 @@ async def _run_gh(
 
 
 __all__ = [
+    "GitGlobalOptionError",
     "GitHubSourceControl",
     "GitHubSourceControlError",
     "GitOutsideWorkspaceError",
     "INTERNAL_BRANCH_PREFIX",
     "InternalBranchPublicationError",
+    "UnsafePushSpecificationError",
 ]

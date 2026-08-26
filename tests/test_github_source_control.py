@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from engine.adapters.source_control.github import (
+    GitGlobalOptionError,
     GitHubSourceControl,
     GitOutsideWorkspaceError,
     InternalBranchPublicationError,
@@ -45,6 +46,8 @@ def _checkout(path: Path, branch: str = "main") -> GitHubSourceControl:
     (path / "README.md").write_text("engine\n")
     _git(path, "add", "README.md")
     _git(path, *_IDENTITY, "commit", "-m", "initial")
+    _git(path, "config", "user.name", "Engine Tests")
+    _git(path, "config", "user.email", "engine@example.test")
     # A remote that exists but is never reachable: the guards under test have
     # to refuse before anything is dialled, so a push that gets past one fails
     # loudly rather than quietly talking to something.
@@ -83,9 +86,7 @@ def test_a_multi_line_commit_message_survives_being_an_argument(
 
     asyncio.run(source_control.run_git(WORKSPACE, ["add", "greeting.txt"]))
     committed = asyncio.run(
-        source_control.run_git(
-            WORKSPACE, [*_IDENTITY, "commit", "--message", message]
-        )
+        source_control.run_git(WORKSPACE, ["commit", "--message", message])
     )
 
     assert committed.ok, committed.stderr
@@ -128,8 +129,6 @@ def test_git_needs_at_least_one_argument(tmp_path: Path) -> None:
         ["push", "--set-upstream", "origin", "engine/ws-under-test"],
         ["push", "origin", "HEAD:refs/heads/engine/ws-under-test"],
         ["push", "origin", "+engine/ws-under-test:engine/ws-under-test"],
-        # Global options ahead of the subcommand are still a push.
-        ["-c", "push.default=current", "push", "origin", "engine/ws-under-test"],
     ],
 )
 def test_an_internal_branch_is_never_published(
@@ -146,18 +145,40 @@ def test_an_internal_branch_is_never_published(
         asyncio.run(source_control.run_git(WORKSPACE, arguments))
 
 
-def test_a_push_naming_no_refspec_is_judged_by_the_checked_out_branch(
+def test_a_push_naming_no_refspec_is_refused(
     tmp_path: Path,
 ) -> None:
     """The refusable case with nothing in argv to refuse.
 
-    `git push` on the workspace's own branch is the shortest route to leaking
-    it, and the argument vector says nothing at all about which branch that is.
+    `git push` says nothing about which source or destination its configuration
+    will choose, so there is no branch name in argv for the guard to validate.
     """
     source_control = _checkout(tmp_path / "checkout", branch="engine/ws-under-test")
 
     with pytest.raises(InternalBranchPublicationError):
         asyncio.run(source_control.run_git(WORKSPACE, ["push", "origin"]))
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["push", "origin", "HEAD"],
+        ["push", "origin", "@"],
+        ["push", "--all", "origin"],
+        ["push", "--branches", "origin"],
+        ["push", "--mirror", "origin"],
+        ["push", "origin", ":"],
+        ["push", "origin", "refs/heads/*:refs/heads/*"],
+    ],
+)
+def test_ambiguous_and_bulk_pushes_are_refused(
+    tmp_path: Path, arguments: list[str]
+) -> None:
+    """Every allowed branch push identifies its remote destination in argv."""
+    source_control = _checkout(tmp_path / "checkout", branch="engine/ws-under-test")
+
+    with pytest.raises(InternalBranchPublicationError):
+        asyncio.run(source_control.run_git(WORKSPACE, arguments))
 
 
 def test_a_descriptive_branch_is_not_refused(tmp_path: Path) -> None:
@@ -176,39 +197,67 @@ def test_a_descriptive_branch_is_not_refused(tmp_path: Path) -> None:
     assert "nowhere.git" in f"{result.stderr}\n{result.stdout}"
 
 
+def test_head_is_safe_when_its_destination_is_explicit(tmp_path: Path) -> None:
+    source_control = _checkout(tmp_path / "checkout")
+
+    result = asyncio.run(
+        source_control.run_git(
+            WORKSPACE, ["push", "origin", "HEAD:refs/heads/agent/add-a-greeting"]
+        )
+    )
+
+    assert not result.ok
+    assert "nowhere.git" in f"{result.stderr}\n{result.stdout}"
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
         ["-C", "/etc", "status"],
         ["--git-dir=/elsewhere/.git", "log"],
         ["--work-tree", "/elsewhere", "status"],
+        ["-c", "alias.x=!sh", "x"],
+        ["--exec-path=/tmp", "x"],
+        ["--config-env", "alias.x=PAYLOAD", "x"],
     ],
 )
-def test_git_cannot_be_pointed_at_another_repository(
+def test_git_global_options_cannot_select_config_or_executables(
     tmp_path: Path, arguments: list[str]
 ) -> None:
-    """The command line is the agent's; the directory is not.
+    """Global git options can be process launchers in disguise.
 
-    `git -C a -C b` composes rather than replaces, so a second `-C` is how an
-    unbounded argument vector would quietly become an unbounded tool.
+    `-c alias.x=!sh` and `--exec-path` are direct code-execution paths. An
+    allowlist also covers the next global option git adds without requiring a
+    security reviewer to hear about it first.
     """
     source_control = _checkout(tmp_path / "checkout")
 
-    with pytest.raises(GitOutsideWorkspaceError):
+    with pytest.raises((GitGlobalOptionError, GitOutsideWorkspaceError)):
         asyncio.run(source_control.run_git(WORKSPACE, arguments))
 
 
-def test_configuration_overrides_are_still_the_agent_s_to_pass(
-    tmp_path: Path,
-) -> None:
-    """`-c` is not `-C`: it configures the command, it does not relocate it."""
+def test_value_free_safe_global_options_still_pass(tmp_path: Path) -> None:
     source_control = _checkout(tmp_path / "checkout")
 
     result = asyncio.run(
-        source_control.run_git(WORKSPACE, ["-c", "core.abbrev=12", "rev-parse", "HEAD"])
+        source_control.run_git(WORKSPACE, ["--no-pager", "rev-parse", "HEAD"])
     )
 
     assert result.ok, result.stderr
+
+
+def test_git_never_receives_the_forge_bearer_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_control = _checkout(tmp_path / "checkout")
+    source_control._token = "adapter-secret"
+    monkeypatch.setenv("GH_TOKEN", "host-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "other-host-secret")
+
+    environment = source_control._git_environment()
+
+    assert "GH_TOKEN" not in environment
+    assert "GITHUB_TOKEN" not in environment
 
 
 def test_git_without_a_workspace_provider_says_so() -> None:

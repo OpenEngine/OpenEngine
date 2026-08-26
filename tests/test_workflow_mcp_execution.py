@@ -11,6 +11,7 @@ from engine.domain import (
     AgentInstanceId,
     AgentProfile,
     AgentRunId,
+    ApprovalDecision,
     Message,
     RunId,
     StartAgentRun,
@@ -21,7 +22,7 @@ from engine.domain import (
     ToolSpec,
     WorkspaceId,
 )
-from engine.ports import AgentTurn, GitResult, McpServerConfig
+from engine.ports import ApprovalRequest, AgentTurn, GitResult, McpServerConfig
 from engine.runtime import (
     Capabilities,
     Dispatcher,
@@ -294,6 +295,32 @@ class GitCallingMcpRunner(CallingMcpRunner):
             agent_run_id, profile, messages, mcp_server, workspace_id
         )
 
+    async def run_turn_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        on_approval,
+        on_message=None,
+        tools=(),
+        workspace_id=None,
+    ):
+        raise AssertionError("workflow execution should use MCP")
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_approval,
+        on_message=None,
+        workspace_id=None,
+    ):
+        return await self.run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
 
 def test_git_reaches_the_step_own_workspace_without_the_model_naming_one() -> None:
     """The step's workspace is bound by the dispatcher, not passed by the model.
@@ -305,15 +332,23 @@ def test_git_reaches_the_step_own_workspace_without_the_model_naming_one() -> No
     async def scenario() -> None:
         runner = GitCallingMcpRunner()
         source_control = GitSourceControl()
+        approvals: list[ApprovalRequest] = []
+
+        async def approve(request: ApprovalRequest) -> ApprovalDecision:
+            approvals.append(request)
+            return ApprovalDecision.ACCEPT
 
         await Dispatcher(_capabilities(runner, source_control)).run_workflow_agent(
-            IMPLEMENTATION_COMMAND, runner=runner
+            IMPLEMENTATION_COMMAND, runner=runner, on_approval=approve
         )
 
         assert source_control.calls == [
             (WorkspaceId("ws-1"), ("status", "--porcelain"))
         ]
         assert runner.answers[0]["output"] == "nothing to commit"
+        assert [request.tool_name for request in approvals] == [
+            "mcp__workflow__git_subcommand"
+        ]
 
     asyncio.run(scenario())
 

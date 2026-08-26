@@ -5,6 +5,8 @@ import asyncio
 from engine.domain import (
     AgentId,
     AgentRunId,
+    ApprovalDecision,
+    ApprovalKind,
     RunFailed,
     RunId,
     StepCompleted,
@@ -12,7 +14,7 @@ from engine.domain import (
     StepSpec,
     WorkspaceId,
 )
-from engine.ports import GitResult
+from engine.ports import ApprovalRequest, GitResult
 from engine.runtime.terminal_mcp import (
     DEFAULT_BASE_REF,
     TerminalMcpBroker,
@@ -36,6 +38,22 @@ def _request(
     token = config.args[config.args.index("--token") + 1]
     return {
         "token": token,
+        "request_id": request_id,
+        "name": name,
+        "arguments": arguments,
+    }
+
+
+def _direct_request(
+    broker: TerminalMcpBroker,
+    request_id: str | int,
+    name: str,
+    arguments: object,
+) -> dict[str, object]:
+    """Call the in-process broker without starting its loopback bridge."""
+
+    return {
+        "token": broker._token,
         "request_id": request_id,
         "name": name,
         "arguments": arguments,
@@ -329,7 +347,15 @@ class RecordingRepository:
         return "https://github.com/acme/api/pull/7"
 
 
-def _repository_broker(source_control: object, *names: str) -> TerminalMcpBroker:
+async def _approve_git(_request: ApprovalRequest) -> ApprovalDecision:
+    return ApprovalDecision.ACCEPT
+
+
+def _repository_broker(
+    source_control: object,
+    *names: str,
+    git_approval=_approve_git,
+) -> TerminalMcpBroker:
     broker = TerminalMcpBroker(
         run_id=RunId("run-1"),
         agent_run_id=AgentRunId("agent-run-1"),
@@ -340,6 +366,7 @@ def _repository_broker(source_control: object, *names: str) -> TerminalMcpBroker
         source_control,  # type: ignore[arg-type]
         names,
         WorkspaceId("ws-under-test"),
+        git_approval,
     )
     return broker
 
@@ -400,6 +427,99 @@ def test_git_runs_against_the_step_workspace_and_returns_what_it_printed() -> No
         assert source_control.git_calls == [
             (WorkspaceId("ws-under-test"), ("status", "--short", "--branch"))
         ]
+
+    asyncio.run(scenario())
+
+
+def test_git_is_approved_by_engine_even_when_the_mcp_tool_was_preapproved() -> None:
+    """Provider permission only admits the call to this server.
+
+    Git may launch helpers, hooks and aliases outside the provider sandbox, so
+    the server independently submits the exact argument vector to Engine's
+    approval broker before invoking source control.
+    """
+
+    async def scenario() -> None:
+        requests: list[ApprovalRequest] = []
+
+        async def approve(request: ApprovalRequest) -> ApprovalDecision:
+            requests.append(request)
+            return ApprovalDecision.ACCEPT
+
+        source_control = RecordingRepository(stdout="clean")
+        broker = _repository_broker(
+            source_control, "git_subcommand", git_approval=approve
+        )
+        response = await broker._submit(
+            _direct_request(
+                broker,
+                "git-sensitive",
+                "git_subcommand",
+                {"arguments": ["-c", "alias.x=!sh", "x"]},
+            )
+        )
+
+        assert response["ok"] is True
+        assert len(requests) == 1
+        request = requests[0]
+        assert request.kind is ApprovalKind.TOOL_USE
+        assert request.tool_name == "mcp__workflow__git_subcommand"
+        assert request.tool_call_id == "git-sensitive"
+        assert request.command == "git -c 'alias.x=!sh' x"
+        assert request.arguments == '{"arguments": ["-c", "alias.x=!sh", "x"]}'
+        assert request.allowed_decisions == (
+            ApprovalDecision.ACCEPT,
+            ApprovalDecision.CANCEL,
+        )
+        assert source_control.git_calls == [
+            (WorkspaceId("ws-under-test"), ("-c", "alias.x=!sh", "x"))
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_git_fails_closed_when_the_step_has_no_approval_handler() -> None:
+    async def scenario() -> None:
+        source_control = RecordingRepository()
+        broker = _repository_broker(
+            source_control, "git_subcommand", git_approval=None
+        )
+        response = await broker._submit(
+            _direct_request(
+                broker,
+                "git-1",
+                "git_subcommand",
+                {"arguments": ["status"]},
+            )
+        )
+
+        assert response["ok"] is False
+        assert "requires approval handling" in str(response["error"])
+        assert source_control.git_calls == []
+
+    asyncio.run(scenario())
+
+
+def test_git_does_not_run_when_approval_is_cancelled() -> None:
+    async def cancel(_request: ApprovalRequest) -> ApprovalDecision:
+        return ApprovalDecision.CANCEL
+
+    async def scenario() -> None:
+        source_control = RecordingRepository()
+        broker = _repository_broker(
+            source_control, "git_subcommand", git_approval=cancel
+        )
+        response = await broker._submit(
+            _direct_request(
+                broker,
+                "git-1",
+                "git_subcommand",
+                {"arguments": ["push", "origin", "agent/topic"]},
+            )
+        )
+
+        assert response == {"ok": False, "error": "git_subcommand was not approved"}
+        assert source_control.git_calls == []
 
     asyncio.run(scenario())
 
