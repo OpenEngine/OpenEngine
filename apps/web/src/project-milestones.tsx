@@ -106,7 +106,7 @@ export function ProjectMilestonesPage({ projectId }: { projectId: string }) {
             className="milestone-viewport milestone-page-map"
             aria-label="Milestone timeline"
           >
-            <MilestoneTimelineVisual milestones={milestones} />
+            <MilestoneTimelineVisual milestones={milestones} projectId={projectId} />
           </section>
           {ordered.length > 0 && (
             <div className="cards">

@@ -14,6 +14,7 @@ import {
   type RunnerOption,
 } from "./api";
 import { ChatThread, ConversationStats } from "./chat";
+import { MilestoneDetailsPage } from "./milestone-details";
 import { MilestoneTimeline } from "./milestone-timeline";
 import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
@@ -286,6 +287,9 @@ type Route =
   /** One project's plan in full, which is the only page a project has that is
    *  not the conversation it was named after. */
   | { kind: "project"; projectId: string }
+  /** One goal off that plan, opened from a workstream on the timeline: the
+   *  workstreams under it, and the tasks started in each. */
+  | { kind: "milestone"; projectId: string; milestoneId: string }
   /** `plan` is the same chat page, opened on the agent that plans rather than
    *  on the one that codes -- and always on a new conversation, because a
    *  button that offered you the last one back would not be a plan. */
@@ -299,6 +303,13 @@ function currentRoute(): Route {
   const projectMilestones = path.match(/^\/projects\/([^/]+)\/milestones$/);
   if (projectMilestones)
     return { kind: "project", projectId: decodeURIComponent(projectMilestones[1]) };
+  const milestoneDetails = path.match(/^\/projects\/([^/]+)\/milestones\/([^/]+)$/);
+  if (milestoneDetails)
+    return {
+      kind: "milestone",
+      projectId: decodeURIComponent(milestoneDetails[1]),
+      milestoneId: decodeURIComponent(milestoneDetails[2]),
+    };
   const workflowConversation = path.match(
     /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
   );
@@ -322,7 +333,7 @@ function currentRoute(): Route {
 function sectionFor(route: Route, projectPage: boolean): RailSection {
   if (route.kind === "chat")
     return route.runId ? "workflows" : route.plan || projectPage ? "projects" : "chats";
-  return route.kind === "project" ? "projects" : "workflows";
+  return route.kind === "project" || route.kind === "milestone" ? "projects" : "workflows";
 }
 
 /** `/plan` is where a plan starts, not where it lives.
@@ -456,6 +467,15 @@ function App() {
           <RunDetailPage runId={route.runId} />
         ) : route.kind === "project" ? (
           <ProjectMilestonesPage projectId={route.projectId} />
+        ) : route.kind === "milestone" ? (
+          <MilestoneDetailsPage
+            projectId={route.projectId}
+            milestoneId={route.milestoneId}
+            // The list the shell already follows for the rail and the runs
+            // page: a task is a run started in a workstream, so this page reads
+            // the same poll rather than opening one of its own.
+            runs={runs}
+          />
         ) : (
           <ChatPanel
             config={config}

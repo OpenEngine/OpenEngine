@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 
 import {
   getProjectMilestones,
+  milestoneDetailsUrl,
   type ApiMilestone,
   type ApiProject,
 } from "./api";
@@ -98,7 +99,16 @@ export function orderMilestones(milestones: ApiMilestone[]): ApiMilestone[] {
   return ordered;
 }
 
-export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilestone[] }) {
+export function MilestoneTimelineVisual({
+  milestones,
+  projectId,
+}: {
+  milestones: ApiMilestone[];
+  /** The plan these belong to, which is what a workstream's link is built
+   *  from: the graph is drawn beside a chat and on the project's own page, and
+   *  both open the same milestone page. */
+  projectId: string;
+}) {
   const ordered = useMemo(() => orderMilestones(milestones), [milestones]);
   const positions = useMemo(
     () =>
@@ -197,17 +207,25 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
                     <li
                       key={workstream.workstreamId}
                       className="milestone-workstream"
-                      // The scope is what separates one workstream from its
-                      // siblings, but it is a sentence and the node is 170px
-                      // wide. It is carried by the tooltip this component
-                      // already uses for descriptions, so it stays one pattern
-                      // and -- unlike a `title` -- answers to the keyboard.
-                      tabIndex={workstream.scope ? 0 : undefined}
-                      aria-describedby={workstream.scope ? scopeId : undefined}
                       onMouseEnter={pinTooltip}
                       onFocus={pinTooltip}
                     >
-                      <span>{workstream.name}</span>
+                      {/* The node has room for a name and nothing else, so the
+                          name is the way in: it opens the milestone this
+                          workstream hangs from, which is where the work under
+                          it -- every workstream, and the tasks in each -- is
+                          written out. The scope is what separates one
+                          workstream from its siblings, but it is a sentence,
+                          so it stays on the tooltip this component already
+                          uses for descriptions: one pattern, and -- unlike a
+                          `title` -- reached by the keyboard the link answers
+                          to rather than by a tab stop of its own. */}
+                      <a
+                        href={milestoneDetailsUrl(projectId, milestone.milestoneId)}
+                        aria-describedby={workstream.scope ? scopeId : undefined}
+                      >
+                        <span>{workstream.name}</span>
+                      </a>
                       {workstream.scope && (
                         <span className="milestone-tooltip" id={scopeId} role="tooltip">
                           {workstream.scope}
@@ -345,7 +363,7 @@ export function MilestoneTimeline({
         {!project ? (
           <p className="milestone-empty">Milestones will appear after this project is created.</p>
         ) : loaded ? (
-          <MilestoneTimelineVisual milestones={milestones} />
+          <MilestoneTimelineVisual milestones={milestones} projectId={project.projectId} />
         ) : error ? (
           // Only reached before the first answer; once there is a timeline to
           // show, a failure is reported by the header note instead.
