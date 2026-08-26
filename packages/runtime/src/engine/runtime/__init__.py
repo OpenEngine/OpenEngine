@@ -78,6 +78,7 @@ from engine.runtime.step_results import (
     step_result_from_tool_call,
 )
 from engine.runtime.terminal_mcp import (
+    REPOSITORY_TOOL_NAMES,
     TerminalMcpBroker,
     TerminalResultAlreadySubmittedError,
     TerminalResultRegistry,
@@ -160,6 +161,7 @@ __all__ = [
     "step_completed_from_arguments",
     "step_result_instructions",
     "step_result_from_tool_call",
+    "REPOSITORY_TOOL_NAMES",
     "terminal_tool_names",
     "with_granted_tools",
 ]

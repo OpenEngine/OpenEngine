@@ -46,6 +46,7 @@ from engine.runtime.step_results import (
     step_result_instructions,
 )
 from engine.runtime.terminal_mcp import (
+    REPOSITORY_TOOL_METHODS,
     TerminalEvent,
     TerminalMcpBroker,
     TerminalResultRegistry,
@@ -145,7 +146,7 @@ class Dispatcher:
         # enumeration from reading as a complete one.
         served: tuple[str, ...] = ()
         if isinstance(selected_runner, McpAgentRunner):
-            served = terminal_tool_names(self._serves_repo_comments(command.profile))
+            served = terminal_tool_names(self._repository_tools(command.profile))
         command = replace(
             command, profile=with_granted_tools(command.profile, served)
         )
@@ -287,16 +288,26 @@ class Dispatcher:
         )
         return turn
 
-    def _serves_repo_comments(self, profile: AgentProfile) -> bool:
-        """Whether a step's broker will offer `add_comment`.
+    def _repository_tools(self, profile: AgentProfile) -> tuple[str, ...]:
+        """Which repository tools a step's broker will offer.
 
-        Asked twice -- once to enable it, once to say so in the system prompt --
-        which is the reason it is a method rather than a condition written out
-        at each site: the announcement and the listing have to agree, and two
-        copies of this are two things to keep in step.
+        The intersection of two things, because a grant alone is not enough:
+        the profile has to ask for the tool, and the composed source control
+        has to have the method behind it. A grant against a source control
+        that cannot honour it is left off the listing rather than served as
+        something that fails when called.
+
+        Asked twice -- once to enable them, once to say so in the system
+        prompt -- which is the reason it is a method rather than a condition
+        written out at each site: the announcement and the listing have to
+        agree, and two copies of this are two things to keep in step.
         """
-        return "add_comment" in profile.capabilities and callable(
-            getattr(self._capabilities.source_control, "add_comment", None)
+        source_control = self._capabilities.source_control
+        return tuple(
+            name
+            for name, method in REPOSITORY_TOOL_METHODS.items()
+            if name in profile.capabilities
+            and callable(getattr(source_control, method, None))
         )
 
     async def _run_with_terminal_mcp(
@@ -317,13 +328,19 @@ class Dispatcher:
             registry=self._terminal_results,
             deliver=deliver,
         )
-        if self._serves_repo_comments(command.profile):
+        repository_tools = self._repository_tools(command.profile)
+        if repository_tools:
             # Older transport fakes may model only terminal delivery. The real
             # broker exposes this hook; keeping it optional preserves those
-            # focused tests while granting the reviewer its repository tool.
-            enable_repo_comments = getattr(broker, "enable_repo_comments", None)
-            if enable_repo_comments is not None:
-                enable_repo_comments(self._capabilities.source_control)
+            # focused tests while granting a step its repository tools.
+            enable = getattr(broker, "enable_repository_tools", None)
+            if enable is not None:
+                enable(
+                    self._capabilities.source_control,
+                    repository_tools,
+                    command.workspace_id,
+                    on_approval,
+                )
         async with broker:
             transcript: list[Message] = []
             corrections = 0

@@ -44,7 +44,10 @@
               "agent_run_id": "golden-run:implementation:run",
               "instance_id": "golden-run:implementation:instance",
               "agent_id": "implementation-agent",
-              "capabilities": [],
+              "capabilities": [
+                "git_subcommand",
+                "open_pull_request"
+              ],
               "prompt": "Fix the queue race and add a regression test.",
               "workspace_id": "workspace-golden-run",
               "step": {
@@ -237,7 +240,10 @@
               "agent_run_id": "golden-run:implementation:run",
               "instance_id": "golden-run:implementation:instance",
               "agent_id": "implementation-agent",
-              "capabilities": [],
+              "capabilities": [
+                "git_subcommand",
+                "open_pull_request"
+              ],
               "prompt": "Fix the queue race and add a regression test.",
               "workspace_id": "workspace-golden-run",
               "step": {
@@ -430,7 +436,10 @@
               "agent_run_id": "golden-run:implementation:run",
               "instance_id": "golden-run:implementation:instance",
               "agent_id": "implementation-agent",
-              "capabilities": [],
+              "capabilities": [
+                "git_subcommand",
+                "open_pull_request"
+              ],
               "prompt": "Fix the queue race and add a regression test.",
               "workspace_id": "workspace-golden-run",
               "step": {
@@ -508,7 +517,10 @@
               "agent_run_id": "golden-run:implementation:run",
               "instance_id": "golden-run:implementation:instance",
               "agent_id": "implementation-agent",
-              "capabilities": [],
+              "capabilities": [
+                "git_subcommand",
+                "open_pull_request"
+              ],
               "prompt": "Fix the queue race and add a regression test.",
               "workspace_id": "workspace-golden-run",
               "step": {

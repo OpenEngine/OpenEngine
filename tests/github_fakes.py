@@ -1,10 +1,10 @@
 """A fake `gh` executable, and a record of everything it was asked to do.
 
-`GitHubSourceControl` leaves review comments by shelling out to the GitHub CLI:
-`gh pr comment` for a general one, and `gh pr view --json headRefOid` followed
-by `gh api .../pulls/<n>/comments` for an inline one. Both of those are real
-requests to somebody's repository, so a test that wants to assert on them needs
-a `gh` that is not GitHub.
+`GitHubSourceControl` reaches github.com by shelling out to the GitHub CLI:
+`gh pr create` to open a review, `gh pr comment` for a general comment, and
+`gh pr view --json headRefOid` followed by `gh api .../pulls/<n>/comments` for
+an inline one. All of those are real requests to somebody's repository, so a
+test that wants to assert on them needs a `gh` that is not GitHub.
 
 This is that: a shim installed next to the fake provider CLIs and named in
 `Settings.github_binary`, which appends each invocation to a JSONL file the test
@@ -65,6 +65,8 @@ def _answer(arguments: Sequence[str]) -> str:
     match tuple(arguments[:2]):
         case ("pr", "view"):
             return HEAD_SHA
+        case ("pr", "create"):
+            return "https://github.test/acme/api/pull/1"
         case ("pr", "comment"):
             url = arguments[2] if len(arguments) > 2 else "https://github.test/pull/1"
             return f"{url}#issuecomment-1"

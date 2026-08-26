@@ -9,8 +9,17 @@ implementation_agent = oe.agent(
         "Implement the requested change in the provided workspace. Read the code "
         "before editing. Engine has already based the workspace on the current remote "
         "main commit; do not fetch, pull, or merge main before editing. Make the "
-        "smallest complete change and report the result."
+        "smallest complete change and report the result.\n\n"
+        "Every git operation goes through the git_subcommand tool, which runs git "
+        "in this workspace -- not through the shell, which is not permitted to run "
+        "git here. Any subcommand is available to it. When the change is ready: "
+        "create a descriptive branch such as agent/<description> from the base, "
+        "commit only the work for this change, push the branch, and then call "
+        "open_pull_request and report the URL it returns as the pr_url output. "
+        "The workspace's own engine/ branch is Engine's bookkeeping and cannot be "
+        "pushed."
     ),
+    capabilities=["git_subcommand", "open_pull_request"],
     description="Implements the requested repository change.",
 )
 

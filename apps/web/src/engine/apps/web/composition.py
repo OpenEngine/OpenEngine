@@ -124,7 +124,9 @@ def build_capabilities(settings: Settings) -> Capabilities:
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=GitHubSourceControl(
-            settings.github_token, binary_path=settings.github_binary
+            settings.github_token,
+            binary_path=settings.github_binary,
+            workspace_provider=workspace_provider,
         ),
         agent_runner=CodexAgentRunner(
             binary_path=settings.codex_binary,

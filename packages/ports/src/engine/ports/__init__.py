@@ -37,7 +37,7 @@ from engine.ports.permissions import (
     PermissionScope,
     PermissionTranslator,
 )
-from engine.ports.source_control import SourceControl
+from engine.ports.source_control import GitResult, SourceControl
 from engine.ports.state_store import StateStore
 from engine.ports.workflow_runtime import WorkflowRuntime
 from engine.ports.workspace_provider import Workspace, WorkspaceProvider, WorkspaceState
@@ -53,6 +53,7 @@ __all__ = [
     "ApprovalCapability",
     "Communications",
     "FinishReason",
+    "GitResult",
     "InteractiveAgentRunner",
     "InteractiveMcpAgentRunner",
     "McpAgentRunner",
