@@ -645,7 +645,6 @@ select:disabled { cursor: default; }
   gap: 12px;
   align-content: start;
 }
-.milestone-card:hover { background: var(--fill); }
 .milestone-card .lede { font-size: 14px; }
 .milestone-card-workstreams {
   display: grid;
@@ -654,9 +653,6 @@ select:disabled { cursor: default; }
   border-top: 1px solid var(--rule);
 }
 .milestone-card-workstreams li { display: grid; gap: 3px; }
-.milestone-card-workstreams a { color: inherit; text-decoration: none; }
-.milestone-card-workstreams a:hover,
-.milestone-card-workstreams a:focus-visible { text-decoration: underline; }
 .milestone-card-workstreams strong { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 .milestone-card-workstreams span { color: var(--muted); font: 500 12px/1.45 var(--mono); }
 
