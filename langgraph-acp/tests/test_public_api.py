@@ -31,6 +31,7 @@ PUBLIC_MODULES = (
     "langgraph_acp.providers.codex",
     "langgraph_acp.result",
     "langgraph_acp.session",
+    "langgraph_acp.store",
     "langgraph_acp.workspace",
 )
 
