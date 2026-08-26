@@ -185,12 +185,15 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await expect(page.getByRole("region", { name: "Milestone timeline" })).toBeVisible();
   // The description a node can only offer on a hover, read here in full and in
   // flow -- which is the whole reason this page exists.
-  const foundationCard = page.getByRole("link", { name: "Planning foundation" });
+  const milestoneCards = page.locator(".cards");
+  const foundationCard = milestoneCards.getByRole("link", {
+    name: "Planning foundation",
+  });
   await expect(foundationCard).toContainText(
     FOUNDATION_DESCRIPTION,
   );
-  await expect(page.getByRole("link", { name: "First release" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Wider rollout" })).toBeVisible();
+  await expect(milestoneCards.getByRole("link", { name: "First release" })).toBeVisible();
+  await expect(milestoneCards.getByRole("link", { name: "Wider rollout" })).toBeVisible();
   await expect(rail.getByRole("link", { name: "Milestones · 3" })).toHaveAttribute(
     "aria-current",
     "page",
