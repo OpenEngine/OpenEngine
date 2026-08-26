@@ -185,16 +185,26 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await expect(page.getByRole("region", { name: "Milestone timeline" })).toBeVisible();
   // The description a node can only offer on a hover, read here in full and in
   // flow -- which is the whole reason this page exists.
-  await expect(page.getByRole("article", { name: "Planning foundation" })).toContainText(
+  const foundationCard = page.getByRole("link", { name: "Planning foundation" });
+  await expect(foundationCard).toContainText(
     FOUNDATION_DESCRIPTION,
   );
-  await expect(page.getByRole("article", { name: "First release" })).toBeVisible();
-  await expect(page.getByRole("article", { name: "Wider rollout" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "First release" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Wider rollout" })).toBeVisible();
   await expect(rail.getByRole("link", { name: "Milestones · 3" })).toHaveAttribute(
     "aria-current",
     "page",
   );
   await shot(page, testInfo, "4 the project's milestones");
+
+  // The whole card, including the workstreams it has room to list, is the way
+  // into the milestone rather than only one small name inside it.
+  await foundationCard.click();
+  await expect(page).toHaveURL(/\/projects\/[^/]+\/milestones\/[^/]+$/);
+  await expect(
+    page.getByRole("heading", { name: "Planning foundation", level: 1 }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "← All milestones" }).click();
 
   // And the way back to the conversation the plan was written in.
   await page.getByRole("link", { name: "← Planning conversation" }).click();
