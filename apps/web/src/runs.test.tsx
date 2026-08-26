@@ -357,11 +357,14 @@ describe("RunDetailPage", () => {
         summary: "Reads right.",
       },
     });
+    let settled = false;
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path === "/api/runs/run-1/human-review" && init?.method === "POST")
+      if (path === "/api/runs/run-1/human-review" && init?.method === "POST") {
+        settled = true;
         return json(decided);
-      if (path === "/api/runs/run-1") return json(awaiting);
+      }
+      if (path === "/api/runs/run-1") return json(settled ? decided : awaiting);
       return json({ error: "not found" }, { status: 404 });
     });
     vi.stubGlobal("fetch", fetch);
@@ -420,13 +423,15 @@ describe("RunDetailPage", () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let settled = false;
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === "/api/runs/run-1/human-review" && init?.method === "POST") {
         await held;
+        settled = true;
         return json(decided);
       }
-      if (path === "/api/runs/run-1") return json(awaiting);
+      if (path === "/api/runs/run-1") return json(settled ? decided : awaiting);
       return json({ error: "not found" }, { status: 404 });
     });
     vi.stubGlobal("fetch", fetch);
@@ -492,6 +497,52 @@ describe("RunDetailPage", () => {
       "run is not awaiting human review",
     );
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+  });
+
+  it("returns a finished run to the step a new message reopened", async () => {
+    vi.useFakeTimers();
+    const finished = run({
+      phase: "succeeded",
+      currentStepId: null,
+      terminalOutcome: "approved",
+      steps: run().steps.map((step) => ({ ...step, status: "completed" })),
+    });
+    let reopened = false;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(reopened ? run() : finished);
+      if (path === "/api/threads/instance")
+        return json({
+          id: "instance",
+          title: "Implementation",
+          archived: false,
+          agentId: "agent",
+          runner: "codex",
+          workspaceRoot: "/worktrees/ws-1",
+          workspaceRef: "engine/ws-1",
+          workspaceAttached: true,
+        });
+      return json({ error: "not found" }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const { container } = render(<RunDetailPage runId="run-1" />);
+    await act(async () => {});
+    expect(container.querySelector(".stats")).toHaveTextContent("approved");
+    expect(container.querySelector(".step[data-live]")).toBeNull();
+
+    // Writing to the implementation's conversation puts the run back to work,
+    // and the page has to follow a run it had already seen finish.
+    reopened = true;
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+    expect(within(container.querySelector(".detail-title") as HTMLElement).getByText(
+      "Implementation",
+    )).toBeVisible();
+    expect(container.querySelector(".stages .stage[data-status='in_progress']")).toHaveTextContent(
+      "Implementation",
+    );
+    expect(container.querySelector(".step[data-live]")).toHaveTextContent("Implementation");
   });
 
   it("offers the workflow checkout's detach operation", async () => {
