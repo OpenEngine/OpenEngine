@@ -134,30 +134,27 @@ describe("milestone timeline", () => {
     const item = screen.getByRole("listitem");
     const scope = screen.getByRole("tooltip", { name: "Persist the plan." });
 
-    // Reachable by keyboard, not only by a hover a touch device cannot make --
-    // and by the link's own tab stop rather than a second one on the bullet
-    // carrying it, which would stop twice on the one workstream.
-    expect(item).not.toHaveAttribute("tabindex");
-    expect(screen.getByRole("link", { name: "Data model" })).toHaveAccessibleDescription(
-      "Persist the plan.",
-    );
+    // Reachable by keyboard, not only by a hover a touch device cannot make,
+    // without turning the workstream name into a navigation target.
+    expect(item).toHaveAttribute("tabindex", "0");
+    expect(item).toHaveAccessibleDescription("Persist the plan.");
+    expect(screen.queryByRole("link", { name: "Data model" })).toBeNull();
     expect(item).toContainElement(scope);
     expect(item).not.toHaveAttribute("title");
   });
 
-  it("opens the milestone page from any workstream hanging off it", () => {
+  it("opens milestone pages from the milestones rather than their workstreams", () => {
     render(
       <MilestoneTimelineVisual milestones={[staffed, launch]} projectId={other.projectId} />,
     );
 
-    // Every bullet under one goal leads to that goal's page: the page is where
-    // the workstreams are told apart, so the milestone is what a click needs.
+    // One link per goal keeps its workstream labels informational rather than
+    // making several differently named links lead to the same page.
     expect(
       screen.getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")]),
     ).toEqual([
-      ["Data model", "/projects/project%202/milestones/foundation"],
-      ["Timeline view", "/projects/project%202/milestones/foundation"],
-      ["Planner tools", "/projects/project%202/milestones/foundation"],
+      ["Foundation", "/projects/project%202/milestones/foundation"],
+      ["Launch", "/projects/project%202/milestones/launch"],
     ]);
   });
 

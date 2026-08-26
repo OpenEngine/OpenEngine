@@ -100,7 +100,9 @@ describe("ProjectMilestonesPage", () => {
     render(<ProjectMilestonesPage projectId="project-1" />);
     await act(async () => {});
 
-    const planned = screen.getByRole("link", { name: "Foundation" });
+    const planned = document.querySelector<HTMLElement>(
+      '.milestone-card[href="/projects/project-1/milestones/milestone-foundation"]',
+    )!;
     expect(planned).toHaveAttribute(
       "href",
       "/projects/project-1/milestones/milestone-foundation",
@@ -116,7 +118,9 @@ describe("ProjectMilestonesPage", () => {
     ).toEqual(["Data modelPersist the plan.", "Timeline view"]);
     expect(within(workstreams).queryByRole("link")).toBeNull();
 
-    const shipping = screen.getByRole("link", { name: "Launch" });
+    const shipping = document.querySelector<HTMLElement>(
+      '.milestone-card[href="/projects/project-1/milestones/milestone-launch"]',
+    )!;
     expect(shipping).toHaveAttribute(
       "href",
       "/projects/project-1/milestones/milestone-launch",
@@ -141,7 +145,7 @@ describe("ProjectMilestonesPage", () => {
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
-    expect(screen.getByRole("link", { name: "Launch" })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Launch" })).toHaveLength(2);
     expect(screen.queryByText("Loading milestones…")).toBeNull();
   });
 
@@ -187,7 +191,7 @@ describe("ProjectMilestonesPage", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
 
     expect(screen.getByText("Not updating: store unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Foundation" })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Foundation" })).toHaveLength(2);
   });
 
   it("stops polling once it leaves the page", async () => {

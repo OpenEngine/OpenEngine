@@ -551,6 +551,13 @@ select:disabled { cursor: default; }
   text-align: center;
   outline: 0;
 }
+.milestone-link {
+  display: grid;
+  gap: 9px;
+  justify-items: center;
+  color: inherit;
+  text-decoration: none;
+}
 .milestone-dot {
   width: 26px;
   height: 26px;
@@ -567,7 +574,9 @@ select:disabled { cursor: default; }
   font-weight: 700;
   line-height: 1.3;
 }
-.milestone-node:focus-visible .milestone-name { border-color: var(--ink); }
+.milestone-link:hover .milestone-name { border-color: var(--ink); }
+.milestone-link:focus-visible { outline: 0; }
+.milestone-link:focus-visible .milestone-name { border-color: var(--ink); }
 .milestone-workstreams {
   display: grid;
   gap: 4px;
@@ -586,11 +595,7 @@ select:disabled { cursor: default; }
   overflow-wrap: anywhere;
 }
 .milestone-workstream::before { content: "• "; }
-/* The name is the way into the milestone, but it is still a bullet in a list
-   170px wide: it reads as one until it is pointed at. */
-.milestone-workstream a { color: inherit; text-decoration: none; }
-.milestone-workstream a:hover { color: var(--ink); text-decoration: underline; }
-.milestone-workstream:has(a:focus-visible) { color: var(--ink); }
+.milestone-workstream:focus-visible { color: var(--ink); }
 .milestone-tooltip {
   /* Above what it describes, and measured against the window by `pinTooltip`
      rather than against the node. The band above a node belongs to the map,
@@ -620,9 +625,9 @@ select:disabled { cursor: default; }
 /* One tooltip at a time: reading a workstream's scope shows it in place of the
    milestone's description, since they share the band above the node. */
 .milestone-node:hover:not(:has(.milestone-workstream:hover)) > .milestone-tooltip,
-.milestone-node:focus-visible > .milestone-tooltip,
+.milestone-node:has(> .milestone-link:focus-visible) > .milestone-tooltip,
 .milestone-workstream:hover > .milestone-tooltip,
-.milestone-workstream:has(a:focus-visible) > .milestone-tooltip { visibility: visible; opacity: 1; }
+.milestone-workstream:focus-visible > .milestone-tooltip { visibility: visible; opacity: 1; }
 .milestone-empty {
   display: grid;
   place-items: center;
