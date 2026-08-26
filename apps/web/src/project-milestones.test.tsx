@@ -100,7 +100,11 @@ describe("ProjectMilestonesPage", () => {
     render(<ProjectMilestonesPage projectId="project-1" />);
     await act(async () => {});
 
-    const planned = screen.getByRole("article", { name: "Foundation" });
+    const planned = screen.getByRole("link", { name: "Foundation" });
+    expect(planned).toHaveAttribute(
+      "href",
+      "/projects/project-1/milestones/milestone-foundation",
+    );
     expect(within(planned).getByText("Build the shared project model.")).toBeInTheDocument();
     expect(within(planned).getByText("milestone-foundation")).toBeInTheDocument();
     expect(within(planned).getByText("2 workstreams")).toBeInTheDocument();
@@ -110,12 +114,13 @@ describe("ProjectMilestonesPage", () => {
     expect(
       within(workstreams).getAllByRole("listitem").map((item) => item.textContent),
     ).toEqual(["Data modelPersist the plan.", "Timeline view"]);
-    expect(within(workstreams).getByRole("link", { name: "Data model" })).toHaveAttribute(
-      "href",
-      "/projects/project-1/milestones/milestone-foundation",
-    );
+    expect(within(workstreams).queryByRole("link")).toBeNull();
 
-    const shipping = screen.getByRole("article", { name: "Launch" });
+    const shipping = screen.getByRole("link", { name: "Launch" });
+    expect(shipping).toHaveAttribute(
+      "href",
+      "/projects/project-1/milestones/milestone-launch",
+    );
     // The dependency reads as the goal it names, not as the id recorded.
     expect(within(shipping).getByText("Depends on Foundation")).toBeInTheDocument();
     expect(within(shipping).getByText("0 workstreams")).toBeInTheDocument();
@@ -132,11 +137,11 @@ describe("ProjectMilestonesPage", () => {
 
     render(<ProjectMilestonesPage projectId="project-1" />);
     await act(async () => {});
-    expect(screen.queryByRole("article", { name: "Launch" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Launch" })).toBeNull();
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
-    expect(screen.getByRole("article", { name: "Launch" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Launch" })).toBeInTheDocument();
     expect(screen.queryByText("Loading milestones…")).toBeNull();
   });
 
@@ -182,7 +187,7 @@ describe("ProjectMilestonesPage", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
 
     expect(screen.getByText("Not updating: store unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("article", { name: "Foundation" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Foundation" })).toBeInTheDocument();
   });
 
   it("stops polling once it leaves the page", async () => {
