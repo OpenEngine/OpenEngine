@@ -1990,11 +1990,35 @@ SqliteACPSessionStore
 PostgresACPSessionStore
 ```
 
+These implementations must be durable because the store is the recovery link between a LangGraph node's logical identity and agent-owned conversation state. Its persisted record is only the mapping:
+
+```text
+(thread_id, session_key)
+        ↓
+opaque ACP session ID
+```
+
+For example, an ACP-backed reviewer may create a GitHub comment and then the application may restart before a reply arrives. The reply webhook can be linked back to the original LangGraph thread and node/session key; the durable store must still resolve that logical identity to the Codex, Claude, or other ACP session that produced the comment. The node can then resume that session and the agent hydrates its own conversation history.
+
+```text
+reply webhook after process restart
+        ↓
+LangGraph thread + node/session key
+        ↓
+durable ACPSessionStore
+        ↓
+ACP session ID
+        ↓
+agent session/resume
+```
+
+Without durable storage, a reboot loses this association. The workflow may still know which LangGraph thread owns the webhook, but it can no longer identify the agent conversation to resume and would have to start a new session or attempt transcript reconstruction. The store does not persist the transcript itself; it preserves only the stable pointer to the conversation owned by the ACP agent.
+
 Do not block initial development on these.
 
 ### Acceptance
 
-Two independent application processes can resolve the same logical session binding against the durable implementation.
+Two independent application processes, including one started after the process that created the binding has exited, can resolve the same logical session binding against the durable implementation and obtain the same ACP session ID.
 
 ---
 
