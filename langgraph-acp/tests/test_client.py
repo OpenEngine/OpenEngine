@@ -9,16 +9,15 @@ mock would exercise none of it while agreeing with whatever the code does.
 that cannot resume, one that asks permission, one that dies mid-request.
 """
 
-import asyncio
 import json
 import sys
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator
 from contextlib import aclosing, asynccontextmanager
-from functools import wraps
 from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import asyncio_test
 
 from langgraph_acp import (
     ACPAgentCapabilityError,
@@ -32,19 +31,6 @@ from langgraph_acp import (
 )
 
 FAKE_AGENT = Path(__file__).resolve().parent / "fake_agent.py"
-
-
-def asyncio_test(
-    test: Callable[..., Coroutine[Any, Any, None]],
-) -> Callable[..., None]:
-    """Run an async test. A decorator rather than a plugin, so that the package
-    keeps the empty dependency list its first ticket established."""
-
-    @wraps(test)
-    def synchronously(*args: Any, **kwargs: Any) -> None:
-        asyncio.run(test(*args, **kwargs))
-
-    return synchronously
 
 
 def fake_agent(*options: str, log: Path | None = None) -> StdioACPProvider:

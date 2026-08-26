@@ -9,27 +9,17 @@ to somebody else's history.
 What is deliberately not tested is durability, because this implementation has
 none. It is the store that lives as long as its process, and the ones that
 outlive a restart arrive with a later ticket.
+
+Whether this store *is* an `ACPSessionStore` is asked of `store_conformance.py`,
+which every implementation runs; the stores at the foot of this file are what
+proves that check has teeth, and that an isinstance test does not.
 """
 
-import asyncio
-from collections.abc import Callable, Coroutine
-from functools import wraps
-from typing import Any
+import pytest
+from conftest import asyncio_test
+from store_conformance import assert_conforms, assert_lifecycle
 
 from langgraph_acp import ACPSessionStore, InMemoryACPSessionStore
-
-
-def asyncio_test(
-    test: Callable[..., Coroutine[Any, Any, None]],
-) -> Callable[..., None]:
-    """Run an async test. A decorator rather than a plugin, so that the package
-    keeps the empty dependency list its first ticket established."""
-
-    @wraps(test)
-    def synchronously(*args: Any, **kwargs: Any) -> None:
-        asyncio.run(test(*args, **kwargs))
-
-    return synchronously
 
 
 @asyncio_test
@@ -146,8 +136,77 @@ async def test_seeded_bindings_are_copied_rather_than_shared() -> None:
     assert await store.get("pr-918", "reviewer") == "sess_abc123"
 
 
-def test_the_in_memory_store_is_an_acp_session_store() -> None:
-    assert isinstance(InMemoryACPSessionStore(), ACPSessionStore)
+def test_the_in_memory_store_conforms_to_the_interface() -> None:
+    assert_conforms(InMemoryACPSessionStore())
+
+
+@asyncio_test
+async def test_the_in_memory_store_serves_the_whole_lifecycle() -> None:
+    """The conformance suite's own run of it, called entirely by keyword."""
+    await assert_lifecycle(InMemoryACPSessionStore())
+
+
+class SynchronousStore:
+    """Three methods with the right names and no `await` in sight."""
+
+    def get(self, thread_id: str, session_key: str) -> str | None:
+        return None
+
+    def put(self, thread_id: str, session_key: str, acp_session_id: str) -> None:
+        return None
+
+    def delete(self, thread_id: str, session_key: str) -> None:
+        return None
+
+
+class NamespacedStore:
+    """Keyed the way LangGraph's own `BaseStore` is, which is not this pair."""
+
+    async def get(self, namespace: str, key: str) -> str | None:
+        return None
+
+    async def put(self, namespace: str, key: str, value: str) -> None:
+        return None
+
+    async def delete(self, namespace: str, key: str) -> None:
+        return None
+
+
+class RenamedStore:
+    """This package's own store after `thread_id` becomes `thread`.
+
+    The regression the conformance suite exists for: nothing about it is wrong
+    until a caller writes `store.get(thread_id=...)`, which every caller does.
+    """
+
+    async def get(self, thread: str, session_key: str) -> str | None:
+        return None
+
+    async def put(self, thread: str, session_key: str, acp_session_id: str) -> None:
+        return None
+
+    async def delete(self, thread: str, session_key: str) -> None:
+        return None
+
+
+UNUSABLE = [SynchronousStore(), NamespacedStore(), RenamedStore()]
+
+
+@pytest.mark.parametrize("store", UNUSABLE, ids=lambda store: type(store).__name__)
+def test_isinstance_accepts_stores_no_caller_could_use(store: object) -> None:
+    """Why `assert_conforms` exists rather than an isinstance check.
+
+    A `runtime_checkable` protocol compares member names, so each of these is an
+    `ACPSessionStore` as far as the interpreter is concerned, and each of them
+    raises `TypeError` the first time a node calls it.
+    """
+    assert isinstance(store, ACPSessionStore)
+
+
+@pytest.mark.parametrize("store", UNUSABLE, ids=lambda store: type(store).__name__)
+def test_the_conformance_check_rejects_them(store: object) -> None:
+    with pytest.raises(AssertionError):
+        assert_conforms(store)
 
 
 def test_the_interface_is_three_methods_and_no_more() -> None:
