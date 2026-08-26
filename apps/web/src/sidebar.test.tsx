@@ -283,6 +283,90 @@ describe("Sidebar", () => {
     expect(row.closest(".rail-item")).not.toHaveAttribute("data-active");
   });
 
+  /** A plan is more than the conversation that wrote it, so a project that has
+   *  one offers it: a subheader under the row, opening the milestones page. */
+  it("offers the milestones of a project that has some, and marks the open one", () => {
+    render(
+      <Sidebar
+        projects={[
+          {
+            projectId: "project agi-1",
+            name: "Engine roadmap",
+            archived: false,
+            conversationUrl: "/conversations/agi-1",
+            milestoneCount: 3,
+          },
+          {
+            projectId: "project-agi-2",
+            name: "Second roadmap",
+            archived: false,
+            conversationUrl: "/conversations/agi-2",
+            milestoneCount: 1,
+          },
+        ]}
+        runs={[run]}
+        initialSection="projects"
+        activeProjectId="project agi-1"
+      />,
+    );
+
+    const open = within(body("Projects")).getByRole("link", {
+      name: "Milestones · 3",
+    });
+    // Encoded here rather than spelled by hand: an id with a space in it is
+    // not what the store writes, but it is what pins this to one builder.
+    expect(open).toHaveAttribute("href", "/projects/project%20agi-1/milestones");
+    expect(open).toHaveAttribute("aria-current", "page");
+    expect(open.closest(".rail-sub")).toHaveAttribute(
+      "aria-label",
+      "Milestones for Engine roadmap",
+    );
+    const other = within(body("Projects")).getByRole("link", { name: "Milestones · 1" });
+    expect(other).not.toHaveAttribute("aria-current");
+  });
+
+  /** Nothing planned is nothing to open, and a project put away has been put
+   *  away along with its plan -- the same reason its row stops being a link. */
+  it("offers no milestones for a project without them, or for an archived one", () => {
+    render(
+      <Sidebar
+        projects={[
+          { projectId: "project-1", name: "Engine roadmap", archived: false },
+          { projectId: "project-2", name: "Fresh plan", archived: false, milestoneCount: 0 },
+          { projectId: "project-3", name: "Put away", archived: true, milestoneCount: 4 },
+        ]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
+
+    expect(
+      within(body("Projects")).queryByRole("link", { name: /Milestones/, hidden: true }),
+    ).not.toBeInTheDocument();
+  });
+
+  /** A plan outlives the conversation that wrote it. Archiving the *thread*
+   *  leaves the project itself live, and its milestones are still worth
+   *  reading even though its name row has nowhere left to send a click. */
+  it("offers the milestones of a live project whose planning chat was archived", () => {
+    render(
+      <Sidebar
+        projects={[
+          { projectId: "project-agi-1", name: "Engine roadmap", archived: false, milestoneCount: 2 },
+        ]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
+
+    const projects = within(body("Projects"));
+    expect(projects.queryByRole("link", { name: "Engine roadmap" })).not.toBeInTheDocument();
+    expect(projects.getByRole("link", { name: "Milestones · 2" })).toHaveAttribute(
+      "href",
+      "/projects/project-agi-1/milestones",
+    );
+  });
+
   /** Archiving is the same one click a chat gets, and it moves the row into a
    *  list of its own rather than deleting anything. */
   it("archives a project from the rail and lists it under Archived projects", async () => {

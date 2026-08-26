@@ -13,7 +13,8 @@ things Postgres will do.
 Implements `engine.ports.StateStore`.
 """
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from itertools import count
 from threading import Lock
@@ -130,6 +131,12 @@ class InMemoryStateStore:
         if project_id is not None:
             milestones = [item for item in milestones if item.project_id == project_id]
         return tuple(reversed(milestones))
+
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
+        with self._lock:
+            return Counter(
+                milestone.project_id for milestone in self._milestones.values()
+            )
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
         with self._lock:

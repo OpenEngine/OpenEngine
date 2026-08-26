@@ -1140,22 +1140,39 @@ def create_app(
             {"runs": [_run_json(run) for run in await run_reader.list()]}
         )
 
-    async def list_projects(_request: Request) -> JSONResponse:
-        projects = await session.state_store.list_projects()
-        # A project is reached through the planning conversation it was named
-        # after, which is the only page it has. Resolved against the threads
-        # that can be opened rather than spelled from the id alone: a project
-        # recorded some other way has the same shape and no conversation, and
-        # an archived plan's page is a blank new chat rather than the plan.
-        conversations = {
+    async def open_conversations() -> set[AgentInstanceId]:
+        """The plans a project row can be linked to.
+
+        A project is reached through the planning conversation it was named
+        after. Resolved against the threads that can be opened rather than
+        spelled from the id alone: a project recorded some other way has the
+        same shape and no conversation, and an archived plan's page is a blank
+        new chat rather than the plan.
+        """
+        return {
             thread.instance_id
             for thread in await service.list()
             if not thread.archived
         }
+
+    async def list_projects(_request: Request) -> JSONResponse:
+        projects = await session.state_store.list_projects()
+        conversations = await open_conversations()
+        # A project's milestones are offered in the rail only by the projects
+        # that have some, so the list says how many. Counted by the store, in
+        # one grouped query: the shell polls this route every second, and both
+        # a query per row and a read of every milestone would make that cost
+        # grow -- with the list, or with the size of every plan in it.
+        milestones = await session.state_store.count_milestones_by_project()
         return JSONResponse(
             {
                 "projects": [
-                    _project_json(project, conversations) for project in projects
+                    _project_json(
+                        project,
+                        conversations,
+                        milestones=milestones.get(project.project_id, 0),
+                    )
+                    for project in projects
                 ]
             }
         )
@@ -1168,8 +1185,9 @@ def create_app(
             return _error(str(error), 400)
         project = Project(ProjectId(f"project-{uuid4().hex[:12]}"), name[:80])
         await session.state_store.save_project(project)
-        # Recorded rather than planned, so it owns no conversation to link to.
-        return JSONResponse(_project_json(project, ()), status_code=201)
+        # Recorded rather than planned, so it owns no conversation to link to
+        # and nothing has been planned under it yet.
+        return JSONResponse(_project_json(project, (), milestones=0), status_code=201)
 
     async def archive_project(request: Request) -> JSONResponse:
         """Put a project away, or take it back out, from one pair of routes.
@@ -1184,14 +1202,19 @@ def create_app(
         archived = request.url.path.rsplit("/", 1)[-1] == "archive"
         project = replace(project, archived=archived)
         await session.state_store.save_project(project)
-        # An archived project keeps its plan: restoring puts the link back
-        # rather than leaving a row that has forgotten where it went.
-        conversations = {
-            thread.instance_id
-            for thread in await service.list()
-            if not thread.archived
-        }
-        return JSONResponse(_project_json(project, conversations))
+        # An archived project keeps its plan: restoring puts the link and the
+        # milestones back rather than leaving a row that has forgotten where it
+        # went. The answer is the whole row the list would send -- counted the
+        # same way, so the two cannot drift -- and a client that redraws from it
+        # is not left with a project missing half itself.
+        counts = await session.state_store.count_milestones_by_project()
+        return JSONResponse(
+            _project_json(
+                project,
+                await open_conversations(),
+                milestones=counts.get(project_id, 0),
+            )
+        )
 
     async def list_project_milestones(request: Request) -> JSONResponse:
         project_id = ProjectId(request.path_params["project_id"])
@@ -1208,7 +1231,9 @@ def create_app(
         )
         return JSONResponse(
             {
-                "project": _project_json(project, ()),
+                # Linked to its plan like any other row: the milestones page
+                # this answers is where the way back to the conversation is.
+                "project": _project_json(project, await open_conversations()),
                 "milestones": [
                     _milestone_json(
                         milestone, by_milestone.get(milestone.milestone_id, ())
@@ -1694,6 +1719,7 @@ def create_app(
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),
                 Route("/plan", spa_page),
+                Route("/projects/{project_id}/milestones", spa_page),
             ]
         )
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
@@ -1737,12 +1763,19 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
 
 
 def _project_json(
-    project: Project, conversations: Container[AgentInstanceId]
+    project: Project,
+    conversations: Container[AgentInstanceId],
+    *,
+    milestones: int | None = None,
 ) -> dict[str, object]:
     """Render a project, linked to its plan when that conversation is open.
 
     `conversations` is required rather than defaulted: a caller that forgot it
     would quietly emit the linkless rows this link exists to replace.
+
+    `milestones` is how many the project has, for the callers that counted
+    them. Left out rather than reported as none by the ones that did not: a
+    zero here is a project with no plan, which is a thing the rail acts on.
     """
 
     result: dict[str, object] = {
@@ -1750,6 +1783,8 @@ def _project_json(
         "name": project.name,
         "archived": project.archived,
     }
+    if milestones is not None:
+        result["milestoneCount"] = milestones
     instance_id = instance_id_for_project(project.project_id)
     if instance_id is not None and instance_id in conversations:
         result["conversationUrl"] = f"/conversations/{quote(str(instance_id), safe='')}"

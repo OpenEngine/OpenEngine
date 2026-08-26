@@ -4,7 +4,7 @@ The adapter satisfies `engine.ports.StateStore` structurally, but its behavior
 and Alembic schema are placeholders until PostgreSQL support is needed.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
@@ -74,6 +74,9 @@ class PostgresStateStore:
     async def list_milestones(
         self, project_id: ProjectId | None = None
     ) -> Sequence[Milestone]:
+        raise NotImplementedError("Milestone reads land with the state-store ticket")
+
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
         raise NotImplementedError("Milestone reads land with the state-store ticket")
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
