@@ -942,6 +942,29 @@ def create_app(
             else None
         )
 
+    async def workflow_runner_for(state: RunState) -> str:
+        """Use the active conversation's runner before the run's initial choice."""
+
+        instances = await session.state_store.list_instances(
+            workflow_run_id=state.run_id
+        )
+        current = next(
+            (
+                instance
+                for instance in instances
+                if instance.workflow_step_id == state.current_step_id
+            ),
+            None,
+        )
+        previous = next((instance for instance in instances if instance.runner), None)
+        return (
+            current.runner
+            if current is not None and current.runner
+            else state.runner_name
+            or (previous.runner if previous is not None else "")
+            or workflow_executor.default_runner
+        )
+
     async def restore_agent_steps() -> None:
         """Restart agent commands whose process-local dispatch was lost."""
         for state in await session.state_store.list_runs():
@@ -951,33 +974,7 @@ def create_app(
                 or state.run_id in workflow_tasks
             ):
                 continue
-            instances = await session.state_store.list_instances(
-                workflow_run_id=state.run_id
-            )
-            current = next(
-                (
-                    instance
-                    for instance in instances
-                    if instance.workflow_step_id == state.current_step_id
-                ),
-                None,
-            )
-            previous = next(
-                (
-                    instance
-                    for instance in instances
-                    if instance.runner
-                ),
-                None,
-            )
-            fallback_runner = (
-                current.runner
-                if current is not None and current.runner
-                else previous.runner
-                if previous is not None
-                else workflow_executor.default_runner
-            )
-            runner_name = state.runner_name or fallback_runner
+            runner_name = await workflow_runner_for(state)
             track_workflow(
                 state.run_id,
                 asyncio.create_task(
@@ -1025,6 +1022,45 @@ def create_app(
         assert thread.workflow_step_id is not None
         await workflow_executor.pause_agent_step(
             thread.workflow_run_id, thread.workflow_step_id
+        )
+
+    async def switch_workflow_runner(thread: ChatThread) -> None:
+        """Restart an active workflow turn on its conversation's new runner."""
+
+        assert thread.workflow_run_id is not None
+        task = workflow_tasks.get(thread.workflow_run_id)
+        if task is None or task.done():
+            return
+        state = await session.state_store.load(thread.workflow_run_id)
+        if (
+            state is None
+            or state.phase is not RunPhase.RUNNING_AGENT
+            or state.current_step_id != thread.workflow_step_id
+        ):
+            return
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        # The completed turn may have advanced to another agent between the
+        # first state read and cancellation. Resume whichever conversation is
+        # now current, without applying this conversation's choice to another.
+        state = await session.state_store.load(thread.workflow_run_id)
+        if (
+            state is None
+            or state.phase is not RunPhase.RUNNING_AGENT
+            or state.agent_paused
+        ):
+            return
+        runner_name = await workflow_runner_for(state)
+        track_workflow(
+            state.run_id,
+            asyncio.create_task(
+                workflow_executor.resume_agent_step(
+                    state.run_id, runner_name=runner_name
+                )
+            ),
         )
 
     async def continue_workflow(thread: ChatThread, text: str) -> None:
@@ -1396,6 +1432,13 @@ def create_app(
             else:
                 title = None
         runner = str(body["runner"]) if "runner" in body else None
+        if (
+            runner is not None
+            and thread.workflow_run_id is not None
+            and runner not in workflow_executor.runners
+        ):
+            return _error(f"unknown workflow runner: {runner}", 400)
+        runner_changed = runner is not None and runner != thread.runner
         auto_approve = None
         if "autoApprove" in body:
             if not isinstance(body["autoApprove"], bool):
@@ -1410,6 +1453,8 @@ def create_app(
             )
         except ValueError as error:
             return _error(str(error), 400)
+        if runner_changed and thread.workflow_run_id is not None:
+            await switch_workflow_runner(thread)
         return JSONResponse(_thread_json(thread))
 
     async def archive_thread(request: Request) -> JSONResponse:
@@ -1544,7 +1589,11 @@ def create_app(
         try:
             if thread.workflow_run_id is not None:
                 if runner is not None and runner != thread.runner:
-                    return _error("a workflow run chooses its runner", 400)
+                    if runner not in workflow_executor.runners:
+                        return _error(f"unknown workflow runner: {runner}", 400)
+                    thread = await service.update_metadata(
+                        instance_id, runner=runner
+                    )
                 await continue_workflow(thread, text)
                 return StreamingResponse(
                     stream_workflow_conversation(instance_id, thread.workflow_run_id),

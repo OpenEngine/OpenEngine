@@ -2568,6 +2568,89 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
     assert [instance.runner for instance in instances] == ["claude", "claude"]
 
 
+def test_active_implementation_and_review_conversations_can_switch_runners() -> None:
+    store = InMemoryStateStore()
+    original_implementer = BlockingWorkflowRunner()
+    replacement_implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implemented with the replacement runner.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    original_reviewer = BlockingWorkflowRunner()
+    replacement_reviewer = _reviewer(summary="Reviewed with the replacement runner.")
+    app = _workflow_app(
+        store,
+        original_implementer,
+        workflow_runners={
+            "codex": original_implementer,
+            "claude": replacement_implementer,
+        },
+        reviewers={
+            "codex": original_reviewer,
+            "claude": replacement_reviewer,
+        },
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Switch both workflow conversations.",
+                    "repository": "acme/api",
+                    "runner": "codex",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(original_implementer.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            implementation_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            implementation = await client.patch(
+                f"/api/threads/{implementation_id}", json={"runner": "claude"}
+            )
+            await asyncio.wait_for(original_reviewer.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            review_id = detail.json()["steps"][1]["agentInstanceId"]
+            review = await client.patch(
+                f"/api/threads/{review_id}", json={"runner": "claude"}
+            )
+            completed = await _await_phase(client, run_id, "awaiting_human_review")
+            instances = [
+                await store.load_instance(AgentInstanceId(instance_id))
+                for instance_id in (implementation_id, review_id)
+            ]
+            return implementation, review, completed, instances
+
+    implementation, review, completed, instances = asyncio.run(scenario())
+
+    assert implementation.status_code == 200
+    assert implementation.json()["runner"] == "claude"
+    assert review.status_code == 200
+    assert review.json()["runner"] == "claude"
+    assert completed.json()["steps"][0]["summary"] == (
+        "Implemented with the replacement runner."
+    )
+    assert completed.json()["steps"][1]["summary"] == (
+        "Reviewed with the replacement runner."
+    )
+    assert original_implementer.workflow_attempts == 1
+    assert original_reviewer.workflow_attempts == 1
+    assert len(replacement_implementer.seen) == 1
+    assert len(replacement_reviewer.seen) == 1
+    assert all(
+        instance is not None and instance.runner == "claude"
+        for instance in instances
+    )
+
+
 @pytest.mark.parametrize(
     "body",
     [

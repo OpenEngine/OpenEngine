@@ -187,7 +187,10 @@ export function completeHumanReview(
   });
 }
 
-/** Choose the runner that answers this conversation from now on. */
+/** Choose the runner that answers this conversation from now on.
+ *
+ * Active workflow conversations restart their current turn on the new runner.
+ */
 export function setThreadRunner(threadId: string, runner: string): Promise<ApiThread> {
   return api<ApiThread>(`/api/threads/${threadId}`, {
     method: "PATCH",

@@ -5,7 +5,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from engine.core import decide
-from engine.core.workflow_interpreter import agent_run_id, current_agent_command
+from engine.core.workflow_interpreter import (
+    agent_instance_id,
+    agent_run_id,
+    current_agent_command,
+)
 from engine.domain import (
     AgentRunId,
     AgentStep,
@@ -253,12 +257,15 @@ class WorkflowExecutor:
                 raise WorkflowExecutionError(
                     f"agent step not found: {command.step.step_id}"
                 )
+            selected_name = await self._runner_name_for_step(
+                state, step, runner_name
+            )
             outcome = await self._run_step(
                 state,
                 command,
                 definition=definition,
-                runner=self._runner_for(step, runner_name),
-                runner_name=runner_name,
+                runner=self._runner_for(step, selected_name),
+                runner_name=selected_name,
                 continuation=(
                     command.prompt
                     if command.agent_run_id
@@ -270,6 +277,21 @@ class WorkflowExecutor:
                 return state
             state, commands = outcome.state, outcome.commands
         return state
+
+    async def _runner_name_for_step(
+        self, state: RunState, step: AgentStep, fallback: str
+    ) -> str:
+        """Prefer a step conversation's choice without leaking it to the next step."""
+
+        instance = await self._capabilities.state_store.load_instance(
+            agent_instance_id(state.run_id, step.step_id)
+        )
+        selected = (
+            instance.runner
+            if instance is not None and instance.runner
+            else state.runner_name or fallback
+        )
+        return self._runner_name(selected, state)
 
     async def _name_workflow(
         self,
