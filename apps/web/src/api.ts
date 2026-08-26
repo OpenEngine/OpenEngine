@@ -80,6 +80,14 @@ export function projectMilestonesUrl(projectId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/milestones`;
 }
 
+/** One milestone's own page: the workstreams under it and the tasks in each.
+ *
+ *  Nested under the plan it belongs to rather than named by its id alone: the
+ *  page is read as part of a project, and the way back out is the plan. */
+export function milestoneDetailsUrl(projectId: string, milestoneId: string): string {
+  return `${projectMilestonesUrl(projectId)}/${encodeURIComponent(milestoneId)}`;
+}
+
 export type ApiWorkstream = {
   workstreamId: string;
   name: string;

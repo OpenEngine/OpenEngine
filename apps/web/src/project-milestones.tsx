@@ -8,7 +8,7 @@
 
 import { useMemo } from "react";
 
-import type { ApiMilestone } from "./api";
+import { milestoneDetailsUrl, type ApiMilestone } from "./api";
 import {
   MilestoneTimelineVisual,
   orderMilestones,
@@ -18,11 +18,13 @@ import {
 function MilestoneCard({
   milestone,
   names,
+  projectId,
 }: {
   milestone: ApiMilestone;
   /** Every milestone by id, so a dependency reads as the goal it names rather
    *  than as the id the planner recorded. */
   names: Map<string, string>;
+  projectId: string;
 }) {
   const dependencies = milestone.dependencies.map((id) => names.get(id) ?? id);
   const titleId = `milestone-card-${milestone.milestoneId}`;
@@ -50,7 +52,9 @@ function MilestoneCard({
         >
           {milestone.workstreams.map((workstream) => (
             <li key={workstream.workstreamId}>
-              <strong>{workstream.name}</strong>
+              <a href={milestoneDetailsUrl(projectId, milestone.milestoneId)}>
+                <strong>{workstream.name}</strong>
+              </a>
               {workstream.scope && <span>{workstream.scope}</span>}
             </li>
           ))}
@@ -106,7 +110,7 @@ export function ProjectMilestonesPage({ projectId }: { projectId: string }) {
             className="milestone-viewport milestone-page-map"
             aria-label="Milestone timeline"
           >
-            <MilestoneTimelineVisual milestones={milestones} />
+            <MilestoneTimelineVisual milestones={milestones} projectId={projectId} />
           </section>
           {ordered.length > 0 && (
             <div className="cards">
@@ -115,6 +119,7 @@ export function ProjectMilestonesPage({ projectId }: { projectId: string }) {
                   key={milestone.milestoneId}
                   milestone={milestone}
                   names={names}
+                  projectId={projectId}
                 />
               ))}
             </div>

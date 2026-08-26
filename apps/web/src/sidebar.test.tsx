@@ -203,6 +203,31 @@ describe("Sidebar", () => {
     expect(within(body("Projects")).getByText("Engine roadmap")).toBeInTheDocument();
   });
 
+  it("marks a project on a milestone child without calling the parent link current", () => {
+    const { container } = render(
+      <Sidebar
+        projects={[
+          {
+            projectId: "project-1",
+            name: "Engine roadmap",
+            archived: false,
+            conversationUrl: "/conversations/agi-1",
+            milestoneCount: 2,
+          },
+        ]}
+        runs={[]}
+        initialSection="projects"
+        activeProjectId="project-1"
+        activeMilestonesPage={false}
+      />,
+    );
+
+    expect(container.querySelector(".rail-item")).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Milestones · 2" })).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+
   /** A project's only page is the planning conversation it was named after, so
    *  the row is a link to it and the rail marks the one you are reading. */
   it("opens a project's planning conversation and marks the one on screen", () => {

@@ -76,7 +76,7 @@ describe("milestone timeline", () => {
 
   it("shows milestone names, descriptions, and dependency lines", () => {
     const { container } = render(
-      <MilestoneTimelineVisual milestones={[launch, foundation]} />,
+      <MilestoneTimelineVisual milestones={[launch, foundation]} projectId={project.projectId} />,
     );
 
     expect(screen.getByText("Foundation")).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("milestone timeline", () => {
       dependencies: index === 0 ? [foundation.milestoneId] : [`later-${index - 1}`],
     }));
     const { container } = render(
-      <MilestoneTimelineVisual milestones={[foundation, ...later]} />,
+      <MilestoneTimelineVisual milestones={[foundation, ...later]} projectId={project.projectId} />,
     );
     const map = container.querySelector<HTMLElement>(".milestone-map")!;
     const nodes = container.querySelectorAll<HTMLElement>(".milestone-node");
@@ -109,7 +109,9 @@ describe("milestone timeline", () => {
   });
 
   it("lists each milestone's workstreams beneath it, in the order the API sent", () => {
-    render(<MilestoneTimelineVisual milestones={[staffed, launch]} />);
+    render(
+      <MilestoneTimelineVisual milestones={[staffed, launch]} projectId={project.projectId} />,
+    );
 
     const list = screen.getByRole("list", { name: "Foundation" });
     const items = screen.getAllByRole("listitem");
@@ -127,21 +129,41 @@ describe("milestone timeline", () => {
   });
 
   it("gives a workstream's scope the tooltip the description already uses", () => {
-    render(<MilestoneTimelineVisual milestones={[foundation]} />);
+    render(<MilestoneTimelineVisual milestones={[foundation]} projectId={project.projectId} />);
 
     const item = screen.getByRole("listitem");
     const scope = screen.getByRole("tooltip", { name: "Persist the plan." });
 
-    // Reachable by keyboard, not only by a hover a touch device cannot make.
-    expect(item).toHaveAttribute("tabindex", "0");
-    expect(item).toHaveAccessibleDescription("Persist the plan.");
+    // Reachable by keyboard, not only by a hover a touch device cannot make --
+    // and by the link's own tab stop rather than a second one on the bullet
+    // carrying it, which would stop twice on the one workstream.
+    expect(item).not.toHaveAttribute("tabindex");
+    expect(screen.getByRole("link", { name: "Data model" })).toHaveAccessibleDescription(
+      "Persist the plan.",
+    );
     expect(item).toContainElement(scope);
     expect(item).not.toHaveAttribute("title");
   });
 
+  it("opens the milestone page from any workstream hanging off it", () => {
+    render(
+      <MilestoneTimelineVisual milestones={[staffed, launch]} projectId={other.projectId} />,
+    );
+
+    // Every bullet under one goal leads to that goal's page: the page is where
+    // the workstreams are told apart, so the milestone is what a click needs.
+    expect(
+      screen.getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([
+      ["Data model", "/projects/project%202/milestones/foundation"],
+      ["Timeline view", "/projects/project%202/milestones/foundation"],
+      ["Planner tools", "/projects/project%202/milestones/foundation"],
+    ]);
+  });
+
   it("hangs a tooltip off the window, above what it describes", async () => {
     const user = userEvent.setup();
-    render(<MilestoneTimelineVisual milestones={[foundation]} />);
+    render(<MilestoneTimelineVisual milestones={[foundation]} projectId={project.projectId} />);
     const item = screen.getByRole("listitem");
     const scope = screen.getByRole("tooltip", { name: "Persist the plan." });
     // jsdom lays nothing out, so the bullet is handed the box a browser would
@@ -160,7 +182,7 @@ describe("milestone timeline", () => {
 
   it("keeps a tooltip on a milestone at the window's edge inside it", async () => {
     const user = userEvent.setup();
-    render(<MilestoneTimelineVisual milestones={[foundation]} />);
+    render(<MilestoneTimelineVisual milestones={[foundation]} projectId={project.projectId} />);
     const node = screen.getByText("Foundation").closest(".milestone-node") as HTMLElement;
     const tooltip = screen.getByRole("tooltip", { name: "Build the shared project model." });
     // Scrolled far enough right that the node itself hangs off the window.
@@ -176,7 +198,9 @@ describe("milestone timeline", () => {
   });
 
   it("grows the map so the deepest node's bullets stay inside it", () => {
-    const { container, rerender } = render(<MilestoneTimelineVisual milestones={[staffed]} />);
+    const { container, rerender } = render(
+      <MilestoneTimelineVisual milestones={[staffed]} projectId={project.projectId} />,
+    );
     const height = () =>
       Number.parseFloat(container.querySelector<HTMLElement>(".milestone-map")!.style.minHeight);
 
@@ -186,12 +210,12 @@ describe("milestone timeline", () => {
     expect(height()).toBeGreaterThanOrEqual(83 + 66 + 9 + 3 * 15 + 2 * 4);
 
     // A plan without workstreams is left on the floor the map already had.
-    rerender(<MilestoneTimelineVisual milestones={[launch]} />);
+    rerender(<MilestoneTimelineVisual milestones={[launch]} projectId={project.projectId} />);
     expect(height()).toBe(180);
   });
 
   it("renders an empty state without inventing milestones", () => {
-    render(<MilestoneTimelineVisual milestones={[]} />);
+    render(<MilestoneTimelineVisual milestones={[]} projectId={project.projectId} />);
 
     expect(
       screen.getByText("No milestones have been added to this project yet."),

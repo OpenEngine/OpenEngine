@@ -1774,6 +1774,7 @@ def create_app(
                 Route("/conversations/{thread_id}", spa_page),
                 Route("/plan", spa_page),
                 Route("/projects/{project_id}/milestones", spa_page),
+                Route("/projects/{project_id}/milestones/{milestone_id}", spa_page),
             ]
         )
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))

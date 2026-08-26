@@ -25,10 +25,20 @@ export function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
 }
 
+/** Whether a run has stopped moving.
+ *
+ *  The engine's own terminal test (`RunState.is_terminal`): every other phase
+ *  is a run with somewhere left to go, including one parked on a human review.
+ *  Not to be confused with `IN_PROGRESS_PHASES`, which is narrower on purpose
+ *  -- it answers whether a run detail page should keep polling. */
+export function runFinished(run: ApiWorkflowRun) {
+  return run.phase === "succeeded" || run.phase === "failed";
+}
+
 /** Prefer the workflow's vocabulary while a run is active. The engine phase
  *  still drives behavior, but an operator cares which step is doing the work. */
 export function runStatusLabel(run: ApiWorkflowRun) {
-  if (run.phase !== "succeeded" && run.phase !== "failed") {
+  if (!runFinished(run)) {
     const current = run.steps.find((step) => step.stepId === run.currentStepId);
     if (current) return current.name;
   }
@@ -52,6 +62,10 @@ export function conversationCount(run: ApiWorkflowRun) {
 export function useRuns() {
   const [runs, setRuns] = useState<ApiWorkflowRun[]>([]);
   const [error, setError] = useState("");
+  // An empty list means "nothing has been run" only once a poll has answered.
+  // Until then it is what the state started as, and a page that reads this list
+  // rather than owning it cannot tell the two apart without being told.
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
@@ -61,6 +75,7 @@ export function useRuns() {
           if (cancelled) return;
           setRuns(value.runs);
           setError("");
+          setLoaded(true);
         })
         .catch((reason: Error) => {
           if (!cancelled) setError(reason.message);
@@ -75,7 +90,7 @@ export function useRuns() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, []);
-  return { runs, error };
+  return { runs, error, loaded };
 }
 
 export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: string }) {

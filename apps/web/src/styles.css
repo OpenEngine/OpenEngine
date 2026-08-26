@@ -584,10 +584,13 @@ select:disabled { cursor: default; }
   /* A workstream name can be machine-generated: break one rather than let it
      run over the milestone 210px to the right. */
   overflow-wrap: anywhere;
-  outline: 0;
 }
 .milestone-workstream::before { content: "• "; }
-.milestone-workstream:focus-visible { color: var(--ink); }
+/* The name is the way into the milestone, but it is still a bullet in a list
+   170px wide: it reads as one until it is pointed at. */
+.milestone-workstream a { color: inherit; text-decoration: none; }
+.milestone-workstream a:hover { color: var(--ink); text-decoration: underline; }
+.milestone-workstream:has(a:focus-visible) { color: var(--ink); }
 .milestone-tooltip {
   /* Above what it describes, and measured against the window by `pinTooltip`
      rather than against the node. The band above a node belongs to the map,
@@ -619,7 +622,7 @@ select:disabled { cursor: default; }
 .milestone-node:hover:not(:has(.milestone-workstream:hover)) > .milestone-tooltip,
 .milestone-node:focus-visible > .milestone-tooltip,
 .milestone-workstream:hover > .milestone-tooltip,
-.milestone-workstream:focus-visible > .milestone-tooltip { visibility: visible; opacity: 1; }
+.milestone-workstream:has(a:focus-visible) > .milestone-tooltip { visibility: visible; opacity: 1; }
 .milestone-empty {
   display: grid;
   place-items: center;
@@ -651,8 +654,43 @@ select:disabled { cursor: default; }
   border-top: 1px solid var(--rule);
 }
 .milestone-card-workstreams li { display: grid; gap: 3px; }
+.milestone-card-workstreams a { color: inherit; text-decoration: none; }
+.milestone-card-workstreams a:hover,
+.milestone-card-workstreams a:focus-visible { text-decoration: underline; }
 .milestone-card-workstreams strong { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 .milestone-card-workstreams span { color: var(--muted); font: 500 12px/1.45 var(--mono); }
+
+/* One milestone's own page: a card per workstream, and in it the tasks started
+   under that heading. */
+.workstream-card { grid-template-rows: none; gap: 12px; align-content: start; }
+.workstream-card .lede { font-size: 14px; }
+.chip-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.workstream-tasks {
+  display: grid;
+  gap: 2px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+.workstream-tasks a {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 7px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.workstream-tasks a:hover .workstream-task-name { text-decoration: underline; }
+.workstream-tasks li + li { border-top: 1px solid var(--rule); }
+.workstream-task-name { font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.workstream-task-stage {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font: 500 11px/1.4 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.workstream-task-stage[data-accent="flame"] { color: var(--flame-deep); }
 
 .welcome { padding: clamp(44px, 8vh, 96px) var(--gutter) 40px; }
 .welcome-copy { display: grid; gap: 14px; max-width: 640px; }

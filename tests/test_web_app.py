@@ -3022,6 +3022,34 @@ def test_new_workflow_frontend_route_serves_the_application(tmp_path) -> None:
     assert "workflow application" in response.text
 
 
+def test_milestone_frontend_routes_serve_the_application(tmp_path) -> None:
+    """A plan's pages are reached by URL as well as by click.
+
+    Both are deep links the client routes itself: the plan, and one goal off it
+    opened from a workstream on the timeline. Without a route apiece, a refresh
+    or a pasted link falls through to the static mount and 404s.
+    """
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<main>workflow application</main>")
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                await client.get("/projects/project-42/milestones"),
+                await client.get("/projects/project-42/milestones/milestone-7"),
+            )
+
+    plan, milestone = asyncio.run(scenario())
+
+    assert plan.status_code == 200
+    assert "workflow application" in plan.text
+    assert milestone.status_code == 200
+    assert "workflow application" in milestone.text
+
+
 class ConversationWorkspaces:
     """A provider whose checkouts come and go, as real ones do."""
 
