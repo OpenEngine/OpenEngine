@@ -7,11 +7,10 @@ import {
 } from "./api";
 
 const NODE_GAP = 210;
-const GRAPH_WIDTH = 1000;
 const MIN_GRAPH_WIDTH = 640;
-const TOOLTIP_EDGE_SPACE = 152;
-// Keep a 280px tooltip plus a 12px gutter inside the smallest graph.
-const SIDE_PADDING = (TOOLTIP_EDGE_SPACE / MIN_GRAPH_WIDTH) * GRAPH_WIDTH;
+// Keep the first node at the same inset even when the map grows wider than the
+// viewport. A proportional inset leaves the visible start of a long plan blank.
+const MAP_SIDE_PADDING = 152;
 const NODE_Y = 96;
 // A node is out of flow, so the map cannot measure the stack inside it. These
 // mirror `.milestone-node` in styles.css so the map can be told how far the
@@ -106,9 +105,7 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
       new Map(
         ordered.map((milestone, index) => [
           milestone.milestoneId,
-          ordered.length === 1
-            ? GRAPH_WIDTH / 2
-            : SIDE_PADDING + index * ((GRAPH_WIDTH - SIDE_PADDING * 2) / (ordered.length - 1)),
+          MAP_SIDE_PADDING + index * NODE_GAP,
         ]),
       ),
     [ordered],
@@ -119,8 +116,7 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
   );
   const minWidth = Math.max(
     MIN_GRAPH_WIDTH,
-    (Math.max(0, ordered.length - 1) * NODE_GAP * GRAPH_WIDTH) /
-      (GRAPH_WIDTH - SIDE_PADDING * 2),
+    MAP_SIDE_PADDING * 2 + Math.max(0, ordered.length - 1) * NODE_GAP,
   );
 
   if (!ordered.length)
@@ -130,9 +126,7 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
     <div className="milestone-map" style={{ minWidth, minHeight: mapMinHeight(ordered) }}>
       <svg
         className="milestone-lines"
-        viewBox={`0 0 ${GRAPH_WIDTH} 180`}
         aria-hidden="true"
-        preserveAspectRatio="none"
       >
         <defs>
           <marker
@@ -177,7 +171,7 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
           <div
             key={milestone.milestoneId}
             className="milestone-node"
-            style={{ left: `${positions.get(milestone.milestoneId)! / 10}%` }}
+            style={{ left: positions.get(milestone.milestoneId) }}
             tabIndex={0}
             aria-describedby={milestone.description ? tooltipId : undefined}
             onMouseEnter={pinTooltip}
