@@ -30,7 +30,7 @@ export function phaseLabel(value: string) {
  *  The engine's own terminal test (`RunState.is_terminal`): every other phase
  *  is a run with somewhere left to go, including one parked on a human review.
  *  Not to be confused with `IN_PROGRESS_PHASES`, which is narrower on purpose
- *  -- it answers whether a run detail page should keep polling. */
+ *  -- it answers whether the engine is working on the run right now. */
 export function runFinished(run: ApiWorkflowRun) {
   return run.phase === "succeeded" || run.phase === "failed";
 }
@@ -428,7 +428,12 @@ function HumanReviewDecision({
 
 function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   return (
-    <article className={`step ${current ? "step-current" : ""}`}>
+    <article
+      className={`step ${current ? "step-current" : ""}`}
+      // Work happening now, marked on the box rather than only in the chip that
+      // names it -- the same thing the rail's live pip says about the run.
+      data-live={step.status === "in_progress" || undefined}
+    >
       <div className="step-rail" aria-hidden="true" />
       <div className="step-body">
         <header>
@@ -479,18 +484,22 @@ export function RunDetailPage({ runId }: { runId: string }) {
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
+    // Kept up even once the run has finished, the way the rail's list is: an
+    // editable step reopens when its conversation is written to, so a page that
+    // stopped reading at "succeeded" would go on saying so while the
+    // implementation it names is working again.
     const load = () => {
       api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`)
         .then((value) => {
           if (cancelled) return;
           setRun(value);
           setError("");
-          if (IN_PROGRESS_PHASES.has(value.phase)) {
-            timer = window.setTimeout(load, 1000);
-          }
         })
         .catch((reason: Error) => {
           if (!cancelled) setError(reason.message);
+        })
+        .finally(() => {
+          if (!cancelled) timer = window.setTimeout(load, 1000);
         });
     };
     load();

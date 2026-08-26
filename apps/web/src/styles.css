@@ -1167,6 +1167,14 @@ select:disabled { cursor: default; }
   border: 1px solid var(--rule);
 }
 .step-current .step-body { background: var(--white); border-color: var(--flame); }
+/* The one step being worked on, said the way the rail's live pip says it: a
+   box that glows rather than one merely outlined, so a run reopened from its
+   conversation reads as in progress without being read. */
+.step[data-live] .step-body {
+  border-color: var(--flame);
+  box-shadow: 0 0 10px var(--flame);
+  animation: glow 1.6s ease-in-out infinite;
+}
 .step-body > header { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; justify-content: space-between; }
 .step-body h2 { margin-top: 6px; font-size: 19px; font-weight: 700; letter-spacing: -.02em; }
 .step-summary { margin-top: 14px; color: var(--ink-soft); font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
@@ -1234,6 +1242,7 @@ select:disabled { cursor: default; }
 .state-inline { padding: 30px var(--gutter); color: var(--muted); font: 500 13px/1.5 var(--mono); }
 
 @keyframes pip { 50% { opacity: .3; } }
+@keyframes glow { 50% { box-shadow: 0 0 20px var(--flame); } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
