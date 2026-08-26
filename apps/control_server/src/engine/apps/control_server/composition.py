@@ -43,12 +43,15 @@ class Settings:
 
 def build_capabilities(settings: Settings) -> Capabilities:
     """Wire every port to its concrete implementation."""
+    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
-        source_control=GitHubSourceControl(settings.github_token),
+        source_control=GitHubSourceControl(
+            settings.github_token, workspace_provider=workspace_provider
+        ),
         agent_runner=CodexAgentRunner(attribution=settings.engine_config.attribution),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
-        workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
+        workspace_provider=workspace_provider,
         state_store=PostgresStateStore(settings.postgres_dsn),
     )
 

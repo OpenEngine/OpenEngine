@@ -10,8 +10,11 @@ from engine.domain import (
     StepCompleted,
     StepId,
     StepSpec,
+    WorkspaceId,
 )
+from engine.ports import GitResult
 from engine.runtime.terminal_mcp import (
+    DEFAULT_BASE_REF,
     TerminalMcpBroker,
     TerminalResultRegistry,
     _mcp_response,
@@ -237,7 +240,7 @@ def test_reviewer_mcp_surface_includes_repo_comment_tool() -> None:
             1,
             "unused",
             {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"},
-            repo_comments=True,
+            repository_tools=("add_comment",),
         )
     )
 
@@ -267,7 +270,7 @@ def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
             step=STEP,
             registry=TerminalResultRegistry(),
         )
-        broker.enable_repo_comments(source_control)  # type: ignore[arg-type]
+        broker.enable_repository_tools(source_control, ("add_comment",))  # type: ignore[arg-type]
         broker._result = asyncio.get_running_loop().create_future()
         request = {
             "token": broker._token,
@@ -300,6 +303,200 @@ def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
                 17,
             )
         ]
+
+    asyncio.run(scenario())
+
+
+class RecordingRepository:
+    """A source control that answers instead of touching a repository."""
+
+    def __init__(self, exit_code: int = 0, stdout: str = "") -> None:
+        self.git_calls: list[tuple[object, tuple[str, ...]]] = []
+        self.reviews: list[tuple[object, ...]] = []
+        self._exit_code = exit_code
+        self._stdout = stdout
+
+    async def run_git(self, workspace_id, arguments) -> GitResult:
+        self.git_calls.append((workspace_id, tuple(arguments)))
+        return GitResult(
+            exit_code=self._exit_code,
+            stdout=self._stdout,
+            stderr="" if not self._exit_code else "fatal: no",
+        )
+
+    async def request_review(self, workspace_id, branch, base_ref, title, body) -> str:
+        self.reviews.append((workspace_id, branch, base_ref, title, body))
+        return "https://github.com/acme/api/pull/7"
+
+
+def _repository_broker(source_control: object, *names: str) -> TerminalMcpBroker:
+    broker = TerminalMcpBroker(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("agent-run-1"),
+        step=STEP,
+        registry=TerminalResultRegistry(),
+    )
+    broker.enable_repository_tools(
+        source_control,  # type: ignore[arg-type]
+        names,
+        WorkspaceId("ws-under-test"),
+    )
+    return broker
+
+
+def test_repository_tools_are_listed_only_when_the_step_holds_them() -> None:
+    response = asyncio.run(
+        _mcp_response(
+            "127.0.0.1",
+            1,
+            "unused",
+            {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"},
+            repository_tools=("git_subcommand", "open_pull_request"),
+        )
+    )
+
+    assert response is not None
+    tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+    assert "add_comment" not in tools
+    git = tools["git_subcommand"]
+    assert git["inputSchema"]["properties"]["arguments"] == {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 1,
+    }
+    assert tools["open_pull_request"]["inputSchema"]["required"] == [
+        "branch",
+        "title",
+        "body",
+    ]
+
+
+def test_git_runs_against_the_step_workspace_and_returns_what_it_printed() -> None:
+    """The model names the command; the broker names the workspace.
+
+    A model that could pass a workspace id could name somebody else's, so the
+    one the step is running in is bound when the tool is enabled and never
+    appears in the tool's schema.
+    """
+
+    async def scenario() -> None:
+        source_control = RecordingRepository(stdout="On branch agent/greeting")
+        broker = _repository_broker(source_control, "git_subcommand")
+        async with broker:
+            response = await broker._submit(
+                _request(
+                    broker,
+                    "git-1",
+                    "git_subcommand",
+                    {"arguments": ["status", "--short", "--branch"]},
+                )
+            )
+
+        assert response == {
+            "ok": True,
+            "acknowledgement": "git ran",
+            "output": "On branch agent/greeting",
+        }
+        assert source_control.git_calls == [
+            (WorkspaceId("ws-under-test"), ("status", "--short", "--branch"))
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_failing_git_command_is_reported_with_what_git_said() -> None:
+    async def scenario() -> None:
+        broker = _repository_broker(
+            RecordingRepository(exit_code=128), "git_subcommand"
+        )
+        async with broker:
+            response = await broker._submit(
+                _request(broker, "git-1", "git_subcommand", {"arguments": ["push"]})
+            )
+
+        assert response["ok"] is False
+        assert "git exited 128" in str(response["error"])
+        assert "fatal: no" in str(response["error"])
+
+    asyncio.run(scenario())
+
+
+def test_a_repository_tool_the_step_was_not_granted_is_refused() -> None:
+    """Serving is per step, so holding one tool is not holding the rest."""
+
+    async def scenario() -> None:
+        source_control = RecordingRepository()
+        broker = _repository_broker(source_control, "git_subcommand")
+        async with broker:
+            response = await broker._submit(
+                _request(
+                    broker,
+                    "pr-1",
+                    "open_pull_request",
+                    {
+                        "branch": "agent/greeting",
+                        "title": "feat: greet",
+                        "body": "Body.",
+                    },
+                )
+            )
+
+        assert response["ok"] is False
+        assert "not enabled" in str(response["error"])
+        assert source_control.reviews == []
+
+    asyncio.run(scenario())
+
+
+def test_a_pull_request_url_reaches_the_model_through_the_bridge() -> None:
+    """A bare "accepted" would leave the step guessing at its own output."""
+
+    async def scenario() -> None:
+        source_control = RecordingRepository()
+        broker = _repository_broker(source_control, "open_pull_request")
+        async with broker:
+            config = broker.config
+            host = config.args[config.args.index("--host") + 1]
+            port = int(config.args[config.args.index("--port") + 1])
+            token = config.args[config.args.index("--token") + 1]
+            response = await _mcp_response(
+                host,
+                port,
+                token,
+                {
+                    "jsonrpc": "2.0",
+                    "id": "call-1",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "open_pull_request",
+                        "arguments": {
+                            "branch": "agent/greeting",
+                            "title": "feat: greet",
+                            "body": "Body.",
+                        },
+                    },
+                },
+                repository_tools=("open_pull_request",),
+            )
+
+        assert response is not None
+        url = "https://github.com/acme/api/pull/7"
+        assert response["result"]["content"] == [{"type": "text", "text": url}]
+        assert response["result"]["structuredContent"] == {
+            "accepted": True,
+            "output": url,
+        }
+        # The base nobody named, rather than nothing at all.
+        assert source_control.reviews == [
+            (
+                WorkspaceId("ws-under-test"),
+                "agent/greeting",
+                DEFAULT_BASE_REF,
+                "feat: greet",
+                "Body.",
+            )
+        ]
+        assert config.args.count("--repository-tool") == 1
 
     asyncio.run(scenario())
 

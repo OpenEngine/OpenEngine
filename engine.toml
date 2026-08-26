@@ -12,9 +12,20 @@ allow = [
   ".venv/bin/python -m pytest tests/**",
   "uv run pytest **",
   "mkdir **",
+]
+
+# Repository work has tools of its own -- `git_subcommand` and
+# `open_pull_request`, served to the steps granted them -- and these are the
+# shell spellings of the same operations. Denied rather than merely unlisted:
+# an agent holding both a tool and a shell that can do the same thing will use
+# whichever it thought of first, and only one of the two runs in the step's own
+# workspace or refuses to publish an internal branch.
+deny = [
   "git add **",
   "git commit **",
+  "git branch **",
   "git checkout **",
+  "git switch **",
   "git push **",
   "gh pr create **",
 ]

@@ -19,8 +19,9 @@ from engine.domain import (
     StepSpec,
     ToolCall,
     ToolSpec,
+    WorkspaceId,
 )
-from engine.ports import AgentTurn, McpServerConfig
+from engine.ports import AgentTurn, GitResult, McpServerConfig
 from engine.runtime import (
     Capabilities,
     Dispatcher,
@@ -102,7 +103,7 @@ async def _report_completion(mcp_server: McpServerConfig) -> None:
     The broker refuses to complete a commenting step that left no comment, so
     a runner that skips it is not modelling what a reviewer does.
     """
-    if "--repo-comments" in mcp_server.args:
+    if "add_comment" in mcp_server.args:
         commented = await _call_tool(
             mcp_server,
             "add_comment",
@@ -218,7 +219,7 @@ def test_a_workflow_step_is_told_every_tool_its_server_serves() -> None:
         assert instructions.startswith("Review the change.")
         assert GRANTED_TOOLS_NOTE in instructions
         listed = {line[2:] for line in instructions.splitlines() if line.startswith("- ")}
-        assert listed == set(terminal_tool_names(repo_comments=True))
+        assert listed == set(terminal_tool_names(("add_comment",)))
         assert "add_comment" in listed
 
     asyncio.run(scenario())
@@ -246,6 +247,73 @@ def test_a_grant_the_broker_cannot_serve_is_not_announced() -> None:
         assert "add_comment" not in instructions
         listed = {line[2:] for line in instructions.splitlines() if line.startswith("- ")}
         assert listed == set(terminal_tool_names())
+
+    asyncio.run(scenario())
+
+
+class GitSourceControl:
+    """Enough of the port for the broker to serve `git_subcommand`."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, tuple[str, ...]]] = []
+
+    async def run_git(self, workspace_id, arguments):
+        self.calls.append((workspace_id, tuple(arguments)))
+        return GitResult(exit_code=0, stdout="nothing to commit", stderr="")
+
+
+IMPLEMENTER = AgentProfile(
+    AgentId("coder"),
+    "Implement the change.",
+    capabilities=("git_subcommand",),
+)
+IMPLEMENTATION_COMMAND = replace(
+    COMMAND, profile=IMPLEMENTER, workspace_id=WorkspaceId("ws-1")
+)
+
+
+class GitCallingMcpRunner(CallingMcpRunner):
+    """Runs one git command before reporting the step complete."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.answers: list[dict[str, object]] = []
+
+    async def run_turn_with_mcp(
+        self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+    ):
+        self.answers.append(
+            await _call_tool(
+                mcp_server,
+                "git_subcommand",
+                {"arguments": ["status", "--porcelain"]},
+                request_id="tool-call-5",
+            )
+        )
+        return await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
+def test_git_reaches_the_step_own_workspace_without_the_model_naming_one() -> None:
+    """The step's workspace is bound by the dispatcher, not passed by the model.
+
+    It is the only reason the tool can be handed a whole `git` and still be
+    bounded: a model that could name a workspace could name another step's.
+    """
+
+    async def scenario() -> None:
+        runner = GitCallingMcpRunner()
+        source_control = GitSourceControl()
+
+        await Dispatcher(_capabilities(runner, source_control)).run_workflow_agent(
+            IMPLEMENTATION_COMMAND, runner=runner
+        )
+
+        assert source_control.calls == [
+            (WorkspaceId("ws-1"), ("status", "--porcelain"))
+        ]
+        assert runner.answers[0]["output"] == "nothing to commit"
 
     asyncio.run(scenario())
 
