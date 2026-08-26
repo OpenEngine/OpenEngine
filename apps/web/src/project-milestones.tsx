@@ -29,7 +29,11 @@ function MilestoneCard({
   const dependencies = milestone.dependencies.map((id) => names.get(id) ?? id);
   const titleId = `milestone-card-${milestone.milestoneId}`;
   return (
-    <article className="card milestone-card" aria-labelledby={titleId}>
+    <a
+      className="card milestone-card"
+      href={milestoneDetailsUrl(projectId, milestone.milestoneId)}
+      aria-labelledby={titleId}
+    >
       <div className="card-top">
         <span className="chip">
           {milestone.workstreams.length}{" "}
@@ -52,9 +56,7 @@ function MilestoneCard({
         >
           {milestone.workstreams.map((workstream) => (
             <li key={workstream.workstreamId}>
-              <a href={milestoneDetailsUrl(projectId, milestone.milestoneId)}>
-                <strong>{workstream.name}</strong>
-              </a>
+              <strong>{workstream.name}</strong>
               {workstream.scope && <span>{workstream.scope}</span>}
             </li>
           ))}
@@ -62,7 +64,7 @@ function MilestoneCard({
       ) : (
         <p className="micro">No workstreams yet.</p>
       )}
-    </article>
+    </a>
   );
 }
 
