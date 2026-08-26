@@ -13,7 +13,7 @@ source of truth then history cannot be resumed after a restart, inspected by a
 human, or moved to a different provider.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
 from engine.domain.agents import AgentInstance, AgentRun
@@ -83,6 +83,17 @@ class StateStore(Protocol):
         self, project_id: ProjectId | None = None
     ) -> Sequence[Milestone]:
         """Return milestones newest first, optionally for one project."""
+        ...
+
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
+        """Return how many milestones each project has, projects with none omitted.
+
+        Separate from `list_milestones` because the caller that wants this wants
+        integers: a projects list says which rows have a plan to offer, and it
+        is polled. Reading every milestone to count them would make that poll
+        cost the total size of every plan in the store, forever, to produce a
+        handful of numbers.
+        """
         ...
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:

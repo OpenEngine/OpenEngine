@@ -3531,22 +3531,19 @@ def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
 def test_projects_api_says_how_many_milestones_each_project_has() -> None:
     """The rail offers a project's plan only where there is one to offer.
 
-    Counted from one read of every milestone rather than a query per project:
-    the shell polls this route every second, and the cost of that must not grow
-    with the number of projects listed.
+    Counted by the store rather than in the handler: the shell polls this route
+    every second, so neither a query per project nor a read of every milestone
+    row will do -- one grows with the list, the other with the total size of
+    every plan in the store. Reading a milestone at all is the failure, which is
+    why the double refuses rather than counts.
     """
 
-    class CountingStore(InMemoryStateStore):
-        def __init__(self) -> None:
-            super().__init__()
-            self.milestone_reads = 0
-
+    class ForbidsMilestoneReads(InMemoryStateStore):
         async def list_milestones(self, project_id=None):
-            self.milestone_reads += 1
-            return await super().list_milestones(project_id)
+            raise AssertionError("counting must not hydrate milestone rows")
 
     runner = ConcurrentRunner()
-    store = CountingStore()
+    store = ForbidsMilestoneReads()
     session = _session_with({"test": runner}, state_store=store)
     planned = Project(ProjectId("project-planned"), "Engine roadmap")
     empty = Project(ProjectId("project-empty"), "Nothing planned yet")
@@ -3562,7 +3559,6 @@ def test_projects_api_says_how_many_milestones_each_project_has() -> None:
                     f"Goal {index}",
                 )
             )
-        store.milestone_reads = 0
         app = create_app(session, {"test": runner})
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -3572,11 +3568,53 @@ def test_projects_api_says_how_many_milestones_each_project_has() -> None:
 
     listed = asyncio.run(scenario())
 
-    assert store.milestone_reads == 1
     assert {
         project["name"]: project["milestoneCount"]
         for project in listed.json()["projects"]
     } == {"Engine roadmap": 3, "Nothing planned yet": 0}
+
+
+def test_archiving_a_project_answers_with_the_plan_it_keeps() -> None:
+    """Archiving is not deleting, and the answer has to say so.
+
+    The route sends the whole row the list would, so a client that redraws from
+    it is not left with a project missing half itself -- and restoring gives the
+    milestones back rather than reporting a plan of none.
+    """
+
+    runner = ConcurrentRunner()
+    store = InMemoryStateStore()
+    session = _session_with({"test": runner}, state_store=store)
+    app = create_app(session, {"test": runner})
+    project = Project(ProjectId("project-planned"), "Engine roadmap")
+
+    async def scenario():
+        await store.save_project(project)
+        for index in range(2):
+            await store.save_milestone(
+                Milestone(
+                    MilestoneId(f"milestone-{index}"),
+                    project.project_id,
+                    f"Goal {index}",
+                )
+            )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            archived = await client.post("/api/projects/project-planned/archive")
+            restored = await client.post("/api/projects/project-planned/unarchive")
+            return archived, restored
+
+    archived, restored = asyncio.run(scenario())
+
+    assert archived.json() == {
+        "projectId": "project-planned",
+        "name": "Engine roadmap",
+        "archived": True,
+        "milestoneCount": 2,
+    }
+    assert restored.json() == {**archived.json(), "archived": False}
 
 
 def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() -> None:

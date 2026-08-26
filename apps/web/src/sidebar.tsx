@@ -153,7 +153,7 @@ function ProjectItem({
   // its row stops being a link to the conversation.
   const milestones = !project.archived && (project.milestoneCount ?? 0) > 0;
   return (
-    <div>
+    <div className="rail-group">
       <div className="rail-item" data-active={active || undefined}>
         {project.conversationUrl && !project.archived ? (
           <a
@@ -302,7 +302,7 @@ export function Sidebar({
           </div>
           <nav className="rail-scroll" aria-label="Recent runs">
             {runs.map((run) => (
-              <div key={run.runId}>
+              <div className="rail-group" key={run.runId}>
                 <div
                   className="rail-item"
                   data-active={

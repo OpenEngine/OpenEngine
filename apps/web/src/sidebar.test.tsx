@@ -345,6 +345,28 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
+  /** A plan outlives the conversation that wrote it. Archiving the *thread*
+   *  leaves the project itself live, and its milestones are still worth
+   *  reading even though its name row has nowhere left to send a click. */
+  it("offers the milestones of a live project whose planning chat was archived", () => {
+    render(
+      <Sidebar
+        projects={[
+          { projectId: "project-agi-1", name: "Engine roadmap", archived: false, milestoneCount: 2 },
+        ]}
+        runs={[run]}
+        initialSection="projects"
+      />,
+    );
+
+    const projects = within(body("Projects"));
+    expect(projects.queryByRole("link", { name: "Engine roadmap" })).not.toBeInTheDocument();
+    expect(projects.getByRole("link", { name: "Milestones · 2" })).toHaveAttribute(
+      "href",
+      "/projects/project-agi-1/milestones",
+    );
+  });
+
   /** Archiving is the same one click a chat gets, and it moves the row into a
    *  list of its own rather than deleting anything. */
   it("archives a project from the rail and lists it under Archived projects", async () => {

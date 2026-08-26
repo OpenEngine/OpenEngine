@@ -136,6 +136,22 @@ describe("ProjectMilestonesPage", () => {
     expect(screen.queryByText("Loading milestones…")).toBeNull();
   });
 
+  /** Reachable two ways: the URL is guessable, and `delete_milestone` can empty
+   *  a plan while this page is open and polling. */
+  it("says an emptied plan is empty rather than showing a bare header", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([])));
+
+    const { container } = render(<ProjectMilestonesPage projectId="project-1" />);
+    await act(async () => {});
+
+    expect(screen.queryByText("Loading milestones…")).toBeNull();
+    expect(
+      screen.getByText("No milestones have been added to this project yet."),
+    ).toBeInTheDocument();
+    expect(container.querySelectorAll(".milestone-card")).toHaveLength(0);
+  });
+
   it("reports a failure that leaves it with nothing to show", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockImplementation(unavailable()));

@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections import Counter
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -1160,20 +1159,18 @@ def create_app(
         projects = await session.state_store.list_projects()
         conversations = await open_conversations()
         # A project's milestones are offered in the rail only by the projects
-        # that have some, so the list says how many. Read whole and counted
-        # here rather than once per project: the shell polls this route every
-        # second, and a query per row would grow that cost with the list.
-        milestones = Counter(
-            milestone.project_id
-            for milestone in await session.state_store.list_milestones()
-        )
+        # that have some, so the list says how many. Counted by the store, in
+        # one grouped query: the shell polls this route every second, and both
+        # a query per row and a read of every milestone would make that cost
+        # grow -- with the list, or with the size of every plan in it.
+        milestones = await session.state_store.count_milestones_by_project()
         return JSONResponse(
             {
                 "projects": [
                     _project_json(
                         project,
                         conversations,
-                        milestones=milestones[project.project_id],
+                        milestones=milestones.get(project.project_id, 0),
                     )
                     for project in projects
                 ]
@@ -1207,13 +1204,15 @@ def create_app(
         await session.state_store.save_project(project)
         # An archived project keeps its plan: restoring puts the link and the
         # milestones back rather than leaving a row that has forgotten where it
-        # went. The answer is the whole row the list would send, so a client
-        # that redraws from it is not left with a project missing half itself.
+        # went. The answer is the whole row the list would send -- counted the
+        # same way, so the two cannot drift -- and a client that redraws from it
+        # is not left with a project missing half itself.
+        counts = await session.state_store.count_milestones_by_project()
         return JSONResponse(
             _project_json(
                 project,
                 await open_conversations(),
-                milestones=len(await session.state_store.list_milestones(project_id)),
+                milestones=counts.get(project_id, 0),
             )
         )
 

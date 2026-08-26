@@ -285,7 +285,16 @@ ul, ol { padding: 0; list-style: none; }
   align-items: start;
   border-top: 1px solid var(--night-rule);
 }
-.rail-item:last-child { border-bottom: 1px solid var(--night-rule); }
+/* Every row draws its own top rule, and the list closes with one underneath
+   whatever it ends on. Written against the list's own children rather than
+   against `.rail-item:last-child`: a row with a sub-list hanging under it is
+   wrapped in a `.rail-group`, where that selector would match every row that
+   happens to have no sub-list -- a second rule against the next row's
+   `border-top` -- and miss the last row when it has one. */
+.rail-scroll > .rail-item:last-child, .rail-archive > .rail-item:last-child,
+.rail-scroll > .rail-group:last-child, .rail-archive > .rail-group:last-child {
+  border-bottom: 1px solid var(--night-rule);
+}
 .rail-item[data-active] { background: var(--night-active); }
 .rail-item:hover:not([data-active]) { background: var(--night-raised); }
 .rail-item-trigger {
@@ -1218,12 +1227,15 @@ select:disabled { cursor: default; }
   .rail-nav { display: flex; gap: 8px; padding: 0; }
   /* A shade taller than on a wide screen: here these are thumb targets. */
   .rail-button { height: 36px; white-space: nowrap; }
-  /* The runs rail nests each item in a group wrapper; size whatever the
-     direct child is so both rails scroll as a row of equal cards. */
+  /* The projects and runs rails nest each item in a group wrapper; size
+     whatever the direct child is so every rail scrolls as a row of equal
+     cards. */
   .rail-scroll { display: flex; gap: 8px; min-width: 0; overflow-x: auto; }
   .rail-scroll > * { flex: 0 0 190px; }
+  /* Cards, not rows: each is drawn all the way round, and the rule that closes
+     a stacked list would only double the last card's own edge. */
   .rail-item { border: 1px solid var(--night-rule); }
-  .rail-item:last-child { border-bottom: 1px solid var(--night-rule); }
+  .rail-scroll > .rail-group:last-child { border-bottom: 0; }
   .panel-head { grid-template-columns: minmax(0, 1fr); }
   .panel-project { grid-template-rows: auto minmax(0, 1fr) auto; }
   .panel-head-compact .lede { display: none; }

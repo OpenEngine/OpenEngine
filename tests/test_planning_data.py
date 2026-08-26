@@ -153,6 +153,43 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
         second.close()
 
 
+def test_milestones_are_counted_per_project_without_reading_them(
+    store: StateStore,
+) -> None:
+    """The projects list is polled, and it wants integers.
+
+    A project with no plan is left out rather than reported as zero: the caller
+    asking how many milestones exist can read an absent key as none, and a store
+    that had to name every project would be doing the projects list's job.
+    """
+
+    planned = Project(ProjectId("project-planned"), "Engine")
+    other = Project(ProjectId("project-other"), "Second")
+    empty = Project(ProjectId("project-empty"), "Nothing planned")
+
+    async def scenario() -> None:
+        for project in (planned, other, empty):
+            await store.save_project(project)
+        for index in range(3):
+            await store.save_milestone(
+                Milestone(MilestoneId(f"milestone-{index}"), planned.project_id, "Goal")
+            )
+        await store.save_milestone(
+            Milestone(MilestoneId("milestone-other"), other.project_id, "Goal")
+        )
+        assert dict(await store.count_milestones_by_project()) == {
+            planned.project_id: 3,
+            other.project_id: 1,
+        }
+        # The count follows the plan rather than a tally kept beside it.
+        await store.delete_milestone(MilestoneId("milestone-other"))
+        assert dict(await store.count_milestones_by_project()) == {
+            planned.project_id: 3
+        }
+
+    asyncio.run(scenario())
+
+
 def test_project_id_round_trips_the_conversation_that_owns_it() -> None:
     instance_id = AgentInstanceId("agi-abc123")
 

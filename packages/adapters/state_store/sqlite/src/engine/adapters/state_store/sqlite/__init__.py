@@ -1,6 +1,6 @@
 """Durable workflow-run and conversation persistence backed by SQLite."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 import json
 from pathlib import Path
@@ -239,6 +239,15 @@ class SQLiteStateStore:
         with self._lock:
             rows = self._connection.execute(query, parameters).fetchall()
         return tuple(_milestone_from_row(row) for row in rows)
+
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
+        # One row per project rather than one per milestone, and no column the
+        # answer does not need: the caller is a poll that wants integers.
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT project_id, COUNT(*) FROM milestones GROUP BY project_id"
+            ).fetchall()
+        return {ProjectId(row[0]): int(row[1]) for row in rows}
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
         with self._lock, self._connection:
