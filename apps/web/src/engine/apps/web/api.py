@@ -933,6 +933,7 @@ def create_app(
         catalog=catalog,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
+    workflow_restart_locks: dict[RunId, asyncio.Lock] = {}
 
     def track_workflow(run_id: RunId, task: asyncio.Task[None]) -> None:
         workflow_tasks[run_id] = task
@@ -1028,40 +1029,44 @@ def create_app(
         """Restart an active workflow turn on its conversation's new runner."""
 
         assert thread.workflow_run_id is not None
-        task = workflow_tasks.get(thread.workflow_run_id)
-        if task is None or task.done():
-            return
-        state = await session.state_store.load(thread.workflow_run_id)
-        if (
-            state is None
-            or state.phase is not RunPhase.RUNNING_AGENT
-            or state.current_step_id != thread.workflow_step_id
-        ):
-            return
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-        # The completed turn may have advanced to another agent between the
-        # first state read and cancellation. Resume whichever conversation is
-        # now current, without applying this conversation's choice to another.
-        state = await session.state_store.load(thread.workflow_run_id)
-        if (
-            state is None
-            or state.phase is not RunPhase.RUNNING_AGENT
-            or state.agent_paused
-        ):
-            return
-        runner_name = await workflow_runner_for(state)
-        track_workflow(
-            state.run_id,
-            asyncio.create_task(
-                workflow_executor.resume_agent_step(
-                    state.run_id, runner_name=runner_name
-                )
-            ),
+        lock = workflow_restart_locks.setdefault(
+            thread.workflow_run_id, asyncio.Lock()
         )
+        async with lock:
+            task = workflow_tasks.get(thread.workflow_run_id)
+            if task is None or task.done():
+                return
+            state = await session.state_store.load(thread.workflow_run_id)
+            if (
+                state is None
+                or state.phase is not RunPhase.RUNNING_AGENT
+                or state.current_step_id != thread.workflow_step_id
+            ):
+                return
+            if state.current_agent_run_id is not None:
+                await service.approvals.cancel_run(state.current_agent_run_id)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+            # The completed turn may have advanced to another agent between the
+            # first state read and cancellation. Resume whichever conversation is
+            # now current, without applying this conversation's choice to another.
+            state = await session.state_store.load(thread.workflow_run_id)
+            if (
+                state is None
+                or state.phase is not RunPhase.RUNNING_AGENT
+                or state.agent_paused
+            ):
+                return
+            runner_name = await workflow_runner_for(state)
+            track_workflow(
+                state.run_id,
+                asyncio.create_task(
+                    workflow_executor.resume_agent_step(
+                        state.run_id, runner_name=runner_name
+                    )
+                ),
+            )
 
     async def continue_workflow(thread: ChatThread, text: str) -> None:
         """Interrupt, append a human message, and resume the same workflow step."""

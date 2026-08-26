@@ -165,7 +165,9 @@ class WorkflowExecutor:
             raise WorkflowExecutionError("current workflow step is not an agent step")
         if message is None and state.agent_paused:
             return
-        selected_name = self._runner_name(runner_name, state)
+        selected_name = await self._runner_name_for_step(
+            state, step, runner_name
+        )
         try:
             command = current_agent_command(definition, state)
             runner = self._runner_for(step, selected_name)
