@@ -104,7 +104,7 @@ export function MilestoneTimelineVisual({
   projectId,
 }: {
   milestones: ApiMilestone[];
-  /** The plan these belong to, which is what a workstream's link is built
+  /** The plan these belong to, which is what each milestone's link is built
    *  from: the graph is drawn beside a chat and on the project's own page, and
    *  both open the same milestone page. */
   projectId: string;
@@ -182,8 +182,6 @@ export function MilestoneTimelineVisual({
             key={milestone.milestoneId}
             className="milestone-node"
             style={{ left: positions.get(milestone.milestoneId) }}
-            tabIndex={0}
-            aria-describedby={milestone.description ? tooltipId : undefined}
             onMouseEnter={pinTooltip}
             onFocus={pinTooltip}
           >
@@ -192,10 +190,16 @@ export function MilestoneTimelineVisual({
                 {milestone.description}
               </span>
             )}
-            <span className="milestone-dot" aria-hidden="true" />
-            <span className="milestone-name" id={nameId}>
-              {milestone.name}
-            </span>
+            <a
+              className="milestone-link"
+              href={milestoneDetailsUrl(projectId, milestone.milestoneId)}
+              aria-describedby={milestone.description ? tooltipId : undefined}
+            >
+              <span className="milestone-dot" aria-hidden="true" />
+              <span className="milestone-name" id={nameId}>
+                {milestone.name}
+              </span>
+            </a>
             {milestone.workstreams.length > 0 && (
               // Named off the milestone rather than by a string of its own:
               // two projects may hold two milestones called "Launch", and the
@@ -207,25 +211,12 @@ export function MilestoneTimelineVisual({
                     <li
                       key={workstream.workstreamId}
                       className="milestone-workstream"
+                      tabIndex={workstream.scope ? 0 : undefined}
+                      aria-describedby={workstream.scope ? scopeId : undefined}
                       onMouseEnter={pinTooltip}
                       onFocus={pinTooltip}
                     >
-                      {/* The node has room for a name and nothing else, so the
-                          name is the way in: it opens the milestone this
-                          workstream hangs from, which is where the work under
-                          it -- every workstream, and the tasks in each -- is
-                          written out. The scope is what separates one
-                          workstream from its siblings, but it is a sentence,
-                          so it stays on the tooltip this component already
-                          uses for descriptions: one pattern, and -- unlike a
-                          `title` -- reached by the keyboard the link answers
-                          to rather than by a tab stop of its own. */}
-                      <a
-                        href={milestoneDetailsUrl(projectId, milestone.milestoneId)}
-                        aria-describedby={workstream.scope ? scopeId : undefined}
-                      >
-                        <span>{workstream.name}</span>
-                      </a>
+                      <span>{workstream.name}</span>
                       {workstream.scope && (
                         <span className="milestone-tooltip" id={scopeId} role="tooltip">
                           {workstream.scope}
