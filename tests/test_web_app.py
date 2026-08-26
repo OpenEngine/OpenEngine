@@ -56,6 +56,7 @@ from engine.domain import (
     StepOutput,
     TaskId,
     ToolCall,
+    WorkflowDefinition,
     WorkflowId,
     WorkspaceId,
     WorkspaceProvisioned,
@@ -559,6 +560,64 @@ class BlockingWorkflowRunner(ConcurrentRunner):
         self.seen.append(tuple(messages))
         self.started.set()
         await self.never.wait()
+        raise AssertionError("the workflow turn should be interrupted")
+
+
+class SlowCancellingWorkflowRunner(BlockingWorkflowRunner):
+    """Hold cancellation open so overlapping workflow mutations can race."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancellation_started = asyncio.Event()
+        self.release_cancellation = asyncio.Event()
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        if str(agent_run_id).endswith(":name:run"):
+            return AgentTurn(Message.assistant("Blocked workflow"))
+        self.workflow_attempts += 1
+        self.seen.append(tuple(messages))
+        self.started.set()
+        try:
+            await self.never.wait()
+        except asyncio.CancelledError:
+            self.cancellation_started.set()
+            await self.release_cancellation.wait()
+            raise
+        raise AssertionError("the workflow turn should be interrupted")
+
+
+class ActiveBlockingWorkflowRunner(BlockingWorkflowRunner):
+    """Record concurrent workflow attempts while holding each one open."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = 0
+        self.most_active = 0
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.workflow_attempts += 1
+        self.seen.append(tuple(messages))
+        self.active += 1
+        self.most_active = max(self.most_active, self.active)
+        self.started.set()
+        try:
+            await self.never.wait()
+        finally:
+            self.active -= 1
         raise AssertionError("the workflow turn should be interrupted")
 
 
@@ -1129,6 +1188,38 @@ def _human_then_agent_catalog() -> WorkflowCatalog:
         ],
     )
     return WorkflowCatalog.from_definitions((definition,))
+
+
+def _agent_human_loop_catalog() -> WorkflowCatalog:
+    worker = oe.agent(id="loop-agent", instructions="Continue after approval.")
+    definition = WorkflowDefinition(
+        workflow_id=WorkflowId("agent-human-loop-v1"),
+        name="Agent human loop",
+        version="v1",
+        steps=(
+            oe.agent_step(
+                id="work",
+                name="Work",
+                agent=worker,
+                prompt=oe.template("Continue the task"),
+                editable=True,
+                workspace_access="write",
+                transitions={"success": oe.goto("approval"), "*": oe.fail()},
+            ),
+            oe.human_review_step(
+                id="approval",
+                name="Approval",
+                title=oe.template("Approve another attempt"),
+                summary=oe.template("Choose whether to continue"),
+                approved=oe.goto("work"),
+                rejected=oe.fail(),
+            ),
+        ),
+    )
+    # The public v1 DSL rejects cycles, but the executor accepts embedded
+    # definitions from durable state. Model the future looping workflow here so
+    # resume behavior stays correct when catalog validation permits them.
+    return WorkflowCatalog({definition.workflow_id: definition})
 
 
 async def _await_phase(
@@ -2566,6 +2657,209 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
     assert claude.seen[0][0] == Message.user("Implement the feature.")
     assert "Name this workflow" in claude.seen[0][1].content
     assert [instance.runner for instance in instances] == ["claude", "claude"]
+
+
+def test_active_implementation_and_review_conversations_can_switch_runners() -> None:
+    store = InMemoryStateStore()
+    original_implementer = BlockingWorkflowRunner()
+    replacement_implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implemented with the replacement runner.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    original_reviewer = BlockingWorkflowRunner()
+    replacement_reviewer = _reviewer(summary="Reviewed with the replacement runner.")
+    app = _workflow_app(
+        store,
+        original_implementer,
+        workflow_runners={
+            "codex": original_implementer,
+            "claude": replacement_implementer,
+        },
+        reviewers={
+            "codex": original_reviewer,
+            "claude": replacement_reviewer,
+        },
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Switch both workflow conversations.",
+                    "repository": "acme/api",
+                    "runner": "codex",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(original_implementer.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            implementation_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            implementation = await client.patch(
+                f"/api/threads/{implementation_id}", json={"runner": "claude"}
+            )
+            await asyncio.wait_for(original_reviewer.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            review_id = detail.json()["steps"][1]["agentInstanceId"]
+            review = await client.patch(
+                f"/api/threads/{review_id}", json={"runner": "claude"}
+            )
+            completed = await _await_phase(client, run_id, "awaiting_human_review")
+            instances = [
+                await store.load_instance(AgentInstanceId(instance_id))
+                for instance_id in (implementation_id, review_id)
+            ]
+            return implementation, review, completed, instances
+
+    implementation, review, completed, instances = asyncio.run(scenario())
+
+    assert implementation.status_code == 200
+    assert implementation.json()["runner"] == "claude"
+    assert review.status_code == 200
+    assert review.json()["runner"] == "claude"
+    assert completed.json()["steps"][0]["summary"] == (
+        "Implemented with the replacement runner."
+    )
+    assert completed.json()["steps"][1]["summary"] == (
+        "Reviewed with the replacement runner."
+    )
+    assert original_implementer.workflow_attempts == 1
+    assert original_reviewer.workflow_attempts == 1
+    assert len(replacement_implementer.seen) == 1
+    assert len(replacement_reviewer.seen) == 1
+    assert all(
+        instance is not None and instance.runner == "claude"
+        for instance in instances
+    )
+
+
+def test_looping_agent_step_keeps_its_conversation_runner_after_human_review() -> None:
+    store = InMemoryStateStore()
+    original = BlockingWorkflowRunner()
+    replacement = TerminalToolRunner(
+        "complete_step",
+        {"outcome": "success", "summary": "Loop completed.", "outputs": {}},
+    )
+    app = _workflow_app(
+        store,
+        original,
+        workflow_runners={"codex": original, "claude": replacement},
+        reviewers={"codex": original, "claude": replacement},
+        workflow_catalog=_agent_human_loop_catalog(),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "agent-human-loop-v1",
+                    "prompt": "Keep the selected runner through the loop.",
+                    "repository": "acme/api",
+                    "runner": "codex",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(original.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+            switched = await client.patch(
+                f"/api/threads/{instance_id}", json={"runner": "claude"}
+            )
+            await _await_phase(client, run_id, "awaiting_human_review")
+
+            approved = await client.post(
+                f"/api/runs/{run_id}/human-review", json={"approved": True}
+            )
+            looped = await _await_phase(client, run_id, "awaiting_human_review")
+            return switched, approved, looped
+
+    switched, approved, looped = asyncio.run(scenario())
+
+    assert switched.status_code == 200
+    assert approved.status_code == 200
+    assert looped.json()["phase"] == "awaiting_human_review"
+    assert original.workflow_attempts == 1
+    assert len(replacement.seen) == 2
+
+
+def test_overlapping_workflow_runner_swaps_restart_only_one_agent() -> None:
+    store = InMemoryStateStore()
+    original = SlowCancellingWorkflowRunner()
+    replacement = ActiveBlockingWorkflowRunner()
+    app = _workflow_app(
+        store,
+        original,
+        workflow_runners={
+            "codex": original,
+            "claude": replacement,
+            "other": replacement,
+        },
+        reviewers={
+            "codex": original,
+            "claude": replacement,
+            "other": replacement,
+        },
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Serialize overlapping runner swaps.",
+                    "repository": "acme/api",
+                    "runner": "codex",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(original.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            first = asyncio.create_task(
+                client.patch(
+                    f"/api/threads/{instance_id}", json={"runner": "claude"}
+                )
+            )
+            await asyncio.wait_for(original.cancellation_started.wait(), timeout=1)
+            second = asyncio.create_task(
+                client.patch(
+                    f"/api/threads/{instance_id}", json={"runner": "other"}
+                )
+            )
+            await asyncio.sleep(0)
+            original.release_cancellation.set()
+            responses = await asyncio.gather(first, second)
+            await asyncio.wait_for(replacement.started.wait(), timeout=1)
+            await asyncio.sleep(0)
+            most_active = replacement.most_active
+            stopped = await client.delete(
+                f"/api/threads/{instance_id}/runs/current"
+            )
+            return responses, most_active, stopped
+
+    responses, most_active, stopped = asyncio.run(scenario())
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert most_active == 1
+    assert stopped.status_code == 204
 
 
 @pytest.mark.parametrize(

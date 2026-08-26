@@ -98,6 +98,7 @@ function ChatHeader({
         threadId={remoteId}
         listed={custom}
         runners={config.runners}
+        workflowRunners={config.workflowRunners}
         fallbackRunner={runner}
         compact={compact}
       />
@@ -151,12 +152,14 @@ function ConversationHeader({
   threadId,
   listed,
   runners,
+  workflowRunners,
   fallbackRunner,
   compact,
 }: {
   threadId: string;
   listed?: ThreadCustom;
   runners: RunnerOption[];
+  workflowRunners: string[];
   fallbackRunner: string;
   compact: boolean;
 }) {
@@ -175,6 +178,9 @@ function ConversationHeader({
   // the truthful thing to show while it is being read.
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
   const workflowConversation = Boolean(thread?.workflowRunId);
+  const availableRunners = workflowConversation
+    ? workflowRunners.map((id) => ({ id, implementation: id }))
+    : runners;
   const autoApprove = chosenAutoApprove ?? thread?.autoApprove ?? false;
   // Title generation refreshes the thread list after the first message. That
   // refreshed value can be newer than the conversation snapshot fetched when
@@ -231,7 +237,7 @@ function ConversationHeader({
           <p className="lede">
             {thread?.editable
               ? "A workflow step owns this transcript; sending guidance reactivates it if it has closed."
-              : "A workflow step owns this transcript; its run chose the runner."}
+              : "A workflow step owns this read-only transcript."}
           </p>
         )}
       </div>
@@ -239,28 +245,21 @@ function ConversationHeader({
         <span>Agent</span>
         <span className="field-box">{thread?.agentId ?? "…"}</span>
       </div>
-      {workflowConversation ? (
-        <div className="field">
-          <span>Runner</span>
-          <span className="field-box">{runner}</span>
-        </div>
-      ) : (
-        <label className="field">
-          <span>Runner</span>
-          <select
-            className="field-box"
-            value={runner}
-            onChange={(event) => void choose(event.target.value)}
-          >
-            {runners.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.id}
-              </option>
-            ))}
-          </select>
-          {error && <span className="field-error">{error}</span>}
-        </label>
-      )}
+      <label className="field">
+        <span>Runner</span>
+        <select
+          className="field-box"
+          value={runner}
+          onChange={(event) => void choose(event.target.value)}
+        >
+          {availableRunners.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.id}
+            </option>
+          ))}
+        </select>
+        {error && <span className="field-error">{error}</span>}
+      </label>
       {workflowConversation && (
         <label className="field">
           <span>Approvals</span>
