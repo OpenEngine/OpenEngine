@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 
 import {
   getProjectMilestones,
@@ -26,6 +26,10 @@ const MAP_FLOOR = 180;
 // Slack under the last bullet, which also absorbs a name that wraps to a
 // second line -- the one part of the stack that cannot be counted from here.
 const MAP_FOOT = 28;
+// The gap a tooltip holds above what it describes, and the one it keeps from
+// the window's edges -- the same 12px the graph's own side padding reserves.
+const TOOLTIP_GAP = 8;
+const TOOLTIP_GUTTER = 12;
 const POLL_MS = 1000;
 // One failed poll is a blip and is kept quiet; a run of them is an outage, and
 // a timeline that has stopped following the plan has to say so.
@@ -36,6 +40,30 @@ export function mapMinHeight(milestones: ApiMilestone[]): number {
   const rows = Math.max(0, ...milestones.map((milestone) => milestone.workstreams.length));
   const list = rows ? NODE_ROW_GAP + rows * WORKSTREAM_LINE + (rows - 1) * WORKSTREAM_GAP : 0;
   return Math.max(MAP_FLOOR, NODE_TOP + NODE_HEAD + list + MAP_FOOT);
+}
+
+/** Place a tooltip above the thing it describes, in the window's coordinates.
+ *
+ * The tooltip is fixed, so the map it hangs in can neither clip it nor scroll
+ * it away, but that also means nothing places it: these two properties are the
+ * whole of its position. The room it grows into is the chat above the
+ * timeline, which is why it is put above the trigger rather than below it. */
+function pinTooltip(event: SyntheticEvent<HTMLElement>) {
+  const tooltip = event.currentTarget.querySelector<HTMLElement>(":scope > .milestone-tooltip");
+  if (!tooltip) return;
+  const trigger = event.currentTarget.getBoundingClientRect();
+  // Hidden rather than unrendered, so it can be measured before it is shown:
+  // its width is what decides whether it clears the window's edges.
+  const half = tooltip.offsetWidth / 2;
+  const left = Math.min(
+    Math.max(trigger.left + trigger.width / 2, half + TOOLTIP_GUTTER),
+    window.innerWidth - half - TOOLTIP_GUTTER,
+  );
+  tooltip.style.setProperty("--tooltip-left", `${left}px`);
+  tooltip.style.setProperty(
+    "--tooltip-bottom",
+    `${window.innerHeight - trigger.top + TOOLTIP_GAP}px`,
+  );
 }
 
 /** Whether two polls returned the same thing, compared as the server sent it. */
@@ -152,6 +180,8 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
             style={{ left: `${positions.get(milestone.milestoneId)! / 10}%` }}
             tabIndex={0}
             aria-describedby={milestone.description ? tooltipId : undefined}
+            onMouseEnter={pinTooltip}
+            onFocus={pinTooltip}
           >
             {milestone.description && (
               <span className="milestone-tooltip" id={tooltipId} role="tooltip">
@@ -180,6 +210,8 @@ export function MilestoneTimelineVisual({ milestones }: { milestones: ApiMilesto
                       // and -- unlike a `title` -- answers to the keyboard.
                       tabIndex={workstream.scope ? 0 : undefined}
                       aria-describedby={workstream.scope ? scopeId : undefined}
+                      onMouseEnter={pinTooltip}
+                      onFocus={pinTooltip}
                     >
                       <span>{workstream.name}</span>
                       {workstream.scope && (

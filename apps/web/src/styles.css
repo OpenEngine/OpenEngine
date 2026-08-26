@@ -543,9 +543,12 @@ select:disabled { cursor: default; }
   gap: 9px;
   justify-items: center;
   width: 170px;
+  /* Centred on its point by a margin rather than a transform: a transformed
+     ancestor would become the containing block for the fixed tooltip below,
+     which would put it back inside the box that was clipping it. */
+  margin-left: -85px;
   padding: 0;
   text-align: center;
-  transform: translateX(-50%);
   outline: 0;
 }
 .milestone-dot {
@@ -573,8 +576,7 @@ select:disabled { cursor: default; }
   text-align: left;
 }
 .milestone-workstream {
-  /* Hanging indent without a containing block, so the scope tooltip inside
-     still hangs off the node and lands where the description does. */
+  /* A hanging indent, so a name that wraps clears its own bullet. */
   padding-left: 11px;
   text-indent: -11px;
   color: var(--muted);
@@ -587,13 +589,17 @@ select:disabled { cursor: default; }
 .milestone-workstream::before { content: "• "; }
 .milestone-workstream:focus-visible { color: var(--ink); }
 .milestone-tooltip {
-  position: absolute;
+  /* Above what it describes, and measured against the window by `pinTooltip`
+     rather than against the node. The band above a node belongs to the map,
+     which is the box that scrolls: a description taller than that band was cut
+     off at the top of it, and a workstream list long enough to scroll carried
+     the band -- and the tooltip in it -- out of sight. */
+  position: fixed;
   z-index: 2;
-  /* Above the node, over the dependency arcs, rather than over the stack it
-     describes: hovering anywhere in the node used to drop this on the
-     workstreams, and a keyboard focus hid them outright. */
-  bottom: calc(100% + 8px);
-  left: 50%;
+  /* The fallbacks are reached only by a node that arrives under a pointer that
+     never entered it; the next move over it places the tooltip properly. */
+  bottom: var(--tooltip-bottom, 50%);
+  left: var(--tooltip-left, 50%);
   text-indent: 0;
   width: max-content;
   max-width: 280px;

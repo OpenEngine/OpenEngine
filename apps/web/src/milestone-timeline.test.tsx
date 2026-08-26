@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -130,6 +131,42 @@ describe("milestone timeline", () => {
     expect(item).toHaveAccessibleDescription("Persist the plan.");
     expect(item).toContainElement(scope);
     expect(item).not.toHaveAttribute("title");
+  });
+
+  it("hangs a tooltip off the window, above what it describes", async () => {
+    const user = userEvent.setup();
+    render(<MilestoneTimelineVisual milestones={[foundation]} />);
+    const item = screen.getByRole("listitem");
+    const scope = screen.getByRole("tooltip", { name: "Persist the plan." });
+    // jsdom lays nothing out, so the bullet is handed the box a browser would
+    // give the last one in a list the map has scrolled.
+    item.getBoundingClientRect = () => ({ top: 600, left: 300, width: 170 }) as DOMRect;
+
+    await user.hover(item);
+
+    // Measured from the window's edges, not the map's: the map is the box that
+    // was clipping the tooltip and scrolling it out of sight.
+    expect(scope.style.getPropertyValue("--tooltip-bottom")).toBe(
+      `${window.innerHeight - 600 + 8}px`,
+    );
+    expect(scope.style.getPropertyValue("--tooltip-left")).toBe("385px");
+  });
+
+  it("keeps a tooltip on a milestone at the window's edge inside it", async () => {
+    const user = userEvent.setup();
+    render(<MilestoneTimelineVisual milestones={[foundation]} />);
+    const node = screen.getByText("Foundation").closest(".milestone-node") as HTMLElement;
+    const tooltip = screen.getByRole("tooltip", { name: "Build the shared project model." });
+    // Scrolled far enough right that the node itself hangs off the window.
+    node.getBoundingClientRect = () => ({ top: 600, left: 1000, width: 170 }) as DOMRect;
+
+    await user.hover(node);
+
+    // Half of a tooltip is measured, which jsdom reports as 0; what the clamp
+    // has to hold on its own is the gutter.
+    expect(tooltip.style.getPropertyValue("--tooltip-left")).toBe(
+      `${window.innerWidth - 12}px`,
+    );
   });
 
   it("grows the map so the deepest node's bullets stay inside it", () => {
