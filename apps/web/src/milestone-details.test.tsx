@@ -61,6 +61,12 @@ const persisting = run("run-1", "Persist milestones", "workstream-data", "runnin
 const migrating = run("run-2", "Add the workstream table", "workstream-data");
 const drawing = run("run-3", "Draw the dependency graph", "workstream-web");
 const unplanned = run("run-4", "A chore nobody planned", null);
+const reviewing = run(
+  "run-5",
+  "Approve the release",
+  "workstream-data",
+  "awaiting_human_review",
+);
 
 /** A fresh response per call: a poll reads more than one of them. */
 function plan(milestones: ApiMilestone[]) {
@@ -78,12 +84,18 @@ function unavailable() {
     });
 }
 
-function open(milestoneId = "milestone-foundation", runs = [persisting, migrating, drawing]) {
+function open(
+  milestoneId = "milestone-foundation",
+  runs = [persisting, migrating, drawing],
+  { runsLoaded = true, runsError = "" } = {},
+) {
   return render(
     <MilestoneDetailsPage
       projectId="project-1"
       milestoneId={milestoneId}
       runs={runs}
+      runsLoaded={runsLoaded}
+      runsError={runsError}
     />,
   );
 }
@@ -149,9 +161,22 @@ describe("MilestoneDetailsPage", () => {
     // The stage the run has reached, in the workflow's own words while it runs.
     expect(within(tasks).getByText("running agent")).toBeInTheDocument();
     expect(within(tasks).getByText("succeeded")).toBeInTheDocument();
-    // A run in progress is what makes its workstream an active one.
+    // A non-terminal run is work left under this heading.
     expect(within(data).getByText("2 tasks")).toBeInTheDocument();
-    expect(within(data).getByText("1 active")).toBeInTheDocument();
+    expect(within(data).getByText("1 unfinished")).toBeInTheDocument();
+  });
+
+  it("counts a task awaiting human review as unfinished and calls it out", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
+
+    open("milestone-foundation", [reviewing]);
+    await act(async () => {});
+
+    const data = screen.getByRole("article", { name: "Data model" });
+    expect(within(data).getByText("1 unfinished")).toBeInTheDocument();
+    expect(within(data).getByText("1 awaiting review")).toBeInTheDocument();
+    expect(screen.getByText("Awaiting review").nextSibling).toHaveTextContent("1");
   });
 
   it("says a workstream nothing has been started in has nothing in it", async () => {
@@ -166,7 +191,47 @@ describe("MilestoneDetailsPage", () => {
       within(view).getByText("No tasks have been started in this workstream yet."),
     ).toBeInTheDocument();
     expect(within(view).getByText("0 tasks")).toBeInTheDocument();
-    expect(screen.queryByText("1 active")).toBeNull();
+    expect(screen.queryByText("1 unfinished")).toBeNull();
+  });
+
+  it("does not claim there are no tasks before the runs poll answers", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
+
+    open("milestone-foundation", [], { runsLoaded: false });
+    await act(async () => {});
+
+    expect(screen.getAllByText("Loading tasks…")).toHaveLength(2);
+    expect(screen.queryByText(/No tasks have been started/)).toBeNull();
+    expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("—");
+  });
+
+  it("reports a runs failure instead of rendering a confident empty state", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
+
+    open("milestone-foundation", [], {
+      runsLoaded: false,
+      runsError: "runs unavailable",
+    });
+    await act(async () => {});
+
+    expect(screen.getAllByText("Could not load tasks: runs unavailable")).toHaveLength(2);
+    expect(screen.queryByText(/No tasks have been started/)).toBeNull();
+  });
+
+  it("keeps known tasks on screen and reports a later runs failure", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
+
+    open("milestone-foundation", [persisting], {
+      runsLoaded: true,
+      runsError: "runs unavailable",
+    });
+    await act(async () => {});
+
+    expect(screen.getByText("Not updating: runs unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Persist milestones")).toBeInTheDocument();
   });
 
   it("says a milestone nothing hangs off has no workstreams", async () => {

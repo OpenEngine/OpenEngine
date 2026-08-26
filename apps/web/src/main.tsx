@@ -19,6 +19,7 @@ import { MilestoneTimeline } from "./milestone-timeline";
 import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
 import { NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
+import { routeForPath, type Route } from "./routes";
 import { Sidebar, type RailSection } from "./sidebar";
 import "./styles.css";
 
@@ -280,50 +281,8 @@ function ConversationHeader({
   );
 }
 
-type Route =
-  | { kind: "runs" }
-  | { kind: "new-run" }
-  | { kind: "run"; runId: string }
-  /** One project's plan in full, which is the only page a project has that is
-   *  not the conversation it was named after. */
-  | { kind: "project"; projectId: string }
-  /** One goal off that plan, opened from a workstream on the timeline: the
-   *  workstreams under it, and the tasks started in each. */
-  | { kind: "milestone"; projectId: string; milestoneId: string }
-  /** `plan` is the same chat page, opened on the agent that plans rather than
-   *  on the one that codes -- and always on a new conversation, because a
-   *  button that offered you the last one back would not be a plan. */
-  | { kind: "chat"; threadId?: string; runId?: string; plan?: boolean };
-
 function currentRoute(): Route {
-  const path = window.location.pathname.replace(/\/$/, "") || "/";
-  if (path === "/" || path === "/runs") return { kind: "runs" };
-  if (path === "/runs/new") return { kind: "new-run" };
-  if (path === "/plan") return { kind: "chat", plan: true };
-  const projectMilestones = path.match(/^\/projects\/([^/]+)\/milestones$/);
-  if (projectMilestones)
-    return { kind: "project", projectId: decodeURIComponent(projectMilestones[1]) };
-  const milestoneDetails = path.match(/^\/projects\/([^/]+)\/milestones\/([^/]+)$/);
-  if (milestoneDetails)
-    return {
-      kind: "milestone",
-      projectId: decodeURIComponent(milestoneDetails[1]),
-      milestoneId: decodeURIComponent(milestoneDetails[2]),
-    };
-  const workflowConversation = path.match(
-    /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
-  );
-  if (workflowConversation)
-    return {
-      kind: "chat",
-      runId: decodeURIComponent(workflowConversation[1]),
-      threadId: decodeURIComponent(workflowConversation[2]),
-    };
-  if (path.startsWith("/runs/"))
-    return { kind: "run", runId: decodeURIComponent(path.slice("/runs/".length)) };
-  if (path.startsWith("/conversations/"))
-    return { kind: "chat", threadId: decodeURIComponent(path.slice("/conversations/".length)) };
-  return { kind: "chat" };
+  return routeForPath(window.location.pathname);
 }
 
 /** Which section of the rail the page on screen came from, so the rail opens
@@ -395,7 +354,7 @@ function App() {
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
-  const { runs, error: runsError } = useRuns();
+  const { runs, error: runsError, loaded: runsLoaded } = useRuns();
   const { projects, archive: archiveProject } = useProjects();
 
   // Settled for this mount: the route is read once, and every move between
@@ -455,7 +414,12 @@ function App() {
           // chat's path can equal no step's conversation URL, so widening this
           // leaves the workflow rows reading exactly as they did.
           activeConversationUrl={conversationUrl}
-          activeProjectId={route.kind === "project" ? route.projectId : undefined}
+          activeProjectId={
+            route.kind === "project" || route.kind === "milestone"
+              ? route.projectId
+              : undefined
+          }
+          activeMilestonesPage={route.kind === "project"}
           activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
           onArchiveProject={archiveProject}
         />
@@ -475,6 +439,8 @@ function App() {
             // page: a task is a run started in a workstream, so this page reads
             // the same poll rather than opening one of its own.
             runs={runs}
+            runsError={runsError}
+            runsLoaded={runsLoaded}
           />
         ) : (
           <ChatPanel

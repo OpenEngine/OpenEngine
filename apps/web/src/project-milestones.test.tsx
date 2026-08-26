@@ -110,6 +110,10 @@ describe("ProjectMilestonesPage", () => {
     expect(
       within(workstreams).getAllByRole("listitem").map((item) => item.textContent),
     ).toEqual(["Data modelPersist the plan.", "Timeline view"]);
+    expect(within(workstreams).getByRole("link", { name: "Data model" })).toHaveAttribute(
+      "href",
+      "/projects/project-1/milestones/milestone-foundation",
+    );
 
     const shipping = screen.getByRole("article", { name: "Launch" });
     // The dependency reads as the goal it names, not as the id recorded.

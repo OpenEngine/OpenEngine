@@ -134,11 +134,14 @@ function ThreadListItem({
 function ProjectItem({
   project,
   active,
+  insideProject = false,
   showingMilestones = false,
   onArchive,
 }: {
   project: ApiProject;
   active: boolean;
+  /** Whether any page belonging to this project is on screen. */
+  insideProject?: boolean;
   /** Whether this project's milestones are the page on screen. */
   showingMilestones?: boolean;
   onArchive?: (project: ApiProject, archived: boolean) => void;
@@ -154,7 +157,7 @@ function ProjectItem({
   const milestones = !project.archived && (project.milestoneCount ?? 0) > 0;
   return (
     <div className="rail-group">
-      <div className="rail-item" data-active={active || undefined}>
+      <div className="rail-item" data-active={active || insideProject || undefined}>
         {project.conversationUrl && !project.archived ? (
           <a
             aria-current={active ? "page" : undefined}
@@ -212,6 +215,7 @@ export function Sidebar({
   activeRunId,
   activeConversationUrl,
   activeProjectId,
+  activeMilestonesPage = true,
   activeView,
   onArchiveProject,
 }: {
@@ -225,6 +229,10 @@ export function Sidebar({
   activeConversationUrl?: string;
   /** The project whose milestones are on screen, when that is the page. */
   activeProjectId?: string;
+  /** Whether the project page on screen is the milestones index itself. A
+   *  milestone child keeps the project row marked but is not the page named by
+   *  its parent link. Defaults true for callers predating child pages. */
+  activeMilestonesPage?: boolean;
   activeView?: "runs" | "new";
   /** Omitted where nothing owns the projects list, which leaves the rows
    *  readable and drops a button that could not have worked. */
@@ -266,10 +274,13 @@ export function Sidebar({
               .map((project) => (
                 <ProjectItem
                   active={isActive(project)}
+                  insideProject={activeProjectId === project.projectId}
                   key={project.projectId}
                   onArchive={onArchiveProject}
                   project={project}
-                  showingMilestones={activeProjectId === project.projectId}
+                  showingMilestones={
+                    activeMilestonesPage && activeProjectId === project.projectId
+                  }
                 />
               ))}
             {archivedProjects.length > 0 && (

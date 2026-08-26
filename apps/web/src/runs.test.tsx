@@ -184,6 +184,7 @@ describe("useRuns", () => {
     await waitFor(() => expect(result.current.runs).toHaveLength(1));
     expect(result.current.runs[0].runId).toBe("run-1");
     expect(result.current.error).toBe("");
+    expect(result.current.loaded).toBe(true);
   });
 
   it("reports a failure instead of an empty list", async () => {
@@ -196,6 +197,7 @@ describe("useRuns", () => {
 
     await waitFor(() => expect(result.current.error).toBe("runs unavailable"));
     expect(result.current.runs).toEqual([]);
+    expect(result.current.loaded).toBe(false);
   });
 
   it("refreshes terminal runs so reactivated waiting conversations appear", async () => {
@@ -242,6 +244,7 @@ describe("useRuns", () => {
 
     expect(result.current.runs).toHaveLength(1);
     expect(result.current.error).toBe("");
+    expect(result.current.loaded).toBe(true);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
