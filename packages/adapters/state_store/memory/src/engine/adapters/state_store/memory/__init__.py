@@ -75,11 +75,18 @@ class InMemoryStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock:
+            if state.workstream_id is not None and state.milestone_id is not None:
+                raise ValueError("a run cannot belong to both a workstream and a milestone")
             if (
                 state.workstream_id is not None
                 and state.workstream_id not in self._workstreams
             ):
                 raise KeyError(f"no workstream {state.workstream_id!r}")
+            if (
+                state.milestone_id is not None
+                and state.milestone_id not in self._milestones
+            ):
+                raise KeyError(f"no milestone {state.milestone_id!r}")
             self._states[state.run_id] = state
 
     async def list_runs(
@@ -145,6 +152,10 @@ class InMemoryStateStore:
                 for workstream in self._workstreams.values()
             ):
                 raise ValueError(f"milestone {milestone_id!r} still has workstreams")
+            if any(
+                state.milestone_id == milestone_id for state in self._states.values()
+            ):
+                raise ValueError(f"milestone {milestone_id!r} still has runs")
             return self._milestones.pop(milestone_id, None) is not None
 
     async def save_workstream(self, workstream: Workstream) -> None:

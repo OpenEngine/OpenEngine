@@ -46,6 +46,7 @@ from engine.domain import (
     HumanReviewCompleted,
     Message,
     Milestone,
+    MilestoneId,
     Project,
     ProjectId,
     Role,
@@ -1292,6 +1293,7 @@ def create_app(
             repository = _required_string(body, "repository")
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
             workstream_value = _optional_string(body, "workstreamId")
+            milestone_value = _optional_string(body, "milestoneId")
         except ValueError as error:
             return _error(str(error), 400)
         definition = catalog.get(workflow_id)
@@ -1303,11 +1305,29 @@ def create_app(
         workstream_id = (
             WorkstreamId(workstream_value) if workstream_value is not None else None
         )
-        if (
-            workstream_id is not None
-            and await session.state_store.load_workstream(workstream_id) is None
-        ):
+        milestone_id = (
+            MilestoneId(milestone_value) if milestone_value is not None else None
+        )
+        workstream = (
+            await session.state_store.load_workstream(workstream_id)
+            if workstream_id is not None
+            else None
+        )
+        if workstream_id is not None and workstream is None:
             return _error(f"unknown workstream: {workstream_id}", 400)
+        if milestone_id is not None:
+            milestone = await session.state_store.load_milestone(milestone_id)
+            if milestone is None:
+                return _error(f"unknown milestone: {milestone_id}", 400)
+            if workstream is not None and workstream.milestone_id != milestone_id:
+                return _error(
+                    f"workstream {workstream_id} does not belong to milestone {milestone_id}",
+                    400,
+                )
+
+        # A selected workstream is the more specific relationship. The
+        # milestone is retained only for a task created without one.
+        direct_milestone_id = milestone_id if workstream_id is None else None
 
         run_id = RunId(f"run-{uuid4().hex[:12]}")
         task_id = TaskId(f"task-{uuid4().hex[:12]}")
@@ -1318,12 +1338,14 @@ def create_app(
             repository=repository,
             workflow_id=workflow_id,
             workstream_id=workstream_id,
+            milestone_id=direct_milestone_id,
         )
         state = RunState(
             run_id=run_id,
             task_id=task_id,
             workflow_id=workflow_id,
             workstream_id=workstream_id,
+            milestone_id=direct_milestone_id,
             prompt=prompt,
             repository=repository,
             workflow_definition=definition,
@@ -1775,6 +1797,10 @@ def create_app(
                 Route("/plan", spa_page),
                 Route("/projects/{project_id}/milestones", spa_page),
                 Route("/projects/{project_id}/milestones/{milestone_id}", spa_page),
+                Route(
+                    "/projects/{project_id}/milestones/{milestone_id}/tasks/new",
+                    spa_page,
+                ),
             ]
         )
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
@@ -1886,6 +1912,7 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
         "workflowVersion": run.workflow_version,
         "taskId": run.task_id,
         "workstreamId": str(run.workstream_id) if run.workstream_id else None,
+        "milestoneId": str(run.milestone_id) if run.milestone_id else None,
         "taskPrompt": run.task_prompt,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},

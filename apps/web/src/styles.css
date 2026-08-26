@@ -692,6 +692,15 @@ select:disabled { cursor: default; }
   text-transform: uppercase;
 }
 .workstream-task-stage[data-accent="flame"] { color: var(--flame-deep); }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: flex-end; }
+.milestone-tasks {
+  margin: 26px var(--gutter) 48px;
+  padding: 24px;
+  border: 1px solid var(--rule);
+  background: var(--white);
+}
+.milestone-tasks-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.milestone-tasks-head h2 { font-size: 22px; }
 
 .welcome { padding: clamp(44px, 8vh, 96px) var(--gutter) 40px; }
 .welcome-copy { display: grid; gap: 14px; max-width: 640px; }

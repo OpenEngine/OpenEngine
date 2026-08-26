@@ -18,7 +18,7 @@ import { MilestoneDetailsPage } from "./milestone-details";
 import { MilestoneTimeline } from "./milestone-timeline";
 import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
-import { NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
+import { NewTaskPage, NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar, type RailSection } from "./sidebar";
 import "./styles.css";
@@ -415,7 +415,7 @@ function App() {
           // leaves the workflow rows reading exactly as they did.
           activeConversationUrl={conversationUrl}
           activeProjectId={
-            route.kind === "project" || route.kind === "milestone"
+            route.kind === "project" || route.kind === "milestone" || route.kind === "new-task"
               ? route.projectId
               : undefined
           }
@@ -427,6 +427,12 @@ function App() {
           <RunsPage runs={runs} error={runsError} />
         ) : route.kind === "new-run" ? (
           <NewWorkflowPage config={config} />
+        ) : route.kind === "new-task" ? (
+          <NewTaskPage
+            config={config}
+            projectId={route.projectId}
+            milestoneId={route.milestoneId}
+          />
         ) : route.kind === "run" ? (
           <RunDetailPage runId={route.runId} />
         ) : route.kind === "project" ? (

@@ -88,6 +88,10 @@ export function milestoneDetailsUrl(projectId: string, milestoneId: string): str
   return `${projectMilestonesUrl(projectId)}/${encodeURIComponent(milestoneId)}`;
 }
 
+export function milestoneNewTaskUrl(projectId: string, milestoneId: string): string {
+  return `${milestoneDetailsUrl(projectId, milestoneId)}/tasks/new`;
+}
+
 export type ApiWorkstream = {
   workstreamId: string;
   name: string;
@@ -161,6 +165,7 @@ export type ApiWorkflowRun = {
   workflowVersion: string;
   taskId: string;
   workstreamId: string | null;
+  milestoneId: string | null;
   taskPrompt: string;
   repository: string;
   repositoryContext: { repository: string };

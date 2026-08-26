@@ -12,6 +12,7 @@ from engine.domain import (
     ConversationId,
     HumanReviewCompleted,
     HumanReviewStep,
+    MilestoneId,
     RunId,
     RunPhase,
     RunState,
@@ -69,6 +70,7 @@ class WorkflowRunView:
     workflow_version: str
     task_id: str
     workstream_id: WorkstreamId | None
+    milestone_id: MilestoneId | None
     task_prompt: str
     repository: str
     phase: str
@@ -141,6 +143,7 @@ class RunReader:
             workflow_version=definition.version if definition is not None else "",
             task_id=str(state.task_id),
             workstream_id=state.workstream_id,
+            milestone_id=state.milestone_id,
             task_prompt=state.prompt,
             repository=state.repository,
             phase=state.phase.value,

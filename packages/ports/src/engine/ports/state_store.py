@@ -97,7 +97,10 @@ class StateStore(Protocol):
         ...
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
-        """Delete one milestone, returning whether it existed."""
+        """Delete one milestone, returning whether it existed.
+
+        Refused while workstreams or runs still point at it.
+        """
         ...
 
     async def save_workstream(self, workstream: Workstream) -> None:

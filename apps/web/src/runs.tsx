@@ -3,11 +3,15 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   api,
   completeHumanReview,
+  milestoneDetailsUrl,
+  type ApiMilestone,
+  type ApiProject,
   type ApiRunStep,
   type ApiWorkflowRun,
   type EngineConfig,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
+import { useProjectMilestones } from "./milestone-timeline";
 import { WorkspaceControl } from "./workspace";
 
 export const IN_PROGRESS_PHASES = new Set([
@@ -205,13 +209,22 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
   );
 }
 
-export function NewWorkflowPage({ config }: { config: EngineConfig }) {
+export function NewWorkflowPage({
+  config,
+  project,
+  milestone,
+}: {
+  config: EngineConfig;
+  project?: ApiProject;
+  milestone?: ApiMilestone;
+}) {
   const [prompt, setPrompt] = useState(
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
   );
   const [repository, setRepository] = useState(".");
   const [runner, setRunner] = useState(config.defaultWorkflowRunner);
   const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
+  const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -232,6 +245,9 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
           prompt,
           repository,
           runner,
+          ...(milestone
+            ? { milestoneId: milestone.milestoneId, workstreamId: workstreamId || undefined }
+            : {}),
         }),
       });
       // The run now owns this prompt, so the draft has nothing left to keep.
@@ -246,11 +262,14 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
   return (
     <main className="panel-scroll">
       <header className="hero hero-narrow">
-        <p className="eyebrow">OpenEngine / New workflow</p>
-        <h1>Start a workflow</h1>
+        <p className="eyebrow">
+          {milestone ? `${project?.name ?? "Project"} / ${milestone.name}` : "OpenEngine / New workflow"}
+        </p>
+        <h1>{milestone ? "Create a task" : "Start a workflow"}</h1>
         <p className="lede">
-          Create one run that keeps its stages, agent conversations, outputs, and final human
-          decision together.
+          {milestone
+            ? "Start work for this milestone, optionally under one of its workstreams."
+            : "Create one run that keeps its stages, agent conversations, outputs, and final human decision together."}
         </p>
       </header>
       <form className="form" onSubmit={submit}>
@@ -268,6 +287,22 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
             ))}
           </select>
         </label>
+        {milestone && (
+          <label>
+            <span>Workstream (optional)</span>
+            <select
+              value={workstreamId}
+              onChange={(event) => setWorkstreamId(event.target.value)}
+            >
+              <option value="">No workstream — milestone task</option>
+              {milestone.workstreams.map((workstream) => (
+                <option key={workstream.workstreamId} value={workstream.workstreamId}>
+                  {workstream.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           <span>Repository</span>
           <input
@@ -307,7 +342,14 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
           </p>
         )}
         <div className="form-actions">
-          <a className="back-link" href="/runs">
+          <a
+            className="back-link"
+            href={
+              milestone && project
+                ? milestoneDetailsUrl(project.projectId, milestone.milestoneId)
+                : "/runs"
+            }
+          >
             Cancel
           </a>
           <button
@@ -315,7 +357,7 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
             disabled={submitting || !runner || !workflowId}
             type="submit"
           >
-            {submitting ? "Creating…" : "Create workflow run"}
+            {submitting ? "Creating…" : milestone ? "Create task" : "Create workflow run"}
           </button>
         </div>
         <p className="form-note">
@@ -325,6 +367,37 @@ export function NewWorkflowPage({ config }: { config: EngineConfig }) {
       </form>
     </main>
   );
+}
+
+export function NewTaskPage({
+  config,
+  projectId,
+  milestoneId,
+}: {
+  config: EngineConfig;
+  projectId: string;
+  milestoneId: string;
+}) {
+  const { project, milestones, loaded, error } = useProjectMilestones(projectId);
+  const milestone = milestones.find((item) => item.milestoneId === milestoneId);
+
+  if (!loaded)
+    return (
+      <main className="panel-scroll">
+        <p className={error ? "notice notice-block" : "state-inline"}>
+          {error ? `Could not load milestone: ${error}` : "Loading milestone…"}
+        </p>
+      </main>
+    );
+  if (!project || !milestone)
+    return (
+      <main className="panel-scroll">
+        <p className="notice notice-block">
+          This project&rsquo;s plan has no milestone {milestoneId}.
+        </p>
+      </main>
+    );
+  return <NewWorkflowPage config={config} project={project} milestone={milestone} />;
 }
 
 function StageProgress({ run }: { run: ApiWorkflowRun }) {

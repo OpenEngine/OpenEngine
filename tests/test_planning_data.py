@@ -99,6 +99,40 @@ def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
     asyncio.run(scenario())
 
 
+def test_run_can_belong_directly_to_a_milestone(store: StateStore) -> None:
+    project = Project(ProjectId("project-engine"), "Engine")
+    milestone = Milestone(
+        MilestoneId("milestone-foundation"), project.project_id, "Foundation"
+    )
+    run = RunState(
+        run_id=RunId("run-foundation"),
+        task_id=TaskId("task-foundation"),
+        workflow_id=WorkflowId("implementation-v1"),
+        milestone_id=milestone.milestone_id,
+    )
+
+    async def scenario() -> None:
+        await store.save_project(project)
+        await store.save_milestone(milestone)
+        await store.save(run)
+
+        assert await store.load(run.run_id) == run
+        with pytest.raises(ValueError, match="still has runs"):
+            await store.delete_milestone(milestone.milestone_id)
+        with pytest.raises(ValueError, match="both a workstream and a milestone"):
+            await store.save(
+                RunState(
+                    run_id=RunId("run-invalid"),
+                    task_id=TaskId("task-invalid"),
+                    workflow_id=WorkflowId("implementation-v1"),
+                    workstream_id=WorkstreamId("workstream-invalid"),
+                    milestone_id=milestone.milestone_id,
+                )
+            )
+
+    asyncio.run(scenario())
+
+
 def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
     path = tmp_path / "planning.sqlite3"
     project = Project(ProjectId("project-engine"), "Engine")
