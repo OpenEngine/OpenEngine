@@ -109,7 +109,8 @@ WorkflowStep = AgentStep | HumanReviewStep
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceSpec:
-    base_ref: str = "origin/main"
+    base_ref: str = ""
+    """Explicit Git ref, or empty to use the configured default branch."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -29,6 +29,7 @@ from engine.domain import (
     StartAgentRun,
     StepCompleted,
     StepId,
+    WorkspaceSpec,
     StepReactivated,
     WorkflowDefinition,
     WorkspaceAccess,
@@ -63,6 +64,7 @@ class WorkflowExecutor:
         review_runners: Mapping[str, AgentRunner],
         approval_handler: Callable[[StartAgentRun, str], ApprovalHandler] | None = None,
         catalog: WorkflowCatalog | None = None,
+        default_branch: str = "main",
     ) -> None:
         self._capabilities = capabilities
         self._dispatcher = Dispatcher(capabilities)
@@ -74,6 +76,7 @@ class WorkflowExecutor:
             if catalog is not None
             else WorkflowCatalog.from_definitions(())
         )
+        self._default_branch = default_branch
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
             raise WorkflowExecutionError(
@@ -100,8 +103,13 @@ class WorkflowExecutor:
         try:
             state = await self._require_state(initial_event.run_id)
             selected_name = self._runner_name(runner_name, state)
-            definition = self._definition_for(state, initial_event.workflow_id)
-            if state.workflow_definition is None or state.runner_name != selected_name:
+            definition = self._resolve_default_branch(
+                self._definition_for(state, initial_event.workflow_id)
+            )
+            if (
+                state.workflow_definition != definition
+                or state.runner_name != selected_name
+            ):
                 state = replace(
                     state,
                     workflow_definition=definition,
@@ -436,6 +444,17 @@ class WorkflowExecutor:
             raise WorkflowExecutionError(
                 f"no {step.workspace_access.value} runner for: {runner_name}"
             ) from error
+
+    def _resolve_default_branch(
+        self, definition: WorkflowDefinition
+    ) -> WorkflowDefinition:
+        """Snapshot the configured branch before the pure engine sees the run."""
+        if definition.workspace.base_ref:
+            return definition
+        return replace(
+            definition,
+            workspace=WorkspaceSpec(base_ref=f"origin/{self._default_branch}"),
+        )
 
     async def _require_state(self, run_id: RunId) -> RunState:
         state = await self._capabilities.state_store.load(run_id)

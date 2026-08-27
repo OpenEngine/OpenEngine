@@ -92,7 +92,10 @@ def agent(
     )
 
 
-def workspace(*, base_ref: str = "origin/main") -> WorkspaceSpec:
+def workspace(*, base_ref: str | None = None) -> WorkspaceSpec:
+    """Use the configured default branch unless an explicit ref is supplied."""
+    if base_ref is None:
+        return WorkspaceSpec()
     return WorkspaceSpec(base_ref=_nonempty(base_ref, "workspace base_ref"))
 
 

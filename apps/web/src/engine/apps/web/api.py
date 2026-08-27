@@ -871,6 +871,7 @@ def create_app(
     review_runners: Mapping[str, AgentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
     approval_policy: ApprovalConfig = ApprovalConfig(),
+    default_branch: str = "main",
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -931,6 +932,7 @@ def create_app(
         review_runners=review_runners if review_runners is not None else runners,
         approval_handler=workflow_approval_handler,
         catalog=catalog,
+        default_branch=default_branch,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
     workflow_restart_locks: dict[RunId, asyncio.Lock] = {}

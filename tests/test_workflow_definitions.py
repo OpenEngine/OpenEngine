@@ -371,6 +371,7 @@ def test_checked_in_definition_is_the_implementation_review_source_of_truth() ->
 
     assert definition.name == "Implementation review"
     assert definition.version == "v1"
+    assert definition.workspace.base_ref == ""
     assert definition.naming_profile is not None
     assert definition.naming_profile.agent_id == AgentId("implementation-agent")
     assert "concise display name" in definition.naming_profile.instructions
