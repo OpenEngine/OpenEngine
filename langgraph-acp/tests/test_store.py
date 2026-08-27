@@ -1,20 +1,26 @@
 """The session binding: its lifecycle, and the isolation it has to guarantee.
 
-Two things are worth pinning down here. The lifecycle -- put, get, delete -- is
-the acceptance criterion, and the isolation is the reason the store is keyed by
-a pair: one LangGraph thread runs an implementer and three reviewers, and a node
+Three things are worth pinning down here. The lifecycle -- put, get, delete --
+is the acceptance criterion. The isolation is the reason the store is keyed by a
+pair: one LangGraph thread runs an implementer and three reviewers, and a node
 that resumed the wrong conversation would be a plausible-looking agent replying
-to somebody else's history.
+to somebody else's history. And conformance is checked against the interface
+rather than against this one class, because swapping in a durable store is meant
+to be a constructor argument, and the durable stores are a later ticket that
+will find these checks already written.
 
 What is deliberately not tested is durability, because this implementation has
 none. It is the store that lives as long as its process, and the ones that
-outlive a restart arrive with a later ticket.
+outlive a restart arrive with that later ticket.
 """
 
 import asyncio
+import inspect
 from collections.abc import Callable, Coroutine
 from functools import wraps
 from typing import Any
+
+import pytest
 
 from langgraph_acp import ACPSessionStore, InMemoryACPSessionStore
 
@@ -146,8 +152,55 @@ async def test_seeded_bindings_are_copied_rather_than_shared() -> None:
     assert await store.get("pr-918", "reviewer") == "sess_abc123"
 
 
-def test_the_in_memory_store_is_an_acp_session_store() -> None:
-    assert isinstance(InMemoryACPSessionStore(), ACPSessionStore)
+#: Every implementation checked against the interface. Ticket 17's durable
+#: stores add themselves here, and inherit the conformance checks below.
+IMPLEMENTATIONS: tuple[type[Any], ...] = (InMemoryACPSessionStore,)
+
+
+def declares_static_conformance(store: InMemoryACPSessionStore) -> ACPSessionStore:
+    """The half of conformance `isinstance` cannot see.
+
+    `runtime_checkable` checks that three names exist and stops there, so an
+    object whose methods are synchronous, or which takes `(namespace, key)` the
+    way LangGraph's `BaseStore` does, satisfies `isinstance` while breaking
+    every caller. This function is never called: mypy checks the return, and
+    dropping an `async`, changing a type, or taking a fourth argument fails the
+    type check instead of production.
+
+    Parameter *names* it will not catch -- mypy ignores them when matching a
+    protocol -- which is what the signature check below is for.
+    """
+    return store
+
+
+@pytest.mark.parametrize(
+    "implementation", IMPLEMENTATIONS, ids=lambda cls: str(cls.__name__)
+)
+def test_an_implementation_is_an_acp_session_store(implementation: type[Any]) -> None:
+    assert isinstance(implementation(), ACPSessionStore)
+
+
+@pytest.mark.parametrize(
+    "implementation", IMPLEMENTATIONS, ids=lambda cls: str(cls.__name__)
+)
+def test_an_implementation_is_callable_the_way_the_protocol_says(
+    implementation: type[Any],
+) -> None:
+    """Signatures match exactly, parameter names included.
+
+    Callers pass `thread_id=` and `session_key=` by keyword, and swapping one
+    store for another is supposed to be a constructor argument. A renamed
+    parameter keeps `isinstance` happy and every existing test green while
+    raising `TypeError` in whichever deployment configured the other store.
+    """
+    for name in ("get", "put", "delete"):
+        declared = getattr(ACPSessionStore, name)
+        implemented = getattr(implementation, name)
+
+        assert inspect.iscoroutinefunction(implemented), f"{name} is not awaitable"
+        assert inspect.signature(implemented) == inspect.signature(declared), (
+            f"{name} does not have the signature the protocol declares"
+        )
 
 
 def test_the_interface_is_three_methods_and_no_more() -> None:

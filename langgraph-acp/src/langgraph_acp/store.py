@@ -52,6 +52,13 @@ class ACPSessionStore(Protocol):
     database. The in-memory one awaits nothing and is async anyway, so that
     swapping it for a durable store is a constructor argument rather than an
     edit to every caller.
+
+    Implementing this means matching these signatures exactly, parameter names
+    included: callers pass `thread_id=` and `session_key=` by keyword, and a
+    store that renamed one would still satisfy `isinstance` -- structural checks
+    see the three names and nothing else -- while raising `TypeError` in
+    whichever deployment configured it. `tests/test_store.py` checks the
+    signature rather than the name for that reason.
     """
 
     async def get(self, thread_id: str, session_key: str) -> str | None:
