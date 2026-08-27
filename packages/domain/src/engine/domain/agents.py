@@ -101,6 +101,13 @@ class AgentInstance:
     title: str = "New chat"
     archived: bool = False
     runner: str = ""
+    model: str = ""
+    """Which of the chosen runner's models answers, advisory.
+
+    Empty means the runner's own default, so a conversation that never picked
+    one keeps whatever the deployment configured. A name rather than anything
+    the domain can interpret -- the same arrangement as `runner`.
+    """
     auto_approve: bool = False
     """Whether this conversation applies the system auto-approval policy."""
     workflow_run_id: RunId | None = None

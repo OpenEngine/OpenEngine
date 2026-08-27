@@ -71,11 +71,24 @@ class Settings:
     codex_timeout_seconds: float | None = None
     """No ceiling: a turn runs until it is done or someone cancels it."""
     codex_model: str = ""
+    codex_models: tuple[str, ...] = ("gpt-5-codex", "gpt-5")
+    """What a conversation on this runner may be switched to.
+
+    A different thing from `codex_model`, which is what a conversation that
+    picked nothing gets: this is the choice offered, and an empty tuple offers
+    none rather than meaning the provider default.
+    """
     claude_binary: str = "claude"
     claude_working_directory: str = "."
     claude_timeout_seconds: float | None = None
     """Same as `codex_timeout_seconds`."""
     claude_model: str = ""
+    claude_models: tuple[str, ...] = ("opus", "sonnet", "haiku")
+    """Same as `codex_models`, in Claude Code's own vocabulary.
+
+    Aliases rather than dated model ids: the CLI resolves each to the current
+    model of that tier, so this list does not go stale between releases.
+    """
     interactive_codex_sandbox: str = "workspace-write"
     """An approved command has to be able to do the thing it was approved for.
 
@@ -186,6 +199,21 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
+    }
+
+
+def build_runner_models(settings: Settings) -> Mapping[str, tuple[str, ...]]:
+    """The models each runner offers, under the names `build_runners` bound.
+
+    Here rather than in the adapters for the reason the runner names are here:
+    below this file a model is an opaque string, and which of a provider's
+    models a deployment can actually reach is the deployment's to state. The
+    interface offers a conversation this list and nothing else, so a name it
+    does not contain cannot be sent to a CLI.
+    """
+    return {
+        "codex": settings.codex_models,
+        "claude": settings.claude_models,
     }
 
 
@@ -302,6 +330,7 @@ __all__ = [
     "Settings",
     "build_capabilities",
     "build_read_only_runners",
+    "build_runner_models",
     "build_runners",
     "build_workflow_runners",
     "build_session",

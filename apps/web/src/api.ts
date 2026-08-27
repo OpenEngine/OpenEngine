@@ -22,6 +22,9 @@ export type AgentOption = {
 export type RunnerOption = {
   id: string;
   implementation: string;
+  /** The models this runner offers. Empty where the deployment composed none,
+   *  and a conversation on it then runs on the runner's own default. */
+  models: string[];
 };
 
 export type EngineConfig = {
@@ -51,6 +54,8 @@ export type ApiThread = {
   archived: boolean;
   agentId: string;
   runner: string;
+  /** The runner's model this chat runs on, empty for the runner's default. */
+  model: string;
   /** The checkout, when this chat currently has one. */
   workspaceRoot?: string;
   /** What to check out to read this chat's work, attached or not. */
@@ -203,6 +208,17 @@ export function setThreadRunner(threadId: string, runner: string): Promise<ApiTh
   return api<ApiThread>(`/api/threads/${threadId}`, {
     method: "PATCH",
     body: JSON.stringify({ runner }),
+  });
+}
+
+/** Choose which of the runner's models answers this conversation.
+ *
+ *  Empty means the runner's own default. Switching runner clears a model the
+ *  new one does not offer, so the answer is read back rather than assumed. */
+export function setThreadModel(threadId: string, model: string): Promise<ApiThread> {
+  return api<ApiThread>(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ model }),
   });
 }
 

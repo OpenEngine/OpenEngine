@@ -117,6 +117,7 @@ class PostgresStateStore:
         archived: bool,
         runner: str,
         auto_approve: bool = False,
+        model: str = "",
     ) -> AgentInstance:
         raise NotImplementedError(
             "Agent instance metadata lands with the state-store ticket"

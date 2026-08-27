@@ -381,15 +381,16 @@ class SQLiteStateStore:
         archived: bool,
         runner: str,
         auto_approve: bool = False,
+        model: str = "",
     ) -> AgentInstance:
         with self._lock, self._connection:
             updated = self._connection.execute(
                 """
                 UPDATE agent_instances
-                SET title = ?, archived = ?, runner = ?, auto_approve = ?
+                SET title = ?, archived = ?, runner = ?, auto_approve = ?, model = ?
                 WHERE instance_id = ?
                 """,
-                (title, archived, runner, auto_approve, instance_id),
+                (title, archived, runner, auto_approve, model, instance_id),
             ).rowcount
             if not updated:
                 raise KeyError(f"no agent instance {instance_id!r}")
@@ -402,7 +403,7 @@ class SQLiteStateStore:
             row = self._connection.execute(
                 """
                 SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                       title, archived, runner, auto_approve,
+                       title, archived, runner, auto_approve, model,
                        workflow_run_id, workflow_step_id
                 FROM agent_instances WHERE instance_id = ?
                 """,
@@ -432,7 +433,7 @@ class SQLiteStateStore:
     ) -> Sequence[AgentInstance]:
         query = """
             SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                   title, archived, runner, auto_approve,
+                   title, archived, runner, auto_approve, model,
                    workflow_run_id, workflow_step_id
             FROM agent_instances
         """
@@ -738,6 +739,7 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
         title=row["title"],
         archived=bool(row["archived"]),
         runner=row["runner"],
+        model=row["model"],
         auto_approve=bool(row["auto_approve"]),
         workflow_run_id=(
             RunId(row["workflow_run_id"])

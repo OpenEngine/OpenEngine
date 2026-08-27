@@ -7,6 +7,7 @@ import {
   newChatAgent,
   setProjectArchived,
   setThreadAutoApprove,
+  setThreadModel,
   setThreadRunner,
   type ApiThread,
   type ApiProject,
@@ -64,6 +65,7 @@ function ChatPanel({
 type ThreadCustom = {
   agentId?: string;
   runner?: string;
+  model?: string;
   workflowRunId?: string;
   editable?: boolean;
   autoApprove?: boolean;
@@ -172,6 +174,7 @@ function ConversationHeader({
   // list is a snapshot taken whenever it was last refreshed.
   const [fetched, setFetched] = useState<ApiThread>();
   const [chosen, setChosen] = useState<string>();
+  const [chosenModel, setChosenModel] = useState<string>();
   const [chosenAutoApprove, setChosenAutoApprove] = useState<boolean>();
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -180,9 +183,16 @@ function ConversationHeader({
   // the truthful thing to show while it is being read.
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
   const workflowConversation = Boolean(thread?.workflowRunId);
+  // No models for a workflow conversation, and so no dropdown: a step's turns
+  // are started by the run rather than from here, and offering a choice this
+  // page could not apply would be worse than offering none.
   const availableRunners = workflowConversation
-    ? workflowRunners.map((id) => ({ id, implementation: id }))
+    ? workflowRunners.map((id) => ({ id, implementation: id, models: [] }))
     : runners;
+  // The chosen runner's own models: a model belongs to the provider that
+  // offers it, so switching runner changes what there is to choose from.
+  const models = availableRunners.find((option) => option.id === runner)?.models ?? [];
+  const model = chosenModel ?? thread?.model ?? "";
   const autoApprove = chosenAutoApprove ?? thread?.autoApprove ?? false;
   // Title generation refreshes the thread list after the first message. That
   // refreshed value can be newer than the conversation snapshot fetched when
@@ -205,11 +215,25 @@ function ConversationHeader({
     setChosen(next);
     setError(undefined);
     try {
+      // The server drops a model the new runner does not offer, so its answer
+      // is what the model dropdown shows rather than the choice made before.
+      setChosenModel(undefined);
       setFetched(await setThreadRunner(threadId, next));
       // The sidebar prints the same runner under every chat's title.
       await aui.threads.reload();
     } catch (failure) {
       setChosen(undefined);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
+  async function chooseModel(next: string) {
+    setChosenModel(next);
+    setError(undefined);
+    try {
+      setFetched(await setThreadModel(threadId, next));
+    } catch (failure) {
+      setChosenModel(undefined);
       setError(failure instanceof Error ? failure.message : String(failure));
     }
   }
@@ -247,21 +271,42 @@ function ConversationHeader({
         <span>Agent</span>
         <span className="field-box">{thread?.agentId ?? "…"}</span>
       </div>
-      <label className="field">
-        <span>Runner</span>
-        <select
-          className="field-box"
-          value={runner}
-          onChange={(event) => void choose(event.target.value)}
-        >
-          {availableRunners.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.id}
-            </option>
-          ))}
-        </select>
-        {error && <span className="field-error">{error}</span>}
-      </label>
+      <div className="field-stack">
+        <label className="field">
+          <span>Runner</span>
+          <select
+            className="field-box"
+            value={runner}
+            onChange={(event) => void choose(event.target.value)}
+          >
+            {availableRunners.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.id}
+              </option>
+            ))}
+          </select>
+          {error && <span className="field-error">{error}</span>}
+        </label>
+        {models.length > 0 && (
+          <label className="field">
+            <span>Model</span>
+            <select
+              className="field-box"
+              value={model}
+              onChange={(event) => void chooseModel(event.target.value)}
+            >
+              {/* What the runner was wired with, which is the only honest name
+                  for it here: the deployment's default is not ours to print. */}
+              <option value="">Default</option>
+              {models.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
       {workflowConversation && (
         <label className="field">
           <span>Approvals</span>

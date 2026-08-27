@@ -105,6 +105,8 @@ class ChatThread:
     instance_id: AgentInstanceId
     agent_id: AgentId
     runner: str
+    model: str = ""
+    """Which of the runner's models answers, empty for the runner's default."""
     title: str = "New chat"
     archived: bool = False
     workspace_root: str | None = None
@@ -334,13 +336,22 @@ class ThreadService:
         approval_policy: ApprovalConfig = ApprovalConfig(),
         *,
         approval_observer: Callable[[ApprovalRecord], Awaitable[None]] | None = None,
+        runner_models: Mapping[str, Sequence[str]] = {},
     ) -> None:
+        """`runner_models` is the models each runner offers, by runner name.
+
+        A conversation may only be set to one of its runner's own, so the
+        composition root's answer to "what can this provider be asked for" is
+        also what a chat is held to. A runner with none offers no choice, and
+        such a conversation runs on whatever that runner was configured with.
+        """
         self.session = session
         self.approvals = ApprovalBroker(
             session.state_store, approval_policy, observe=approval_observer
         )
         """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
+        self._runner_models = {name: tuple(models) for name, models in runner_models.items()}
         self._workflow_catalog = workflow_catalog
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
@@ -375,6 +386,7 @@ class ThreadService:
                 if instance.runner in self.session.runners
                 else self.session.default_runner
             ),
+            model=self._offered_model(instance.runner, instance.model),
             title=await self._instance_title(instance),
             archived=instance.archived,
             workflow_run_id=instance.workflow_run_id,
@@ -472,6 +484,9 @@ class ThreadService:
         if selected_runner not in self.session.runners:
             raise ValueError(f"unknown runner {selected_runner!r}")
         thread.runner = selected_runner
+        # A turn may name a runner the header never sent, and a model belongs to
+        # the runner that offers it.
+        thread.model = self._offered_model(selected_runner, thread.model)
         await self._persist_metadata(thread)
 
         async with self._locks[instance_id]:
@@ -482,6 +497,7 @@ class ThreadService:
                 on_message=observed.put_nowait,
                 on_approval=on_approval,
                 agent_run_id=agent_run_id,
+                model=thread.model,
             )
         return turn.message.content
 
@@ -707,11 +723,13 @@ class ThreadService:
             )
             # The session's answer rather than the name's, so a chat with an
             # agent that only reads is named by a runner that only reads too.
+            profile = self.session.profiles[thread.agent_id]
+            model = self._offered_model(selected_runner, thread.model)
             turn = await self.session.runner_for(
                 thread.agent_id, selected_runner
             ).run_turn(
                 _new_agent_run_id(),
-                self.session.profiles[thread.agent_id],
+                replace(profile, model=model) if model else profile,
                 (*title_context, Message.user(_TITLE_PROMPT)),
                 # Naming a chat reads the transcript, not the tree, so a
                 # detached one is named where the process runs rather than
@@ -742,14 +760,24 @@ class ThreadService:
         runner: str | None = None,
         archived: bool | None = None,
         auto_approve: bool | None = None,
+        model: str | None = None,
     ) -> ChatThread:
         thread = await self._require(instance_id)
         if runner is not None and runner not in self.session.runners:
             raise ValueError(f"unknown runner {runner!r}")
+        if model:
+            offered = self._runner_models.get(runner or thread.runner, ())
+            if model not in offered:
+                raise ValueError(f"unknown model {model!r}")
         if title is not None:
             thread.title = title
+        if model is not None:
+            thread.model = model
         if runner is not None:
             thread.runner = runner
+            # Switching provider drops a model the new one does not offer,
+            # rather than passing a Claude model name to Codex.
+            thread.model = self._offered_model(runner, thread.model)
         if archived is not None:
             thread.archived = archived
         if auto_approve is not None:
@@ -770,7 +798,21 @@ class ThreadService:
             thread.archived,
             thread.runner,
             thread.auto_approve,
+            thread.model,
         )
+
+    def models_for(self, runner: str) -> tuple[str, ...]:
+        """The models this process offers under one runner name."""
+        return self._runner_models.get(runner, ())
+
+    def _offered_model(self, runner: str, model: str) -> str:
+        """`model` if that runner offers it, otherwise the runner's default.
+
+        Read wherever a runner and a model meet, because the two are chosen
+        separately: the composition may have stopped offering a model, and a
+        conversation may have been switched to a provider that never did.
+        """
+        return model if model in self._runner_models.get(runner, ()) else ""
 
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
         thread = await self.get(instance_id)
@@ -871,8 +913,16 @@ def create_app(
     review_runners: Mapping[str, AgentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
     approval_policy: ApprovalConfig = ApprovalConfig(),
+    runner_models: Mapping[str, Sequence[str]] = {},
 ) -> Starlette:
-    """Build the web application around already-composed capabilities."""
+    """Build the web application around already-composed capabilities.
+
+    `runner_models` names the models each runner offers, by the same names as
+    `runners`. Composed rather than discovered: which models a deployment can
+    reach is the composition root's to state, exactly as the runners themselves
+    are, and a runner listed with none is simply one this interface offers no
+    choice for.
+    """
     if workflow_runners is not None and review_runners is None:
         raise ValueError("review_runners are required with workflow_runners")
     if workflow_catalog is None:
@@ -891,6 +941,7 @@ def create_app(
         catalog,
         approval_policy,
         approval_observer=approval_feed.publish,
+        runner_models=runner_models,
     )
     run_reader = RunReader(session.state_store, catalog)
 
@@ -1148,7 +1199,13 @@ def create_app(
                     for agent_id, profile in sorted(session.profiles.items())
                 ],
                 "runners": [
-                    {"id": name, "implementation": type(runner).__name__}
+                    {
+                        "id": name,
+                        "implementation": type(runner).__name__,
+                        # Empty where nothing was composed, which is the
+                        # client's cue that this runner has no choice to offer.
+                        "models": list(service.models_for(name)),
+                    }
                     for name, runner in runners.items()
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
@@ -1444,6 +1501,7 @@ def create_app(
         ):
             return _error(f"unknown workflow runner: {runner}", 400)
         runner_changed = runner is not None and runner != thread.runner
+        model = str(body["model"]) if "model" in body else None
         auto_approve = None
         if "autoApprove" in body:
             if not isinstance(body["autoApprove"], bool):
@@ -1455,6 +1513,7 @@ def create_app(
                 title=title,
                 runner=runner,
                 auto_approve=auto_approve,
+                model=model,
             )
         except ValueError as error:
             return _error(str(error), 400)
@@ -1800,6 +1859,7 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
         "archived": thread.archived,
         "agentId": str(thread.agent_id),
         "runner": thread.runner,
+        "model": thread.model,
         # Present but detached is a state of its own: the work is still there,
         # on the ref, and attaching brings a checkout back to it.
         "workspaceAttached": thread.workspace_root is not None,

@@ -467,6 +467,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
             "archived": True,
             "agentId": "coder",
             "runner": "other",
+            "model": "",
             "workspaceAttached": False,
         }
     ]
@@ -484,6 +485,7 @@ class ConcurrentRunner:
     def __init__(self, replies: Sequence[str] = ("ok",)) -> None:
         self.replies = list(replies)
         self.seen: list[tuple[Message, ...]] = []
+        self.models: list[str] = []
         self.workspace_ids: list[str | None] = []
         self.active = 0
         self.most_active = 0
@@ -497,6 +499,7 @@ class ConcurrentRunner:
         workspace_id=None,
     ) -> AgentTurn:
         self.seen.append(tuple(messages))
+        self.models.append(profile.model)
         self.workspace_ids.append(workspace_id)
         self.active += 1
         self.most_active = max(self.most_active, self.active)
@@ -3611,6 +3614,60 @@ def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None
     assert [turn[-1].content for turn in second.seen] == ["hi"]
     assert first.seen == []
     assert unknown.status_code == 400
+
+
+def test_a_chat_runs_on_the_model_it_picked_from_its_runners_own() -> None:
+    """The header offers a model under the runner, and the turn is run on it.
+
+    A model belongs to the provider that offers it, so one the chosen runner
+    does not have is refused -- and switching provider drops the choice rather
+    than handing one CLI another's model name.
+    """
+    first = ConcurrentRunner(("from the first",))
+    second = ConcurrentRunner(("from the second",))
+    runners = {"test": first, "other": second}
+    store = InMemoryStateStore()
+    app = create_app(
+        _session_with(runners, state_store=store),
+        runners,
+        runner_models={"test": ("fast", "slow"), "other": ("only",)},
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            config = await client.get("/api/config")
+            created = await client.post(
+                "/api/threads", json={"agentId": "coder", "runner": "test"}
+            )
+            thread_id = created.json()["id"]
+            chosen = await client.patch(
+                f"/api/threads/{thread_id}", json={"model": "slow"}
+            )
+            await client.post(f"/api/threads/{thread_id}/runs", json={"text": "hi"})
+            stored = await store.load_instance(AgentInstanceId(thread_id))
+            unknown = await client.patch(
+                f"/api/threads/{thread_id}", json={"model": "only"}
+            )
+            switched = await client.patch(
+                f"/api/threads/{thread_id}", json={"runner": "other"}
+            )
+            return config, created, chosen, stored, unknown, switched
+
+    config, created, chosen, stored, unknown, switched = asyncio.run(scenario())
+
+    assert config.json()["runners"] == [
+        {"id": "test", "implementation": "ConcurrentRunner", "models": ["fast", "slow"]},
+        {"id": "other", "implementation": "ConcurrentRunner", "models": ["only"]},
+    ]
+    assert created.json()["model"] == ""
+    assert chosen.json()["model"] == "slow"
+    assert first.models == ["slow"]
+    # Durable, so a restart reopens the chat on the model it was answering on.
+    assert stored is not None and stored.model == "slow"
+    # "only" is the other runner's, so this chat cannot be set to it.
+    assert unknown.status_code == 400
+    assert switched.json()["model"] == ""
 
 
 def test_agent_names_chat_before_answer_without_changing_conversation() -> None:

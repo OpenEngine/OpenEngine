@@ -52,7 +52,7 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0004",)
+    assert revision == ("sqlite_0005",)
 
 
 def test_milestone_details_migration_preserves_existing_records(tmp_path: Path) -> None:

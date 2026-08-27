@@ -233,9 +233,10 @@ class AgentSession:
         archived: bool,
         runner: str,
         auto_approve: bool = False,
+        model: str = "",
     ) -> AgentInstance:
         return await self._capabilities.state_store.update_instance_metadata(
-            instance_id, title, archived, runner, auto_approve
+            instance_id, title, archived, runner, auto_approve, model
         )
 
     async def instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
@@ -347,6 +348,7 @@ class AgentSession:
         on_message: TurnObserver | None = None,
         on_approval: ApprovalHandler | None = None,
         agent_run_id: AgentRunId | None = None,
+        model: str = "",
     ) -> AgentTurn:
         """Add a message to the conversation and get the agent's reply.
 
@@ -366,6 +368,12 @@ class AgentSession:
         `agent_run_id` lets a caller that has to name the execution before it
         starts -- because it is brokering approvals for it, or replaying it
         durably -- supply the id instead of learning it afterwards.
+
+        `model` names which of the runner's models answers this turn, and
+        overrides whatever the profile asks for: a profile's preference is a
+        property of the role, while this is the choice a person made about one
+        conversation. Empty leaves the profile -- and so the runner's own
+        default -- alone.
 
         A turn that is cancelled keeps whatever a reporting runner had already
         told us it did, marked as interrupted. A runner that reports nothing
@@ -402,6 +410,8 @@ class AgentSession:
                     dict.fromkeys((*profile.capabilities, *contextual))
                 ),
             )
+        if model:
+            profile = replace(profile, model=model)
         # After the profile, because which runner answers depends on it -- and
         # still before anything is written, so a turn nobody can run leaves the
         # transcript as it was.

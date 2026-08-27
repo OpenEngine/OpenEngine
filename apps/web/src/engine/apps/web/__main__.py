@@ -16,6 +16,7 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_read_only_runners,
+    build_runner_models,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -50,6 +51,13 @@ def report_wiring(settings: Settings) -> None:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
     print(f"agents: {', '.join(sorted(session.profiles))}")
     print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
+    print(
+        "runner models: "
+        + ", ".join(
+            f"{name}: {', '.join(models) or 'provider default only'}"
+            for name, models in build_runner_models(settings).items()
+        )
+    )
     print(
         "workflow runners: "
         + ", ".join(
@@ -108,6 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         review_runners=read_only_runners,
         workflow_catalog=workflow_catalog,
         approval_policy=loaded.config.approvals,
+        runner_models=build_runner_models(settings),
     )
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)

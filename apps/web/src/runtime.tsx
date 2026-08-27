@@ -110,6 +110,7 @@ function remoteMetadata(thread: ApiThread) {
     custom: {
       agentId: thread.agentId,
       runner: thread.runner,
+      model: thread.model,
       workspaceRoot: thread.workspaceRoot,
       workspaceRef: thread.workspaceRef,
       workspaceAttached: thread.workspaceAttached,

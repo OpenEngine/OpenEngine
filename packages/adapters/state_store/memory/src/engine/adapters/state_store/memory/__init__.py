@@ -221,6 +221,7 @@ class InMemoryStateStore:
         archived: bool,
         runner: str,
         auto_approve: bool = False,
+        model: str = "",
     ) -> AgentInstance:
         with self._lock:
             instance = self._instances.get(instance_id)
@@ -232,6 +233,7 @@ class InMemoryStateStore:
                 archived=archived,
                 runner=runner,
                 auto_approve=auto_approve,
+                model=model,
             )
             self._instances[instance_id] = updated
         return updated

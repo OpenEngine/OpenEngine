@@ -42,6 +42,7 @@ from engine.apps.web.composition import (  # noqa: E402
     Settings,
     build_capabilities,
     build_read_only_runners,
+    build_runner_models,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -120,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         workflow_runners=build_workflow_runners(settings),
         review_runners=read_only_runners,
         approval_policy=loaded.config.approvals,
+        runner_models=build_runner_models(settings),
     )
     print(describe_loaded_config(loaded), flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")

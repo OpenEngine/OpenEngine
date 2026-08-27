@@ -151,6 +151,7 @@ class StateStore(Protocol):
         archived: bool,
         runner: str,
         auto_approve: bool = False,
+        model: str = "",
     ) -> AgentInstance:
         """Persist the user-facing state of an interactive instance."""
         ...

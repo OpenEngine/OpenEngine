@@ -428,6 +428,10 @@ ul, ol { padding: 0; list-style: none; }
 .panel-head-compact .field { gap: 5px; }
 .panel-head-compact .field-box { height: 38px; }
 
+/* Two controls in one of the header's columns: the model belongs to the runner
+   above it, so it is stacked under it rather than given a column of its own. */
+.field-stack { display: grid; gap: 14px; min-width: 0; align-self: end; }
+.panel-head-compact .field-stack { gap: 10px; }
 .field { display: grid; gap: 8px; min-width: 0; font-size: 14px; }
 .field > span:first-child { color: var(--ink-soft); }
 .field-box {
