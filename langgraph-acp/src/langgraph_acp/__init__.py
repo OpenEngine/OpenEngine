@@ -6,12 +6,9 @@ The boundary this package exists to hold:
     ACP owns the agent conversation and agent-side session state.
     langgraph-acp owns the binding between the two.
 
-What is here so far is the vocabulary and the connection beneath it: the types a
-node configures itself with, the events it streams, the result it returns, the
-failures it reports, a provider that can launch an ACP agent and hold a live
-session with it, and the store that remembers which conversation belongs to
-which node. LangGraph itself has not arrived -- `ACPNode` is a later ticket --
-so nothing yet joins the two halves.
+What is here is the vocabulary, the connection beneath it, and the first node
+that joins the two halves: `ACPNode` resolves an agent, opens and initializes a
+connection, starts a session, runs a prompt, and returns an `ACPResult`.
 
     ACPAgentRegistry -> ACPAgentProvider -> ACPClient -> ACPSession
          "codex"          how to reach      one live     one conversation
@@ -61,6 +58,7 @@ from langgraph_acp.errors import (
     ACPSessionError,
 )
 from langgraph_acp.events import EVENT_NAMESPACE, ACPEvent, ACPEventType
+from langgraph_acp.node import ACPNode
 from langgraph_acp.providers.codex import CODEX_ACP_COMMAND, CodexACPProvider
 from langgraph_acp.result import ACPResult, ACPUsage
 from langgraph_acp.session import (
@@ -84,6 +82,7 @@ __all__ = [
     "ACPError",
     "ACPEvent",
     "ACPEventType",
+    "ACPNode",
     "ACPPrompt",
     "ACPRequirements",
     "ACPResult",

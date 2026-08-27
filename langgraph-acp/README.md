@@ -14,27 +14,22 @@ The design and the ticket sequence live in
 
 ## Status
 
-Tickets 1 to 3 of that plan: the core types, a connection to a real agent, and
-the store that remembers which conversation belongs to which node. `ACPNode`
-arrives later, so nothing here is a LangGraph node yet — but an ACP agent can be
-launched, initialized, prompted, and streamed from today.
+Tickets 1 to 4 of that plan: the core types, a connection to a real agent, the
+store that remembers which conversation belongs to which node, and the first
+working `ACPNode` end-to-end path.
 
 ```python
-from langgraph_acp import default_registry
+from langgraph_acp import ACPNode
 
-client = await default_registry().resolve("codex").connect()
-session = await client.new_session(cwd="/path/to/checkout")
-
-async for event in session.prompt("Review this change"):
-    print(event.name, event.data)
-
-await client.close()
+result = await ACPNode(agent="codex")("Review this change")
+print(result.message)
 ```
 
 Available now:
 
 | | |
 | --- | --- |
+| `ACPNode` | a LangGraph-compatible async callable that runs one ACP turn |
 | `ACPAgentProvider`, `ACPAgentRegistry`, `default_registry` | names resolve to agents |
 | `StdioACPProvider`, `CodexACPProvider` | how an agent is launched |
 | `ACPClient`, `ACPCapabilities` | one live connection, and what it can do |
@@ -54,6 +49,10 @@ default_registry().register(
     StdioACPProvider(name="gemini", command=["gemini", "--experimental-acp"])
 )
 ```
+
+The minimal node takes its invocation input as the prompt and starts a fresh
+session each time. Runtime prompt resolvers, session reuse, MCP injection, and
+LangGraph event streaming arrive in the following tickets.
 
 ## Session bindings
 
