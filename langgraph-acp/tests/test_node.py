@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from langgraph.graph import END, START, StateGraph
+
 from langgraph_acp import ACPAgentRegistry, ACPNode, ACPResult, StdioACPProvider
 
 FAKE_AGENT = Path(__file__).resolve().parent / "fake_agent.py"
@@ -66,3 +68,36 @@ def test_the_node_sends_its_invocation_input_as_the_prompt(tmp_path: Path) -> No
         if message.get("method") == "session/prompt"
     )
     assert prompt == [{"type": "text", "text": "Review ticket 4"}]
+
+
+def test_a_langgraph_graph_invokes_the_node_and_returns_its_result(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "sent.jsonl"
+    registry = ACPAgentRegistry(
+        [
+            StdioACPProvider(
+                name="codex",
+                command=(sys.executable, str(FAKE_AGENT)),
+                env={"FAKE_AGENT_LOG": str(log)},
+            )
+        ]
+    )
+    graph = StateGraph(str)  # type: ignore[type-var]
+    graph.add_node(  # type: ignore[call-overload]
+        "agent", ACPNode(agent="codex", registry=registry)
+    )
+    graph.add_edge(START, "agent")
+    graph.add_edge("agent", END)
+
+    result = asyncio.run(graph.compile().ainvoke("Review this change"))
+
+    assert isinstance(result, ACPResult)
+    assert result == ACPResult(
+        message="Looking.",
+        content=({"type": "text", "text": "Looking."},),
+        agent="codex",
+        session_id="sess_fake_1",
+        stop_reason="end_turn",
+    )
+    assert sent_methods(log) == ["initialize", "session/new", "session/prompt"]

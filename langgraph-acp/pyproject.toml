@@ -19,7 +19,7 @@ build-backend = "hatchling.build"
 packages = ["src/langgraph_acp"]
 
 [dependency-groups]
-dev = ["mypy>=1.15", "pytest>=8.0"]
+dev = ["langgraph>=1.0", "mypy>=1.15", "pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
