@@ -2,11 +2,10 @@
  *
  *  The timeline gives a workstream a bullet and the project's milestones page
  *  gives it a line under the goal it hangs from; neither says whether anything
- *  is happening in it. This is the page a workstream opens: every workstream
- *  under the milestone, and under each the tasks started in it -- what the task
- *  is, the stage its run has reached, and the way through to the run itself. */
+ *  is happening in it. This page shows every task rolled up to the milestone,
+ *  and lets a workstream narrow that list to the tasks started under it. */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   milestoneNewTaskUrl,
@@ -48,15 +47,30 @@ function awaitingReview(tasks: ApiWorkflowRun[]) {
   return tasks.filter((task) => task.phase === "awaiting_human_review").length;
 }
 
-function TaskList({ tasks, label }: { tasks: ApiWorkflowRun[]; label: string }) {
+function TaskList({
+  tasks,
+  label,
+  workstreamNames,
+}: {
+  tasks: ApiWorkflowRun[];
+  label: string;
+  workstreamNames: Map<string, string>;
+}) {
   return (
     <ul className="workstream-tasks" aria-label={label}>
       {tasks.map((task) => (
         <li key={task.runId}>
           <a href={`/runs/${encodeURIComponent(task.runId)}`}>
             <span className="workstream-task-name">{task.name}</span>
-            <span className="workstream-task-stage" data-accent={phaseAccent(task.phase)}>
-              {runStatusLabel(task)}
+            <span className="workstream-task-meta">
+              <span className="workstream-task-context">
+                {task.workstreamId
+                  ? (workstreamNames.get(task.workstreamId) ?? task.workstreamId)
+                  : "Milestone task"}
+              </span>
+              <span className="workstream-task-stage" data-accent={phaseAccent(task.phase)}>
+                {runStatusLabel(task)}
+              </span>
             </span>
           </a>
         </li>
@@ -69,7 +83,8 @@ function WorkstreamCard({
   workstream,
   tasks,
   tasksKnown,
-  tasksError,
+  selected,
+  onSelect,
 }: {
   workstream: ApiWorkstream;
   tasks: ApiWorkflowRun[];
@@ -78,13 +93,26 @@ function WorkstreamCard({
    *  the shell began with, and saying "nothing yet" would be a claim made from
    *  data the page does not have. */
   tasksKnown: boolean;
-  tasksError: string;
+  selected: boolean;
+  onSelect: () => void;
 }) {
   const unfinished = unfinishedTasks(tasks);
   const awaiting = awaitingReview(tasks);
   const titleId = `workstream-${workstream.workstreamId}`;
   return (
-    <article className="card workstream-card" aria-labelledby={titleId}>
+    <article
+      className="card workstream-card"
+      aria-labelledby={titleId}
+      data-selected={selected || undefined}
+    >
+      <button
+        type="button"
+        className="workstream-card-action"
+        aria-labelledby={titleId}
+        aria-pressed={selected}
+        aria-controls="milestone-task-list"
+        onClick={onSelect}
+      />
       <div className="card-top">
         <span className="chip-row">
           {tasksKnown && (
@@ -101,18 +129,6 @@ function WorkstreamCard({
       </div>
       <h2 id={titleId}>{workstream.name}</h2>
       {workstream.scope && <p className="lede">{workstream.scope}</p>}
-      {!tasksKnown ? (
-        <p className="micro">
-          {tasksError ? `Could not load tasks: ${tasksError}` : "Loading tasks…"}
-        </p>
-      ) : tasks.length > 0 ? (
-        // Named in full rather than off the heading above it: two milestones in
-        // one plan may both hang a workstream called "Web", and a list
-        // answering to "Web" names neither of them.
-        <TaskList tasks={tasks} label={`Tasks in ${workstream.name}`} />
-      ) : (
-        <p className="micro">No tasks have been started in this workstream yet.</p>
-      )}
     </article>
   );
 }
@@ -135,6 +151,7 @@ export function MilestoneDetailsPage({
   runsError: string;
   runsLoaded: boolean;
 }) {
+  const [selectedWorkstreamId, setSelectedWorkstreamId] = useState<string | null>(null);
   const { project, milestones, loaded, error, stale } = useProjectMilestones(projectId);
   const milestone = milestones.find((item) => item.milestoneId === milestoneId);
   const names = useMemo(
@@ -143,11 +160,24 @@ export function MilestoneDetailsPage({
   );
   const grouped = useMemo(() => tasksByWorkstream(runs), [runs]);
   const workstreams = milestone?.workstreams ?? [];
-  const workstreamTasks = workstreams.flatMap(
-    (workstream) => grouped.get(workstream.workstreamId) ?? [],
+  const workstreamNames = useMemo(
+    () => new Map(workstreams.map((workstream) => [workstream.workstreamId, workstream.name])),
+    [workstreams],
   );
-  const milestoneTasks = runs.filter((run) => run.milestoneId === milestoneId);
-  const tasks = [...workstreamTasks, ...milestoneTasks];
+  const tasks = runs.filter(
+    (run) =>
+      run.milestoneId === milestoneId ||
+      (run.workstreamId !== null && workstreamNames.has(run.workstreamId)),
+  );
+  // A workstream can disappear while this page is polling. Treat its old
+  // selection as cleared immediately, so it cannot leave the task list pinned
+  // to a heading no longer in the plan.
+  const selectedWorkstream = workstreams.find(
+    (workstream) => workstream.workstreamId === selectedWorkstreamId,
+  );
+  const visibleTasks = selectedWorkstream
+    ? (grouped.get(selectedWorkstream.workstreamId) ?? [])
+    : tasks;
   // The goals this one waits on, read as the names the planner gave them rather
   // than as the ids it recorded -- the same way the milestone's card does.
   const dependencies = (milestone?.dependencies ?? []).map((id) => names.get(id) ?? id);
@@ -229,7 +259,12 @@ export function MilestoneDetailsPage({
                   workstream={workstream}
                   tasks={grouped.get(workstream.workstreamId) ?? []}
                   tasksKnown={runsLoaded}
-                  tasksError={runsError}
+                  selected={selectedWorkstream?.workstreamId === workstream.workstreamId}
+                  onSelect={() =>
+                    setSelectedWorkstreamId((current) =>
+                      current === workstream.workstreamId ? null : workstream.workstreamId,
+                    )
+                  }
                 />
               ))}
             </div>
@@ -239,23 +274,53 @@ export function MilestoneDetailsPage({
               <p>Tasks can be created directly under this milestone.</p>
             </div>
           )}
-          <section className="milestone-tasks" aria-labelledby="milestone-tasks-title">
+          <section
+            id="milestone-task-list"
+            className="milestone-tasks"
+            aria-labelledby="milestone-tasks-title"
+          >
             <div className="milestone-tasks-head">
-              <h2 id="milestone-tasks-title">Milestone tasks</h2>
-              {runsLoaded && (
-                <span className="chip">
-                  {milestoneTasks.length} {milestoneTasks.length === 1 ? "task" : "tasks"}
-                </span>
-              )}
+              <div>
+                <h2 id="milestone-tasks-title">
+                  {selectedWorkstream ? `${selectedWorkstream.name} tasks` : "Milestone tasks"}
+                </h2>
+                {selectedWorkstream && <p className="micro">Filtered by workstream</p>}
+              </div>
+              <span className="milestone-tasks-actions">
+                {selectedWorkstream && (
+                  <button
+                    type="button"
+                    className="btn btn-quiet"
+                    onClick={() => setSelectedWorkstreamId(null)}
+                  >
+                    Show all tasks
+                  </button>
+                )}
+                {runsLoaded && (
+                  <span className="chip">
+                    {visibleTasks.length} {visibleTasks.length === 1 ? "task" : "tasks"}
+                  </span>
+                )}
+              </span>
             </div>
             {!runsLoaded ? (
               <p className="micro">
                 {runsError ? `Could not load tasks: ${runsError}` : "Loading tasks…"}
               </p>
-            ) : milestoneTasks.length > 0 ? (
-              <TaskList tasks={milestoneTasks} label={`Tasks in ${milestone.name}`} />
+            ) : visibleTasks.length > 0 ? (
+              <TaskList
+                tasks={visibleTasks}
+                label={
+                  selectedWorkstream
+                    ? `Tasks in ${selectedWorkstream.name}`
+                    : `Tasks in ${milestone.name}`
+                }
+                workstreamNames={workstreamNames}
+              />
+            ) : selectedWorkstream ? (
+              <p className="micro">No tasks have been started in this workstream yet.</p>
             ) : (
-              <p className="micro">No tasks have been created directly under this milestone yet.</p>
+              <p className="micro">No tasks have been started under this milestone yet.</p>
             )}
           </section>
         </>

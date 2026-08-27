@@ -661,9 +661,26 @@ select:disabled { cursor: default; }
 .milestone-card-workstreams strong { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 .milestone-card-workstreams span { color: var(--muted); font: 500 12px/1.45 var(--mono); }
 
-/* One milestone's own page: a card per workstream, and in it the tasks started
-   under that heading. */
-.workstream-card { grid-template-rows: none; gap: 12px; align-content: start; }
+/* One milestone's own page: workstream cards filter the complete task list
+   below them. */
+.workstream-card {
+  position: relative;
+  width: 100%;
+  grid-template-rows: none;
+  gap: 12px;
+  align-content: start;
+}
+.workstream-card[data-selected] { border-top-color: var(--flame); background: var(--fill-hover); }
+.workstream-card-action {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.workstream-card-action:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
 .workstream-card .lede { font-size: 14px; }
 .chip-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .workstream-tasks {
@@ -683,7 +700,30 @@ select:disabled { cursor: default; }
 }
 .workstream-tasks a:hover .workstream-task-name { text-decoration: underline; }
 .workstream-tasks li + li { border-top: 1px solid var(--rule); }
-.workstream-task-name { font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.workstream-task-name {
+  flex: 1 1 50%;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.workstream-task-meta {
+  display: flex;
+  flex: 0 1 50%;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.workstream-task-context {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
 .workstream-task-stage {
   flex: 0 0 auto;
   color: var(--muted);
@@ -701,6 +741,8 @@ select:disabled { cursor: default; }
 }
 .milestone-tasks-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
 .milestone-tasks-head h2 { font-size: 22px; }
+.milestone-tasks-head > div { display: grid; gap: 4px; }
+.milestone-tasks-actions { display: flex; gap: 10px; align-items: center; }
 
 .welcome { padding: clamp(44px, 8vh, 96px) var(--gutter) 40px; }
 .welcome-copy { display: grid; gap: 14px; max-width: 640px; }
@@ -1303,6 +1345,8 @@ select:disabled { cursor: default; }
   .panel-project { grid-template-rows: auto minmax(0, 1fr) auto; }
   .panel-head-compact .lede { display: none; }
   .milestone-timeline-head { align-items: start; flex-direction: column; gap: 6px; }
+  .milestone-tasks-head { align-items: flex-start; flex-direction: column; }
+  .milestone-tasks-actions { flex-wrap: wrap; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .composer { grid-template-columns: minmax(0, 1fr); }
   .card-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiMilestone, ApiProject, ApiWorkflowRun } from "./api";
@@ -151,32 +151,64 @@ describe("MilestoneDetailsPage", () => {
       [...container.querySelectorAll(".workstream-card h2")].map((h) => h.textContent),
     ).toEqual(["Data model", "Timeline view"]);
     const data = screen.getByRole("article", { name: "Data model" });
+    expect(screen.getByRole("heading", { name: "Data model", level: 2 })).toBeInTheDocument();
+    expect(
+      within(within(data).getByRole("button", { name: "Data model" })).queryByRole("heading"),
+    ).toBeNull();
     expect(within(data).getByText("Persist the plan.")).toBeInTheDocument();
     expect(within(data).getByText("workstream-data")).toBeInTheDocument();
   });
 
-  it("lists each workstream's tasks, and leads to the run behind one", async () => {
+  it("lists every milestone task with its workstream, and leads to its run", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
 
     open("milestone-foundation", [persisting, migrating, drawing, unplanned]);
     await act(async () => {});
 
-    const data = screen.getByRole("article", { name: "Data model" });
-    const tasks = within(data).getByRole("list", { name: "Tasks in Data model" });
-    // Grouped by the workstream each run was started in: the task belonging to
-    // no workstream is on no card here, and the other milestone's is on its own.
+    const tasks = screen.getByRole("list", { name: "Tasks in Foundation" });
+    // The task belonging to no workstream or milestone is not part of this
+    // milestone, while every task in one of its workstreams is present.
     expect(within(tasks).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
       "/runs/run-1",
       "/runs/run-2",
+      "/runs/run-3",
     ]);
     expect(within(tasks).getByText("Persist milestones")).toBeInTheDocument();
+    expect(within(tasks).getAllByText("Data model")).toHaveLength(2);
+    expect(within(tasks).getByText("Timeline view")).toBeInTheDocument();
     // The stage the run has reached, in the workflow's own words while it runs.
     expect(within(tasks).getByText("running agent")).toBeInTheDocument();
-    expect(within(tasks).getByText("succeeded")).toBeInTheDocument();
+    expect(within(tasks).getAllByText("succeeded")).toHaveLength(2);
     // A non-terminal run is work left under this heading.
+    const data = screen.getByRole("article", { name: "Data model" });
     expect(within(data).getByText("2 tasks")).toBeInTheDocument();
     expect(within(data).getByText("1 unfinished")).toBeInTheDocument();
+  });
+
+  it("filters the task list when a workstream is clicked, and can show all again", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
+
+    open("milestone-foundation", [persisting, migrating, drawing, direct]);
+    await act(async () => {});
+
+    const data = screen.getByRole("button", { name: "Data model" });
+    fireEvent.click(data);
+
+    expect(data).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("heading", { name: "Data model tasks" })).toBeInTheDocument();
+    const filtered = screen.getByRole("list", { name: "Tasks in Data model" });
+    expect(within(filtered).getAllByRole("link")).toHaveLength(2);
+    expect(within(filtered).queryByText("Draw the dependency graph")).toBeNull();
+    expect(within(filtered).queryByText("Document the milestone")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all tasks" }));
+
+    expect(data).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("list", { name: "Tasks in Foundation" })).toHaveTextContent(
+      "Document the milestone",
+    );
   });
 
   it("counts a task awaiting human review as unfinished and calls it out", async () => {
@@ -205,6 +237,8 @@ describe("MilestoneDetailsPage", () => {
       "/runs/run-6",
     );
     expect(within(list).queryByText("A chore nobody planned")).toBeNull();
+    expect(within(list).getByText("Data model")).toBeInTheDocument();
+    expect(within(list).getByText("Milestone task")).toBeInTheDocument();
     expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("2");
   });
 
@@ -216,8 +250,9 @@ describe("MilestoneDetailsPage", () => {
     await act(async () => {});
 
     const view = screen.getByRole("article", { name: "Timeline view" });
+    fireEvent.click(within(view).getByRole("button", { name: "Timeline view" }));
     expect(
-      within(view).getByText("No tasks have been started in this workstream yet."),
+      screen.getByText("No tasks have been started in this workstream yet."),
     ).toBeInTheDocument();
     expect(within(view).getByText("0 tasks")).toBeInTheDocument();
     expect(screen.queryByText("1 unfinished")).toBeNull();
@@ -230,7 +265,7 @@ describe("MilestoneDetailsPage", () => {
     open("milestone-foundation", [], { runsLoaded: false });
     await act(async () => {});
 
-    expect(screen.getAllByText("Loading tasks…")).toHaveLength(3);
+    expect(screen.getByText("Loading tasks…")).toBeInTheDocument();
     expect(screen.queryByText(/No tasks have been started/)).toBeNull();
     expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("—");
   });
@@ -245,7 +280,7 @@ describe("MilestoneDetailsPage", () => {
     });
     await act(async () => {});
 
-    expect(screen.getAllByText("Could not load tasks: runs unavailable")).toHaveLength(3);
+    expect(screen.getByText("Could not load tasks: runs unavailable")).toBeInTheDocument();
     expect(screen.queryByText(/No tasks have been started/)).toBeNull();
   });
 
@@ -299,7 +334,7 @@ describe("MilestoneDetailsPage", () => {
 
     open();
     await act(async () => {});
-    expect(screen.queryByRole("article", { name: "Data model" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Data model" })).toBeNull();
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
