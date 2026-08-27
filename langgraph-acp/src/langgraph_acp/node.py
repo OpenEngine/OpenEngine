@@ -54,10 +54,18 @@ class ACPNode:
                     block = event.data.get("content")
                     if isinstance(block, Mapping):
                         copied = copied_mapping(block)
-                        content.append(copied)
                         text = copied.get("text")
                         if copied.get("type") == "text" and isinstance(text, str):
                             message_parts.append(text)
+                            previous = content[-1] if content else None
+                            if (
+                                isinstance(previous, dict)
+                                and previous.get("type") == "text"
+                                and isinstance(previous.get("text"), str)
+                            ):
+                                previous["text"] += text
+                                continue
+                        content.append(copied)
                 elif event.type == ACPEventType.PROMPT_COMPLETED:
                     reported = event.data.get("stopReason")
                     if isinstance(reported, str):

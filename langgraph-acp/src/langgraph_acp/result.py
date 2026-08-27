@@ -84,7 +84,7 @@ class ACPResult:
     message: str = ""
     """The agent's final text, flattened for the common case."""
     content: Sequence[JSONValue] = ()
-    """The final content blocks, as the agent sent them."""
+    """Final content blocks, with adjacent streamed text deltas coalesced."""
     agent: str | None = None
     """The registered name of the agent that ran the turn."""
     session_id: str | None = None

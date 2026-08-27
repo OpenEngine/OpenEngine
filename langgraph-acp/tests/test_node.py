@@ -20,14 +20,14 @@ def sent_methods(log: Path) -> list[str]:
     return [message["method"] for message in messages if "method" in message]
 
 
-def test_a_node_runs_a_complete_turn_against_a_stubbed_cli(tmp_path: Path) -> None:
-    """The first meaningful path: graph input in, normalized result out."""
+def test_a_node_coalesces_text_chunks_from_a_stubbed_cli(tmp_path: Path) -> None:
+    """Transport chunk boundaries do not leak into the durable result."""
     log = tmp_path / "sent.jsonl"
     registry = ACPAgentRegistry(
         [
             StdioACPProvider(
                 name="codex",
-                command=(sys.executable, str(FAKE_AGENT)),
+                command=(sys.executable, str(FAKE_AGENT), "--split-message"),
                 env={"FAKE_AGENT_LOG": str(log)},
             )
         ]

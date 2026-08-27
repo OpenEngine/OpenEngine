@@ -101,12 +101,14 @@ def capabilities(options: set[str]) -> dict[str, Any]:
 
 def run_turn(message_id: Any, options: set[str]) -> None:
     """One prompt turn: some updates, maybe a question, then a stop reason."""
-    update(
-        {
-            "sessionUpdate": "agent_message_chunk",
-            "content": {"type": "text", "text": "Looking."},
-        }
-    )
+    message_chunks = ("Look", "ing.") if "--split-message" in options else ("Looking.",)
+    for text in message_chunks:
+        update(
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": text},
+            }
+        )
     update({"sessionUpdate": "a_kind_invented_after_this_release", "detail": 1})
     send(
         {
