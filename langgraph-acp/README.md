@@ -14,9 +14,10 @@ The design and the ticket sequence live in
 
 ## Status
 
-Tickets 1 and 2 of that plan: the core types, and a connection to a real agent.
-`ACPNode` arrives later, so nothing here is a LangGraph node yet — but an ACP
-agent can be launched, initialized, prompted, and streamed from today.
+Tickets 1 to 3 of that plan: the core types, a connection to a real agent, and
+the store that remembers which conversation belongs to which node. `ACPNode`
+arrives later, so nothing here is a LangGraph node yet — but an ACP agent can be
+launched, initialized, prompted, and streamed from today.
 
 ```python
 from langgraph_acp import default_registry
@@ -39,6 +40,7 @@ Available now:
 | `ACPClient`, `ACPCapabilities` | one live connection, and what it can do |
 | `ACPSession` | one conversation, and the turns run in it |
 | `ACPSessionSpec`, `ACPSessionStrategy` | which conversation a node speaks in |
+| `ACPSessionStore`, `InMemoryACPSessionStore` | which ACP session a node's identity resolves to |
 | `ACPWorkspace` | the filesystem context a session is given |
 | `ACPConfig`, `ACPRequirements` | settings requested, capabilities demanded |
 | `ACPEvent`, `ACPEventType` | streamed activity, normalized |
@@ -52,6 +54,33 @@ default_registry().register(
     StdioACPProvider(name="gemini", command=["gemini", "--experimental-acp"])
 )
 ```
+
+## Session bindings
+
+`ACPSessionStore` maps a node's logical identity to the ACP session it speaks
+in, so that a workflow can pick a conversation back up later:
+
+```python
+store = InMemoryACPSessionStore()
+
+await store.put("pr-918", "reviewer", "sess_abc123")
+await store.get("pr-918", "reviewer")     # -> "sess_abc123"
+await store.delete("pr-918", "reviewer")
+```
+
+The identity is a pair, not a thread id, because one LangGraph thread routinely
+runs several agents — an implementer and three reviewers on the same pull
+request — and none of them may resume another's conversation.
+
+**A store holds ACP session identifiers and nothing else.** No conversation
+history, no agent messages, no tool history, no model context, no agent memory:
+the ACP agent owns all of that and restores it itself when asked to load
+`sess_abc123`. That is what makes a reply arriving on a webhook days later
+resume a live conversation without reconstructing a transcript — and why the
+store is the piece that has to be durable. `InMemoryACPSessionStore` is not; it
+lives as long as its process, which is right for tests, examples, and
+single-process graphs. The durable implementations arrive with Ticket 17 and
+change nothing about the interface.
 
 Two behaviours are placeholders that later tickets replace. Permission requests
 are streamed as `acp.permission.requested` and then declined, because the policy

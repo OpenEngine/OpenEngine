@@ -15,9 +15,9 @@ days later needs no transcript reconstruction.
 The identity a store persists is `(thread_id, session_key)` rather than
 `thread_id` alone, because one LangGraph thread routinely runs several agents --
 an implementer and three reviewers on the same pull request -- and none of them
-may resume another's conversation. The store that writes that mapping down
-arrives with its own ticket; what lives here is the session an id names once it
-has been resolved.
+may resume another's conversation. Writing that mapping down is
+`ACPSessionStore`, in `langgraph_acp.store`; what lives here is the intent that
+selects a conversation, and the session an id names once one has been resolved.
 """
 
 from collections.abc import AsyncGenerator, Mapping, Sequence

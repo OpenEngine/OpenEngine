@@ -8,13 +8,17 @@ The boundary this package exists to hold:
 
 What is here so far is the vocabulary and the connection beneath it: the types a
 node configures itself with, the events it streams, the result it returns, the
-failures it reports, and a provider that can launch an ACP agent and hold a live
-session with it. LangGraph itself has not arrived -- `ACPNode` is a later
-ticket -- so nothing yet joins the two halves.
+failures it reports, a provider that can launch an ACP agent and hold a live
+session with it, and the store that remembers which conversation belongs to
+which node. LangGraph itself has not arrived -- `ACPNode` is a later ticket --
+so nothing yet joins the two halves.
 
     ACPAgentRegistry -> ACPAgentProvider -> ACPClient -> ACPSession
          "codex"          how to reach      one live     one conversation
                              an agent       connection      and its turns
+
+    ACPSessionStore     (thread_id, session_key) -> "sess_abc123"
+                        the binding, and only ever the binding
 
 Naming an agent is confined to `langgraph_acp.providers`. Everything else --
 every core type, the registry, the client, the session -- is written without
@@ -65,6 +69,7 @@ from langgraph_acp.session import (
     ACPSessionSpec,
     ACPSessionStrategy,
 )
+from langgraph_acp.store import ACPSessionStore, InMemoryACPSessionStore
 from langgraph_acp.workspace import ACPWorkspace
 
 __all__ = [
@@ -85,12 +90,14 @@ __all__ = [
     "ACPSession",
     "ACPSessionError",
     "ACPSessionSpec",
+    "ACPSessionStore",
     "ACPSessionStrategy",
     "ACPUsage",
     "ACPWorkspace",
     "CODEX_ACP_COMMAND",
     "CodexACPProvider",
     "EVENT_NAMESPACE",
+    "InMemoryACPSessionStore",
     "JSONObject",
     "JSONValue",
     "PROTOCOL_VERSION",
