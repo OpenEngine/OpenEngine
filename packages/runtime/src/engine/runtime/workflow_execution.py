@@ -103,8 +103,9 @@ class WorkflowExecutor:
         try:
             state = await self._require_state(initial_event.run_id)
             selected_name = self._runner_name(runner_name, state)
-            definition = self._resolve_default_branch(
-                self._definition_for(state, initial_event.workflow_id)
+            definition = resolve_default_branch(
+                self._definition_for(state, initial_event.workflow_id),
+                self._default_branch,
             )
             if (
                 state.workflow_definition != definition
@@ -445,17 +446,6 @@ class WorkflowExecutor:
                 f"no {step.workspace_access.value} runner for: {runner_name}"
             ) from error
 
-    def _resolve_default_branch(
-        self, definition: WorkflowDefinition
-    ) -> WorkflowDefinition:
-        """Snapshot the configured branch before the pure engine sees the run."""
-        if definition.workspace.base_ref:
-            return definition
-        return replace(
-            definition,
-            workspace=WorkspaceSpec(base_ref=f"origin/{self._default_branch}"),
-        )
-
     async def _require_state(self, run_id: RunId) -> RunState:
         state = await self._capabilities.state_store.load(run_id)
         if state is None:
@@ -480,9 +470,21 @@ def _only(commands: Sequence[Command], expected: type[Command]) -> Command:
     return commands[0]
 
 
+def resolve_default_branch(
+    definition: WorkflowDefinition, default_branch: str
+) -> WorkflowDefinition:
+    """Snapshot the configured branch before the pure engine sees a run."""
+    if definition.workspace.base_ref:
+        return definition
+    return replace(
+        definition,
+        workspace=WorkspaceSpec(base_ref=f"origin/{default_branch}"),
+    )
+
+
 def _clean_workflow_name(value: str) -> str:
     first_line = value.strip().splitlines()[0] if value.strip() else ""
     return first_line.strip(" \t\"'`).:;!?")[:80]
 
 
-__all__ = ["WorkflowExecutionError", "WorkflowExecutor"]
+__all__ = ["WorkflowExecutionError", "WorkflowExecutor", "resolve_default_branch"]
