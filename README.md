@@ -54,6 +54,17 @@ uv run engine-control-server --config ./engine.toml
 neither is set, Engine reads `./engine.toml` when it exists, otherwise it uses
 built-in defaults. Configurations are not merged.
 
+Workflows start from the configured default branch unless their definition
+explicitly names a different ref:
+
+```toml
+default_branch = "main"
+```
+
+For a repository whose primary branch is `master`, set
+`default_branch = "master"`. If the configured branch is absent from `origin`,
+Engine stops before running an agent and explains how to correct the setting.
+
 Repository-owned workflows are selected with a directory relative to the
 configuration file:
 

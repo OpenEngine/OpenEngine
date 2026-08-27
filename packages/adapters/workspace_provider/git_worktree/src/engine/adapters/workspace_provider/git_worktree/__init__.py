@@ -187,18 +187,28 @@ async def _repository_root(repository: str) -> str:
 
 async def _resolve_base(repository_root: str, base_ref: str) -> str:
     """Resolve the workflow base without moving the developer's local branch."""
-    if base_ref != "origin/main":
+    if not base_ref.startswith("origin/"):
         return base_ref
 
+    branch = base_ref.removeprefix("origin/")
     temporary_ref = f"refs/engine/provisioning/{uuid4().hex}"
     try:
-        await _git(
-            repository_root,
-            "fetch",
-            "--no-tags",
-            "origin",
-            f"+refs/heads/main:{temporary_ref}",
-        )
+        try:
+            await _git(
+                repository_root,
+                "fetch",
+                "--no-tags",
+                "origin",
+                f"+refs/heads/{branch}:{temporary_ref}",
+            )
+        except GitWorktreeError as error:
+            if "couldn't find remote ref" not in str(error):
+                raise
+            raise GitWorktreeError(
+                f"Configured default branch {branch!r} does not exist on remote "
+                f"'origin'. Create that branch, or set default_branch in engine.toml "
+                "to a branch that exists."
+            ) from error
         return await _git(
             repository_root, "rev-parse", "--verify", f"{temporary_ref}^{{commit}}"
         )

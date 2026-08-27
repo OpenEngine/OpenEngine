@@ -60,7 +60,7 @@ workflow = oe.workflow(
     id="implementation-review-v1",
     name="Implementation review",
     version="v1",
-    workspace=oe.workspace(base_ref="origin/main"),
+    workspace=oe.workspace(),
     naming_agent=naming_agent,
     naming_prompt=(
         "Name this workflow based on the task above. Do not perform the task or use "

@@ -73,11 +73,11 @@ def _git(repository: Path, *arguments: str) -> None:
     )
 
 
-def _repository(tmp_path: Path) -> Path:
+def _repository(tmp_path: Path, branch: str = "main") -> Path:
     repository = tmp_path / "repository"
     remote = tmp_path / "remote.git"
     subprocess.run(
-        ["git", "init", "-b", "main", str(repository)],
+        ["git", "init", "-b", branch, str(repository)],
         check=True,
         capture_output=True,
         text=True,
@@ -201,14 +201,17 @@ async def _await_phase(
     return response
 
 
+@pytest.mark.parametrize(("branch", "default_branch"), [("main", "main"), ("master", "master")])
 def test_implementation_review_workflow_completes_end_to_end(
+    branch: str,
+    default_branch: str,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         dispatcher_module, "TerminalMcpBroker", MockTerminalMcpBroker
     )
     database = tmp_path / "workflow.sqlite3"
-    repository = _repository(tmp_path)
+    repository = _repository(tmp_path, branch)
     store = SQLiteStateStore(database)
     workspaces = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
     implementer = CompletingRunner(
@@ -243,6 +246,7 @@ def test_implementation_review_workflow_completes_end_to_end(
         {"test": reviewer},
         workflow_runners={"test": implementer},
         review_runners={"test": reviewer},
+        default_branch=default_branch,
     )
 
     async def scenario():
@@ -319,6 +323,8 @@ def test_implementation_review_workflow_completes_end_to_end(
     }
     assert state.phase is RunPhase.SUCCEEDED
     assert state.name == "Exercise complete workflow"
+    assert state.workflow_definition is not None
+    assert state.workflow_definition.workspace.base_ref == f"origin/{default_branch}"
     assert completed.json()["name"] == state.name
     assert reopened_state == state
     assert [type(event) for event in history] == [

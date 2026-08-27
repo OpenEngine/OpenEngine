@@ -29,6 +29,7 @@ from engine.domain import (
     StartAgentRun,
     StepCompleted,
     StepId,
+    WorkspaceSpec,
     StepReactivated,
     WorkflowDefinition,
     WorkspaceAccess,
@@ -63,6 +64,7 @@ class WorkflowExecutor:
         review_runners: Mapping[str, AgentRunner],
         approval_handler: Callable[[StartAgentRun, str], ApprovalHandler] | None = None,
         catalog: WorkflowCatalog | None = None,
+        default_branch: str = "main",
     ) -> None:
         self._capabilities = capabilities
         self._dispatcher = Dispatcher(capabilities)
@@ -74,6 +76,7 @@ class WorkflowExecutor:
             if catalog is not None
             else WorkflowCatalog.from_definitions(())
         )
+        self._default_branch = default_branch
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
             raise WorkflowExecutionError(
@@ -100,8 +103,14 @@ class WorkflowExecutor:
         try:
             state = await self._require_state(initial_event.run_id)
             selected_name = self._runner_name(runner_name, state)
-            definition = self._definition_for(state, initial_event.workflow_id)
-            if state.workflow_definition is None or state.runner_name != selected_name:
+            definition = resolve_default_branch(
+                self._definition_for(state, initial_event.workflow_id),
+                self._default_branch,
+            )
+            if (
+                state.workflow_definition != definition
+                or state.runner_name != selected_name
+            ):
                 state = replace(
                     state,
                     workflow_definition=definition,
@@ -461,9 +470,21 @@ def _only(commands: Sequence[Command], expected: type[Command]) -> Command:
     return commands[0]
 
 
+def resolve_default_branch(
+    definition: WorkflowDefinition, default_branch: str
+) -> WorkflowDefinition:
+    """Snapshot the configured branch before the pure engine sees a run."""
+    if definition.workspace.base_ref:
+        return definition
+    return replace(
+        definition,
+        workspace=WorkspaceSpec(base_ref=f"origin/{default_branch}"),
+    )
+
+
 def _clean_workflow_name(value: str) -> str:
     first_line = value.strip().splitlines()[0] if value.strip() else ""
     return first_line.strip(" \t\"'`).:;!?")[:80]
 
 
-__all__ = ["WorkflowExecutionError", "WorkflowExecutor"]
+__all__ = ["WorkflowExecutionError", "WorkflowExecutor", "resolve_default_branch"]

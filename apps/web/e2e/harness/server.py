@@ -120,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         workflow_runners=build_workflow_runners(settings),
         review_runners=read_only_runners,
         approval_policy=loaded.config.approvals,
+        default_branch=loaded.config.default_branch,
     )
     print(describe_loaded_config(loaded), flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")

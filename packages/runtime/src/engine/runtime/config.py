@@ -70,6 +70,7 @@ class ClaudeConfig:
 class EngineConfig:
     """All configuration understood by this version of Engine."""
 
+    default_branch: str = "main"
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
     claude: ClaudeConfig = ClaudeConfig()
@@ -140,12 +141,16 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     _reject_unknown(
         document,
-        {"attribution", "approvals", "claude", "workflows"},
+        {"attribution", "approvals", "claude", "default_branch", "workflows"},
         "configuration",
     )
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
         raise EngineConfigError("attribution must be a boolean")
+
+    default_branch = document.get("default_branch", "main")
+    if not isinstance(default_branch, str) or not default_branch.strip():
+        raise EngineConfigError("default_branch must be a non-empty string")
 
     claude = _table(document.get("claude", {}), "claude")
     _reject_unknown(claude, {"output_style"}, "claude")
@@ -182,6 +187,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     return EngineConfig(
         attribution=attribution,
+        default_branch=default_branch,
         claude=ClaudeConfig(output_style=output_style),
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
@@ -213,10 +219,11 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
         else "disabled"
     )
     attribution = "on" if loaded.config.attribution else "off"
+    default_branch = loaded.config.default_branch
     style = loaded.config.claude.output_style
     output_style = style.value if style is not None else "provider default"
     return (
-        f"configuration: {source}; attribution={attribution}; "
+        f"configuration: {source}; attribution={attribution}; default_branch={default_branch}; "
         f"claude.output_style={output_style}; approvals enforced "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
         f"workflows={workflows}"

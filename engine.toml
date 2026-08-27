@@ -1,4 +1,5 @@
 attribution = false
+default_branch = "main"
 
 [claude]
 output_style = "concise"
