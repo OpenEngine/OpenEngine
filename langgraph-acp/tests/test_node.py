@@ -1,0 +1,103 @@
+"""A complete ACPNode invocation against a stubbed ACP CLI."""
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from langgraph.graph import END, START, StateGraph
+
+from langgraph_acp import ACPAgentRegistry, ACPNode, ACPResult, StdioACPProvider
+
+FAKE_AGENT = Path(__file__).resolve().parent / "fake_agent.py"
+
+
+def sent_methods(log: Path) -> list[str]:
+    messages: list[dict[str, Any]] = [
+        json.loads(line) for line in log.read_text().splitlines()
+    ]
+    return [message["method"] for message in messages if "method" in message]
+
+
+def test_a_node_coalesces_text_chunks_from_a_stubbed_cli(tmp_path: Path) -> None:
+    """Transport chunk boundaries do not leak into the durable result."""
+    log = tmp_path / "sent.jsonl"
+    registry = ACPAgentRegistry(
+        [
+            StdioACPProvider(
+                name="codex",
+                command=(sys.executable, str(FAKE_AGENT), "--split-message"),
+                env={"FAKE_AGENT_LOG": str(log)},
+            )
+        ]
+    )
+    node = ACPNode(agent="codex", registry=registry)
+
+    result = asyncio.run(node("Review this change"))
+
+    assert isinstance(result, ACPResult)
+    assert result == ACPResult(
+        message="Looking.",
+        content=({"type": "text", "text": "Looking."},),
+        agent="codex",
+        session_id="sess_fake_1",
+        stop_reason="end_turn",
+    )
+    assert sent_methods(log) == ["initialize", "session/new", "session/prompt"]
+
+
+def test_the_node_sends_its_invocation_input_as_the_prompt(tmp_path: Path) -> None:
+    log = tmp_path / "sent.jsonl"
+    registry = ACPAgentRegistry(
+        [
+            StdioACPProvider(
+                name="codex",
+                command=(sys.executable, str(FAKE_AGENT)),
+                env={"FAKE_AGENT_LOG": str(log)},
+            )
+        ]
+    )
+
+    asyncio.run(ACPNode(agent="codex", registry=registry)("Review ticket 4"))
+
+    messages = [json.loads(line) for line in log.read_text().splitlines()]
+    prompt = next(
+        message["params"]["prompt"]
+        for message in messages
+        if message.get("method") == "session/prompt"
+    )
+    assert prompt == [{"type": "text", "text": "Review ticket 4"}]
+
+
+def test_a_langgraph_graph_invokes_the_node_and_returns_its_result(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "sent.jsonl"
+    registry = ACPAgentRegistry(
+        [
+            StdioACPProvider(
+                name="codex",
+                command=(sys.executable, str(FAKE_AGENT)),
+                env={"FAKE_AGENT_LOG": str(log)},
+            )
+        ]
+    )
+    graph = StateGraph(str)  # type: ignore[type-var]
+    graph.add_node(  # type: ignore[call-overload]
+        "agent", ACPNode(agent="codex", registry=registry)
+    )
+    graph.add_edge(START, "agent")
+    graph.add_edge("agent", END)
+
+    result = asyncio.run(graph.compile().ainvoke("Review this change"))
+
+    assert isinstance(result, ACPResult)
+    assert result == ACPResult(
+        message="Looking.",
+        content=({"type": "text", "text": "Looking."},),
+        agent="codex",
+        session_id="sess_fake_1",
+        stop_reason="end_turn",
+    )
+    assert sent_methods(log) == ["initialize", "session/new", "session/prompt"]
