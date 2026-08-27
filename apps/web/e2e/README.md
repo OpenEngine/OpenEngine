@@ -122,6 +122,12 @@ unzip it, and point `show-report` at the directory.
   it is still running, the approval it pauses on reaches the browser, approving
   it is recorded as an approval, the turn carries on, and the file the command
   was allowed to write exists in that chat's worktree.
+* `approval-placement.spec.ts` -- *where* a request is shown, on each runner: a
+  step runs two different `git_subcommand` calls through the run-bound MCP
+  server, and each pause has to render beside the call that raised it, with
+  nothing collecting in the end-of-turn slot -- before the decision, after it,
+  and after a reload. The pairing is the provider's own id for the call, which
+  that server is the one place that has to look up rather than know.
 * `workflow-run.spec.ts` -- a workflow run on each runner, end to end: the run
   is created from the form, provisions a checkout that exists on disk, streams
   the implementation's first message and its command into the step's

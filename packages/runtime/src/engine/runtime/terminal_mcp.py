@@ -39,6 +39,13 @@ TerminalEvent = StepCompleted | RunFailed
 TerminalDelivery = Callable[[TerminalEvent], Awaitable[None]]
 McpRequestId = str | int
 
+#: Given a tool's provider-facing name and the arguments it was called with,
+#: the id the transcript records that call under -- or ``None`` while the
+#: provider has not reported the call yet. The MCP request id cannot stand in
+#: for it: this server is reached over its own transport, and the number it
+#: numbers a request with is not anything the conversation contains.
+ToolCallLookup = Callable[[str, str], str | None]
+
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
 
@@ -117,6 +124,7 @@ class TerminalMcpBroker:
         self._repository_tools: tuple[str, ...] = ()
         self._workspace_id: WorkspaceId | None = None
         self._git_approval: ApprovalHandler | None = None
+        self._tool_call_ids: ToolCallLookup | None = None
         self._comments_added = 0
 
     def enable_repository_tools(
@@ -125,6 +133,7 @@ class TerminalMcpBroker:
         names: Sequence[str],
         workspace_id: WorkspaceId | None = None,
         git_approval: ApprovalHandler | None = None,
+        tool_call_ids: ToolCallLookup | None = None,
     ) -> None:
         """Expose named repository operations through this run-bound server.
 
@@ -132,6 +141,11 @@ class TerminalMcpBroker:
         honour, decided by the dispatcher; the broker only serves it. The
         workspace is the one the step is running in, and it is bound here
         rather than passed per call so a model cannot name a different one.
+
+        `tool_call_ids` is how a request raised here names the call it is about.
+        The dispatcher owns that answer because it is the side watching the
+        provider's stream; without it a request can still be raised, and is
+        shown at the end of the turn instead of beside the call.
         """
 
         self._source_control = source_control
@@ -140,6 +154,7 @@ class TerminalMcpBroker:
         )
         self._workspace_id = workspace_id
         self._git_approval = git_approval
+        self._tool_call_ids = tool_call_ids
 
     async def __aenter__(self) -> TerminalMcpBroker:
         self._result = asyncio.get_running_loop().create_future()
@@ -347,14 +362,23 @@ class TerminalMcpBroker:
                 "ok": False,
                 "error": "git_subcommand requires approval handling for this step",
             }
+        tool_name = f"mcp__{_SERVER_NAME}__git_subcommand"
+        tool_arguments = json.dumps({"arguments": arguments}, sort_keys=True)
         request = ApprovalRequest(
             approval_id=f"terminal:{self._agent_run_id}:{request_id}",
             kind=ApprovalKind.TOOL_USE,
             reason="Run git in the step's bound workspace.",
             command=shlex.join(("git", *arguments)),
-            tool_name=f"mcp__{_SERVER_NAME}__git_subcommand",
-            tool_call_id=str(request_id),
-            arguments=json.dumps({"arguments": arguments}, sort_keys=True),
+            tool_name=tool_name,
+            # The provider's id for this call, not this server's id for the
+            # request carrying it. Naming the request would put the pause
+            # beside nothing, because no call in the transcript is called that.
+            tool_call_id=(
+                self._tool_call_ids(tool_name, tool_arguments)
+                if self._tool_call_ids is not None
+                else None
+            ),
+            arguments=tool_arguments,
             allowed_decisions=(
                 ApprovalDecision.ACCEPT,
                 ApprovalDecision.CANCEL,
@@ -745,5 +769,6 @@ __all__ = [
     "TerminalMcpBroker",
     "TerminalResultAlreadySubmittedError",
     "TerminalResultRegistry",
+    "ToolCallLookup",
     "terminal_tool_names",
 ]
