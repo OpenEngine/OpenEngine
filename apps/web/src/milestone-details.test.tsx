@@ -35,6 +35,7 @@ function run(
   name: string,
   workstreamId: string | null,
   phase = "succeeded",
+  milestoneId: string | null = null,
 ): ApiWorkflowRun {
   return {
     runId,
@@ -44,6 +45,7 @@ function run(
     workflowVersion: "1",
     taskId: `task-${runId}`,
     workstreamId,
+    milestoneId,
     taskPrompt: name,
     repository: ".",
     repositoryContext: { repository: "." },
@@ -61,6 +63,13 @@ const persisting = run("run-1", "Persist milestones", "workstream-data", "runnin
 const migrating = run("run-2", "Add the workstream table", "workstream-data");
 const drawing = run("run-3", "Draw the dependency graph", "workstream-web");
 const unplanned = run("run-4", "A chore nobody planned", null);
+const direct = run(
+  "run-6",
+  "Document the milestone",
+  null,
+  "succeeded",
+  "milestone-foundation",
+);
 const reviewing = run(
   "run-5",
   "Approve the release",
@@ -125,6 +134,10 @@ describe("MilestoneDetailsPage", () => {
       "href",
       "/projects/project-1/milestones",
     );
+    expect(screen.getByRole("link", { name: "New task" })).toHaveAttribute(
+      "href",
+      "/projects/project-1/milestones/milestone-launch/tasks/new",
+    );
   });
 
   it("gives a card to every workstream under the milestone, and to no other", async () => {
@@ -179,6 +192,22 @@ describe("MilestoneDetailsPage", () => {
     expect(screen.getByText("Awaiting review").nextSibling).toHaveTextContent("1");
   });
 
+  it("lists tasks linked directly to the milestone below its workstreams", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
+
+    open("milestone-foundation", [persisting, direct, unplanned]);
+    await act(async () => {});
+
+    const list = screen.getByRole("list", { name: "Tasks in Foundation" });
+    expect(within(list).getByRole("link", { name: /Document the milestone/ })).toHaveAttribute(
+      "href",
+      "/runs/run-6",
+    );
+    expect(within(list).queryByText("A chore nobody planned")).toBeNull();
+    expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("2");
+  });
+
   it("says a workstream nothing has been started in has nothing in it", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
@@ -201,7 +230,7 @@ describe("MilestoneDetailsPage", () => {
     open("milestone-foundation", [], { runsLoaded: false });
     await act(async () => {});
 
-    expect(screen.getAllByText("Loading tasks…")).toHaveLength(2);
+    expect(screen.getAllByText("Loading tasks…")).toHaveLength(3);
     expect(screen.queryByText(/No tasks have been started/)).toBeNull();
     expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("—");
   });
@@ -216,7 +245,7 @@ describe("MilestoneDetailsPage", () => {
     });
     await act(async () => {});
 
-    expect(screen.getAllByText("Could not load tasks: runs unavailable")).toHaveLength(2);
+    expect(screen.getAllByText("Could not load tasks: runs unavailable")).toHaveLength(3);
     expect(screen.queryByText(/No tasks have been started/)).toBeNull();
   });
 

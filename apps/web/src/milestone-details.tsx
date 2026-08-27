@@ -9,6 +9,7 @@
 import { useMemo } from "react";
 
 import {
+  milestoneNewTaskUrl,
   projectMilestonesUrl,
   type ApiWorkflowRun,
   type ApiWorkstream,
@@ -45,6 +46,23 @@ function unfinishedTasks(tasks: ApiWorkflowRun[]) {
  *  way the runs page counts them: it is the one number a reader can act on. */
 function awaitingReview(tasks: ApiWorkflowRun[]) {
   return tasks.filter((task) => task.phase === "awaiting_human_review").length;
+}
+
+function TaskList({ tasks, label }: { tasks: ApiWorkflowRun[]; label: string }) {
+  return (
+    <ul className="workstream-tasks" aria-label={label}>
+      {tasks.map((task) => (
+        <li key={task.runId}>
+          <a href={`/runs/${encodeURIComponent(task.runId)}`}>
+            <span className="workstream-task-name">{task.name}</span>
+            <span className="workstream-task-stage" data-accent={phaseAccent(task.phase)}>
+              {runStatusLabel(task)}
+            </span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function WorkstreamCard({
@@ -91,18 +109,7 @@ function WorkstreamCard({
         // Named in full rather than off the heading above it: two milestones in
         // one plan may both hang a workstream called "Web", and a list
         // answering to "Web" names neither of them.
-        <ul className="workstream-tasks" aria-label={`Tasks in ${workstream.name}`}>
-          {tasks.map((task) => (
-            <li key={task.runId}>
-              <a href={`/runs/${encodeURIComponent(task.runId)}`}>
-                <span className="workstream-task-name">{task.name}</span>
-                <span className="workstream-task-stage" data-accent={phaseAccent(task.phase)}>
-                  {runStatusLabel(task)}
-                </span>
-              </a>
-            </li>
-          ))}
-        </ul>
+        <TaskList tasks={tasks} label={`Tasks in ${workstream.name}`} />
       ) : (
         <p className="micro">No tasks have been started in this workstream yet.</p>
       )}
@@ -136,9 +143,11 @@ export function MilestoneDetailsPage({
   );
   const grouped = useMemo(() => tasksByWorkstream(runs), [runs]);
   const workstreams = milestone?.workstreams ?? [];
-  const tasks = workstreams.flatMap(
+  const workstreamTasks = workstreams.flatMap(
     (workstream) => grouped.get(workstream.workstreamId) ?? [],
   );
+  const milestoneTasks = runs.filter((run) => run.milestoneId === milestoneId);
+  const tasks = [...workstreamTasks, ...milestoneTasks];
   // The goals this one waits on, read as the names the planner gave them rather
   // than as the ids it recorded -- the same way the milestone's card does.
   const dependencies = (milestone?.dependencies ?? []).map((id) => names.get(id) ?? id);
@@ -162,11 +171,21 @@ export function MilestoneDetailsPage({
               <p className="micro">Depends on {dependencies.join(" · ")}</p>
             )}
           </div>
-          {notUpdating && (
-            <span className="micro milestone-stale" role="status">
-              Not updating: {notUpdating}
-            </span>
-          )}
+          <div className="detail-actions">
+            {notUpdating && (
+              <span className="micro milestone-stale" role="status">
+                Not updating: {notUpdating}
+              </span>
+            )}
+            {milestone && (
+              <a
+                className="btn btn-primary"
+                href={milestoneNewTaskUrl(projectId, milestone.milestoneId)}
+              >
+                New task
+              </a>
+            )}
+          </div>
         </div>
       </header>
       {!loaded ? (
@@ -217,9 +236,28 @@ export function MilestoneDetailsPage({
           ) : (
             <div className="empty">
               <h2>No workstreams yet.</h2>
-              <p>Work is planned under this milestone before any task can be started in it.</p>
+              <p>Tasks can be created directly under this milestone.</p>
             </div>
           )}
+          <section className="milestone-tasks" aria-labelledby="milestone-tasks-title">
+            <div className="milestone-tasks-head">
+              <h2 id="milestone-tasks-title">Milestone tasks</h2>
+              {runsLoaded && (
+                <span className="chip">
+                  {milestoneTasks.length} {milestoneTasks.length === 1 ? "task" : "tasks"}
+                </span>
+              )}
+            </div>
+            {!runsLoaded ? (
+              <p className="micro">
+                {runsError ? `Could not load tasks: ${runsError}` : "Loading tasks…"}
+              </p>
+            ) : milestoneTasks.length > 0 ? (
+              <TaskList tasks={milestoneTasks} label={`Tasks in ${milestone.name}`} />
+            ) : (
+              <p className="micro">No tasks have been created directly under this milestone yet.</p>
+            )}
+          </section>
         </>
       )}
     </main>

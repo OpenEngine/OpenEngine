@@ -2897,6 +2897,59 @@ def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> N
     assert asyncio.run(store.list_runs()) == ()
 
 
+def test_create_workflow_run_uses_workstream_or_milestone_relationship() -> None:
+    store = InMemoryStateStore()
+    project = Project(ProjectId("project-engine"), "Engine")
+    milestone = Milestone(
+        MilestoneId("milestone-foundation"), project.project_id, "Foundation"
+    )
+    workstream = Workstream(
+        WorkstreamId("workstream-data"), milestone.milestone_id, "Data model"
+    )
+    asyncio.run(store.save_project(project))
+    asyncio.run(store.save_milestone(milestone))
+    asyncio.run(store.save_workstream(workstream))
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            direct = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Document the milestone.",
+                    "repository": ".",
+                    "milestoneId": milestone.milestone_id,
+                },
+            )
+            scoped = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Persist the model.",
+                    "repository": ".",
+                    "milestoneId": milestone.milestone_id,
+                    "workstreamId": workstream.workstream_id,
+                },
+            )
+            return direct, scoped
+
+    direct, scoped = asyncio.run(scenario())
+
+    assert (direct.status_code, scoped.status_code) == (201, 201)
+    assert (direct.json()["milestoneId"], direct.json()["workstreamId"]) == (
+        milestone.milestone_id,
+        None,
+    )
+    assert (scoped.json()["milestoneId"], scoped.json()["workstreamId"]) == (
+        None,
+        workstream.workstream_id,
+    )
+
+
 def test_workflow_conversation_is_nested_under_its_run_not_standalone() -> None:
     store = InMemoryStateStore()
     state = _workflow_state(RunPhase.RUNNING_AGENT, REVIEW_STEP)

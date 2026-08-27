@@ -95,6 +95,8 @@ class SQLiteStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock, self._connection:
+            if state.workstream_id is not None and state.milestone_id is not None:
+                raise ValueError("a run cannot belong to both a workstream and a milestone")
             if state.workstream_id is not None:
                 exists = self._connection.execute(
                     "SELECT 1 FROM workstreams WHERE workstream_id = ?",
@@ -102,18 +104,27 @@ class SQLiteStateStore:
                 ).fetchone()
                 if exists is None:
                     raise KeyError(f"no workstream {state.workstream_id!r}")
+            if state.milestone_id is not None:
+                exists = self._connection.execute(
+                    "SELECT 1 FROM milestones WHERE milestone_id = ?",
+                    (state.milestone_id,),
+                ).fetchone()
+                if exists is None:
+                    raise KeyError(f"no milestone {state.milestone_id!r}")
             self._connection.execute(
                 """
-                INSERT INTO run_states (run_id, state_json, workstream_id)
-                VALUES (?, ?, ?)
+                INSERT INTO run_states (run_id, state_json, workstream_id, milestone_id)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
-                    workstream_id = excluded.workstream_id
+                    workstream_id = excluded.workstream_id,
+                    milestone_id = excluded.milestone_id
                 """,
                 (
                     state.run_id,
                     json.dumps(_state_to_dict(state)),
                     state.workstream_id,
+                    state.milestone_id,
                 ),
             )
 
@@ -251,13 +262,19 @@ class SQLiteStateStore:
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
         with self._lock, self._connection:
+            has_direct_runs = self._connection.execute(
+                "SELECT 1 FROM run_states WHERE milestone_id = ? LIMIT 1",
+                (milestone_id,),
+            ).fetchone()
+            if has_direct_runs is not None:
+                raise ValueError(f"milestone {milestone_id!r} still has runs")
             try:
                 cursor = self._connection.execute(
                     "DELETE FROM milestones WHERE milestone_id = ?", (milestone_id,)
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError(
-                    f"milestone {milestone_id!r} still has workstreams"
+                    f"milestone {milestone_id!r} still has workstreams or runs"
                 ) from error
         return cursor.rowcount > 0
 
@@ -890,6 +907,7 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "task_id": state.task_id,
         "workflow_id": state.workflow_id,
         "workstream_id": state.workstream_id,
+        "milestone_id": state.milestone_id,
         "phase": state.phase.value,
         "repository": state.repository,
         "prompt": state.prompt,
@@ -938,6 +956,11 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         workstream_id=(
             WorkstreamId(str(value["workstream_id"]))
             if value.get("workstream_id") is not None
+            else None
+        ),
+        milestone_id=(
+            MilestoneId(str(value["milestone_id"]))
+            if value.get("milestone_id") is not None
             else None
         ),
         phase=RunPhase(str(value["phase"])),
@@ -1197,6 +1220,7 @@ def _event_to_dict(event: Event) -> dict[str, object]:
             "repository": event.repository,
             "workflow_id": event.workflow_id,
             "workstream_id": event.workstream_id,
+            "milestone_id": event.milestone_id,
         }
     if isinstance(event, RunNamed):
         return {
@@ -1264,6 +1288,11 @@ def _event_from_dict(value: dict[str, object]) -> Event:
             workstream_id=(
                 WorkstreamId(str(value["workstream_id"]))
                 if value.get("workstream_id") is not None
+                else None
+            ),
+            milestone_id=(
+                MilestoneId(str(value["milestone_id"]))
+                if value.get("milestone_id") is not None
                 else None
             ),
         )

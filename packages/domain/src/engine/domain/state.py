@@ -10,6 +10,7 @@ from enum import Enum
 from engine.domain.events import HumanReviewCompleted, StepCompleted
 from engine.domain.ids import (
     AgentRunId,
+    MilestoneId,
     RunId,
     StepId,
     TaskId,
@@ -40,6 +41,7 @@ class RunState:
     task_id: TaskId
     workflow_id: WorkflowId
     workstream_id: WorkstreamId | None = None
+    milestone_id: MilestoneId | None = None
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""
     prompt: str = ""

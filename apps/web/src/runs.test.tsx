@@ -2,7 +2,7 @@ import { act, render, renderHook, screen, waitFor, within } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ApiWorkflowRun, EngineConfig } from "./api";
+import type { ApiMilestone, ApiProject, ApiWorkflowRun, EngineConfig } from "./api";
 import {
   conversationCount,
   NewWorkflowPage,
@@ -27,6 +27,20 @@ const config: EngineConfig = {
     { id: "release-v2", name: "Release", version: "v2" },
   ],
 };
+const project: ApiProject = {
+  projectId: "project-1",
+  name: "Engine roadmap",
+  archived: false,
+};
+const milestone: ApiMilestone = {
+  milestoneId: "milestone-foundation",
+  name: "Foundation",
+  description: "Build the shared model.",
+  dependencies: [],
+  workstreams: [
+    { workstreamId: "workstream-data", name: "Data model", scope: "Persist it." },
+  ],
+};
 
 function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
   return {
@@ -37,6 +51,7 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
     workflowVersion: "v1",
     taskId: "task-1",
     workstreamId: null,
+    milestoneId: null,
     taskPrompt: "Do the work",
     repository: ".",
     repositoryContext: { repository: "." },
@@ -172,6 +187,31 @@ describe("NewWorkflowPage", () => {
       "/api/runs",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("creates a milestone task with an optional workstream", async () => {
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<NewWorkflowPage config={config} project={project} milestone={milestone} />);
+
+    expect(
+      screen.getByRole("option", { name: "No workstream — milestone task" }),
+    ).toHaveValue("");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Workstream (optional)" }),
+      "workstream-data",
+    );
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Persist it");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
+    const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      milestoneId: "milestone-foundation",
+      workstreamId: "workstream-data",
+    });
   });
 });
 

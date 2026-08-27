@@ -90,6 +90,7 @@ def decide_workflow(
                 task_id=event.task_id,
                 workflow_id=event.workflow_id,
                 workstream_id=event.workstream_id,
+                milestone_id=event.milestone_id,
                 workflow_definition=definition,
                 phase=RunPhase.PREPARING_WORKSPACE,
                 repository=event.repository,
