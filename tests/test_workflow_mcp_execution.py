@@ -353,6 +353,207 @@ def test_git_reaches_the_step_own_workspace_without_the_model_naming_one() -> No
     asyncio.run(scenario())
 
 
+#: How both adapters spell one call to this server. The dispatcher pairs an
+#: approval to a call by exact equality on these two strings, so the spelling
+#: is a contract between the adapters and the pairing rather than a detail --
+#: which is what `test_both_adapters_spell_a_git_call_this_way` is for.
+GIT_TOOL = "mcp__workflow__git_subcommand"
+STATUS = ("status", "--porcelain")
+STATUS_ARGUMENTS = json.dumps({"arguments": list(STATUS)}, sort_keys=True)
+
+
+def _reported_git_call(call_id: str, arguments: str = STATUS_ARGUMENTS) -> Message:
+    """The assistant message an adapter writes when the provider makes a call."""
+    return Message.assistant(tool_calls=(ToolCall(call_id, GIT_TOOL, arguments),))
+
+
+class ScriptedGitRunner(CallingMcpRunner):
+    """Streams what the provider reported, then calls what it reported calling.
+
+    The order is the fixture's whole point: a CLI writes the call onto its own
+    stream before invoking the tool over MCP, and the id an approval is paired
+    by exists only in the first of those. Each entry is what to stream and the
+    git arguments to then call with, so a test can vary or drop the streamed
+    half and get the cases a browser cannot produce on purpose.
+    """
+
+    def __init__(
+        self, script: Sequence[tuple[Sequence[Message], Sequence[str]]]
+    ) -> None:
+        super().__init__()
+        self._script = script
+        self.answers: list[dict[str, object]] = []
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        on_approval,
+        on_message=None,
+        tools=(),
+        workspace_id=None,
+    ):
+        raise AssertionError("workflow execution should use MCP")
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_approval,
+        on_message=None,
+        workspace_id=None,
+    ):
+        assert on_message is not None
+        for index, (reported, arguments) in enumerate(self._script):
+            for message in reported:
+                on_message(message)
+            self.answers.append(
+                await _call_tool(
+                    mcp_server,
+                    "git_subcommand",
+                    {"arguments": list(arguments)},
+                    request_id=f"git-{index}",
+                )
+            )
+        return await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
+async def _paired_call_ids(
+    script: Sequence[tuple[Sequence[Message], Sequence[str]]],
+) -> list[str | None]:
+    """Run the step and report which call each git approval was paired with."""
+    runner = ScriptedGitRunner(script)
+    approvals: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalDecision:
+        approvals.append(request)
+        return ApprovalDecision.ACCEPT
+
+    await Dispatcher(_capabilities(runner, GitSourceControl())).run_workflow_agent(
+        IMPLEMENTATION_COMMAND, runner=runner, on_approval=approve
+    )
+    return [request.tool_call_id for request in approvals]
+
+
+def test_a_git_approval_is_paired_with_the_call_the_provider_reported() -> None:
+    """The id comes off the provider's stream, not off the MCP request.
+
+    This server is reached over a transport of its own, and the number it
+    numbers a request with is not anything the conversation contains -- so a
+    request that named it paired with nothing and was shown at the end of the
+    turn instead of beside the command it was asking about.
+    """
+
+    async def scenario() -> None:
+        assert await _paired_call_ids(
+            [((Message.assistant("Checking."), _reported_git_call("call-7")), STATUS)]
+        ) == ["call-7"]
+
+    asyncio.run(scenario())
+
+
+def test_a_git_approval_names_no_call_when_nothing_the_provider_said_matches() -> None:
+    """Unmatched is `None` rather than the nearest thing.
+
+    A request rendered beside a call it was not about tells the reader the
+    agent asked to run something it never asked to run, which is worse than
+    the end-of-turn slot `None` falls back to. So a different command, and a
+    call the provider has not reported at all, both decline to pair.
+    """
+
+    async def scenario() -> None:
+        other = json.dumps({"arguments": ["log", "--oneline"]}, sort_keys=True)
+        assert await _paired_call_ids(
+            [
+                ((_reported_git_call("call-1", other),), STATUS),
+                ((), STATUS),
+            ]
+        ) == [None, None]
+
+    asyncio.run(scenario())
+
+
+def test_a_repeated_git_call_is_paired_with_the_one_just_reported() -> None:
+    """Two identical calls are told apart by which was reported most recently.
+
+    The case the browser test deliberately avoids: it drives two *different*
+    commands, because an id that anchors nothing and an id that anchors the
+    wrong call both read as inline when there is one call on screen to be
+    beside. Identical calls are the only input where the newest-first scan can
+    pair with the wrong one, so it is pinned here instead.
+    """
+
+    async def scenario() -> None:
+        assert await _paired_call_ids(
+            [
+                ((_reported_git_call("call-1"),), STATUS),
+                ((_reported_git_call("call-2"),), STATUS),
+            ]
+        ) == ["call-1", "call-2"]
+
+    asyncio.run(scenario())
+
+
+def test_both_adapters_spell_a_git_call_this_way() -> None:
+    """The pairing is exact string equality, so the spelling is a contract.
+
+    The dispatcher matches on the tool name and argument text the adapter
+    wrote. Both write `json.dumps(..., sort_keys=True)`; compact separators or
+    `ensure_ascii=False` on either side would pair nothing and send every
+    repository approval quietly back to the end of the turn. Nothing else
+    checks the two spellings against each other, so this asserts both against
+    the same strings the tests above stream.
+    """
+
+    # Imported here rather than at the top: this module is about runtime
+    # delivery, and the adapters appear only as the other half of this one
+    # contract.
+    from engine.adapters.agent_runner.claude_code import (
+        messages_from_event as claude_messages_from_event,
+    )
+    from engine.adapters.agent_runner.codex import (
+        messages_from_event as codex_messages_from_event,
+    )
+
+    claude = claude_messages_from_event(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": GIT_TOOL,
+                        "input": {"arguments": list(STATUS)},
+                    }
+                ]
+            },
+        }
+    )
+    codex = codex_messages_from_event(
+        {
+            "type": "item.started",
+            "item": {
+                "id": "item-1",
+                "type": "mcp_tool_call",
+                "server": "workflow",
+                "tool": "git_subcommand",
+                "arguments": json.dumps({"arguments": list(STATUS)}),
+            },
+        },
+        thread_id="thread-1",
+    )
+
+    for call in (claude[0].tool_calls[0], codex[0].tool_calls[0]):
+        assert call.name == GIT_TOOL
+        assert call.arguments == STATUS_ARGUMENTS
+
+
 def test_a_non_mcp_step_announces_nothing_because_it_serves_nothing() -> None:
     """The plain `run_turn` branch passes no `tools=` and has no broker."""
 

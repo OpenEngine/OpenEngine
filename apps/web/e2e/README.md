@@ -123,11 +123,14 @@ unzip it, and point `show-report` at the directory.
   it is recorded as an approval, the turn carries on, and the file the command
   was allowed to write exists in that chat's worktree.
 * `approval-placement.spec.ts` -- *where* a request is shown, on each runner: a
-  step runs two different `git_subcommand` calls through the run-bound MCP
-  server, and each pause has to render beside the call that raised it, with
-  nothing collecting in the end-of-turn slot -- before the decision, after it,
-  and after a reload. The pairing is the provider's own id for the call, which
-  that server is the one place that has to look up rather than know.
+  step runs three `git_subcommand` calls through the run-bound MCP server -- two
+  different commands and then a repeat of the first -- and each pause has to
+  render beside the call that raised it, with nothing collecting in the
+  end-of-turn slot, before the decision, after it, and after a reload. The
+  pairing is the provider's own id for the call, which that server is the one
+  place that has to look up rather than know; the lookup itself is pinned at
+  speed in `tests/test_workflow_mcp_execution.py`, and what only a browser can
+  say is that the pairing survives everything between the broker and the page.
 * `workflow-run.spec.ts` -- a workflow run on each runner, end to end: the run
   is created from the form, provisions a checkout that exists on disk, streams
   the implementation's first message and its command into the step's
