@@ -37,6 +37,7 @@ from engine.ports.workspace_provider import WorkspaceState
 from engine.ports.state_store import StateStore
 from engine.runtime.approvals import ApprovalsUnsupportedError
 from engine.runtime.capabilities import Capabilities
+from engine.runtime.logging import log_event
 from engine.runtime.profiles import BUILT_IN, profile_for, with_granted_tools
 
 #: Grant name -> the tool it resolves to. Empty until tools exist; a profile
@@ -509,6 +510,14 @@ class AgentSession:
                 )
             raise
         except Exception as error:
+            log_event(
+                "agent turn failed",
+                level="error",
+                error_type=type(error).__name__,
+                instance_id=str(instance_id),
+                agent_run_id=str(agent_run.agent_run_id),
+                runner=runner_name,
+            )
             await store.record_agent_run(
                 replace(
                     agent_run,

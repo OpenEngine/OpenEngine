@@ -455,8 +455,23 @@ class WorkflowExecutor:
     async def _fail(self, run_id: RunId, error: Exception) -> None:
         state = await self._capabilities.state_store.load(run_id)
         if state is None:
+            log_event(
+                "workflow run failed",
+                level="error",
+                error_type=type(error).__name__,
+                run_id=str(run_id),
+            )
             return
         definition = self._definition_for(state)
+        log_event(
+            "workflow run failed",
+            level="error",
+            error_type=type(error).__name__,
+            run_id=str(run_id),
+            workflow_id=state.workflow_id,
+            phase=state.phase.value,
+            current_step_id=str(state.current_step_id) if state.current_step_id else None,
+        )
         failure = RunFailed(run_id=run_id, reason=f"{type(error).__name__}: {error}")
         await self._transition(state, failure, definition)
 
