@@ -101,7 +101,10 @@ class GitHubCredentialStore:
 
     def get(self) -> str | None:
         """Return the stored token, or None when nothing is saved."""
-        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+        try:
+            return keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+        except keyring.errors.NoKeyringError:
+            return None
 
     def set(self, token: str) -> None:
         self._check_backend()
@@ -110,12 +113,15 @@ class GitHubCredentialStore:
     def delete(self) -> None:
         try:
             keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
-        except keyring.errors.PasswordDeleteError:
+        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
             pass
 
     def get_client_id(self) -> str | None:
         """Return the stored OAuth client ID, or None when nothing is saved."""
-        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_CLIENT_ID_USERNAME)
+        try:
+            return keyring.get_password(_KEYRING_SERVICE, _KEYRING_CLIENT_ID_USERNAME)
+        except keyring.errors.NoKeyringError:
+            return None
 
     def set_client_id(self, client_id: str) -> None:
         self._check_backend()
@@ -124,7 +130,7 @@ class GitHubCredentialStore:
     def delete_client_id(self) -> None:
         try:
             keyring.delete_password(_KEYRING_SERVICE, _KEYRING_CLIENT_ID_USERNAME)
-        except keyring.errors.PasswordDeleteError:
+        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
             pass
 
 

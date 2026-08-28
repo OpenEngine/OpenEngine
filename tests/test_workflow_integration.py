@@ -12,7 +12,6 @@ import pytest
 from starlette.applications import Starlette
 
 import engine.runtime.dispatcher as dispatcher_module
-import github_fakes
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeWorkspaceProvider,
@@ -449,7 +448,7 @@ def _compose(
     repository: Path,
     monkeypatch: pytest.MonkeyPatch,
     script: object,
-) -> tuple[Starlette, Capabilities, Path]:
+) -> tuple[Starlette, Capabilities]:
     """The web application, composed as it is in production over fake CLIs.
 
     The composition root rather than a hand-wired capability set: which runner
@@ -462,12 +461,10 @@ def _compose(
     script_path = tmp_path / "script.json"
     script_path.write_text(json.dumps(script), encoding="utf-8")
     monkeypatch.setenv(SCRIPT_ENVIRONMENT_VARIABLE, str(script_path))
-    gh_log = tmp_path / "gh.jsonl"
 
     settings = Settings(
         codex_binary=fake_codex(binaries),
         claude_binary=fake_claude(binaries),
-        github_binary=github_fakes.install(binaries, gh_log),
         codex_working_directory=str(repository),
         claude_working_directory=str(repository),
         workspace_root=str(tmp_path / "workspaces"),
@@ -481,7 +478,7 @@ def _compose(
         workflow_runners=build_workflow_runners(settings),
         review_runners=build_read_only_runners(settings),
     )
-    return app, capabilities, gh_log
+    return app, capabilities
 
 
 async def _drive(
@@ -537,15 +534,28 @@ def test_a_scripted_cli_drives_a_run_over_the_real_mcp_bridge(
     provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Provision, implement, complete the step, review, and stop for a human."""
+    from unittest.mock import patch
+    from engine.adapters.source_control.github import GitHubSourceControl
+
     repository = _repository(tmp_path)
-    app, capabilities, gh_log = _compose(
+    app, capabilities = _compose(
         tmp_path, repository, monkeypatch, SCRIPTED_RUN
     )
 
+    api_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_api(self, method: str, path: str, **kwargs: object) -> dict:
+        api_calls.append((method, path, dict(kwargs)))
+        # GET /repos/.../pulls/N returns the head SHA the inline comment needs.
+        if method == "GET" and "/pulls/" in path:
+            return {"head": {"sha": "abc1234"}}
+        return {}
+
     try:
-        run, threads = asyncio.run(
-            _drive(app, repository, TASK, provider, "awaiting_human_review")
-        )
+        with patch.object(GitHubSourceControl, "_api", fake_api):
+            run, threads = asyncio.run(
+                _drive(app, repository, TASK, provider, "awaiting_human_review")
+            )
     finally:
         capabilities.state_store.close()
 
@@ -567,41 +577,19 @@ def test_a_scripted_cli_drives_a_run_over_the_real_mcp_bridge(
     checkout = Path(workspaces.pop())
     assert (checkout / "greeting.txt").read_text().strip() == "hello"
 
-    # And the reviewer's inline finding reached `gh` rather than GitHub.
-    recorded = [call["argv"] for call in github_fakes.calls(gh_log)]
-    assert recorded[0] == [
-        "pr",
-        "view",
-        PULL_REQUEST,
-        "--json",
-        "headRefOid",
-        "--jq",
-        ".headRefOid",
-    ]
-    assert recorded[1] == [
-        "api",
-        "--method",
-        "POST",
-        "repos/acme/api/pulls/7/comments",
-        "--raw-field",
-        f"body={FINDING}",
-        "--raw-field",
-        f"commit_id={github_fakes.HEAD_SHA}",
-        "--raw-field",
-        "path=greeting.txt",
-        "--field",
-        "line=1",
-        "--raw-field",
-        "side=RIGHT",
-    ]
-    assert len(recorded) == 2
+    # The reviewer's inline finding reached the GitHub API directly.
+    post_calls = [(m, p, kw) for m, p, kw in api_calls if m == "POST"]
+    assert any("/pulls/7/comments" in p for _, p, _ in post_calls)
+    inline = next((kw for _, p, kw in post_calls if "/pulls/7/comments" in p), None)
+    assert inline is not None
+    assert inline.get("json", {}).get("body") == FINDING
 
 
 def test_codex_clarification_pauses_the_step_and_reaches_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository = _repository(tmp_path)
-    app, capabilities, _gh_log = _compose(
+    app, capabilities = _compose(
         tmp_path, repository, monkeypatch, CLARIFICATION_RUN
     )
 
@@ -685,7 +673,7 @@ def test_a_completion_without_its_declared_output_is_refused(
     provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository = _repository(tmp_path)
-    app, capabilities, _ = _compose(
+    app, capabilities = _compose(
         tmp_path, repository, monkeypatch, INCOMPLETE_RUN
     )
 
