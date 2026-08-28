@@ -52,7 +52,50 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0005",)
+    assert revision == ("sqlite_0006",)
+
+
+def test_message_conversation_index_is_used_after_upgrade(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "sqlite_0005")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO agent_instances (
+                instance_id, agent_id, conversation_id, title, archived,
+                runner, auto_approve
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("instance-1", "coder", "conversation-1", "Chat", 0, "codex", 0),
+        )
+        connection.execute(
+            """
+            INSERT INTO messages (instance_id, role, content, tool_calls)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("instance-1", "user", "Keep me", "[]"),
+        )
+        connection.commit()
+
+    upgrade(url)
+
+    with sqlite3.connect(database) as connection:
+        plan = connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT sequence, role, content, tool_calls, tool_call_id
+            FROM messages WHERE instance_id = ? ORDER BY sequence
+            """,
+            ("instance-1",),
+        ).fetchall()
+        content = connection.execute(
+            "SELECT content FROM messages WHERE instance_id = ?",
+            ("instance-1",),
+        ).fetchone()
+
+    assert any("messages_by_instance" in row[3] for row in plan)
+    assert content == ("Keep me",)
 
 
 def test_milestone_details_migration_preserves_existing_records(tmp_path: Path) -> None:
