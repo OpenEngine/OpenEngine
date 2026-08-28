@@ -36,7 +36,7 @@ class TestGitHubCredentialStore:
 
     def test_set_writes_to_keyring(self, monkeypatch):
         written: list[tuple] = []
-        real_backend = MagicMock(spec=keyring.backend.KeyringBackend)
+        real_backend = MagicMock()
         real_backend.priority = 5
         monkeypatch.setattr(keyring, "get_keyring", lambda: real_backend)
         monkeypatch.setattr(
@@ -54,7 +54,7 @@ class TestGitHubCredentialStore:
 
     def test_set_raises_for_any_low_priority_backend(self, monkeypatch):
         """Priority < 1 means stub/null backend, not just the fail class."""
-        stub = MagicMock(spec=keyring.backend.KeyringBackend)
+        stub = MagicMock()
         stub.priority = 0
         monkeypatch.setattr(keyring, "get_keyring", lambda: stub)
         with pytest.raises(GitHubAuthError, match="no secure keyring"):
@@ -352,7 +352,7 @@ class TestPollEndpoint:
 
 
 def _high_priority_backend():
-    backend = MagicMock(spec=keyring.backend.KeyringBackend)
+    backend = MagicMock()
     backend.priority = 5
     return backend
 

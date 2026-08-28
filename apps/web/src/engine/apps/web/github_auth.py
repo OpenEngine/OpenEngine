@@ -92,8 +92,15 @@ class GitHubCredentialStore:
     """
 
     def _check_backend(self) -> None:
-        backend = keyring.get_keyring()
-        if isinstance(backend, keyring.backend.KeyringBackend) and backend.priority < 1:
+        try:
+            backend = keyring.get_keyring()
+            priority = backend.priority
+        except (keyring.errors.NoKeyringError, NotImplementedError):
+            raise GitHubAuthError(
+                "no secure keyring backend available on this system; "
+                "the value cannot be stored safely"
+            )
+        if priority < 1:
             raise GitHubAuthError(
                 "no secure keyring backend available on this system; "
                 "the value cannot be stored safely"
