@@ -2,14 +2,20 @@
 
 The Python process serves both the chat API and the built assistant-ui client.
 ``--check`` retains the cheap composition smoke test used in CI.
+
+Composition is reachable twice: ``main`` runs it once and serves the result,
+and ``build_app`` is the import string the development server's reloader names,
+which constructs the same application again in every fresh child process.
 """
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import uvicorn
+from starlette.applications import Starlette
 
 from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
@@ -23,6 +29,7 @@ from engine.apps.web.composition import (
 from engine.runtime import (
     EngineConfigError,
     LoadedEngineConfig,
+    WorkflowCatalog,
     describe_loaded_config,
     load_engine_config,
     load_workflow_catalog,
@@ -74,33 +81,35 @@ def report_wiring(settings: Settings) -> None:
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the OpenEngine web interface.")
-    parser.add_argument("--config", help="read Engine settings from this TOML file")
-    parser.add_argument("--check", action="store_true", help="report wiring and exit")
-    args = parser.parse_args(argv)
-    try:
-        loaded = load_engine_config(args.config)
-        workflow_catalog = (
-            load_workflow_catalog(loaded.workflows_directory)
-            if loaded.workflows_directory is not None
-            else None
-        )
-    except (EngineConfigError, WorkflowLoadError) as error:
-        print(f"configuration error: {error}", file=sys.stderr)
-        return 2
+def read_configuration(
+    config_path: str | os.PathLike[str] | None = None,
+) -> tuple[LoadedEngineConfig, WorkflowCatalog | None]:
+    """The two files this process reads once, at startup, and never again.
+
+    Together because they fail together -- neither is worth starting without --
+    and because "what a restart is for" has to be one list: the development
+    server watches exactly what this function reads.
+    """
+    loaded = load_engine_config(config_path)
+    catalog = (
+        load_workflow_catalog(loaded.workflows_directory)
+        if loaded.workflows_directory is not None
+        else None
+    )
+    return loaded, catalog
+
+
+def compose_app(
+    loaded: LoadedEngineConfig, workflow_catalog: WorkflowCatalog | None
+) -> Starlette:
+    """Wire the capability graph and hand it to the HTTP surface."""
     settings = Settings(engine_config=loaded.config, config_path=loaded.path)
-
-    if args.check:
-        report_wiring(settings)
-        return 0
-
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
-    app = create_app(
+    return create_app(
         session,
         runners,
         STATIC_DIRECTORY,
@@ -110,6 +119,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
     )
+
+
+def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
+    """Read the configuration and compose the application from it.
+
+    The reloader names this as an import string and calls it with no arguments
+    in each child process it starts, so the configuration file is selected by
+    ``ENGINE_CONFIG`` there rather than by a command line the child never saw.
+    """
+    return compose_app(*read_configuration(config_path))
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run the OpenEngine web interface.")
+    parser.add_argument("--config", help="read Engine settings from this TOML file")
+    parser.add_argument("--check", action="store_true", help="report wiring and exit")
+    args = parser.parse_args(argv)
+    try:
+        loaded, workflow_catalog = read_configuration(args.config)
+    except (EngineConfigError, WorkflowLoadError) as error:
+        print(f"configuration error: {error}", file=sys.stderr)
+        return 2
+    settings = Settings(engine_config=loaded.config, config_path=loaded.path)
+
+    if args.check:
+        report_wiring(settings)
+        return 0
+
+    app = compose_app(loaded, workflow_catalog)
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)
     return 0

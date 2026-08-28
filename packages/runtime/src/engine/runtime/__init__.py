@@ -17,6 +17,7 @@ from engine.runtime.approvals import (
 )
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.config import (
+    CONFIG_ENVIRONMENT_VARIABLE,
     ApprovalCapability,
     ApprovalConfig,
     BashApprovalConfig,
@@ -102,6 +103,7 @@ __all__ = [
     "INVALID_COMPLETION_ERROR",
     "BUILT_IN",
     "CODER",
+    "CONFIG_ENVIRONMENT_VARIABLE",
     "DEFAULT_RUNNER",
     "FOREMAN",
     "PLANNER",
