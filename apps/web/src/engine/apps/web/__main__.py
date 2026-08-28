@@ -20,6 +20,7 @@ from engine.apps.web.composition import (
     build_session,
     build_workflow_runners,
 )
+from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.runtime import (
     EngineConfigError,
     LoadedEngineConfig,
@@ -95,7 +96,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_wiring(settings)
         return 0
 
-    capabilities = build_capabilities(settings)
+    credential_store = GitHubCredentialStore()
+    capabilities = build_capabilities(settings, credential_store=credential_store)
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
@@ -109,6 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         workflow_catalog=workflow_catalog,
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
+        credential_store=credential_store,
+        github_client_id=settings.github_client_id,
     )
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)

@@ -249,8 +249,7 @@ def test_value_free_safe_global_options_still_pass(tmp_path: Path) -> None:
 def test_git_never_receives_the_forge_bearer_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source_control = _checkout(tmp_path / "checkout")
-    source_control._token = "adapter-secret"
+    source_control = GitHubSourceControl("adapter-secret", workspace_provider=_OneWorkspace(tmp_path))
     monkeypatch.setenv("GH_TOKEN", "host-secret")
     monkeypatch.setenv("GITHUB_TOKEN", "other-host-secret")
 
@@ -272,14 +271,15 @@ def test_opening_a_review_proposes_against_the_base_branch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A workflow's base is written `origin/main`; GitHub wants `main`."""
-    source_control = _checkout(tmp_path / "checkout")
-    calls: list[tuple[str, ...]] = []
+    checkout = tmp_path / "checkout"
+    source_control = _checkout(checkout)
+    api_calls: list[tuple[str, str, dict]] = []
 
-    async def gh(*arguments: str, cwd: str | None = None) -> str:
-        calls.append(arguments)
-        return "https://github.com/acme/api/pull/42"
+    async def fake_api(self_inner, method: str, path: str, **kwargs: object) -> dict:
+        api_calls.append((method, path, kwargs.get("json", {})))
+        return {"html_url": "https://github.com/acme/api/pull/42"}
 
-    monkeypatch.setattr(source_control, "_gh", gh)
+    monkeypatch.setattr(type(source_control), "_api", fake_api)
 
     url = asyncio.run(
         source_control.request_review(
@@ -288,20 +288,14 @@ def test_opening_a_review_proposes_against_the_base_branch(
     )
 
     assert url == "https://github.com/acme/api/pull/42"
-    assert calls == [
-        (
-            "pr",
-            "create",
-            "--head",
-            "agent/add-a-greeting",
-            "--base",
-            "main",
-            "--title",
-            "feat: greet",
-            "--body",
-            "Body.",
-        )
-    ]
+    assert len(api_calls) == 1
+    method, path, payload = api_calls[0]
+    assert method == "POST"
+    assert path.endswith("/pulls")
+    assert payload["head"] == "agent/add-a-greeting"
+    assert payload["base"] == "main"
+    assert payload["title"] == "feat: greet"
+    assert payload["body"] == "Body."
 
 
 def test_a_base_branch_with_a_slash_in_it_is_left_alone(
@@ -309,13 +303,13 @@ def test_a_base_branch_with_a_slash_in_it_is_left_alone(
 ) -> None:
     """`release/2.0` is a branch name, not a remote and a branch."""
     source_control = _checkout(tmp_path / "checkout")
-    calls: list[tuple[str, ...]] = []
+    api_calls: list[tuple[str, str, dict]] = []
 
-    async def gh(*arguments: str, cwd: str | None = None) -> str:
-        calls.append(arguments)
-        return "https://github.com/acme/api/pull/42"
+    async def fake_api(self_inner, method: str, path: str, **kwargs: object) -> dict:
+        api_calls.append((method, path, kwargs.get("json", {})))
+        return {"html_url": "https://github.com/acme/api/pull/42"}
 
-    monkeypatch.setattr(source_control, "_gh", gh)
+    monkeypatch.setattr(type(source_control), "_api", fake_api)
 
     asyncio.run(
         source_control.request_review(
@@ -323,7 +317,7 @@ def test_a_base_branch_with_a_slash_in_it_is_left_alone(
         )
     )
 
-    assert calls[0][calls[0].index("--base") + 1] == "release/2.0"
+    assert api_calls[0][2]["base"] == "release/2.0"
 
 
 def test_a_review_is_never_opened_for_an_internal_branch(tmp_path: Path) -> None:
@@ -340,15 +334,17 @@ def test_a_review_is_never_opened_for_an_internal_branch(tmp_path: Path) -> None
 # --- comments ----------------------------------------------------------------
 
 
-def test_general_comment_uses_gh_pr_comment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_general_comment_posts_to_the_issues_comments_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source_control = GitHubSourceControl("")
-    calls: list[tuple[str, ...]] = []
+    api_calls: list[tuple[str, str, dict]] = []
 
-    async def gh(*arguments: str) -> str:
-        calls.append(arguments)
-        return ""
+    async def fake_api(self_inner, method: str, path: str, **kwargs: object) -> dict:
+        api_calls.append((method, path, kwargs.get("json", {})))
+        return {}
 
-    monkeypatch.setattr(source_control, "_gh", gh)
+    monkeypatch.setattr(type(source_control), "_api", fake_api)
 
     asyncio.run(
         source_control.add_comment(
@@ -356,28 +352,26 @@ def test_general_comment_uses_gh_pr_comment(monkeypatch: pytest.MonkeyPatch) -> 
         )
     )
 
-    assert calls == [
-        (
-            "pr",
-            "comment",
-            "https://github.com/acme/api/pull/42",
-            "--body",
-            "Looks good.",
-        )
-    ]
+    assert len(api_calls) == 1
+    method, path, payload = api_calls[0]
+    assert method == "POST"
+    assert path == "/repos/acme/api/issues/42/comments"
+    assert payload == {"body": "Looks good."}
 
 
 def test_inline_comment_resolves_head_and_posts_review_comment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_control = GitHubSourceControl("")
-    calls: list[tuple[str, ...]] = []
+    api_calls: list[tuple[str, str, dict]] = []
 
-    async def gh(*arguments: str) -> str:
-        calls.append(arguments)
-        return "abc123" if arguments[:2] == ("pr", "view") else ""
+    async def fake_api(self_inner, method: str, path: str, **kwargs: object) -> dict:
+        api_calls.append((method, path, kwargs.get("json", {})))
+        if method == "GET" and path.endswith("/pulls/42"):
+            return {"head": {"sha": "abc123"}}
+        return {}
 
-    monkeypatch.setattr(source_control, "_gh", gh)
+    monkeypatch.setattr(type(source_control), "_api", fake_api)
 
     asyncio.run(
         source_control.add_comment(
@@ -388,31 +382,20 @@ def test_inline_comment_resolves_head_and_posts_review_comment(
         )
     )
 
-    assert calls[0] == (
-        "pr",
-        "view",
-        "https://github.com/acme/api/pull/42",
-        "--json",
-        "headRefOid",
-        "--jq",
-        ".headRefOid",
-    )
-    assert calls[1] == (
-        "api",
-        "--method",
-        "POST",
-        "repos/acme/api/pulls/42/comments",
-        "--raw-field",
-        "body=This can race.",
-        "--raw-field",
-        "commit_id=abc123",
-        "--raw-field",
-        "path=src/worker.py",
-        "--field",
-        "line=17",
-        "--raw-field",
-        "side=RIGHT",
-    )
+    assert len(api_calls) == 2
+    # First call fetches the PR to get the head SHA.
+    get_method, get_path, _ = api_calls[0]
+    assert get_method == "GET"
+    assert get_path == "/repos/acme/api/pulls/42"
+    # Second call posts the inline review comment.
+    post_method, post_path, post_payload = api_calls[1]
+    assert post_method == "POST"
+    assert post_path == "/repos/acme/api/pulls/42/comments"
+    assert post_payload["body"] == "This can race."
+    assert post_payload["commit_id"] == "abc123"
+    assert post_payload["path"] == "src/worker.py"
+    assert post_payload["line"] == 17
+    assert post_payload["side"] == "RIGHT"
 
 
 @pytest.mark.parametrize(

@@ -1,22 +1,23 @@
-"""GitHub source control: git in the workspace, ``gh`` for everything else.
+"""GitHub source control: git for local workspace operations, httpx for the API.
 
-Two binaries, one capability. `git` does the work that happens inside a
-checkout and `gh` the work that happens on github.com, and which of the two a
-method reaches for is an implementation detail of that method rather than
-something a caller picks.
+Two mechanisms, one capability. `git` handles everything that happens inside a
+checkout (branching, committing, pushing) and `httpx` handles everything that
+talks to github.com (pull requests, comments). Which one a method uses is an
+implementation detail of that method.
 
-The adapter is composed with the workspace provider because every operation
-here is keyed by `WorkspaceId` and git needs a directory. Resolving it here
-rather than letting callers pass a path is what keeps the engine from ever
-holding one -- the same reason `CodexAgentRunner` takes the provider.
+The adapter is composed with the workspace provider because every operation is
+keyed by `WorkspaceId` and git needs a directory. Resolving it here rather than
+letting callers pass a path is what keeps the engine from ever holding one.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from urllib.parse import urlparse
+
+import httpx
 
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import GitResult
@@ -89,17 +90,21 @@ class GitHubSourceControl:
 
     def __init__(
         self,
-        token: str,
+        token: str | Callable[[], str | None],
         api_url: str = "https://api.github.com",
-        binary_path: str = "gh",
         workspace_provider: WorkspaceProvider | None = None,
         git_binary_path: str = "git",
     ) -> None:
-        self._token = token
-        self._api_url = api_url
-        self._binary_path = binary_path
+        self._token_source = token
+        self._api_url = api_url.rstrip("/")
         self._workspace_provider = workspace_provider
         self._git_binary_path = git_binary_path
+
+    @property
+    def _token(self) -> str:
+        if callable(self._token_source):
+            return self._token_source() or ""
+        return self._token_source
 
     async def run_git(
         self, workspace_id: WorkspaceId, arguments: Sequence[str]
@@ -147,34 +152,27 @@ class GitHubSourceControl:
         title: str,
         body: str,
     ) -> str:
-        """Open a pull request with ``gh`` and return its URL."""
+        """Open a pull request via the GitHub API and return its URL."""
 
         if not branch.strip():
             raise ValueError("branch must not be empty")
         if not title.strip():
             raise ValueError("title must not be empty")
         _refuse_internal_branch(branch)
+
         root_path = await self._root_path(workspace_id)
-        url = await self._gh(
-            "pr",
-            "create",
-            "--head",
-            branch,
-            # A workflow's base is written as a ref somebody can resolve
-            # locally, and `origin/main` is the usual spelling. GitHub wants
-            # the branch that ref names, so the remote comes off here rather
-            # than every caller having to remember two spellings of one base.
-            "--base",
-            _base_branch(base_ref),
-            "--title",
-            title,
-            "--body",
-            body,
-            cwd=root_path,
+        owner, repo = await self._repo_coords(root_path)
+        base = _base_branch(base_ref)
+
+        response = await self._api(
+            "POST",
+            f"/repos/{owner}/{repo}/pulls",
+            json={"title": title, "body": body, "head": branch, "base": base},
         )
+        url = response.get("html_url", "")
         if not url:
-            raise GitHubSourceControlError("gh returned no pull-request URL")
-        return url.splitlines()[-1].strip()
+            raise GitHubSourceControlError("GitHub API returned no pull-request URL")
+        return url
 
     async def add_comment(
         self,
@@ -183,7 +181,7 @@ class GitHubSourceControl:
         file: str | None = None,
         line: int | None = None,
     ) -> None:
-        """Add a general or inline pull-request comment with ``gh``."""
+        """Add a general or inline pull-request comment via the GitHub API."""
 
         if not pr_url.strip():
             raise ValueError("pr_url must not be empty")
@@ -198,33 +196,38 @@ class GitHubSourceControl:
         ):
             raise ValueError("line must be a positive integer")
 
-        pull_request = _pull_request_parts(pr_url)
+        owner, repo, number = _pull_request_parts(pr_url)
+
         if file is None:
-            await self._gh("pr", "comment", pr_url, "--body", comment)
+            await self._api(
+                "POST",
+                f"/repos/{owner}/{repo}/issues/{number}/comments",
+                json={"body": comment},
+            )
             return
 
-        owner, repository, number = pull_request
-        head_sha = await self._gh(
-            "pr", "view", pr_url, "--json", "headRefOid", "--jq", ".headRefOid"
-        )
+        # Inline comment: resolve the PR head SHA first.
+        pr_data = await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}")
+        head_sha = pr_data.get("head", {}).get("sha", "")
         if not head_sha:
-            raise GitHubSourceControlError("gh returned an empty pull-request head SHA")
-        await self._gh(
-            "api",
-            "--method",
+            raise GitHubSourceControlError(
+                "GitHub API returned an empty pull-request head SHA"
+            )
+        await self._api(
             "POST",
-            f"repos/{owner}/{repository}/pulls/{number}/comments",
-            "--raw-field",
-            f"body={comment}",
-            "--raw-field",
-            f"commit_id={head_sha}",
-            "--raw-field",
-            f"path={file}",
-            "--field",
-            f"line={line}",
-            "--raw-field",
-            "side=RIGHT",
+            f"/repos/{owner}/{repo}/pulls/{number}/comments",
+            json={
+                "body": comment,
+                "commit_id": head_sha,
+                "path": file,
+                "line": line,
+                "side": "RIGHT",
+            },
         )
+
+    # -------------------------------------------------------------------------
+    # Internal helpers
+    # -------------------------------------------------------------------------
 
     async def _root_path(self, workspace_id: WorkspaceId) -> str:
         if self._workspace_provider is None:
@@ -272,21 +275,13 @@ class GitHubSourceControl:
             )
         return result.stdout
 
-    async def _gh(self, *arguments: str, cwd: str | None = None) -> str:
-        return await _run_gh(self._binary_path, arguments, self._environment(), cwd)
-
-    def _environment(self) -> Mapping[str, str] | None:
-        if not self._token:
-            return None
-        return {**os.environ, "GH_TOKEN": self._token}
-
     def _git_environment(self) -> Mapping[str, str]:
         """The host environment without forge bearer tokens.
 
         Git authentication belongs to the configured credential helper. A git
-        subprocess does not need the token used by `gh`, and Git can invoke
-        helpers, hooks and aliases, so putting that token in its environment
-        turns any such program into a credential reader.
+        subprocess does not need the token used for the GitHub API, and git can
+        invoke helpers, hooks and aliases, so putting that token in its
+        environment turns any such program into a credential reader.
         """
 
         return {
@@ -301,9 +296,47 @@ class GitHubSourceControl:
             }
         }
 
+    def _http_headers(self) -> dict[str, str]:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    async def _api(self, method: str, path: str, **kwargs: object) -> dict:
+        """Make one GitHub API call and return the parsed JSON body."""
+        url = f"{self._api_url}{path}"
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method,
+                url,
+                headers=self._http_headers(),
+                **kwargs,
+            )
+        if response.is_error:
+            try:
+                detail = response.json().get("message", response.text)
+            except Exception:
+                detail = response.text or f"HTTP {response.status_code}"
+            raise GitHubSourceControlError(
+                f"GitHub API {method} {path} failed ({response.status_code}): {detail}"
+            )
+        if response.status_code == 204 or not response.content:
+            return {}
+        return response.json()
+
+    async def _repo_coords(self, root_path: str) -> tuple[str, str]:
+        """The `owner/repo` pair from the workspace's `origin` remote URL."""
+        result = await self._git_checked(
+            root_path, ("remote", "get-url", "origin")
+        )
+        return _parse_repo_coords(result)
+
 
 class GitHubSourceControlError(RuntimeError):
-    """The GitHub CLI could not perform a source-control operation."""
+    """The GitHub API could not perform a source-control operation."""
 
 
 class InternalBranchPublicationError(GitHubSourceControlError):
@@ -458,28 +491,27 @@ def _pull_request_parts(pr_url: str) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[3]
 
 
-async def _run_gh(
-    binary_path: str,
-    arguments: tuple[str, ...],
-    environment: Mapping[str, str] | None,
-    cwd: str | None = None,
-) -> str:
-    try:
-        process = await asyncio.create_subprocess_exec(
-            binary_path,
-            *arguments,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=environment,
-            cwd=cwd,
+def _parse_repo_coords(remote_url: str) -> tuple[str, str]:
+    """Extract `(owner, repo)` from an HTTPS or SSH remote URL.
+
+    Handles the two common spellings:
+      https://github.com/owner/repo.git
+      git@github.com:owner/repo.git
+    """
+    remote_url = remote_url.strip()
+    # SSH shorthand: git@github.com:owner/repo.git
+    if remote_url.startswith("git@"):
+        path = remote_url.split(":", 1)[-1]
+    else:
+        parsed = urlparse(remote_url)
+        path = parsed.path
+    path = path.strip("/").removesuffix(".git")
+    parts = path.split("/")
+    if len(parts) < 2:
+        raise GitHubSourceControlError(
+            f"cannot determine owner/repo from remote URL: {remote_url!r}"
         )
-    except OSError as error:
-        raise GitHubSourceControlError(f"could not start {binary_path}: {error}") from error
-    stdout, stderr = await process.communicate()
-    if process.returncode:
-        detail = stderr.decode(errors="replace").strip() or "unknown error"
-        raise GitHubSourceControlError(f"gh failed: {detail}")
-    return stdout.decode(errors="replace").strip()
+    return parts[0], parts[1]
 
 
 __all__ = [

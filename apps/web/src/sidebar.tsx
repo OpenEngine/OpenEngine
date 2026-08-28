@@ -17,6 +17,7 @@ import { useState, type ReactNode } from "react";
 
 import { projectMilestonesUrl, type ApiProject, type ApiWorkflowRun } from "./api";
 import { RailBrand, RailFoot } from "./brand";
+import { SettingsPanel } from "./settings-panel";
 import { conversationCount, IN_PROGRESS_PHASES, runStatusLabel } from "./runs";
 
 export type RailSection = "projects" | "workflows" | "chats";
@@ -247,6 +248,7 @@ export function Sidebar({
   const [chosen, setChosen] = useState<RailSection | "closed" | null>(null);
   const open = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
   const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // A row with nowhere to go is never the page you are reading. Both sides are
   // optional here, so comparing them alone would call two absent URLs a match
   // and mark every such row on every page.
@@ -382,7 +384,11 @@ export function Sidebar({
           </ThreadListPrimitive.Root>
         </Section>
       </div>
-      <RailFoot />
+      {settingsOpen ? (
+        <SettingsPanel onClose={() => setSettingsOpen(false)} />
+      ) : (
+        <RailFoot onSettings={() => setSettingsOpen(true)} />
+      )}
     </aside>
   );
 }

@@ -1299,6 +1299,188 @@ select:disabled { cursor: default; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 
+/* --- settings panel ------------------------------------------------------ */
+
+.rail-foot { justify-content: flex-start; }
+.rail-foot-label { flex: 1 1 auto; }
+
+.rail-gear {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--night-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.rail-gear:hover { color: var(--night-ink); }
+.rail-gear svg { width: 14px; height: 14px; }
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid var(--night-rule);
+}
+
+.settings-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px var(--rail-pad, 18px);
+  border-bottom: 1px solid var(--night-rule);
+}
+
+.settings-panel-title {
+  flex: 1 1 auto;
+  color: var(--night-ink);
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.settings-panel-close {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--night-muted);
+  background: transparent;
+  border: 0;
+  font: 500 16px/1 var(--mono);
+  cursor: pointer;
+}
+.settings-panel-close:hover { color: var(--night-ink); }
+
+.settings-panel-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px var(--rail-pad, 18px);
+}
+
+.settings-section { margin-bottom: 24px; }
+
+.settings-section-title {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--night-muted);
+  font: 500 10px/1 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.settings-status {
+  margin: 0 0 10px;
+  font: 400 12px/1.4 var(--mono);
+}
+.settings-status-ok { color: #6bbf6b; }
+.settings-status-muted { color: var(--night-muted); }
+.settings-status-error { color: var(--flame); }
+
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.settings-button {
+  padding: 7px 12px;
+  color: var(--night-ink);
+  background: var(--night-raised);
+  border: 1px solid var(--night-rule);
+  font: 500 11px/1 var(--mono);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings-button:hover { background: var(--night-active); border-color: #6a6a64; }
+.settings-button-primary {
+  color: var(--night);
+  background: var(--night-ink);
+  border-color: var(--night-ink);
+}
+.settings-button-primary:hover { background: #d4d3d0; border-color: #d4d3d0; }
+.settings-button-danger:hover { color: var(--flame); border-color: var(--flame); }
+
+.settings-device-flow { margin-bottom: 12px; }
+
+.settings-device-flow-instruction {
+  margin: 0 0 10px;
+  color: var(--night-muted);
+  font: 400 12px/1.5 var(--mono);
+}
+
+.settings-link { color: var(--night-ink); }
+.settings-link:hover { text-decoration: underline; }
+
+.settings-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--night-muted);
+  font: 400 11px/1 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.settings-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  color: var(--night-ink);
+  background: var(--night-raised);
+  border: 1px solid var(--night-rule);
+  font: 400 13px/1 var(--mono);
+  outline: none;
+  margin-bottom: 10px;
+}
+.settings-input:focus { border-color: var(--night-muted); }
+
+.settings-client-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--night-raised);
+  border: 1px solid var(--night-rule);
+}
+.settings-client-id-label {
+  color: var(--night-muted);
+  font: 400 11px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  flex-shrink: 0;
+}
+.settings-client-id-source { color: var(--night-muted); }
+.settings-client-id-hint {
+  flex: 1;
+  color: var(--night-ink);
+  font: 400 13px/1 var(--mono);
+  letter-spacing: .05em;
+}
+.settings-link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--night-muted);
+  font: 400 11px/1 var(--mono);
+  cursor: pointer;
+  text-decoration: underline;
+  flex-shrink: 0;
+}
+.settings-link-button:hover { color: var(--night-ink); }
+
+.settings-client-id-form { margin-bottom: 12px; }
+
+.settings-device-code {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--night-ink);
+  background: var(--night-raised);
+  border: 1px solid var(--night-rule);
+  font: 700 18px/1 var(--mono);
+  letter-spacing: .2em;
+  text-align: center;
+}
+
 /* --- narrow -------------------------------------------------------------- */
 
 @media (max-width: 1000px) {
@@ -1311,7 +1493,7 @@ select:disabled { cursor: default; }
   .app-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
   .rail { --rail-pad: 12px; flex-direction: row; gap: 10px; align-items: center; padding: 10px 12px; overflow-x: auto; }
   .rail-brand { padding: 0; }
-  .rail-wordmark, .rail-foot, .rail-archive, .rail-sub, .rail-note { display: none; }
+  .rail-wordmark, .rail-foot, .settings-panel, .rail-archive, .rail-sub, .rail-note { display: none; }
   /* No room to stack three sections here, so the rail is one scrolling row.
      The sections stop being boxes -- `contents` lifts their headers and bodies
      into the row -- and `order` keeps all three headers together at the front,

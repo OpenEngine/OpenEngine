@@ -8,9 +8,6 @@ approval policy plumbing -- and changes only what a test must own:
     where it works        a fixture repository, so worktrees are disposable
     what it remembers     a SQLite file under the test's own directory
     which CLI it runs     `tests/provider_fakes.py`, scripted per test
-    which `gh` it runs    `tests/github_fakes.py`, recording into the state
-                          directory instead of commenting on somebody's
-                          pull request
 
 Everything else is production wiring, including the parts that are easy to get
 wrong: the interactive runners, the write-enabled workflow runners, and the
@@ -52,7 +49,6 @@ from engine.runtime import (  # noqa: E402
     describe_loaded_config,
     load_engine_config,
 )
-import github_fakes  # noqa: E402
 from provider_fakes import fake_claude, fake_codex  # noqa: E402
 
 
@@ -100,7 +96,6 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         codex_binary=fake_codex(binaries),
         claude_binary=fake_claude(binaries),
-        github_binary=github_fakes.install(binaries, state / "gh.jsonl"),
         codex_working_directory=args.repository,
         claude_working_directory=args.repository,
         workspace_root=str(state / "workspaces"),

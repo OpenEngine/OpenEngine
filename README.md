@@ -142,6 +142,58 @@ they may do is a property of the step, and a reviewer that cannot write should
 not become one that can because a chat was granted `edit`. The approvals they
 raise mid-run are governed like any other.
 
+## GitHub connection
+
+OpenEngine connects to GitHub to open pull requests and post review comments.
+The connection is set up once per machine through the Settings panel (gear icon
+at the bottom of the sidebar).
+
+### One-time setup: register an OAuth App
+
+You need to create one GitHub OAuth App for your team. Each colleague then
+pastes the client ID into their own Settings panel — no secrets are shared and
+no server configuration is required beyond the step below.
+
+1. Go to **github.com → Settings → Developer settings → OAuth Apps → New OAuth App**
+2. Fill in the form (device flow does not use the callback URL, but GitHub
+   requires one):
+   - **Application name:** `OpenEngine`
+   - **Homepage URL:** `http://localhost:8000`
+   - **Authorization callback URL:** `http://localhost:8000`
+3. Click **Register application**
+4. On the app page, check **Enable Device Flow** and click **Update application**
+5. Copy the **Client ID** (looks like `Ov23liXXXXXXXXXX`)
+
+### Connecting
+
+1. Open the Settings panel (gear icon in the sidebar)
+2. Paste the Client ID into the field and click **Save**
+3. Click **Connect GitHub**
+4. The panel shows a short code and a link to **github.com/login/device**
+5. Open that link, enter the code, click **Authorize**
+6. The panel switches to **Connected** automatically
+
+The token is stored in the OS keychain (macOS Keychain, Secret Service on
+Linux, Windows Credential Manager). Each colleague repeats steps 1–6 once with
+the same client ID.
+
+### Environment variable fallback
+
+If you deploy OpenEngine on a server where no keychain is available, set the
+client ID and a pre-generated token as environment variables instead:
+
+```toml
+# engine.toml
+github_client_id = "Ov23liXXXXXXXXXX"
+github_token     = "ghp_XXXXXXXXXXXX"
+```
+
+Or via environment variables:
+
+```bash
+GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-web
+```
+
 ## What is it.
 
 We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.

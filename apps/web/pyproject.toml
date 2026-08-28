@@ -22,6 +22,7 @@ dependencies = [
     "engine-adapter-workspace-provider-git-worktree",
     "starlette>=0.52",
     "uvicorn>=0.35",
+    "keyring>=25",
 ]
 
 [project.scripts]

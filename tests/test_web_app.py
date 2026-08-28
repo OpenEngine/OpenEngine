@@ -9,7 +9,6 @@ import httpx
 import openengine as oe
 import pytest
 
-import github_fakes
 from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
 from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
@@ -378,33 +377,41 @@ def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> Non
     assert planner_profile.capabilities == ()
 
 
-def test_review_comments_are_left_with_the_gh_the_composition_names(tmp_path) -> None:
-    """Which `gh` runs is the composition's to say, as the two CLIs are.
+def test_review_comments_reach_the_github_api(tmp_path) -> None:
+    """Comments are posted via the GitHub API, not via the gh CLI.
 
-    Proved by leaving a comment rather than by reading the constructor argument
-    back, because what matters is the executable the adapter actually spawns:
-    an unwired `github_binary` spawns whatever `gh` is on PATH, which for a
-    reviewer means somebody's real repository.
+    Proved by intercepting the HTTP request rather than by reading constructor
+    arguments back: what matters is that the adapter actually calls the right
+    endpoint with the right payload.
     """
-    log = tmp_path / "gh.jsonl"
-    capabilities = build_capabilities(
-        Settings(
-            github_binary=github_fakes.install(tmp_path, log),
-            sqlite_path=str(tmp_path / "c.sqlite3"),
-        )
-    )
+    recorded: list[httpx.Request] = []
+
+    async def fake_api(
+        self,
+        method: str,
+        path: str,
+        **kwargs: object,
+    ) -> dict:
+        recorded.append(httpx.Request(method, f"https://api.github.com{path}"))
+        return {}
+
+    from engine.adapters.source_control.github import GitHubSourceControl
+    from unittest.mock import patch
+
+    capabilities = build_capabilities(Settings(sqlite_path=str(tmp_path / "c.sqlite3")))
     try:
-        asyncio.run(
-            capabilities.source_control.add_comment(
-                "https://github.com/acme/api/pull/7", "Looks right."
+        with patch.object(GitHubSourceControl, "_api", fake_api):
+            asyncio.run(
+                capabilities.source_control.add_comment(
+                    "https://github.com/acme/api/pull/7", "Looks right."
+                )
             )
-        )
     finally:
         capabilities.state_store.close()
 
-    assert [call["argv"] for call in github_fakes.calls(log)] == [
-        ["pr", "comment", "https://github.com/acme/api/pull/7", "--body", "Looks right."]
-    ]
+    assert len(recorded) == 1
+    assert recorded[0].method == "POST"
+    assert "/repos/acme/api/issues/7/comments" in str(recorded[0].url)
 
 
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:

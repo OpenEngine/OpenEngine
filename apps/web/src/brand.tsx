@@ -32,12 +32,26 @@ export function RailBrand({ href = "/" }: { href?: string }) {
   );
 }
 
-export function RailFoot() {
+export function RailFoot({ onSettings }: { onSettings?: () => void }) {
   return (
-    <p className="rail-foot">
+    <div className="rail-foot">
       <span className="rail-pip" aria-hidden="true" />
-      Local openengine
-    </p>
+      <span className="rail-foot-label">Local openengine</span>
+      {onSettings && (
+        <button
+          aria-label="Open settings"
+          className="rail-gear"
+          onClick={onSettings}
+          title="Settings"
+          type="button"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" />
+            <path fillRule="evenodd" d="M8 0a1 1 0 0 1 .98.804l.32 1.603a5.5 5.5 0 0 1 1.092.637l1.538-.614a1 1 0 0 1 1.225.447l.944 1.636a1 1 0 0 1-.217 1.255l-1.26 1.022a5.54 5.54 0 0 1 0 1.42l1.26 1.022a1 1 0 0 1 .217 1.255l-.944 1.636a1 1 0 0 1-1.225.447l-1.538-.614a5.5 5.5 0 0 1-1.093.637l-.319 1.603A1 1 0 0 1 8 16a1 1 0 0 1-.98-.804l-.32-1.603a5.5 5.5 0 0 1-1.092-.637l-1.538.614a1 1 0 0 1-1.225-.447l-.944-1.636a1 1 0 0 1 .217-1.255l1.26-1.022a5.54 5.54 0 0 1 0-1.42L2.118 6.769a1 1 0 0 1-.217-1.255l.944-1.636a1 1 0 0 1 1.225-.447l1.538.614A5.5 5.5 0 0 1 6.7 2.407L7.02.804A1 1 0 0 1 8 0Zm0 2.06-.25 1.247a1 1 0 0 1-.722.768 3.5 3.5 0 0 0-1.508.884 1 1 0 0 1-1.036.204L3.28 4.55l-.472.818 1.015.824a1 1 0 0 1 .332 1.04 3.54 3.54 0 0 0 0 1.536 1 1 0 0 1-.332 1.04l-1.015.824.472.818 1.204-.481a1 1 0 0 1 1.036.204 3.5 3.5 0 0 0 1.508.884 1 1 0 0 1 .722.768L8 13.94l.25-1.247a1 1 0 0 1 .722-.768 3.5 3.5 0 0 0 1.508-.884 1 1 0 0 1 1.036-.204l1.204.481.472-.818-1.015-.824a1 1 0 0 1-.332-1.04 3.54 3.54 0 0 0 0-1.536 1 1 0 0 1 .332-1.04l1.015-.824-.472-.818-1.204.481a1 1 0 0 1-1.036-.204 3.5 3.5 0 0 0-1.508-.884 1 1 0 0 1-.722-.768L8 2.06Z" />
+          </svg>
+        </button>
+      )}
+    </div>
   );
 }
 

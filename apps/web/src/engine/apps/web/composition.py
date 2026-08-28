@@ -32,6 +32,7 @@ from engine.adapters.agent_runner.claude_code import (
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
+from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
@@ -94,14 +95,12 @@ class Settings:
     """Claude workflows may read and edit files, but not run unrestricted Bash."""
     temporal_host: str = "localhost:7233"
     github_token: str = ""
-    github_binary: str = "gh"
-    """The GitHub CLI review comments are left with.
+    github_client_id: str = ""
+    """OAuth App client ID for the GitHub device flow.
 
-    A field for the same reason `codex_binary` and `claude_binary` are: which
-    executable a capability shells out to is the deployment's to state, and
-    stating it here keeps it readable in the one file allowed to name adapters.
-    A `PATH` shim would do the same job invisibly, and would take the next thing
-    in the process that wanted the real `gh` with it.
+    Obtain by registering an OAuth App at github.com/settings/developers.
+    When empty, the Connect GitHub UI is shown but attempts to connect will
+    return a configuration error.
     """
     buzz_base_url: str = ""
     buzz_api_token: str = ""
@@ -118,14 +117,23 @@ class Settings:
     """The single TOML source, or ``None`` when built-in defaults are active."""
 
 
-def build_capabilities(settings: Settings) -> Capabilities:
+def build_capabilities(
+    settings: Settings,
+    credential_store: GitHubCredentialStore | None = None,
+) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
+    _store = credential_store or GitHubCredentialStore()
+
+    def _token() -> str:
+        # Prefer the keychain token; fall back to the env-var token (for
+        # deployments that inject it via the environment rather than OAuth).
+        return _store.get() or settings.github_token
+
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=GitHubSourceControl(
-            settings.github_token,
-            binary_path=settings.github_binary,
+            _token,
             workspace_provider=workspace_provider,
         ),
         agent_runner=CodexAgentRunner(
