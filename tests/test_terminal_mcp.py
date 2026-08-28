@@ -355,6 +355,7 @@ def _repository_broker(
     source_control: object,
     *names: str,
     git_approval=_approve_git,
+    tool_call_ids=None,
 ) -> TerminalMcpBroker:
     broker = TerminalMcpBroker(
         run_id=RunId("run-1"),
@@ -367,6 +368,7 @@ def _repository_broker(
         names,
         WorkspaceId("ws-under-test"),
         git_approval,
+        tool_call_ids,
     )
     return broker
 
@@ -464,7 +466,10 @@ def test_git_is_approved_by_engine_even_when_the_mcp_tool_was_preapproved() -> N
         request = requests[0]
         assert request.kind is ApprovalKind.TOOL_USE
         assert request.tool_name == "mcp__workflow__git_subcommand"
-        assert request.tool_call_id == "git-sensitive"
+        # Nothing told this broker what the provider called the call, and the
+        # request id is this server's own numbering -- so the request names no
+        # call rather than one nothing in the transcript answers to.
+        assert request.tool_call_id is None
         assert request.command == "git -c 'alias.x=!sh' x"
         assert request.arguments == '{"arguments": ["-c", "alias.x=!sh", "x"]}'
         assert request.allowed_decisions == (
@@ -473,6 +478,56 @@ def test_git_is_approved_by_engine_even_when_the_mcp_tool_was_preapproved() -> N
         )
         assert source_control.git_calls == [
             (WorkspaceId("ws-under-test"), ("-c", "alias.x=!sh", "x"))
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_git_approval_names_the_call_the_provider_reported() -> None:
+    """The pause has to be readable beside the call it interrupted.
+
+    A client pairs the two by the provider's id for the call, and this server
+    is reached over a transport of its own -- so the id is looked up from what
+    the provider streamed rather than taken from the MCP request carrying it.
+    """
+
+    async def scenario() -> None:
+        requests: list[ApprovalRequest] = []
+        asked: list[tuple[str, str]] = []
+
+        async def approve(request: ApprovalRequest) -> ApprovalDecision:
+            requests.append(request)
+            return ApprovalDecision.ACCEPT
+
+        def tool_call_ids(name: str, arguments: str) -> str | None:
+            asked.append((name, arguments))
+            return "thread-1:item-7"
+
+        source_control = RecordingRepository(stdout="clean")
+        broker = _repository_broker(
+            source_control,
+            "git_subcommand",
+            git_approval=approve,
+            tool_call_ids=tool_call_ids,
+        )
+        response = await broker._submit(
+            _direct_request(
+                broker,
+                "git-9",
+                "git_subcommand",
+                {"arguments": ["status", "--short"]},
+            )
+        )
+
+        assert response["ok"] is True
+        assert requests[0].tool_call_id == "thread-1:item-7"
+        # Asked by what the call is, so the answer can be found among the calls
+        # the provider has reported rather than among this server's requests.
+        assert asked == [
+            (
+                "mcp__workflow__git_subcommand",
+                '{"arguments": ["status", "--short"]}',
+            )
         ]
 
     asyncio.run(scenario())
