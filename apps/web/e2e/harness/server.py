@@ -8,9 +8,7 @@ approval policy plumbing -- and changes only what a test must own:
     where it works        a fixture repository, so worktrees are disposable
     what it remembers     a SQLite file under the test's own directory
     which CLI it runs     `tests/provider_fakes.py`, scripted per test
-    which `gh` it runs    `tests/github_fakes.py`, recording into the state
-                          directory instead of commenting on somebody's
-                          pull request
+    GitHub API calls      stubbed so tests run without a real token or network
 
 Everything else is production wiring, including the parts that are easy to get
 wrong: the interactive runners, the write-enabled workflow runners, and the
@@ -52,7 +50,7 @@ from engine.runtime import (  # noqa: E402
     describe_loaded_config,
     load_engine_config,
 )
-import github_fakes  # noqa: E402
+from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
 from provider_fakes import fake_claude, fake_codex  # noqa: E402
 
 
@@ -121,6 +119,14 @@ def main(argv: list[str] | None = None) -> int:
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
     )
+    # Stub out real GitHub API calls so e2e tests work without a token.
+    async def _fake_api(self, method: str, path: str, **kwargs: object) -> dict:
+        if method == "GET" and "/pulls/" in path:
+            return {"head": {"sha": "abc1234"}}
+        return {}
+
+    GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]
+
     print(describe_loaded_config(loaded), flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
     return 0
