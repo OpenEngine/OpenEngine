@@ -120,9 +120,17 @@ def main(argv: list[str] | None = None) -> int:
         default_branch=loaded.config.default_branch,
     )
     # Stub out real GitHub API calls so e2e tests work without a token.
+    # Comment POSTs are recorded to gh.jsonl so tests can assert on them.
+    gh_log = state / "gh.jsonl"
+
     async def _fake_api(self, method: str, path: str, **kwargs: object) -> dict:
         if method == "GET" and "/pulls/" in path:
             return {"head": {"sha": "abc1234"}}
+        if method == "POST" and "/comments" in path:
+            import json as _json
+            body = (kwargs.get("json") or {}).get("body", "")
+            with gh_log.open("a", encoding="utf-8") as f:
+                f.write(_json.dumps({"path": path, "body": body}) + "\n")
         return {}
 
     GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]
