@@ -32,7 +32,6 @@ from engine.adapters.agent_runner.claude_code import (
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
-from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
@@ -96,12 +95,6 @@ class Settings:
     temporal_host: str = "localhost:7233"
     github_token: str = ""
     github_client_id: str = ""
-    """OAuth App client ID for the GitHub device flow.
-
-    Obtain by registering an OAuth App at github.com/settings/developers.
-    When empty, the Connect GitHub UI is shown but attempts to connect will
-    return a configuration error.
-    """
     buzz_base_url: str = ""
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
@@ -123,13 +116,13 @@ def build_capabilities(
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    _store = credential_store or GitHubCredentialStore()
-
+    _store = credential_store
     def _token() -> str:
-        # Prefer the keychain token; fall back to the env-var token (for
-        # deployments that inject it via the environment rather than OAuth).
-        return _store.get() or settings.github_token
-
+        if _store is not None:
+            stored = _store.get()
+            if stored:
+                return stored
+        return settings.github_token
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=GitHubSourceControl(
