@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+import { apiProxyTarget } from "./src/api-proxy";
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -13,7 +15,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:8000",
+      "/api": apiProxyTarget(process.env),
     },
   },
 });

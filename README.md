@@ -23,10 +23,20 @@ All three entrypoints run today and report their wiring:
 uv run engine-web
 ```
 
-`engine-web` serves the client built into `apps/web/dist`, so a source edit
-needs a rebuild and a restart. The
-[development server plan](docs/dev-server.md) covers the proposed single
-command that watches the checkout and does both.
+`engine-web` serves the client built into `apps/web/dist` and reads its
+configuration once, so a source edit needs a rebuild, a Ctrl-C, or both. While
+working on OpenEngine itself, run the development server instead:
+
+```bash
+uv run engine-dev
+```
+
+It starts the Vite dev server and a reloading API as one process: a component
+edit is hot-swapped into the open page, and a change to Python, `engine.toml`
+or a workflow restarts the API. Open the address Vite prints. `--no-web` runs
+the API alone, and `--build` serves the built client from the API the way
+`engine-web` does. A restart ends any agent run in flight; the
+[development server plan](docs/dev-server.md) has the rest of the detail.
 
 SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
 history is currently a placeholder; the SQLite state store upgrades its

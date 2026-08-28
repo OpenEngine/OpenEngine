@@ -17,6 +17,7 @@ from engine.adapters.agent_runner.codex import (
 )
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
+from engine.apps.web.__main__ import build_app
 from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
@@ -115,6 +116,33 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeypatch) -> None:
+    """The contract the development server's reloader depends on.
+
+    It constructs the application again in every child process it starts, with
+    no command line and nothing handed to it, so a composition that only works
+    when `main` assembles it would leave `engine-dev` reloading into nothing.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    app = build_app()
+
+    async def ask() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get("/api/config")
+
+    answered = asyncio.run(ask())
+    assert answered.status_code == 200
+    assert answered.json()["runners"] == [
+        {"id": "codex", "implementation": "CodexAgentRunner"},
+        {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
+    ]
+    # Composed from the working directory, exactly as `engine-web` composes it.
+    assert (tmp_path / "conversations.sqlite3").exists()
 
 
 def test_web_offers_one_interactive_runner_per_cli() -> None:
