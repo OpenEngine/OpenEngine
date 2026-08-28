@@ -23,6 +23,11 @@ All three entrypoints run today and report their wiring:
 uv run engine-web
 ```
 
+`engine-web` serves the client built into `apps/web/dist`, so a source edit
+needs a rebuild and a restart. The
+[development server plan](docs/dev-server.md) covers the proposed single
+command that watches the checkout and does both.
+
 SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
 history is currently a placeholder; the SQLite state store upgrades its
 database on startup and can also be upgraded explicitly:
