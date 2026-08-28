@@ -1,6 +1,6 @@
 # Development server
 
-Status: proposed
+Status: phase 1 implemented as `uv run engine-dev`; phases 2 and 3 proposed
 
 This plan replaces the manual edit-build-restart loop for a source checkout
 with one command that watches the repository, applies UI changes to the open
@@ -75,22 +75,34 @@ follow from that, and no wiring is duplicated:
 
 ### What is watched, and what must not be
 
-The reloader watches `packages/`, `apps/web/src/engine`, `workflows/`, and
-`engine.toml` — the last two because they are startup-time reads, which is the
-whole of "restart if necessary".
+The reloader watches the checkout as a whole and restarts on `*.py` and
+`*.toml`. A list of source directories was the obvious alternative and is the
+one that goes stale; the startup-time reads are spread across the tree anyway —
+`packages/` and `apps/`, `workflows/`, and `engine.toml` beside them — and only
+the last of those has no directory of its own to watch.
 
-Exclusions matter more than inclusions here, because two of them would
+That makes the exclusions the substance of it, because two of them would
 otherwise produce a server that restarts continuously while doing normal work:
 
 - `conversations.sqlite3` and its `-wal`/`-shm` siblings are written into the
   working directory on every message. Watching the repository root without
   excluding them means every chat turn restarts the server mid-turn.
-- `apps/web/dist` and `apps/web/node_modules` are build output and vendor code.
+- `.venv` is thousands of `*.py` files that a `uv sync` rewrites, and
+  `apps/web/node_modules` and `apps/web/dist` are vendor code and build output.
 - Agent worktrees live under `workspace_root`, which defaults to
-  `/tmp/engine-workspaces` and is therefore already outside the tree. This is
-  worth an explicit note in the code: pointing `workspace_root` inside the
-  repository would make every agent edit restart the server underneath the
-  agent.
+  `/tmp/engine-workspaces` and is therefore already outside the tree. It is
+  excluded when it is not: pointing `workspace_root` inside the repository
+  would make every agent edit restart the server underneath the agent.
+
+Two properties of Uvicorn's filter that the exclusions have to be written for,
+because it reports neither: an exclusion is matched against absolute paths, so
+a relative one excludes nothing, and a directory is recognised as a directory
+once, at startup, so a path that does not exist yet is read as a glob that
+matches nothing. `engine-dev` passes absolute paths and drops the ones that are
+not there.
+
+`watchfiles` is a development dependency for this. Without it Uvicorn falls
+back to polling every watched file, which still works and is slower.
 
 ## Restarts are not free, and the plan says so
 
@@ -118,8 +130,9 @@ anticipated one.
 
 Editing `pyproject.toml`, `uv.lock`, `package.json`, or `package-lock.json`
 means the running processes are stale in a way a restart does not fix. The
-supervisor detects those paths and prints the one command that fixes it —
-`uv sync --all-packages` or `npm --prefix apps/web install` — rather than
+supervisor polls those files itself — separately from the reloader, which
+restarts but does not explain — and prints the one command that fixes it,
+`uv sync --all-packages` or `npm --prefix apps/web install`, rather than
 running it. Both are slow enough, and mutate the environment enough, that a
 tool doing it unannounced during someone's edit is worse than a printed line.
 An `--auto-sync` flag can opt in later.
@@ -131,10 +144,13 @@ triggers.
 ## Command surface
 
 ```bash
-uv run engine-dev              # both tiers; open http://localhost:5173
+uv run engine-dev              # both tiers; open the address Vite prints
 uv run engine-dev --no-web     # API only, reloading; for backend-only work
 uv run engine-dev --build      # serve built dist from :8000, production shape
 ```
+
+`--config`, `--port` and `--web-port` are there for the cases that need them.
+The API takes a free port when 8000 is held, and tells Vite which one it got.
 
 `--build` exists so the served-from-Python path — SPA fallback routes, the
 `BuiltClient` cache headers, asset hashing — stays exercisable by hand, since
@@ -146,9 +162,10 @@ bug would hide.
 `engine-dev` is a console script on `apps/web`, implemented in a new
 `apps/web/src/engine/apps/web/dev.py`. It is deliberately not a new workspace
 package: `tests/test_packages.py` pins the package roots in
-`EXPECTED_PACKAGE_ROOTS`, and a developer convenience is not a capability. The
-module imports the standard library and its own entrypoint only, so
-`tests/test_boundaries.py` is unaffected.
+`EXPECTED_PACKAGE_ROOTS`, and a developer convenience is not a capability. It
+names no adapter — the standard library, the entrypoint it reloads, and the
+settings that hold the default host and port — so `tests/test_boundaries.py` is
+unaffected.
 
 ## Acceptance criteria
 
@@ -171,10 +188,11 @@ module imports the standard library and its own entrypoint only, so
 Proportionate to a developer tool — the supervisor's decisions are tested, its
 subprocesses are not:
 
-- `tests/test_dev_server.py`: the reload configuration is right. Watched
-  directories include `workflows/` and `engine.toml`; exclusions cover
-  `*.sqlite3*`, `dist/`, and `node_modules/`; `ENGINE_CONFIG` and
-  `ENGINE_API_URL` are set for the children. No process is spawned.
+- `tests/test_dev_server.py`: which changes restart the API and which must not,
+  asserted through Uvicorn's own reload filter over a fixture checkout rather
+  than over our flags — a test that read back the flags would pass while they
+  meant something else. Plus what each child is told, and the dependency
+  notices. No process is spawned.
 - One test in `tests/test_web_app.py` that `build_app` returns a working
   application, which is the contract `--reload` depends on and the one thing
   here that can silently break the production entrypoint.
