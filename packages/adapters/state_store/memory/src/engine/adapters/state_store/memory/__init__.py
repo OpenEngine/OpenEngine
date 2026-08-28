@@ -280,6 +280,16 @@ class InMemoryStateStore:
         with self._lock:
             return self._conversations.get(instance_id)
 
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
+        with self._lock:
+            return {
+                instance_id: self._conversations[instance_id]
+                for instance_id in instance_ids
+                if instance_id in self._conversations
+            }
+
     async def append_messages(
         self, instance_id: AgentInstanceId, messages: Sequence[Message]
     ) -> None:

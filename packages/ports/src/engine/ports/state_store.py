@@ -189,6 +189,12 @@ class StateStore(Protocol):
         """
         ...
 
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
+        """Load the known conversations for several instances in one store read."""
+        ...
+
     async def append_messages(
         self, instance_id: AgentInstanceId, messages: Sequence[Message]
     ) -> None:
