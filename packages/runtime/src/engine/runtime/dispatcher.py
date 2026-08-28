@@ -50,6 +50,7 @@ from engine.runtime.terminal_mcp import (
     TerminalEvent,
     TerminalMcpBroker,
     TerminalResultRegistry,
+    ToolCallLookup,
     terminal_tool_names,
 )
 
@@ -193,6 +194,23 @@ class Dispatcher:
             observed.append(message)
             pending.put_nowait(message)
 
+        def observed_tool_call_id(name: str, arguments: str) -> str | None:
+            """The transcript's id for the call a run-bound tool is answering.
+
+            Read off what the provider has already reported rather than passed
+            through the MCP request, because the two are different transports
+            and only this one produces the ids the conversation is written in.
+            Newest first: an agent that runs the same command twice is asking
+            about the second one. Unmatched is `None` rather than a guess -- a
+            request beside the wrong call is worse than one beside no call.
+            """
+
+            for message in reversed(observed):
+                for call in message.tool_calls:
+                    if call.name == name and call.arguments == arguments:
+                        return call.call_id
+            return None
+
         async def persist_progress() -> None:
             while (message := await pending.get()) is not None:
                 await caps.state_store.append_messages(instance.instance_id, (message,))
@@ -208,6 +226,7 @@ class Dispatcher:
                         on_terminal_result,
                         observe,
                         on_approval,
+                        observed_tool_call_id,
                     )
                 elif isinstance(selected_runner, StreamingAgentRunner):
                     result = None
@@ -318,6 +337,7 @@ class Dispatcher:
         deliver: Callable[[TerminalEvent], Awaitable[None]] | None,
         on_message: TurnObserver,
         on_approval: ApprovalHandler | None,
+        tool_call_ids: ToolCallLookup | None = None,
     ) -> tuple[TerminalEvent | None, AgentTurn | None, tuple[Message, ...]]:
         """Run until a terminal result or clarification request is produced."""
         assert command.step is not None
@@ -340,6 +360,7 @@ class Dispatcher:
                     repository_tools,
                     command.workspace_id,
                     on_approval,
+                    tool_call_ids,
                 )
         async with broker:
             transcript: list[Message] = []
