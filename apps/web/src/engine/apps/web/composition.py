@@ -33,6 +33,7 @@ from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.sqlite import SQLiteStateStore
+from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 from engine.ports import AgentRunner
