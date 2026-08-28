@@ -100,7 +100,6 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         codex_binary=fake_codex(binaries),
         claude_binary=fake_claude(binaries),
-        github_binary=github_fakes.install(binaries, state / "gh.jsonl"),
         codex_working_directory=args.repository,
         claude_working_directory=args.repository,
         workspace_root=str(state / "workspaces"),
