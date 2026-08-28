@@ -22,9 +22,11 @@ from engine.adapters.agent_runner.codex import (
     CodexExecutionError,
     CodexToolsUnsupportedError,
     _app_server_thread_params,
+    app_server_response_for,
     approval_request_from_app_server,
     app_server_sandbox_policy,
     messages_from_app_server_event,
+    mcp_elicitation_request_from_app_server,
     parse_events,
     render_prompt,
     thread_id_of,
@@ -56,6 +58,8 @@ from engine.ports import (
     StreamingMcpAgentRunner,
     PermissionScope,
     PermissionTranslator,
+    UserInputAnswer,
+    UserInputResponse,
 )
 
 #: Captured from `codex exec --json --sandbox read-only "Reply with exactly the
@@ -525,6 +529,80 @@ def test_app_server_user_input_is_normalized_with_choices_and_other_input() -> N
     assert request.questions[0].allows_other is True
 
 
+def test_app_server_mcp_form_elicitation_uses_the_protocol_schema() -> None:
+    message = {
+        "id": "elicit-1",
+        "method": "mcpServer/elicitation/request",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "serverName": "workflow",
+            "mode": "form",
+            "message": "Choose a scope",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "oneOf": [
+                            {"const": "once", "title": "Allow once"},
+                            {"const": "session", "title": "Allow for session"},
+                        ],
+                    }
+                },
+            },
+        },
+    }
+
+    request = mcp_elicitation_request_from_app_server(message)
+
+    assert request is not None
+    assert request.kind is ApprovalKind.USER_INPUT
+    assert request.tool_name == "workflow"
+    assert request.questions[0].options[0].label == "once"
+    assert request.questions[0].options[0].description == "Allow once"
+    response = UserInputResponse((UserInputAnswer("scope", ("once",)),))
+    assert app_server_response_for(message, response) == {
+        "action": "accept",
+        "content": {"scope": "once"},
+    }
+
+
+def test_app_server_mcp_form_elicitation_round_trips_answers() -> None:
+    message = {
+        "id": "elicit-2",
+        "method": "mcpServer/elicitation/request",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "serverName": "example",
+            "mode": "form",
+            "message": "Configure the deployment",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "region": {
+                        "type": "string",
+                        "description": "Deployment region",
+                        "enum": ["east", "west"],
+                    }
+                },
+            },
+        },
+    }
+
+    request = mcp_elicitation_request_from_app_server(message)
+
+    assert request is not None
+    assert request.kind is ApprovalKind.USER_INPUT
+    assert request.questions[0].options[1].label == "west"
+    response = UserInputResponse((UserInputAnswer("region", ("west",)),))
+    assert app_server_response_for(message, response) == {
+        "action": "accept",
+        "content": {"region": "west"},
+    }
+
+
 def _fake_app_server(tmp_path) -> str:
     binary = tmp_path / "codex"
     binary.write_text(
@@ -583,6 +661,75 @@ def _fake_app_server(tmp_path) -> str:
     )
     binary.chmod(0o755)
     return str(binary)
+
+
+def _fake_eliciting_app_server(tmp_path) -> str:
+    binary = tmp_path / "codex"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"id": initialize["id"], "result": {"userAgent": "fake"}})
+            assert receive()["method"] == "initialized"
+            start = receive()
+            send({"id": start["id"], "result": {"thread": {"id": "thread-1"}}})
+            turn = receive()
+            send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
+            send({"id": "elicit-1", "method": "mcpServer/elicitation/request",
+                  "params": {"threadId": "thread-1", "turnId": "turn-1",
+                             "serverName": "workflow", "mode": "form",
+                             "message": "Choose a scope", "requestedSchema": {
+                                 "type": "object", "properties": {"scope": {
+                                     "type": "string", "enum": ["once", "session"]
+                                 }}
+                             }}})
+            response = receive()
+            assert response == {"id": "elicit-1", "result": {
+                "action": "accept", "content": {"scope": "once"}
+            }}
+            send({"method": "item/completed", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 1,
+                "item": {"id": "msg-1", "type": "agentMessage", "text": "done"}}})
+            send({"method": "turn/completed", "params": {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "items": [], "status": "completed"}}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
+    runner = CodexAgentRunner(binary_path=_fake_eliciting_app_server(tmp_path))
+    requests = []
+
+    async def answer(request):
+        requests.append(request)
+        return UserInputResponse((UserInputAnswer("scope", ("once",)),))
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-1"),
+            PROFILE,
+            (Message.user("run it"),),
+            answer,
+        )
+    )
+
+    assert requests[0].kind is ApprovalKind.USER_INPUT
+    assert requests[0].tool_name == "workflow"
+    assert turn.message.content == "done"
 
 
 def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:

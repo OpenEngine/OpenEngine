@@ -392,6 +392,123 @@ def user_input_request_from_app_server(
     )
 
 
+def mcp_elicitation_request_from_app_server(
+    message: dict[str, Any],
+) -> ApprovalRequest | None:
+    """Normalize an MCP server's app-server form elicitation."""
+    if message.get("method") != "mcpServer/elicitation/request" or "id" not in message:
+        return None
+    params = message.get("params") or {}
+    if not isinstance(params, dict) or params.get("mode") not in {"form", "openai/form"}:
+        return None
+    approval_id = ":".join(
+        part
+        for part in (
+            str(params.get("threadId", "")),
+            str(params.get("turnId", "")),
+            str(message["id"]),
+        )
+        if part
+    )
+    schema = params.get("requestedSchema") or {}
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict):
+        return None
+    questions: list[UserInputQuestion] = []
+    for name, definition in properties.items():
+        if not isinstance(definition, dict):
+            continue
+        choices = definition.get("enum")
+        choice_names = definition.get("enumNames")
+        titled_choices = definition.get("oneOf")
+        if definition.get("type") == "array":
+            items = definition.get("items") or {}
+            if isinstance(items, dict):
+                choices = items.get("enum")
+                titled_choices = items.get("anyOf")
+        if isinstance(titled_choices, list):
+            choices = [
+                choice.get("const")
+                for choice in titled_choices
+                if isinstance(choice, dict) and "const" in choice
+            ]
+            choice_names = [
+                choice.get("title", choice.get("const"))
+                for choice in titled_choices
+                if isinstance(choice, dict) and "const" in choice
+            ]
+        questions.append(
+            UserInputQuestion(
+                question_id=str(name),
+                header=str(definition.get("title") or name),
+                question=str(definition.get("description") or params.get("message") or name),
+                options=(
+                    tuple(
+                        UserInputOption(
+                            label=str(choice),
+                            description=(
+                                str(choice_names[index])
+                                if isinstance(choice_names, list)
+                                and index < len(choice_names)
+                                and choice_names[index] != choice
+                                else ""
+                            ),
+                        )
+                        for index, choice in enumerate(choices)
+                    )
+                    if isinstance(choices, list)
+                    else ()
+                ),
+                multi_select=definition.get("type") == "array",
+                allows_other=not isinstance(choices, list),
+            )
+        )
+    if not questions:
+        return None
+    return ApprovalRequest(
+        approval_id=approval_id,
+        kind=ApprovalKind.USER_INPUT,
+        reason=str(params.get("message", questions[0].question)),
+        tool_name=str(params.get("serverName") or "mcp_elicitation"),
+        arguments=json.dumps(params, sort_keys=True),
+        allowed_decisions=(ApprovalDecision.CANCEL,),
+        questions=tuple(questions),
+        requires_human=True,
+    )
+
+
+def app_server_response_for(
+    message: dict[str, Any], decision: ApprovalDecision | UserInputResponse
+) -> dict[str, Any]:
+    """Build the result payload for a supported app-server interaction."""
+    if message.get("method") != "mcpServer/elicitation/request":
+        if isinstance(decision, UserInputResponse):
+            return {
+                "answers": {
+                    answer.question_id: {"answers": list(answer.answers)}
+                    for answer in decision.answers
+                }
+            }
+        return {"decision": APP_SERVER_DECISIONS[decision]}
+
+    if isinstance(decision, UserInputResponse):
+        params = message.get("params") or {}
+        schema = params.get("requestedSchema") or {}
+        properties = schema.get("properties") if isinstance(schema, dict) else {}
+        content: dict[str, Any] = {}
+        for answer in decision.answers:
+            definition = properties.get(answer.question_id, {}) if isinstance(properties, dict) else {}
+            content[answer.question_id] = (
+                list(answer.answers)
+                if isinstance(definition, dict) and definition.get("type") == "array"
+                else (answer.answers[0] if answer.answers else "")
+            )
+        return {"action": "accept", "content": content}
+    if decision is ApprovalDecision.CANCEL:
+        return {"action": "cancel", "content": None}
+    return {"action": "accept", "content": {}}
+
+
 def _legacy_app_server_item(item: dict[str, Any]) -> dict[str, Any]:
     """Convert a v2 app-server item to the existing audit-event vocabulary."""
     converted: dict[str, Any] = {}
@@ -1041,6 +1158,8 @@ class CodexAgentRunner:
                 request = approval_request_from_app_server(message)
                 if request is None:
                     request = user_input_request_from_app_server(message)
+                if request is None:
+                    request = mcp_elicitation_request_from_app_server(message)
                 if request is not None:
                     decision = await on_approval(request)
                     if (
@@ -1051,16 +1170,7 @@ class CodexAgentRunner:
                             f"approval decision {decision.value!r} is not allowed for "
                             f"{request.approval_id}"
                         )
-                    result = (
-                        {
-                            "answers": {
-                                answer.question_id: {"answers": list(answer.answers)}
-                                for answer in decision.answers
-                            }
-                        }
-                        if isinstance(decision, UserInputResponse)
-                        else {"decision": APP_SERVER_DECISIONS[decision]}
-                    )
+                    result = app_server_response_for(message, decision)
                     await _write_json(
                         process.stdin,
                         {"id": message["id"], "result": result},
@@ -1249,11 +1359,13 @@ __all__ = [
     "CodexToolsUnsupportedError",
     "CodexUnavailableError",
     "action_messages",
+    "app_server_response_for",
     "app_server_sandbox_policy",
     "approval_request_from_app_server",
     "user_input_request_from_app_server",
     "failure_message_of",
     "messages_from_app_server_event",
+    "mcp_elicitation_request_from_app_server",
     "messages_from_event",
     "parse_events",
     "render_prompt",
