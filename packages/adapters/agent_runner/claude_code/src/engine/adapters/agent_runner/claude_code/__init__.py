@@ -70,7 +70,10 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.protocol_diagnostics import AgentProtocolDiagnostics
+from engine.runtime.protocol_diagnostics import (
+    AgentProtocolDiagnostics,
+    interaction_rejection_message,
+)
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
@@ -882,6 +885,9 @@ class ClaudeCodeAgentRunner:
                 if message.get("type") == "control_request":
                     request_id = message.get("request_id")
                     subtype = (message.get("request") or {}).get("subtype")
+                    rejection_message = interaction_rejection_message(
+                        str(subtype), "unsupported_subtype"
+                    )
                     diagnostics.record(
                         "interaction_rejected",
                         adapter_file=__file__,
@@ -895,13 +901,17 @@ class ClaudeCodeAgentRunner:
                             "response": {
                                 "subtype": "error",
                                 "request_id": request_id,
-                                "error": f"unsupported control request {subtype}",
+                                "error": rejection_message,
                             },
                         },
                     )
-                    raise ClaudeExecutionError(
-                        f"Claude requested unsupported interaction {subtype!r}"
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        request_id=str(request_id),
+                        response_error_code="unsupported_control_request",
                     )
+                    continue
                 if message.get("type") in {"control_response", "control_cancel_request"}:
                     continue
 

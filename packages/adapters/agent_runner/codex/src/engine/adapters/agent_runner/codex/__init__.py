@@ -106,7 +106,10 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.protocol_diagnostics import AgentProtocolDiagnostics
+from engine.runtime.protocol_diagnostics import (
+    AgentProtocolDiagnostics,
+    interaction_rejection_message,
+)
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
@@ -184,6 +187,15 @@ class CodexUnavailableError(RuntimeError):
 
 class CodexExecutionError(RuntimeError):
     """Codex ran and failed, timed out, or produced no answer."""
+
+
+class InvalidAppServerInteractionError(ValueError):
+    """A known app-server interaction carried an unsupported payload shape."""
+
+    def __init__(self, method: str, reason: str) -> None:
+        super().__init__(f"invalid {method} payload: {reason}")
+        self.method = method
+        self.reason = reason
 
 
 class CodexToolsUnsupportedError(NotImplementedError):
@@ -424,8 +436,13 @@ def mcp_elicitation_request_from_app_server(
     message: dict[str, Any],
 ) -> ApprovalRequest | None:
     """Normalize an MCP server's app-server form elicitation."""
-    if _elicitation_rejection_reason(message) is not None:
+    reason = _elicitation_rejection_reason(message)
+    if reason == "not_mcp_elicitation":
         return None
+    if reason is not None:
+        raise InvalidAppServerInteractionError(
+            "mcpServer/elicitation/request", reason
+        )
     params = message["params"]
     assert isinstance(params, dict)
     approval_id = ":".join(
@@ -1242,17 +1259,57 @@ class CodexAgentRunner:
                     turn_response_seen = True
                     continue
 
-                request = approval_request_from_app_server(message)
-                if request is None:
-                    request = user_input_request_from_app_server(message)
-                if request is None:
-                    request = mcp_elicitation_request_from_app_server(message)
-                if "id" in message and message.get("method"):
+                is_server_request = "id" in message and bool(message.get("method"))
+                if is_server_request:
                     diagnostics.record(
                         "interaction_received",
                         adapter_file=__file__,
                         **_diagnostic_shape(message),
                     )
+
+                request = approval_request_from_app_server(message)
+                if request is None:
+                    request = user_input_request_from_app_server(message)
+                if request is None:
+                    try:
+                        request = mcp_elicitation_request_from_app_server(message)
+                    except InvalidAppServerInteractionError as error:
+                        rejection_message = interaction_rejection_message(
+                            error.method, error.reason
+                        )
+                        LOGGER.error(
+                            "rejecting Codex app-server request method=%s reason=%s "
+                            "agent_run_id=%s",
+                            error.method,
+                            error.reason,
+                            agent_run_id,
+                        )
+                        diagnostics.record(
+                            "interaction_rejected",
+                            adapter_file=__file__,
+                            **_diagnostic_shape(message),
+                            rejection_reason=error.reason,
+                        )
+                        if "id" in message:
+                            await _write_json(
+                                process.stdin,
+                                {
+                                    "id": message["id"],
+                                    "error": {
+                                        "code": -32602,
+                                        "message": rejection_message,
+                                        "data": {"reason": error.reason},
+                                    },
+                                },
+                            )
+                            diagnostics.record(
+                                "interaction_response_sent",
+                                adapter_file=__file__,
+                                method=error.method,
+                                request_id=str(message["id"]),
+                                response_error_code=-32602,
+                            )
+                        continue
                 if request is not None:
                     diagnostics.record(
                         "interaction_normalized",
@@ -1295,12 +1352,11 @@ class CodexAgentRunner:
                     )
                     continue
 
-                if "id" in message and message.get("method"):
+                if is_server_request:
                     method = str(message["method"])
-                    rejection_reason = (
-                        _elicitation_rejection_reason(message)
-                        if method == "mcpServer/elicitation/request"
-                        else "unsupported_method"
+                    rejection_reason = "unsupported_method"
+                    rejection_message = interaction_rejection_message(
+                        method, rejection_reason
                     )
                     LOGGER.error(
                         "rejecting Codex app-server request method=%s reason=%s "
@@ -1321,13 +1377,18 @@ class CodexAgentRunner:
                             "id": message["id"],
                             "error": {
                                 "code": -32601,
-                                "message": f"unsupported server request {method}",
+                                "message": rejection_message,
                             },
                         },
                     )
-                    raise CodexExecutionError(
-                        f"codex app-server requested unsupported interaction {method!r}"
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        method=method,
+                        request_id=str(message["id"]),
+                        response_error_code=-32601,
                     )
+                    continue
 
                 method = message.get("method")
                 if method:
@@ -1494,6 +1555,7 @@ __all__ = [
     "CodexPermissionTranslator",
     "CodexToolsUnsupportedError",
     "CodexUnavailableError",
+    "InvalidAppServerInteractionError",
     "action_messages",
     "app_server_response_for",
     "app_server_sandbox_policy",

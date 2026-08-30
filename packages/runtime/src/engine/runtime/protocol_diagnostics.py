@@ -91,4 +91,17 @@ class AgentProtocolDiagnostics:
             LOGGER.warning("could not write agent protocol diagnostic: %s", error)
 
 
-__all__ = ["AGENT_PROTOCOL_DIAGNOSTIC_LOG", "AgentProtocolDiagnostics"]
+def interaction_rejection_message(interaction: str, reason: str) -> str:
+    """Explain a harness incompatibility to the still-running agent."""
+    return (
+        f"OpenEngine could not handle the provider's {interaction} interaction "
+        f"({reason}). The requested tool did not run. This is a runner "
+        "compatibility error; do not retry the same call unchanged."
+    )
+
+
+__all__ = [
+    "AGENT_PROTOCOL_DIAGNOSTIC_LOG",
+    "AgentProtocolDiagnostics",
+    "interaction_rejection_message",
+]

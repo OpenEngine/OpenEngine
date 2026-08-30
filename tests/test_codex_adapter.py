@@ -21,6 +21,7 @@ from engine.adapters.agent_runner.codex import (
     CodexAgentRunner,
     CodexExecutionError,
     CodexToolsUnsupportedError,
+    InvalidAppServerInteractionError,
     _app_server_thread_params,
     _elicitation_rejection_reason,
     app_server_response_for,
@@ -619,6 +620,19 @@ def test_mcp_elicitation_rejection_identifies_the_incompatible_shape() -> None:
     }
 
     assert _elicitation_rejection_reason(message) == "schema_properties_not_object"
+    with pytest.raises(
+        InvalidAppServerInteractionError, match="schema_properties_not_object"
+    ):
+        mcp_elicitation_request_from_app_server(message)
+
+
+def test_mcp_elicitation_parser_ignores_an_unrelated_method() -> None:
+    assert (
+        mcp_elicitation_request_from_app_server(
+            {"id": "approval-1", "method": "item/commandExecution/requestApproval"}
+        )
+        is None
+    )
 
 
 def _fake_app_server(tmp_path) -> str:
@@ -755,7 +769,62 @@ def _fake_incompatible_eliciting_app_server(tmp_path) -> str:
                              "serverName": "workflow", "mode": "openai/form",
                              "message": "secret approval wording",
                              "requestedSchema": {"fields": [{"secret": "value"}]}}})
-            receive()
+            rejection = receive()
+            assert rejection["id"] == "elicit-bad"
+            assert rejection["error"]["code"] == -32602
+            assert "schema_properties_not_object" in rejection["error"]["message"]
+            assert "requested tool did not run" in rejection["error"]["message"]
+            assert "do not retry" in rejection["error"]["message"]
+            assert rejection["error"]["data"] == {
+                "reason": "schema_properties_not_object"
+            }
+            send({"method": "item/completed", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 1,
+                "item": {"id": "msg-1", "type": "agentMessage",
+                         "text": "recovered"}}})
+            send({"method": "turn/completed", "params": {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "items": [], "status": "completed"}}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def _fake_unknown_request_app_server(tmp_path) -> str:
+    binary = tmp_path / "codex-unknown-request"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"id": initialize["id"], "result": {"userAgent": "fake"}})
+            assert receive()["method"] == "initialized"
+            start = receive()
+            send({"id": start["id"], "result": {"thread": {"id": "thread-1"}}})
+            turn = receive()
+            send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
+            send({"id": "future-1", "method": "future/interaction", "params": {}})
+            rejection = receive()
+            assert rejection["id"] == "future-1"
+            assert rejection["error"]["code"] == -32601
+            assert "future/interaction" in rejection["error"]["message"]
+            assert "unsupported_method" in rejection["error"]["message"]
+            assert "requested tool did not run" in rejection["error"]["message"]
+            send({"method": "item/completed", "params": {"item": {
+                "id": "msg-1", "type": "agentMessage", "text": "recovered"}}})
+            send({"method": "turn/completed", "params": {
+                "turn": {"id": "turn-1", "items": [], "status": "completed"}}})
             '''
         )
     )
@@ -821,30 +890,55 @@ def test_app_server_diagnostic_records_shapes_without_values(tmp_path, monkeypat
     assert diagnostic.stat().st_mode & 0o777 == 0o600
 
 
-def test_rejected_elicitation_logs_its_shape_and_reason(tmp_path, monkeypatch) -> None:
+def test_rejected_elicitation_logs_an_error_and_keeps_the_turn_alive(
+    tmp_path, monkeypatch
+) -> None:
     diagnostic = tmp_path / "codex-app-server.jsonl"
     monkeypatch.setenv(AGENT_PROTOCOL_DIAGNOSTIC_LOG, str(diagnostic))
     runner = CodexAgentRunner(
         binary_path=_fake_incompatible_eliciting_app_server(tmp_path)
     )
 
-    with pytest.raises(CodexExecutionError, match="unsupported interaction"):
-        asyncio.run(
-            runner.run_turn_interactive(
-                AgentRunId("ar-rejected"),
-                PROFILE,
-                (Message.user("go"),),
-                lambda _request: None,
-            )
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-rejected"),
+            PROFILE,
+            (Message.user("go"),),
+            lambda _request: None,
         )
+    )
 
     records = [json.loads(line) for line in diagnostic.read_text().splitlines()]
-    rejected = records[-1]
+    rejected = next(
+        record for record in records if record["event"] == "interaction_rejected"
+    )
     assert rejected["event"] == "interaction_rejected"
     assert rejected["rejection_reason"] == "schema_properties_not_object"
     assert rejected["requested_schema_keys"] == ["fields"]
+    response = next(
+        record
+        for record in records
+        if record["event"] == "interaction_response_sent"
+    )
+    assert response["response_error_code"] == -32602
+    assert turn.message.content == "recovered"
     assert "secret approval wording" not in diagnostic.read_text()
     assert '"secret": "value"' not in diagnostic.read_text()
+
+
+def test_unknown_app_server_request_is_rejected_without_ending_the_turn(tmp_path) -> None:
+    runner = CodexAgentRunner(binary_path=_fake_unknown_request_app_server(tmp_path))
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-unknown"),
+            PROFILE,
+            (Message.user("go"),),
+            lambda _request: None,
+        )
+    )
+
+    assert turn.message.content == "recovered"
 
 
 def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:
