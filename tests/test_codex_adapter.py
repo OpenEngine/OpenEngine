@@ -609,6 +609,42 @@ def test_app_server_mcp_form_elicitation_round_trips_answers() -> None:
     }
 
 
+def test_app_server_empty_mcp_form_is_an_accept_cancel_approval() -> None:
+    message = {
+        "id": "elicit-confirm",
+        "method": "mcpServer/elicitation/request",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "serverName": "workflow",
+            "mode": "form",
+            "message": "Allow the workflow tool to continue?",
+            "requestedSchema": {"type": "object", "properties": {}},
+        },
+    }
+
+    assert _elicitation_rejection_reason(message) is None
+    request = mcp_elicitation_request_from_app_server(message)
+
+    assert request is not None
+    assert request.kind is ApprovalKind.TOOL_USE
+    assert request.reason == "Allow the workflow tool to continue?"
+    assert request.tool_name == "workflow"
+    assert request.questions == ()
+    assert request.allowed_decisions == (
+        ApprovalDecision.ACCEPT,
+        ApprovalDecision.CANCEL,
+    )
+    assert app_server_response_for(message, ApprovalDecision.ACCEPT) == {
+        "action": "accept",
+        "content": {},
+    }
+    assert app_server_response_for(message, ApprovalDecision.CANCEL) == {
+        "action": "cancel",
+        "content": None,
+    }
+
+
 def test_mcp_elicitation_rejection_identifies_the_incompatible_shape() -> None:
     message = {
         "id": "elicit-1",
@@ -792,6 +828,52 @@ def _fake_incompatible_eliciting_app_server(tmp_path) -> str:
     return str(binary)
 
 
+def _fake_empty_eliciting_app_server(tmp_path) -> str:
+    binary = tmp_path / "codex-empty-elicitation"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"id": initialize["id"], "result": {"userAgent": "fake"}})
+            assert receive()["method"] == "initialized"
+            start = receive()
+            send({"id": start["id"], "result": {"thread": {"id": "thread-1"}}})
+            turn = receive()
+            send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
+            send({"id": "elicit-confirm", "method": "mcpServer/elicitation/request",
+                  "params": {"threadId": "thread-1", "turnId": "turn-1",
+                             "serverName": "workflow", "mode": "form",
+                             "message": "Allow the workflow tool to continue?",
+                             "requestedSchema": {
+                                 "type": "object", "properties": {}
+                             }}})
+            response = receive()
+            assert response == {"id": "elicit-confirm", "result": {
+                "action": "accept", "content": {}
+            }}
+            send({"method": "item/completed", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 1,
+                "item": {"id": "msg-1", "type": "agentMessage", "text": "done"}}})
+            send({"method": "turn/completed", "params": {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "items": [], "status": "completed"}}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
 def _fake_unknown_request_app_server(tmp_path) -> str:
     binary = tmp_path / "codex-unknown-request"
     binary.write_text(
@@ -850,6 +932,28 @@ def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
     )
 
     assert requests[0].kind is ApprovalKind.USER_INPUT
+    assert requests[0].tool_name == "workflow"
+    assert turn.message.content == "done"
+
+
+def test_interactive_turn_accepts_an_empty_mcp_elicitation(tmp_path) -> None:
+    runner = CodexAgentRunner(binary_path=_fake_empty_eliciting_app_server(tmp_path))
+    requests = []
+
+    async def approve(request):
+        requests.append(request)
+        return ApprovalDecision.ACCEPT
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-empty-elicitation"),
+            PROFILE,
+            (Message.user("run it"),),
+            approve,
+        )
+    )
+
+    assert requests[0].kind is ApprovalKind.TOOL_USE
     assert requests[0].tool_name == "workflow"
     assert turn.message.content == "done"
 

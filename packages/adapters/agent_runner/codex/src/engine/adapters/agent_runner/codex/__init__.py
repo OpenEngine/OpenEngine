@@ -425,7 +425,7 @@ def _elicitation_rejection_reason(message: dict[str, Any]) -> str | None:
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         return "schema_properties_not_object"
-    if not any(
+    if properties and not any(
         isinstance(definition, dict) for definition in properties.values()
     ):
         return "schema_has_no_supported_properties"
@@ -508,7 +508,17 @@ def mcp_elicitation_request_from_app_server(
             )
         )
     if not questions:
-        return None
+        return ApprovalRequest(
+            approval_id=approval_id,
+            kind=ApprovalKind.TOOL_USE,
+            reason=str(params.get("message") or "Approve the MCP server request."),
+            tool_name=str(params.get("serverName") or "mcp_elicitation"),
+            arguments=json.dumps(params, sort_keys=True),
+            allowed_decisions=(
+                ApprovalDecision.ACCEPT,
+                ApprovalDecision.CANCEL,
+            ),
+        )
     return ApprovalRequest(
         approval_id=approval_id,
         kind=ApprovalKind.USER_INPUT,
