@@ -286,4 +286,28 @@ describe("what deciding placement costs", () => {
     expect(seen[2]).not.toBe(seen[0]);
     expect([...seen[2]]).toEqual(["call-1", "call-2"]);
   });
+
+  it("notices a call streamed into the existing transcript array", () => {
+    const seen: ReadonlySet<string>[] = [];
+    const Probe = () => {
+      seen.push(useToolCallIds());
+      return null;
+    };
+    const message = { content: [] as Part[] };
+    turn.thread.messages = [message];
+    const view = render(
+      <ToolCallIndex>
+        <Probe />
+      </ToolCallIndex>,
+    );
+
+    message.content.push(call("call-streamed", "Bash", "git status --short"));
+    view.rerender(
+      <ToolCallIndex>
+        <Probe />
+      </ToolCallIndex>,
+    );
+
+    expect([...seen.at(-1)!]).toEqual(["call-streamed"]);
+  });
 });

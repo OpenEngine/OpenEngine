@@ -849,23 +849,26 @@ export function useToolCallIds(): ReadonlySet<string> {
  *  turn that reads one, which is the cost this exists to avoid. Tokens arrive
  *  far more often than tool calls do, so most rescans find nothing new. */
 export function ToolCallIndex({ children }: { children: ReactNode }) {
-  const messages = useAuiState((state) => state.thread.messages);
   const held = useRef<ReadonlySet<string>>(new Set<string>());
-  const ids = useMemo(() => {
-    const found = new Set<string>();
-    for (const message of messages) {
+  const signature = useAuiState((state) => {
+    const ids: string[] = [];
+    for (const message of state.thread.messages) {
       if (!Array.isArray(message.content)) continue;
       for (const part of message.content) {
-        if (part.type === "tool-call") found.add(part.toolCallId);
+        if (part.type === "tool-call") ids.push(part.toolCallId);
       }
     }
+    return JSON.stringify(ids);
+  });
+  const ids = useMemo(() => {
+    const found = new Set<string>(JSON.parse(signature) as string[]);
     const previous = held.current;
     if (previous.size === found.size && [...found].every((id) => previous.has(id))) {
       return previous;
     }
     held.current = found;
     return found;
-  }, [messages]);
+  }, [signature]);
 
   return <ToolCallIds.Provider value={ids}>{children}</ToolCallIds.Provider>;
 }

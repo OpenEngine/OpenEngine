@@ -152,6 +152,14 @@ class ActiveRun:
         a single slot would hand the new question over in place of it -- leaving
         a card waiting forever on a request that was decided.
         """
+        self._approval_transitions: list[dict[str, object]] = []
+        """Every distinct state the run stream must deliver, in order.
+
+        The latest-state map makes reconnect snapshots cheap, but cannot serve
+        as an event queue: a pending request may become decided before the
+        stream task next runs. Keeping the transitions separately makes stream
+        delivery independent of event-loop scheduling.
+        """
         self.error: str | None = None
         self.done = False
         self._revision = 0
@@ -169,6 +177,7 @@ class ActiveRun:
 
     async def stream(self) -> AsyncIterator[bytes]:
         revision = 0
+        transition_index = 0
         sent: dict[str, dict[str, object]] = {}
         while True:
             async with self._changed:
@@ -177,11 +186,16 @@ class ActiveRun:
                 )
                 revision = self._revision
                 content = [dict(part) for part in self.content]
-                approvals = {key: dict(value) for key, value in self.approvals.items()}
+                transitions = [
+                    dict(value)
+                    for value in self._approval_transitions[transition_index:]
+                ]
+                transition_index += len(transitions)
                 error = self.error
                 done = self.done
 
-            for approval_id, approval in approvals.items():
+            for approval in transitions:
+                approval_id = str(approval["id"])
                 # Whole snapshots, including the resolved ones: a client that
                 # missed the decision would otherwise go on showing a prompt
                 # for a request that has already been answered. Every one that
@@ -234,6 +248,7 @@ class ActiveRun:
         snapshot = _approval_json(approval)
         async with self._changed:
             self.approvals[str(approval.approval_id)] = snapshot
+            self._approval_transitions.append(snapshot)
             self._revision += 1
             self._changed.notify_all()
 
@@ -244,7 +259,9 @@ class ActiveRun:
         ending sends a moment later, and awaiting a lock here would yield the
         event loop back to the very turn being torn down.
         """
-        self.approvals[str(approval.approval_id)] = _approval_json(approval)
+        snapshot = _approval_json(approval)
+        self.approvals[str(approval.approval_id)] = snapshot
+        self._approval_transitions.append(snapshot)
 
     async def _finish(self) -> None:
         async with self._changed:
