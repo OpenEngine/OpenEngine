@@ -788,6 +788,44 @@ def _fake_incompatible_eliciting_app_server(tmp_path) -> str:
     return str(binary)
 
 
+def _fake_unknown_request_app_server(tmp_path) -> str:
+    binary = tmp_path / "codex-unknown-request"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"id": initialize["id"], "result": {"userAgent": "fake"}})
+            assert receive()["method"] == "initialized"
+            start = receive()
+            send({"id": start["id"], "result": {"thread": {"id": "thread-1"}}})
+            turn = receive()
+            send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
+            send({"id": "future-1", "method": "future/interaction", "params": {}})
+            assert receive() == {"id": "future-1", "error": {
+                "code": -32601,
+                "message": "unsupported server request future/interaction"
+            }}
+            send({"method": "item/completed", "params": {"item": {
+                "id": "msg-1", "type": "agentMessage", "text": "recovered"}}})
+            send({"method": "turn/completed", "params": {
+                "turn": {"id": "turn-1", "items": [], "status": "completed"}}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
 def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
     runner = CodexAgentRunner(binary_path=_fake_eliciting_app_server(tmp_path))
     requests = []
@@ -880,6 +918,21 @@ def test_rejected_elicitation_logs_an_error_and_keeps_the_turn_alive(
     assert turn.message.content == "recovered"
     assert "secret approval wording" not in diagnostic.read_text()
     assert '"secret": "value"' not in diagnostic.read_text()
+
+
+def test_unknown_app_server_request_is_rejected_without_ending_the_turn(tmp_path) -> None:
+    runner = CodexAgentRunner(binary_path=_fake_unknown_request_app_server(tmp_path))
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-unknown"),
+            PROFILE,
+            (Message.user("go"),),
+            lambda _request: None,
+        )
+    )
+
+    assert turn.message.content == "recovered"
 
 
 def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:

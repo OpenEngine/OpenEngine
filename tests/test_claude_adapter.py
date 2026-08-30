@@ -589,6 +589,42 @@ def _fake_interactive_claude(tmp_path) -> str:
     return str(binary)
 
 
+def _fake_unknown_control_request_claude(tmp_path) -> str:
+    binary = tmp_path / "claude-unknown-control"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"type": "control_response", "response": {
+                "subtype": "success", "request_id": initialize["request_id"],
+                "response": {}}})
+            receive()
+            send({"type": "control_request", "request_id": "future-1",
+                  "request": {"subtype": "future_interaction"}})
+            assert receive() == {"type": "control_response", "response": {
+                "subtype": "error", "request_id": "future-1",
+                "error": "unsupported control request future_interaction"}}
+            send({"type": "assistant", "message": {"content": [{
+                "type": "text", "text": "recovered"}]}})
+            send({"type": "result", "subtype": "success", "is_error": False,
+                  "result": "recovered", "usage": {}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
 def test_interactive_turn_round_trips_a_control_approval(tmp_path) -> None:
     runner = ClaudeCodeAgentRunner(binary_path=_fake_interactive_claude(tmp_path))
     observed: list[Message] = []
@@ -650,6 +686,23 @@ def test_interactive_diagnostic_uses_shared_redacted_vocabulary(
     assert records[2]["tool_name"] == "Bash"
     assert "touch output.txt" not in text
     assert "a prompt that must not be logged" not in text
+
+
+def test_unknown_control_request_is_rejected_without_ending_the_turn(tmp_path) -> None:
+    runner = ClaudeCodeAgentRunner(
+        binary_path=_fake_unknown_control_request_claude(tmp_path)
+    )
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-unknown"),
+            PROFILE,
+            (Message.user("go"),),
+            lambda _request: None,
+        )
+    )
+
+    assert turn.message.content == "recovered"
 
 
 def test_terminal_mcp_configuration_is_passed_to_claude() -> None:

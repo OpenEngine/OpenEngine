@@ -1372,9 +1372,14 @@ class CodexAgentRunner:
                             },
                         },
                     )
-                    raise CodexExecutionError(
-                        f"codex app-server requested unsupported interaction {method!r}"
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        method=method,
+                        request_id=str(message["id"]),
+                        response_error_code=-32601,
                     )
+                    continue
 
                 method = message.get("method")
                 if method:

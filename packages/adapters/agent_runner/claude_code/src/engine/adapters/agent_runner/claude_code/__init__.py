@@ -899,9 +899,13 @@ class ClaudeCodeAgentRunner:
                             },
                         },
                     )
-                    raise ClaudeExecutionError(
-                        f"Claude requested unsupported interaction {subtype!r}"
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        request_id=str(request_id),
+                        response_error_code="unsupported_control_request",
                     )
+                    continue
                 if message.get("type") in {"control_response", "control_cancel_request"}:
                     continue
 

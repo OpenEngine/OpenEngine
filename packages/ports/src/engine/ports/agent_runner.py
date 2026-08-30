@@ -312,7 +312,13 @@ class InteractiveAgentRunner(AgentRunner, Protocol):
         tools: Sequence[ToolSpec] = (),
         workspace_id: WorkspaceId | None = None,
     ) -> AgentTurn:
-        """Run a turn, awaiting `on_approval` whenever user consent is needed."""
+        """Run a turn, awaiting `on_approval` whenever user consent is needed.
+
+        A provider-initiated interaction that cannot be normalized must be
+        rejected with that provider's error response and the turn kept alive.
+        Unsupported or malformed interactions are tool-level failures, not a
+        reason to terminate the agent execution.
+        """
         ...
 
 
