@@ -42,6 +42,10 @@ from engine.runtime.profiles import (
     profile_for,
     with_granted_tools,
 )
+from engine.runtime.protocol_diagnostics import (
+    AGENT_PROTOCOL_DIAGNOSTIC_LOG,
+    AgentProtocolDiagnostics,
+)
 from engine.runtime.planning_tools import (
     PLANNING_TOOL_NAMES,
     PlanningMcpBroker,
@@ -108,6 +112,8 @@ __all__ = [
     "FOREMAN",
     "PLANNER",
     "AgentSession",
+    "AgentProtocolDiagnostics",
+    "AGENT_PROTOCOL_DIAGNOSTIC_LOG",
     "ApprovalBroker",
     "ApprovalDecisionNotAllowedError",
     "ApprovalError",

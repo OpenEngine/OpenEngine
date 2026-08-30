@@ -17,7 +17,6 @@ import textwrap
 import pytest
 
 from engine.adapters.agent_runner.codex import (
-    APP_SERVER_DIAGNOSTIC_LOG,
     CODEX_PERMISSION_TRANSLATOR,
     CodexAgentRunner,
     CodexExecutionError,
@@ -45,7 +44,11 @@ from engine.domain import (
     ToolSpec,
     WorkspaceId,
 )
-from engine.runtime import GRANTED_TOOLS_NOTE, with_granted_tools
+from engine.runtime import (
+    AGENT_PROTOCOL_DIAGNOSTIC_LOG,
+    GRANTED_TOOLS_NOTE,
+    with_granted_tools,
+)
 from engine.ports import (
     AgentRunner,
     ApprovalCapability,
@@ -784,7 +787,7 @@ def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
 
 def test_app_server_diagnostic_records_shapes_without_values(tmp_path, monkeypatch) -> None:
     diagnostic = tmp_path / "codex-app-server.jsonl"
-    monkeypatch.setenv(APP_SERVER_DIAGNOSTIC_LOG, str(diagnostic))
+    monkeypatch.setenv(AGENT_PROTOCOL_DIAGNOSTIC_LOG, str(diagnostic))
     runner = CodexAgentRunner(binary_path=_fake_eliciting_app_server(tmp_path))
 
     async def answer(_request):
@@ -803,10 +806,10 @@ def test_app_server_diagnostic_records_shapes_without_values(tmp_path, monkeypat
     records = [json.loads(line) for line in text.splitlines()]
     assert [record["event"] for record in records] == [
         "session_started",
-        "initialized",
-        "server_request_received",
-        "server_request_normalized",
-        "server_response_sent",
+        "session_initialized",
+        "interaction_received",
+        "interaction_normalized",
+        "interaction_response_sent",
     ]
     request = records[2]
     assert request["mode"] == "form"
@@ -820,7 +823,7 @@ def test_app_server_diagnostic_records_shapes_without_values(tmp_path, monkeypat
 
 def test_rejected_elicitation_logs_its_shape_and_reason(tmp_path, monkeypatch) -> None:
     diagnostic = tmp_path / "codex-app-server.jsonl"
-    monkeypatch.setenv(APP_SERVER_DIAGNOSTIC_LOG, str(diagnostic))
+    monkeypatch.setenv(AGENT_PROTOCOL_DIAGNOSTIC_LOG, str(diagnostic))
     runner = CodexAgentRunner(
         binary_path=_fake_incompatible_eliciting_app_server(tmp_path)
     )
@@ -837,7 +840,7 @@ def test_rejected_elicitation_logs_its_shape_and_reason(tmp_path, monkeypatch) -
 
     records = [json.loads(line) for line in diagnostic.read_text().splitlines()]
     rejected = records[-1]
-    assert rejected["event"] == "server_request_rejected"
+    assert rejected["event"] == "interaction_rejected"
     assert rejected["rejection_reason"] == "schema_properties_not_object"
     assert rejected["requested_schema_keys"] == ["fields"]
     assert "secret approval wording" not in diagnostic.read_text()

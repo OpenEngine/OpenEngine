@@ -76,14 +76,11 @@ and do not read the growing transcript as the reason.
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import shutil
 from collections.abc import AsyncIterator, Iterable, Sequence
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from engine.adapters.agent_runner.codex.permissions import (
@@ -109,19 +106,11 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.protocol_diagnostics import AgentProtocolDiagnostics
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
 LOGGER = logging.getLogger(__name__)
-
-#: Opt-in protocol diagnostics. The trace records shapes and identifiers, never
-#: prompts, answers, commands, or schema property names. It is intentionally an
-#: environment setting rather than ordinary application logging: app-server
-#: traffic can be frequent, and a deployment must choose where diagnostic data
-#: is retained.
-APP_SERVER_DIAGNOSTIC_LOG = "ENGINE_CODEX_APP_SERVER_LOG"
-APP_SERVER_DIAGNOSTIC_MAX_BYTES = 1_000_000
-APP_SERVER_DIAGNOSTIC_BACKUPS = 3
 
 #: Sandbox policies the CLI accepts. Chat defaults to the read-only one: an
 #: agent you are talking to should not be able to edit the tree as a side
@@ -586,44 +575,6 @@ def _diagnostic_shape(message: dict[str, Any]) -> dict[str, Any]:
             else []
         )
     return shaped
-
-
-def _rotate_diagnostic_log(path: Path) -> None:
-    if not path.exists() or path.stat().st_size < APP_SERVER_DIAGNOSTIC_MAX_BYTES:
-        return
-    oldest = path.with_name(f"{path.name}.{APP_SERVER_DIAGNOSTIC_BACKUPS}")
-    oldest.unlink(missing_ok=True)
-    for index in range(APP_SERVER_DIAGNOSTIC_BACKUPS - 1, 0, -1):
-        source = path.with_name(f"{path.name}.{index}")
-        if source.exists():
-            source.replace(path.with_name(f"{path.name}.{index + 1}"))
-    path.replace(path.with_name(f"{path.name}.1"))
-
-
-def _write_app_server_diagnostic(event: str, **details: Any) -> None:
-    """Append one redacted JSONL diagnostic when the deployment opts in."""
-    configured = os.environ.get(APP_SERVER_DIAGNOSTIC_LOG)
-    if not configured:
-        return
-    path = Path(configured).expanduser()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _rotate_diagnostic_log(path)
-        record = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "event": event,
-            "adapter_file": __file__,
-            **details,
-        }
-        descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-        try:
-            os.write(descriptor, (json.dumps(record, sort_keys=True) + "\n").encode())
-        finally:
-            os.close(descriptor)
-        path.chmod(0o600)
-    except OSError as error:
-        # Diagnostics must never be able to terminate an agent turn.
-        LOGGER.warning("could not write Codex app-server diagnostic: %s", error)
 
 
 def _legacy_app_server_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -1198,14 +1149,13 @@ class CodexAgentRunner:
         events: list[dict[str, Any]] = []
         observed: list[Message] = []
         started_actions: set[str] = set()
-        diagnostic_context = {
-            "agent_run_id": str(agent_run_id),
-            "binary_path": shutil.which(self._binary_path) or self._binary_path,
-            "working_directory_sha256": hashlib.sha256(
-                working_directory.encode()
-            ).hexdigest(),
-        }
-        _write_app_server_diagnostic("session_started", **diagnostic_context)
+        diagnostics = AgentProtocolDiagnostics.for_run(
+            "codex",
+            agent_run_id,
+            shutil.which(self._binary_path) or self._binary_path,
+            working_directory,
+        )
+        diagnostics.record("session_started", adapter_file=__file__)
         try:
             await _write_json(
                 process.stdin,
@@ -1231,9 +1181,9 @@ class CodexAgentRunner:
                     "codex app-server did not complete initialization within "
                     f"{self._protocol_timeout_seconds:g}s"
                 ) from error
-            _write_app_server_diagnostic(
-                "initialized",
-                **diagnostic_context,
+            diagnostics.record(
+                "session_initialized",
+                adapter_file=__file__,
                 response_keys=sorted(str(key) for key in initialized),
                 user_agent=(
                     str(initialized["userAgent"])
@@ -1298,15 +1248,15 @@ class CodexAgentRunner:
                 if request is None:
                     request = mcp_elicitation_request_from_app_server(message)
                 if "id" in message and message.get("method"):
-                    _write_app_server_diagnostic(
-                        "server_request_received",
-                        **diagnostic_context,
+                    diagnostics.record(
+                        "interaction_received",
+                        adapter_file=__file__,
                         **_diagnostic_shape(message),
                     )
                 if request is not None:
-                    _write_app_server_diagnostic(
-                        "server_request_normalized",
-                        **diagnostic_context,
+                    diagnostics.record(
+                        "interaction_normalized",
+                        adapter_file=__file__,
                         method=str(message.get("method", "")),
                         request_id=str(message["id"]),
                         approval_kind=request.kind.value,
@@ -1322,9 +1272,9 @@ class CodexAgentRunner:
                             f"{request.approval_id}"
                         )
                     result = app_server_response_for(message, decision)
-                    _write_app_server_diagnostic(
-                        "server_response_sent",
-                        **diagnostic_context,
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
                         method=str(message.get("method", "")),
                         request_id=str(message["id"]),
                         decision=(
@@ -1359,9 +1309,9 @@ class CodexAgentRunner:
                         rejection_reason,
                         agent_run_id,
                     )
-                    _write_app_server_diagnostic(
-                        "server_request_rejected",
-                        **diagnostic_context,
+                    diagnostics.record(
+                        "interaction_rejected",
+                        adapter_file=__file__,
                         **_diagnostic_shape(message),
                         rejection_reason=rejection_reason,
                     )
