@@ -611,9 +611,15 @@ def _fake_unknown_control_request_claude(tmp_path) -> str:
             receive()
             send({"type": "control_request", "request_id": "future-1",
                   "request": {"subtype": "future_interaction"}})
-            assert receive() == {"type": "control_response", "response": {
-                "subtype": "error", "request_id": "future-1",
-                "error": "unsupported control request future_interaction"}}
+            rejection = receive()
+            assert rejection["type"] == "control_response"
+            assert rejection["response"]["subtype"] == "error"
+            assert rejection["response"]["request_id"] == "future-1"
+            error = rejection["response"]["error"]
+            assert "future_interaction" in error
+            assert "unsupported_subtype" in error
+            assert "requested tool did not run" in error
+            assert "do not retry" in error
             send({"type": "assistant", "message": {"content": [{
                 "type": "text", "text": "recovered"}]}})
             send({"type": "result", "subtype": "success", "is_error": False,

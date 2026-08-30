@@ -45,6 +45,7 @@ from engine.runtime.profiles import (
 from engine.runtime.protocol_diagnostics import (
     AGENT_PROTOCOL_DIAGNOSTIC_LOG,
     AgentProtocolDiagnostics,
+    interaction_rejection_message,
 )
 from engine.runtime.planning_tools import (
     PLANNING_TOOL_NAMES,
@@ -165,6 +166,7 @@ __all__ = [
     "profile_for",
     "load_engine_config",
     "load_workflow_catalog",
+    "interaction_rejection_message",
     "parse_engine_config",
     "session_grant_from",
     "run_failed_from_tool_call",

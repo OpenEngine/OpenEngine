@@ -106,7 +106,10 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.protocol_diagnostics import AgentProtocolDiagnostics
+from engine.runtime.protocol_diagnostics import (
+    AgentProtocolDiagnostics,
+    interaction_rejection_message,
+)
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
@@ -1271,6 +1274,9 @@ class CodexAgentRunner:
                     try:
                         request = mcp_elicitation_request_from_app_server(message)
                     except InvalidAppServerInteractionError as error:
+                        rejection_message = interaction_rejection_message(
+                            error.method, error.reason
+                        )
                         LOGGER.error(
                             "rejecting Codex app-server request method=%s reason=%s "
                             "agent_run_id=%s",
@@ -1291,7 +1297,7 @@ class CodexAgentRunner:
                                     "id": message["id"],
                                     "error": {
                                         "code": -32602,
-                                        "message": "invalid elicitation request",
+                                        "message": rejection_message,
                                         "data": {"reason": error.reason},
                                     },
                                 },
@@ -1349,6 +1355,9 @@ class CodexAgentRunner:
                 if is_server_request:
                     method = str(message["method"])
                     rejection_reason = "unsupported_method"
+                    rejection_message = interaction_rejection_message(
+                        method, rejection_reason
+                    )
                     LOGGER.error(
                         "rejecting Codex app-server request method=%s reason=%s "
                         "agent_run_id=%s",
@@ -1368,7 +1377,7 @@ class CodexAgentRunner:
                             "id": message["id"],
                             "error": {
                                 "code": -32601,
-                                "message": f"unsupported server request {method}",
+                                "message": rejection_message,
                             },
                         },
                     )

@@ -770,10 +770,14 @@ def _fake_incompatible_eliciting_app_server(tmp_path) -> str:
                              "message": "secret approval wording",
                              "requestedSchema": {"fields": [{"secret": "value"}]}}})
             rejection = receive()
-            assert rejection == {"id": "elicit-bad", "error": {
-                "code": -32602, "message": "invalid elicitation request",
-                "data": {"reason": "schema_properties_not_object"}
-            }}
+            assert rejection["id"] == "elicit-bad"
+            assert rejection["error"]["code"] == -32602
+            assert "schema_properties_not_object" in rejection["error"]["message"]
+            assert "requested tool did not run" in rejection["error"]["message"]
+            assert "do not retry" in rejection["error"]["message"]
+            assert rejection["error"]["data"] == {
+                "reason": "schema_properties_not_object"
+            }
             send({"method": "item/completed", "params": {
                 "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 1,
                 "item": {"id": "msg-1", "type": "agentMessage",
@@ -811,10 +815,12 @@ def _fake_unknown_request_app_server(tmp_path) -> str:
             turn = receive()
             send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
             send({"id": "future-1", "method": "future/interaction", "params": {}})
-            assert receive() == {"id": "future-1", "error": {
-                "code": -32601,
-                "message": "unsupported server request future/interaction"
-            }}
+            rejection = receive()
+            assert rejection["id"] == "future-1"
+            assert rejection["error"]["code"] == -32601
+            assert "future/interaction" in rejection["error"]["message"]
+            assert "unsupported_method" in rejection["error"]["message"]
+            assert "requested tool did not run" in rejection["error"]["message"]
             send({"method": "item/completed", "params": {"item": {
                 "id": "msg-1", "type": "agentMessage", "text": "recovered"}}})
             send({"method": "turn/completed", "params": {
