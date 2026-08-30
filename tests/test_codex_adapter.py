@@ -22,6 +22,7 @@ from engine.adapters.agent_runner.codex import (
     CodexExecutionError,
     CodexToolsUnsupportedError,
     _app_server_thread_params,
+    _elicitation_rejection_reason,
     app_server_response_for,
     approval_request_from_app_server,
     app_server_sandbox_policy,
@@ -43,7 +44,11 @@ from engine.domain import (
     ToolSpec,
     WorkspaceId,
 )
-from engine.runtime import GRANTED_TOOLS_NOTE, with_granted_tools
+from engine.runtime import (
+    AGENT_PROTOCOL_DIAGNOSTIC_LOG,
+    GRANTED_TOOLS_NOTE,
+    with_granted_tools,
+)
 from engine.ports import (
     AgentRunner,
     ApprovalCapability,
@@ -603,6 +608,19 @@ def test_app_server_mcp_form_elicitation_round_trips_answers() -> None:
     }
 
 
+def test_mcp_elicitation_rejection_identifies_the_incompatible_shape() -> None:
+    message = {
+        "id": "elicit-1",
+        "method": "mcpServer/elicitation/request",
+        "params": {
+            "mode": "openai/form",
+            "requestedSchema": {"fields": []},
+        },
+    }
+
+    assert _elicitation_rejection_reason(message) == "schema_properties_not_object"
+
+
 def _fake_app_server(tmp_path) -> str:
     binary = tmp_path / "codex"
     binary.write_text(
@@ -710,6 +728,41 @@ def _fake_eliciting_app_server(tmp_path) -> str:
     return str(binary)
 
 
+def _fake_incompatible_eliciting_app_server(tmp_path) -> str:
+    binary = tmp_path / "codex-incompatible"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"id": initialize["id"], "result": {"userAgent": "fake"}})
+            assert receive()["method"] == "initialized"
+            start = receive()
+            send({"id": start["id"], "result": {"thread": {"id": "thread-1"}}})
+            turn = receive()
+            send({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
+            send({"id": "elicit-bad", "method": "mcpServer/elicitation/request",
+                  "params": {"threadId": "thread-1", "turnId": "turn-1",
+                             "serverName": "workflow", "mode": "openai/form",
+                             "message": "secret approval wording",
+                             "requestedSchema": {"fields": [{"secret": "value"}]}}})
+            receive()
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
 def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
     runner = CodexAgentRunner(binary_path=_fake_eliciting_app_server(tmp_path))
     requests = []
@@ -730,6 +783,68 @@ def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
     assert requests[0].kind is ApprovalKind.USER_INPUT
     assert requests[0].tool_name == "workflow"
     assert turn.message.content == "done"
+
+
+def test_app_server_diagnostic_records_shapes_without_values(tmp_path, monkeypatch) -> None:
+    diagnostic = tmp_path / "codex-app-server.jsonl"
+    monkeypatch.setenv(AGENT_PROTOCOL_DIAGNOSTIC_LOG, str(diagnostic))
+    runner = CodexAgentRunner(binary_path=_fake_eliciting_app_server(tmp_path))
+
+    async def answer(_request):
+        return UserInputResponse((UserInputAnswer("scope", ("once",)),))
+
+    asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-sensitive"),
+            PROFILE,
+            (Message.user("a prompt that must not be logged"),),
+            answer,
+        )
+    )
+
+    text = diagnostic.read_text()
+    records = [json.loads(line) for line in text.splitlines()]
+    assert [record["event"] for record in records] == [
+        "session_started",
+        "session_initialized",
+        "interaction_received",
+        "interaction_normalized",
+        "interaction_response_sent",
+    ]
+    request = records[2]
+    assert request["mode"] == "form"
+    assert request["requested_schema_keys"] == ["properties", "type"]
+    assert request["property_count"] == 1
+    assert "scope" not in text
+    assert "once" not in text
+    assert "a prompt that must not be logged" not in text
+    assert diagnostic.stat().st_mode & 0o777 == 0o600
+
+
+def test_rejected_elicitation_logs_its_shape_and_reason(tmp_path, monkeypatch) -> None:
+    diagnostic = tmp_path / "codex-app-server.jsonl"
+    monkeypatch.setenv(AGENT_PROTOCOL_DIAGNOSTIC_LOG, str(diagnostic))
+    runner = CodexAgentRunner(
+        binary_path=_fake_incompatible_eliciting_app_server(tmp_path)
+    )
+
+    with pytest.raises(CodexExecutionError, match="unsupported interaction"):
+        asyncio.run(
+            runner.run_turn_interactive(
+                AgentRunId("ar-rejected"),
+                PROFILE,
+                (Message.user("go"),),
+                lambda _request: None,
+            )
+        )
+
+    records = [json.loads(line) for line in diagnostic.read_text().splitlines()]
+    rejected = records[-1]
+    assert rejected["event"] == "interaction_rejected"
+    assert rejected["rejection_reason"] == "schema_properties_not_object"
+    assert rejected["requested_schema_keys"] == ["fields"]
+    assert "secret approval wording" not in diagnostic.read_text()
+    assert '"secret": "value"' not in diagnostic.read_text()
 
 
 def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:

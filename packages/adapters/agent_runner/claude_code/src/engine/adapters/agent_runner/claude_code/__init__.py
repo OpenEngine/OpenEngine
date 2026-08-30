@@ -70,6 +70,7 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.protocol_diagnostics import AgentProtocolDiagnostics
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
@@ -200,6 +201,32 @@ def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | 
         questions=questions,
         requires_human=requires_human,
     )
+
+
+def _control_diagnostic_shape(message: dict[str, Any]) -> dict[str, Any]:
+    """Describe a Claude control request without retaining its input values."""
+    request = message.get("request")
+    shaped: dict[str, Any] = {
+        "interaction_type": str(message.get("type", "")),
+        "request_id": str(message["request_id"])
+        if "request_id" in message
+        else None,
+        "request_type": type(request).__name__,
+    }
+    if isinstance(request, dict):
+        shaped.update(
+            {
+                "request_keys": sorted(str(key) for key in request),
+                "subtype": str(request["subtype"])
+                if "subtype" in request
+                else None,
+                "tool_name": str(request["tool_name"])
+                if "tool_name" in request
+                else None,
+                "input_type": type(request.get("input")).__name__,
+            }
+        )
+    return shaped
 
 
 def control_response_for(
@@ -702,6 +729,8 @@ class ClaudeCodeAgentRunner:
             events, stderr = await asyncio.wait_for(
                 self._read_interactive_stream(
                     process,
+                    agent_run_id,
+                    working_directory,
                     flatten(messages),
                     on_approval,
                     on_message or (lambda _message: None),
@@ -756,6 +785,8 @@ class ClaudeCodeAgentRunner:
     async def _read_interactive_stream(
         self,
         process: asyncio.subprocess.Process,
+        agent_run_id: AgentRunId,
+        working_directory: str,
         prompt: str,
         on_approval: ApprovalHandler,
         on_message: TurnObserver,
@@ -769,6 +800,13 @@ class ClaudeCodeAgentRunner:
         lines = read_lines(process.stdout).__aiter__()
         events: list[dict[str, Any]] = []
         observed: list[Message] = []
+        diagnostics = AgentProtocolDiagnostics.for_run(
+            "claude_code",
+            agent_run_id,
+            shutil.which(self._binary_path) or self._binary_path,
+            working_directory,
+        )
+        diagnostics.record("session_started", adapter_file=__file__)
         try:
             initialize_id = "engine-initialize"
             await _write_json(
@@ -789,6 +827,7 @@ class ClaudeCodeAgentRunner:
                     "Claude Code did not complete control initialization within "
                     f"{self._protocol_timeout_seconds:g}s"
                 ) from error
+            diagnostics.record("session_initialized", adapter_file=__file__)
 
             await _write_json(
                 process.stdin,
@@ -803,7 +842,20 @@ class ClaudeCodeAgentRunner:
             while True:
                 message = await _next_json_message(lines)
                 request = approval_request_from_control(message)
+                if message.get("type") == "control_request":
+                    diagnostics.record(
+                        "interaction_received",
+                        adapter_file=__file__,
+                        **_control_diagnostic_shape(message),
+                    )
                 if request is not None:
+                    diagnostics.record(
+                        "interaction_normalized",
+                        adapter_file=__file__,
+                        request_id=str(message["request_id"]),
+                        approval_kind=request.kind.value,
+                        question_count=len(request.questions),
+                    )
                     decision = await on_approval(request)
                     if (
                         isinstance(decision, ApprovalDecision)
@@ -813,12 +865,29 @@ class ClaudeCodeAgentRunner:
                             f"approval decision {decision.value!r} is not allowed for "
                             f"{request.approval_id}"
                         )
-                    await _write_json(process.stdin, control_response_for(message, decision))
+                    response = control_response_for(message, decision)
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        request_id=str(message["request_id"]),
+                        decision=(
+                            "user_input"
+                            if isinstance(decision, UserInputResponse)
+                            else decision.value
+                        ),
+                    )
+                    await _write_json(process.stdin, response)
                     continue
 
                 if message.get("type") == "control_request":
                     request_id = message.get("request_id")
                     subtype = (message.get("request") or {}).get("subtype")
+                    diagnostics.record(
+                        "interaction_rejected",
+                        adapter_file=__file__,
+                        **_control_diagnostic_shape(message),
+                        rejection_reason="unsupported_subtype",
+                    )
                     await _write_json(
                         process.stdin,
                         {

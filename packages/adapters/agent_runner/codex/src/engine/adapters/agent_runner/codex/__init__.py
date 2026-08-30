@@ -77,6 +77,7 @@ and do not read the growing transcript as the reason.
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 from collections.abc import AsyncIterator, Iterable, Sequence
@@ -105,8 +106,11 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.protocol_diagnostics import AgentProtocolDiagnostics
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
+
+LOGGER = logging.getLogger(__name__)
 
 #: Sandbox policies the CLI accepts. Chat defaults to the read-only one: an
 #: agent you are talking to should not be able to edit the tree as a side
@@ -392,15 +396,38 @@ def user_input_request_from_app_server(
     )
 
 
+def _elicitation_rejection_reason(message: dict[str, Any]) -> str | None:
+    """Why a named MCP elicitation cannot be normalized, without its values."""
+    if message.get("method") != "mcpServer/elicitation/request":
+        return "not_mcp_elicitation"
+    if "id" not in message:
+        return "missing_request_id"
+    params = message.get("params")
+    if not isinstance(params, dict):
+        return "params_not_object"
+    if params.get("mode") not in {"form", "openai/form"}:
+        return "unsupported_mode"
+    schema = params.get("requestedSchema")
+    if not isinstance(schema, dict):
+        return "requested_schema_not_object"
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return "schema_properties_not_object"
+    if not any(
+        isinstance(definition, dict) for definition in properties.values()
+    ):
+        return "schema_has_no_supported_properties"
+    return None
+
+
 def mcp_elicitation_request_from_app_server(
     message: dict[str, Any],
 ) -> ApprovalRequest | None:
     """Normalize an MCP server's app-server form elicitation."""
-    if message.get("method") != "mcpServer/elicitation/request" or "id" not in message:
+    if _elicitation_rejection_reason(message) is not None:
         return None
-    params = message.get("params") or {}
-    if not isinstance(params, dict) or params.get("mode") not in {"form", "openai/form"}:
-        return None
+    params = message["params"]
+    assert isinstance(params, dict)
     approval_id = ":".join(
         part
         for part in (
@@ -410,10 +437,10 @@ def mcp_elicitation_request_from_app_server(
         )
         if part
     )
-    schema = params.get("requestedSchema") or {}
-    properties = schema.get("properties") if isinstance(schema, dict) else None
-    if not isinstance(properties, dict):
-        return None
+    schema = params["requestedSchema"]
+    assert isinstance(schema, dict)
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
     questions: list[UserInputQuestion] = []
     for name, definition in properties.items():
         if not isinstance(definition, dict):
@@ -507,6 +534,47 @@ def app_server_response_for(
     if decision is ApprovalDecision.CANCEL:
         return {"action": "cancel", "content": None}
     return {"action": "accept", "content": {}}
+
+
+def _diagnostic_shape(message: dict[str, Any]) -> dict[str, Any]:
+    """Describe a protocol message without retaining user or tool content."""
+    params = message.get("params")
+    shaped: dict[str, Any] = {
+        "method": str(message.get("method", "")),
+        "request_id": str(message["id"]) if "id" in message else None,
+        "params_type": type(params).__name__,
+    }
+    if not isinstance(params, dict):
+        return shaped
+    shaped.update(
+        {
+            "params_keys": sorted(str(key) for key in params),
+            "mode": str(params["mode"]) if "mode" in params else None,
+            "server_name": str(params["serverName"])
+            if "serverName" in params
+            else None,
+            "thread_id": str(params["threadId"]) if "threadId" in params else None,
+            "turn_id": str(params["turnId"]) if params.get("turnId") else None,
+        }
+    )
+    schema = params.get("requestedSchema")
+    shaped["requested_schema_type"] = type(schema).__name__
+    if isinstance(schema, dict):
+        shaped["requested_schema_keys"] = sorted(str(key) for key in schema)
+        properties = schema.get("properties")
+        shaped["property_count"] = len(properties) if isinstance(properties, dict) else None
+        shaped["property_schema_types"] = (
+            sorted(
+                {
+                    str(definition.get("type", "unspecified"))
+                    for definition in properties.values()
+                    if isinstance(definition, dict)
+                }
+            )
+            if isinstance(properties, dict)
+            else []
+        )
+    return shaped
 
 
 def _legacy_app_server_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -1005,6 +1073,7 @@ class CodexAgentRunner:
             events, stderr = await asyncio.wait_for(
                 self._read_app_server(
                     process,
+                    agent_run_id,
                     render_prompt(profile, messages),
                     profile.model or self._model,
                     working_directory,
@@ -1062,6 +1131,7 @@ class CodexAgentRunner:
     async def _read_app_server(
         self,
         process: asyncio.subprocess.Process,
+        agent_run_id: AgentRunId,
         prompt: str,
         model: str,
         working_directory: str,
@@ -1079,6 +1149,13 @@ class CodexAgentRunner:
         events: list[dict[str, Any]] = []
         observed: list[Message] = []
         started_actions: set[str] = set()
+        diagnostics = AgentProtocolDiagnostics.for_run(
+            "codex",
+            agent_run_id,
+            shutil.which(self._binary_path) or self._binary_path,
+            working_directory,
+        )
+        diagnostics.record("session_started", adapter_file=__file__)
         try:
             await _write_json(
                 process.stdin,
@@ -1095,7 +1172,7 @@ class CodexAgentRunner:
                 },
             )
             try:
-                await asyncio.wait_for(
+                initialized = await asyncio.wait_for(
                     _read_rpc_response(lines, 0),
                     timeout=self._protocol_timeout_seconds,
                 )
@@ -1104,6 +1181,16 @@ class CodexAgentRunner:
                     "codex app-server did not complete initialization within "
                     f"{self._protocol_timeout_seconds:g}s"
                 ) from error
+            diagnostics.record(
+                "session_initialized",
+                adapter_file=__file__,
+                response_keys=sorted(str(key) for key in initialized),
+                user_agent=(
+                    str(initialized["userAgent"])
+                    if initialized.get("userAgent") is not None
+                    else None
+                ),
+            )
             await _write_json(process.stdin, {"method": "initialized", "params": {}})
 
             thread_params = _app_server_thread_params(
@@ -1160,7 +1247,21 @@ class CodexAgentRunner:
                     request = user_input_request_from_app_server(message)
                 if request is None:
                     request = mcp_elicitation_request_from_app_server(message)
+                if "id" in message and message.get("method"):
+                    diagnostics.record(
+                        "interaction_received",
+                        adapter_file=__file__,
+                        **_diagnostic_shape(message),
+                    )
                 if request is not None:
+                    diagnostics.record(
+                        "interaction_normalized",
+                        adapter_file=__file__,
+                        method=str(message.get("method", "")),
+                        request_id=str(message["id"]),
+                        approval_kind=request.kind.value,
+                        question_count=len(request.questions),
+                    )
                     decision = await on_approval(request)
                     if (
                         isinstance(decision, ApprovalDecision)
@@ -1171,6 +1272,23 @@ class CodexAgentRunner:
                             f"{request.approval_id}"
                         )
                     result = app_server_response_for(message, decision)
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        method=str(message.get("method", "")),
+                        request_id=str(message["id"]),
+                        decision=(
+                            "user_input"
+                            if isinstance(decision, UserInputResponse)
+                            else decision.value
+                        ),
+                        response_action=result.get("action"),
+                        response_content_count=(
+                            len(result["content"])
+                            if isinstance(result.get("content"), dict)
+                            else 0
+                        ),
+                    )
                     await _write_json(
                         process.stdin,
                         {"id": message["id"], "result": result},
@@ -1179,6 +1297,24 @@ class CodexAgentRunner:
 
                 if "id" in message and message.get("method"):
                     method = str(message["method"])
+                    rejection_reason = (
+                        _elicitation_rejection_reason(message)
+                        if method == "mcpServer/elicitation/request"
+                        else "unsupported_method"
+                    )
+                    LOGGER.error(
+                        "rejecting Codex app-server request method=%s reason=%s "
+                        "agent_run_id=%s",
+                        method,
+                        rejection_reason,
+                        agent_run_id,
+                    )
+                    diagnostics.record(
+                        "interaction_rejected",
+                        adapter_file=__file__,
+                        **_diagnostic_shape(message),
+                        rejection_reason=rejection_reason,
+                    )
                     await _write_json(
                         process.stdin,
                         {

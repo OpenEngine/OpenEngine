@@ -157,6 +157,14 @@ they may do is a property of the step, and a reviewer that cannot write should
 not become one that can because a chat was granted `edit`. The approvals they
 raise mid-run are governed like any other.
 
+To diagnose interactive runner protocol incompatibilities, set
+`ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and
+Claude Code record normalized session and interaction events alongside their
+runner-specific request shapes, parser outcomes, response actions, executable,
+and hashed working-directory identity. The trace does not record prompts,
+commands, approval wording, answers, schema property names, or property values.
+The file is created with mode `0600` and rotates at 1 MB with three backups.
+
 ## What is it.
 
 We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.
