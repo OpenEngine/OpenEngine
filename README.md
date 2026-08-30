@@ -157,6 +157,13 @@ they may do is a property of the step, and a reviewer that cannot write should
 not become one that can because a chat was granted `edit`. The approvals they
 raise mid-run are governed like any other.
 
+To diagnose Codex app-server protocol incompatibilities, set
+`ENGINE_CODEX_APP_SERVER_LOG` to a JSONL file before starting Engine. The
+adapter records request shapes, parser outcomes, response actions, Codex's user
+agent, and hashed working-directory identity. It does not record prompts,
+commands, approval wording, answers, schema property names, or property values.
+The file is created with mode `0600` and rotates at 1 MB with three backups.
+
 ## What is it.
 
 We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.
