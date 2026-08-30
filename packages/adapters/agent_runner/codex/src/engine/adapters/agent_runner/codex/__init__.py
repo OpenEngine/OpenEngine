@@ -531,6 +531,34 @@ def mcp_elicitation_request_from_app_server(
     )
 
 
+def _is_bound_mcp_tool_confirmation(
+    message: dict[str, Any], mcp_server: McpServerConfig | None
+) -> bool:
+    """Whether Codex is redundantly gating Engine's own bound MCP tool.
+
+    The bound server performs its own authorization after the provider admits
+    the call (notably the mandatory git approval). Sending this transport-level
+    confirmation through the approval broker as well records two approvals for
+    one action. External MCP servers remain outside this exception.
+    """
+    if (
+        mcp_server is None
+        or message.get("method") != "mcpServer/elicitation/request"
+    ):
+        return False
+    params = message.get("params")
+    if not isinstance(params, dict) or params.get("serverName") != mcp_server.name:
+        return False
+    schema = params.get("requestedSchema")
+    metadata = params.get("_meta")
+    return (
+        isinstance(schema, dict)
+        and schema.get("properties") == {}
+        and isinstance(metadata, dict)
+        and metadata.get("codex_approval_kind") == "mcp_tool_call"
+    )
+
+
 def app_server_response_for(
     message: dict[str, Any], decision: ApprovalDecision | UserInputResponse
 ) -> dict[str, Any]:
@@ -1329,7 +1357,17 @@ class CodexAgentRunner:
                         approval_kind=request.kind.value,
                         question_count=len(request.questions),
                     )
-                    decision = await on_approval(request)
+                    if _is_bound_mcp_tool_confirmation(message, mcp_server):
+                        decision = ApprovalDecision.ACCEPT
+                        diagnostics.record(
+                            "interaction_auto_accepted",
+                            adapter_file=__file__,
+                            method=str(message.get("method", "")),
+                            request_id=str(message["id"]),
+                            reason="bound_mcp_server_enforces_authorization",
+                        )
+                    else:
+                        decision = await on_approval(request)
                     if (
                         isinstance(decision, ApprovalDecision)
                         and decision not in request.allowed_decisions

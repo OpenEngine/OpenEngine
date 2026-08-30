@@ -72,4 +72,50 @@ describe("approval snapshots", () => {
     act(() => publishApproval(threadId, { ...approval() }, 8));
     expect(renders).toBe(2);
   });
+
+  it("removes accepted confirmations for Engine's separately approved MCP call", () => {
+    const threadId = "bound-mcp-confirmation";
+    const transport = approval({
+      toolName: "workflow",
+      arguments: JSON.stringify({
+        _meta: { codex_approval_kind: "mcp_tool_call" },
+        requestedSchema: { type: "object", properties: {} },
+      }),
+    });
+
+    publishApproval(threadId, transport, 4);
+    expect(readApprovals(threadId)).toHaveLength(1);
+
+    publishApproval(
+      threadId,
+      {
+        ...transport,
+        status: "decided",
+        decision: "accept",
+        decisionSource: "policy",
+      },
+      4,
+    );
+
+    expect(readApprovals(threadId)).toEqual([]);
+  });
+
+  it("keeps a refused bound MCP confirmation in the audit trail", () => {
+    const threadId = "refused-bound-mcp-confirmation";
+    publishApproval(
+      threadId,
+      approval({
+        status: "decided",
+        decision: "cancel",
+        decisionSource: "user",
+        toolName: "workflow",
+        arguments: JSON.stringify({
+          _meta: { codex_approval_kind: "mcp_tool_call" },
+        }),
+      }),
+      2,
+    );
+
+    expect(readApprovals(threadId)).toHaveLength(1);
+  });
 });

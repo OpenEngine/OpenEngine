@@ -42,6 +42,32 @@ const listeners = new Map<string, Set<() => void>>();
  *  forever on a fresh `[]`. */
 const NONE: readonly InlineApproval[] = [];
 
+/** A historical Codex transport confirmation for Engine's bound MCP server.
+ *
+ * Engine's server separately recorded the real operation approval. These old
+ * accepted envelopes have no call id, so showing them leaves a second card at
+ * the bottom of the transcript. Pending or refused envelopes remain visible:
+ * only a completed acceptance is known to be redundant. */
+function isAcceptedBoundMcpConfirmation(approval: ApiApproval): boolean {
+  if (
+    approval.kind !== "tool_use" ||
+    approval.toolName !== "workflow" ||
+    approval.toolCallId !== null ||
+    approval.status !== "decided" ||
+    approval.decision !== "accept" ||
+    !approval.arguments
+  )
+    return false;
+  try {
+    const envelope = JSON.parse(approval.arguments) as {
+      _meta?: { codex_approval_kind?: unknown };
+    };
+    return envelope._meta?.codex_approval_kind === "mcp_tool_call";
+  } catch {
+    return false;
+  }
+}
+
 /** Record a snapshot against the turn that raised it, pending or resolved.
  *
  *  Snapshots are whole, so a request that has since been decided simply
@@ -54,6 +80,15 @@ export function publishApproval(
   if (!approval) return;
   const existing = byThread.get(threadId) ?? NONE;
   const at = existing.findIndex((entry) => entry.approval.id === approval.id);
+  if (isAcceptedBoundMcpConfirmation(approval)) {
+    if (at < 0) return;
+    byThread.set(
+      threadId,
+      existing.filter((_, index) => index !== at),
+    );
+    for (const listener of listeners.get(threadId) ?? []) listener();
+    return;
+  }
   // A reconnecting browser is sent the current snapshot from scratch, so the
   // same one arrives again unchanged. Publishing it would be a re-render that
   // says nothing.

@@ -854,6 +854,7 @@ def _fake_empty_eliciting_app_server(tmp_path) -> str:
                   "params": {"threadId": "thread-1", "turnId": "turn-1",
                              "serverName": "workflow", "mode": "form",
                              "message": "Allow the workflow tool to continue?",
+                             "_meta": {"codex_approval_kind": "mcp_tool_call"},
                              "requestedSchema": {
                                  "type": "object", "properties": {}
                              }}})
@@ -955,6 +956,26 @@ def test_interactive_turn_accepts_an_empty_mcp_elicitation(tmp_path) -> None:
 
     assert requests[0].kind is ApprovalKind.TOOL_USE
     assert requests[0].tool_name == "workflow"
+    assert turn.message.content == "done"
+
+
+def test_bound_mcp_confirmation_defers_to_the_servers_authorization(tmp_path) -> None:
+    runner = CodexAgentRunner(binary_path=_fake_empty_eliciting_app_server(tmp_path))
+    server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
+
+    async def unexpected_approval(_request):
+        raise AssertionError("the redundant provider confirmation reached the broker")
+
+    turn = asyncio.run(
+        runner.run_turn_with_mcp_interactive(
+            AgentRunId("ar-bound-mcp-confirmation"),
+            PROFILE,
+            (Message.user("run it"),),
+            server,
+            unexpected_approval,
+        )
+    )
+
     assert turn.message.content == "done"
 
 
