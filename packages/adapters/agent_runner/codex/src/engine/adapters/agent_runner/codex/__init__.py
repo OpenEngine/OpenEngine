@@ -76,10 +76,12 @@ and do not read the growing transcript as the reason.
 """
 
 import asyncio
+from datetime import UTC, datetime
 import json
 import os
 import shutil
 from collections.abc import AsyncIterator, Iterable, Sequence
+from pathlib import Path
 from typing import Any
 
 from engine.adapters.agent_runner.codex.permissions import (
@@ -172,6 +174,58 @@ OUTPUT_FIELDS = ("aggregated_output", "output", "result", "error")
 
 #: Fields that describe the item rather than its arguments.
 NON_ARGUMENT_FIELDS = frozenset({"id", "type", "status", "exit_code", *OUTPUT_FIELDS})
+
+DEFAULT_DIAGNOSTIC_LOG_PATH = "/tmp/engine-codex-app-server.jsonl"
+DIAGNOSTIC_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _app_server_request_telemetry(message: dict[str, Any]) -> dict[str, Any]:
+    """Return enough request shape to debug dispatch without logging user data."""
+    params = message.get("params")
+    params = params if isinstance(params, dict) else {}
+    schema = params.get("requestedSchema")
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    property_types = (
+        {
+            str(name): definition.get("type")
+            for name, definition in properties.items()
+            if isinstance(definition, dict)
+        }
+        if isinstance(properties, dict)
+        else {}
+    )
+    return {
+        "request_id": str(message.get("id", "")),
+        "method": str(message.get("method", "")),
+        "params_keys": sorted(str(key) for key in params),
+        "thread_id": str(params.get("threadId", "")),
+        "turn_id": str(params.get("turnId", "")),
+        "server_name": str(params.get("serverName", "")),
+        "mode": str(params.get("mode", "")),
+        "schema_property_types": property_types,
+    }
+
+
+def _append_diagnostic(path: str | None, event: str, **fields: Any) -> None:
+    """Append one bounded JSONL diagnostic record; diagnostics never break a turn."""
+    if not path:
+        return
+    try:
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() and destination.stat().st_size >= DIAGNOSTIC_LOG_MAX_BYTES:
+            destination.replace(destination.with_suffix(destination.suffix + ".1"))
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event": event,
+            "adapter_file": __file__,
+            "process_id": os.getpid(),
+            **fields,
+        }
+        with destination.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError:
+        pass
 
 
 class CodexUnavailableError(RuntimeError):
@@ -811,6 +865,7 @@ class CodexAgentRunner:
         model: str = "",
         workspace_provider: WorkspaceProvider | None = None,
         attribution: bool = True,
+        diagnostic_log_path: str | None = DEFAULT_DIAGNOSTIC_LOG_PATH,
     ) -> None:
         if sandbox not in SANDBOX_MODES:
             raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
@@ -822,6 +877,7 @@ class CodexAgentRunner:
         self._model = model
         self._attribution = attribution
         self._workspace_provider = workspace_provider
+        self._diagnostic_log_path = diagnostic_log_path
         #: Live processes, so `cancel` has something to reach for.
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
@@ -1005,6 +1061,7 @@ class CodexAgentRunner:
             events, stderr = await asyncio.wait_for(
                 self._read_app_server(
                     process,
+                    agent_run_id,
                     render_prompt(profile, messages),
                     profile.model or self._model,
                     working_directory,
@@ -1062,6 +1119,7 @@ class CodexAgentRunner:
     async def _read_app_server(
         self,
         process: asyncio.subprocess.Process,
+        agent_run_id: AgentRunId,
         prompt: str,
         model: str,
         working_directory: str,
@@ -1079,6 +1137,12 @@ class CodexAgentRunner:
         events: list[dict[str, Any]] = []
         observed: list[Message] = []
         started_actions: set[str] = set()
+        _append_diagnostic(
+            self._diagnostic_log_path,
+            "session_started",
+            agent_run_id=str(agent_run_id),
+            app_server_process_id=process.pid,
+        )
         try:
             await _write_json(
                 process.stdin,
@@ -1156,10 +1220,23 @@ class CodexAgentRunner:
                     continue
 
                 request = approval_request_from_app_server(message)
+                request_kind = "approval" if request is not None else ""
                 if request is None:
                     request = user_input_request_from_app_server(message)
+                    if request is not None:
+                        request_kind = "user_input"
                 if request is None:
                     request = mcp_elicitation_request_from_app_server(message)
+                    if request is not None:
+                        request_kind = "mcp_elicitation"
+                if "id" in message and message.get("method"):
+                    _append_diagnostic(
+                        self._diagnostic_log_path,
+                        "server_request",
+                        agent_run_id=str(agent_run_id),
+                        disposition=request_kind or "unsupported",
+                        **_app_server_request_telemetry(message),
+                    )
                 if request is not None:
                     decision = await on_approval(request)
                     if (

@@ -711,7 +711,11 @@ def _fake_eliciting_app_server(tmp_path) -> str:
 
 
 def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
-    runner = CodexAgentRunner(binary_path=_fake_eliciting_app_server(tmp_path))
+    diagnostic_log = tmp_path / "codex-app-server.jsonl"
+    runner = CodexAgentRunner(
+        binary_path=_fake_eliciting_app_server(tmp_path),
+        diagnostic_log_path=str(diagnostic_log),
+    )
     requests = []
 
     async def answer(request):
@@ -730,6 +734,17 @@ def test_interactive_turn_round_trips_an_mcp_elicitation(tmp_path) -> None:
     assert requests[0].kind is ApprovalKind.USER_INPUT
     assert requests[0].tool_name == "workflow"
     assert turn.message.content == "done"
+    records = [json.loads(line) for line in diagnostic_log.read_text().splitlines()]
+    assert records[0]["event"] == "session_started"
+    assert records[0]["agent_run_id"] == "ar-1"
+    request_record = records[1]
+    assert request_record["event"] == "server_request"
+    assert request_record["method"] == "mcpServer/elicitation/request"
+    assert request_record["disposition"] == "mcp_elicitation"
+    assert request_record["server_name"] == "workflow"
+    assert request_record["schema_property_types"] == {"scope": "string"}
+    assert "message" not in request_record
+    assert "once" not in diagnostic_log.read_text()
 
 
 def test_interactive_turn_round_trips_an_app_server_approval(tmp_path) -> None:
