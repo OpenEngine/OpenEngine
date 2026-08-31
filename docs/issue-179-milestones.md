@@ -5,7 +5,7 @@ into milestones that retire architectural risk before the native LangGraph graph
 becomes a production path. An issue belongs to the earliest milestone that needs
 its answer; later milestones depend on the completion of every earlier one.
 
-## Milestone 1: Validate the direction
+## Native graph architecture approved
 
 **Exit criterion:** the team has a documented go/no-go decision for a native
 LangGraph implementation-review workflow and an agreed configuration boundary.
@@ -21,9 +21,9 @@ LangGraph implementation-review workflow and an agreed configuration boundary.
   user-facing SDLC configuration surface so the graph is built against the
   intended product boundary.
 
-## Milestone 2: Establish durable runtime contracts
+## Durable agent workflow foundation
 
-**Depends on:** Milestone 1.
+**Depends on:** Native graph architecture approved.
 
 **Exit criterion:** an `ACPNode` workflow can run with the required tools, persist
 and expose its state, pause safely for a human decision, and recover without
@@ -49,9 +49,9 @@ Issues #183 and #184 should be designed together: the interrupt's durable state
 and the UI projection must agree on ownership and resume semantics. Issue #198
 must be resolved before any graph node is allowed to publish GitHub changes.
 
-## Milestone 3: Ship the native graph
+## Native implementation-review workflow
 
-**Depends on:** Milestone 2.
+**Depends on:** Durable agent workflow foundation.
 
 **Exit criterion:** the repository-owned implementation-review workflow runs as
 a selectable native LangGraph graph with implementation, review, and human-review
@@ -64,9 +64,9 @@ critical findings can publish review comments.
 - [ ] [#185](https://github.com/spiralsoft-ai/OpenEngine/issues/185) — Build and
   wire the production implementation-review graph.
 
-## Milestone 4: Prove behavioral parity
+## Production parity verified
 
-**Depends on:** Milestone 3.
+**Depends on:** Native implementation-review workflow.
 
 **Exit criterion:** an end-to-end test covers real worktrees, fake agent CLIs,
 durable persistence, tool access, transitions, and the human-review gate, and
