@@ -30,6 +30,7 @@ members = [
     "engine-migrations",
     "engine-ports",
     "engine-runtime",
+    "engine-scoper",
     "engine-web",
     "engine-worker",
 ]
@@ -421,6 +422,17 @@ requires-dist = [
     { name = "engine-domain", editable = "packages/domain" },
     { name = "engine-ports", editable = "packages/ports" },
 ]
+
+[[package]]
+name = "engine-scoper"
+version = "0.0.0"
+source = { editable = "packages/scoper" }
+dependencies = [
+    { name = "engine-domain" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "engine-domain", editable = "packages/domain" }]
 
 [[package]]
 name = "engine-web"

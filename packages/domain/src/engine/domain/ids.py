@@ -27,6 +27,9 @@ MilestoneId = NewType("MilestoneId", str)
 WorkstreamId = NewType("WorkstreamId", str)
 """A body of workflow-run work within a milestone."""
 
+WorkOrderId = NewType("WorkOrderId", str)
+"""A scoped unit of work needed to satisfy a milestone."""
+
 StepId = NewType("StepId", str)
 """One step in a workflow."""
 
@@ -84,5 +87,6 @@ __all__ = [
     "TaskId",
     "WorkflowId",
     "WorkstreamId",
+    "WorkOrderId",
     "WorkspaceId",
 ]

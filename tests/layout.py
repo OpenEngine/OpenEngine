@@ -87,6 +87,8 @@ def _layer_for(root: Path) -> str:
             return DOMAIN
         case ("packages", "engine"):
             return ENGINE
+        case ("packages", "scoper"):
+            return ENGINE
         case ("packages", "ports"):
             return PORTS
         case ("packages", "runtime"):

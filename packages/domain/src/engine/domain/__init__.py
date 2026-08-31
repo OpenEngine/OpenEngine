@@ -52,6 +52,7 @@ from engine.domain.ids import (
     TaskId,
     WorkflowId,
     WorkstreamId,
+    WorkOrderId,
     WorkspaceId,
 )
 from engine.domain.planning import (
@@ -63,6 +64,15 @@ from engine.domain.planning import (
     workstreams_by_milestone,
 )
 from engine.domain.state import RunPhase, RunState
+from engine.domain.scoping import (
+    MilestoneScope,
+    ScopingPlan,
+    ScopingPolicy,
+    Supersession,
+    WorkOrder,
+    WorkOrderSpec,
+    WorkOrderStatus,
+)
 from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
 from engine.domain.workflow import (
     AgentStep,
@@ -109,6 +119,7 @@ __all__ = [
     "MessageId",
     "Milestone",
     "MilestoneId",
+    "MilestoneScope",
     "Notify",
     "OutcomeTransition",
     "PersistRun",
@@ -127,6 +138,8 @@ __all__ = [
     "RunRequested",
     "RunState",
     "ScheduleTimer",
+    "ScopingPlan",
+    "ScopingPolicy",
     "SessionGrant",
     "SessionGrantId",
     "StartAgentRun",
@@ -142,6 +155,7 @@ __all__ = [
     "ToolParameter",
     "ToolParameterType",
     "ToolSpec",
+    "Supersession",
     "Transition",
     "ValueReference",
     "WorkflowDefinition",
@@ -150,6 +164,10 @@ __all__ = [
     "WorkflowTemplate",
     "Workstream",
     "WorkstreamId",
+    "WorkOrder",
+    "WorkOrderId",
+    "WorkOrderSpec",
+    "WorkOrderStatus",
     "workstreams_by_milestone",
     "WorkspaceAccess",
     "WorkspaceId",
