@@ -50,6 +50,39 @@ const SCRIPT: Script = {
   ],
 };
 
+for (const runner of ["codex", "claude"]) {
+  test(`a ${runner} project can call milestone tools`, async ({ page, engine }) => {
+    engine.script({
+      title: `${runner} milestone project`,
+      scenarios: [
+        {
+          steps: [
+            {
+              type: "tool",
+              name: "add_milestone",
+              arguments: {
+                name: `${runner} foundation`,
+                description: "Created through the project's bound planning tools.",
+              },
+            },
+            { type: "say", text: `${runner} added the milestone.` },
+          ],
+        },
+      ],
+    });
+
+    await page.goto("/conversations");
+    await page.getByRole("button", { name: "Projects" }).click();
+    await page.getByRole("link", { name: "+ New project" }).click();
+    await page.getByLabel("Runner").selectOption(runner);
+    await page.getByLabel("Message the agent").fill("Add the foundation milestone.");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    await expect(page.getByText(`${runner} added the milestone.`)).toBeVisible();
+    await expect(page.getByText(`${runner} foundation`, { exact: true })).toBeVisible();
+  });
+}
+
 test("a new project opens a planning conversation and appears in the rail", async ({
   page,
   engine,
