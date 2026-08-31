@@ -1315,6 +1315,7 @@ def test_run_api_covers_workflow_lifecycle_phases(
     if phase is RunPhase.AWAITING_HUMAN_REVIEW:
         assert body["pendingHumanReview"] is not None
         assert "Implemented the lock" in body["pendingHumanReview"]["summary"]
+        assert body["pendingHumanReview"]["prUrl"] == "https://github.com/acme/api/pull/42"
         assert body["steps"][1]["changesRequested"] is True
         assert body["humanDecision"] is None
     if phase is RunPhase.SUCCEEDED:

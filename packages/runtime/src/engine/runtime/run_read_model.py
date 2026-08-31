@@ -53,6 +53,7 @@ class PendingHumanReviewView:
     step_id: StepId
     title: str
     summary: str
+    pull_request_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +289,23 @@ def _pending_human_review(
         step_id=step.step_id,
         title=render_template(step.title, state),
         summary=render_template(step.summary, state),
+        pull_request_url=_pull_request_url(state),
     )
+
+
+def _pull_request_url(state: RunState) -> str | None:
+    """The most recent `pr_url` output any prior step reported, if any.
+
+    A review step judges an implementation already made, so a run reaching it
+    with a published change has the PR link sitting in an earlier step's
+    outputs -- pulling it forward here is what lets the reviewer jump straight
+    to the PR instead of hunting through step summaries for it."""
+
+    for result in reversed(state.step_results):
+        for output in result.outputs:
+            if output.name == "pr_url" and output.value:
+                return output.value
+    return None
 
 
 def _step_status(state: RunState, step_id: StepId, completed: bool) -> str:

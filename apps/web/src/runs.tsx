@@ -635,6 +635,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 The implementation and agent review are complete. A human approval or rejection
                 is the final decision.
               </p>
+              {run.pendingHumanReview.prUrl && (
+                <p>
+                  <a href={run.pendingHumanReview.prUrl} target="_blank" rel="noreferrer">
+                    View pull request ↗
+                  </a>
+                </p>
+              )}
               <HumanReviewDecision run={run} onDecided={setRun} />
             </section>
           )}
