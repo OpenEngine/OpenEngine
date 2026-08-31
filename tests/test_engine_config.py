@@ -1,4 +1,4 @@
-"""Engine's TOML configuration is singular, typed, and provider-neutral."""
+"""Engine's TOML configuration is singular and typed."""
 
 from pathlib import Path
 
@@ -70,6 +70,19 @@ def test_loads_a_configured_default_branch(tmp_path: Path) -> None:
     assert loaded.config.default_branch == "master"
 
 
+def test_loads_github_deployment_credentials(tmp_path: Path) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text(
+        'github_client_id = "client-from-toml"\n'
+        'github_token = "token-from-toml"\n'
+    )
+
+    loaded = load_engine_config(path, environ={}, cwd=tmp_path)
+
+    assert loaded.config.github_client_id == "client-from-toml"
+    assert loaded.config.github_token == "token-from-toml"
+
+
 def test_selection_is_explicit_then_environment_then_working_directory(
     tmp_path: Path,
 ) -> None:
@@ -107,6 +120,8 @@ def test_selection_is_explicit_then_environment_then_working_directory(
         ({"attribution": "no"}, "attribution must be a boolean"),
         ({"default_branch": ""}, "default_branch must be a non-empty string"),
         ({"default_branch": 1}, "default_branch must be a non-empty string"),
+        ({"github_client_id": 1}, "github_client_id must be a string"),
+        ({"github_token": " "}, "github_token must not be blank"),
         ({"output_style": "concise"}, "unknown key in configuration: output_style"),
         ({"claude": {"style": "concise"}}, "unknown key in claude: style"),
         ({"claude": {"output_style": True}}, "claude.output_style must be a string"),
@@ -208,6 +223,44 @@ def test_web_entrypoint_puts_explicit_config_in_composition_settings(
         ApprovalCapability.READ,
         ApprovalCapability.BASH,
     )
+
+
+def test_web_entrypoint_uses_toml_github_credentials_when_environment_is_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text(
+        'github_client_id = "client-from-toml"\n'
+        'github_token = "token-from-toml"\n'
+    )
+    seen = []
+    monkeypatch.delenv("GITHUB_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+
+    assert web_main.main(["--check", "--config", str(path)]) == 0
+
+    assert seen[0].github_client_id == "client-from-toml"
+    assert seen[0].github_token == "token-from-toml"
+
+
+def test_web_entrypoint_prefers_environment_github_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text(
+        'github_client_id = "client-from-toml"\n'
+        'github_token = "token-from-toml"\n'
+    )
+    seen = []
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "client-from-environment")
+    monkeypatch.setenv("GITHUB_TOKEN", "token-from-environment")
+    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+
+    assert web_main.main(["--check", "--config", str(path)]) == 0
+
+    assert seen[0].github_client_id == "client-from-environment"
+    assert seen[0].github_token == "token-from-environment"
 
 
 @pytest.mark.parametrize(

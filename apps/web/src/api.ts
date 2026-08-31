@@ -319,6 +319,55 @@ export type ApiHistory = {
   unstable_resume: boolean;
 };
 
+export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
+
+export type GitHubClientIdInfo =
+  | { source: "environment" | "configuration"; hint: string }
+  | { source: "keychain"; hint: string }
+  | { source: "none"; hint: "" };
+
+export type GitHubConnectResponse = {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type GitHubPollResponse =
+  | { status: "complete" }
+  | {
+      status: "pending";
+      /** Seconds to wait before the next poll. Grows when GitHub returns slow_down. */
+      nextInterval: number;
+    };
+
+export function getGitHubStatus(): Promise<GitHubStatus> {
+  return api<GitHubStatus>("/api/github/status");
+}
+
+export function getGitHubClientId(): Promise<GitHubClientIdInfo> {
+  return api<GitHubClientIdInfo>("/api/github/client-id");
+}
+
+export function setGitHubClientId(clientId: string): Promise<void> {
+  return api<void>("/api/github/client-id", {
+    method: "POST",
+    body: JSON.stringify({ clientId }),
+  });
+}
+
+export function connectGitHub(): Promise<GitHubConnectResponse> {
+  return api<GitHubConnectResponse>("/api/github/connect", { method: "POST" });
+}
+
+export function pollGitHubConnect(): Promise<GitHubPollResponse> {
+  return api<GitHubPollResponse>("/api/github/connect/poll", { method: "POST" });
+}
+
+export function disconnectGitHub(): Promise<void> {
+  return api<void>("/api/github/disconnect", { method: "POST" });
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,

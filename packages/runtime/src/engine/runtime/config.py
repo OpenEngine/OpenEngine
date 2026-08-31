@@ -1,4 +1,4 @@
-"""Provider-neutral configuration loaded before applications compose adapters.
+"""Configuration loaded before applications compose adapters.
 
 This module deliberately stops at reading and validating Engine's vocabulary.
 Runners expose provider translators for that vocabulary, while policy
@@ -71,6 +71,8 @@ class EngineConfig:
     """All configuration understood by this version of Engine."""
 
     default_branch: str = "main"
+    github_client_id: str = ""
+    github_token: str = ""
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
     claude: ClaudeConfig = ClaudeConfig()
@@ -141,7 +143,15 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     _reject_unknown(
         document,
-        {"attribution", "approvals", "claude", "default_branch", "workflows"},
+        {
+            "attribution",
+            "approvals",
+            "claude",
+            "default_branch",
+            "github_client_id",
+            "github_token",
+            "workflows",
+        },
         "configuration",
     )
     attribution = document.get("attribution", True)
@@ -151,6 +161,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     default_branch = document.get("default_branch", "main")
     if not isinstance(default_branch, str) or not default_branch.strip():
         raise EngineConfigError("default_branch must be a non-empty string")
+
+    github_client_id = _optional_nonblank_string(
+        document.get("github_client_id", ""), "github_client_id"
+    )
+    github_token = _optional_nonblank_string(
+        document.get("github_token", ""), "github_token"
+    )
 
     claude = _table(document.get("claude", {}), "claude")
     _reject_unknown(claude, {"output_style"}, "claude")
@@ -188,6 +205,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     return EngineConfig(
         attribution=attribution,
         default_branch=default_branch,
+        github_client_id=github_client_id,
+        github_token=github_token,
         claude=ClaudeConfig(output_style=output_style),
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
@@ -200,6 +219,16 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         workflows=WorkflowsConfig(directory=workflow_directory),
     )
+
+
+def _optional_nonblank_string(value: object, name: str) -> str:
+    """Validate a string setting which may be omitted but never whitespace."""
+
+    if not isinstance(value, str):
+        raise EngineConfigError(f"{name} must be a string")
+    if value and not value.strip():
+        raise EngineConfigError(f"{name} must not be blank")
+    return value.strip()
 
 
 def describe_loaded_config(loaded: LoadedEngineConfig) -> str:

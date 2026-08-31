@@ -26,6 +26,7 @@ from engine.apps.web.composition import (
     build_session,
     build_workflow_runners,
 )
+from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.runtime import (
     EngineConfigError,
     LoadedEngineConfig,
@@ -81,6 +82,23 @@ def report_wiring(settings: Settings) -> None:
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
+def _settings(loaded: LoadedEngineConfig) -> Settings:
+    """Apply deployment overrides to the immutable TOML configuration."""
+
+    return Settings(
+        engine_config=loaded.config,
+        config_path=loaded.path,
+        github_client_id=os.environ.get(
+            "GITHUB_CLIENT_ID", loaded.config.github_client_id
+        ),
+        github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+    )
+
+
+def _github_client_id_source() -> str:
+    return "environment" if "GITHUB_CLIENT_ID" in os.environ else "configuration"
+
+
 def read_configuration(
     config_path: str | os.PathLike[str] | None = None,
 ) -> tuple[LoadedEngineConfig, WorkflowCatalog | None]:
@@ -103,8 +121,9 @@ def compose_app(
     loaded: LoadedEngineConfig, workflow_catalog: WorkflowCatalog | None
 ) -> Starlette:
     """Wire the capability graph and hand it to the HTTP surface."""
-    settings = Settings(engine_config=loaded.config, config_path=loaded.path)
-    capabilities = build_capabilities(settings)
+    settings = _settings(loaded)
+    credential_store = GitHubCredentialStore()
+    capabilities = build_capabilities(settings, credential_store=credential_store)
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
@@ -118,6 +137,9 @@ def compose_app(
         workflow_catalog=workflow_catalog,
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
+        credential_store=credential_store,
+        github_client_id=settings.github_client_id,
+        github_client_id_source=_github_client_id_source(),
     )
 
 
@@ -141,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
-    settings = Settings(engine_config=loaded.config, config_path=loaded.path)
+    settings = _settings(loaded)
 
     if args.check:
         report_wiring(settings)

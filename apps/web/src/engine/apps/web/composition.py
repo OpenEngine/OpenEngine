@@ -33,6 +33,7 @@ from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.sqlite import SQLiteStateStore
+from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 from engine.ports import AgentRunner
@@ -94,15 +95,7 @@ class Settings:
     """Claude workflows may read and edit files, but not run unrestricted Bash."""
     temporal_host: str = "localhost:7233"
     github_token: str = ""
-    github_binary: str = "gh"
-    """The GitHub CLI review comments are left with.
-
-    A field for the same reason `codex_binary` and `claude_binary` are: which
-    executable a capability shells out to is the deployment's to state, and
-    stating it here keeps it readable in the one file allowed to name adapters.
-    A `PATH` shim would do the same job invisibly, and would take the next thing
-    in the process that wanted the real `gh` with it.
-    """
+    github_client_id: str = ""
     buzz_base_url: str = ""
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
@@ -118,14 +111,23 @@ class Settings:
     """The single TOML source, or ``None`` when built-in defaults are active."""
 
 
-def build_capabilities(settings: Settings) -> Capabilities:
+def build_capabilities(
+    settings: Settings,
+    credential_store: GitHubCredentialStore | None = None,
+) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
+    _store = credential_store
+    def _token() -> str:
+        if _store is not None:
+            stored = _store.get()
+            if stored:
+                return stored
+        return settings.github_token
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=GitHubSourceControl(
-            settings.github_token,
-            binary_path=settings.github_binary,
+            _token,
             workspace_provider=workspace_provider,
         ),
         agent_runner=CodexAgentRunner(
