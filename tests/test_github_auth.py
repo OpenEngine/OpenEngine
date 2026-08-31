@@ -271,6 +271,13 @@ class TestCsrfGuard:
         resp = self._post(app, "/api/github/connect", origin="https://evil.example.com")
         assert resp.status_code == 403
 
+    def test_connect_from_lookalike_localhost_origin_is_rejected(self, tmp_path):
+        app = _make_github_app(tmp_path)
+        resp = self._post(
+            app, "/api/github/connect", origin="https://localhost.evil.example.com"
+        )
+        assert resp.status_code == 403
+
     def test_disconnect_from_cross_origin_is_rejected(self, tmp_path):
         app = _make_github_app(tmp_path)
         resp = self._post(app, "/api/github/disconnect", origin="https://evil.example.com")

@@ -5,6 +5,7 @@ The Python process serves both the chat API and the built assistant-ui client.
 """
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -90,7 +91,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
-    settings = Settings(engine_config=loaded.config, config_path=loaded.path)
+    settings = Settings(
+        engine_config=loaded.config,
+        config_path=loaded.path,
+        # Deployment credentials are deliberately outside the keychain path.
+        # An explicit environment value wins so a container can override a
+        # checked-in, non-secret client ID without editing its configuration.
+        github_client_id=os.environ.get(
+            "GITHUB_CLIENT_ID", loaded.config.github_client_id
+        ),
+        github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+    )
+    github_client_id_source = (
+        "environment" if "GITHUB_CLIENT_ID" in os.environ else "configuration"
+    )
 
     if args.check:
         report_wiring(settings)
@@ -113,6 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default_branch=loaded.config.default_branch,
         credential_store=credential_store,
         github_client_id=settings.github_client_id,
+        github_client_id_source=github_client_id_source,
     )
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)

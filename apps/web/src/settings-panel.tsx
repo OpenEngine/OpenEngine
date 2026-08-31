@@ -24,7 +24,11 @@ type ConnectionState =
 
 type ClientIdState =
   | { phase: "loading" }
-  | { phase: "configured"; hint: string; source: "env" | "keychain" }
+  | {
+      phase: "configured";
+      hint: string;
+      source: "environment" | "configuration" | "keychain";
+    }
   | { phase: "unconfigured" }
   | { phase: "editing"; value: string; saving: boolean };
 
@@ -180,8 +184,11 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             <div className="settings-client-id">
               <span className="settings-client-id-label">
                 Client ID
-                {clientId.source === "env" && (
-                  <span className="settings-client-id-source"> (env)</span>
+                {clientId.source === "environment" && (
+                  <span className="settings-client-id-source"> (environment)</span>
+                )}
+                {clientId.source === "configuration" && (
+                  <span className="settings-client-id-source"> (configuration)</span>
                 )}
               </span>
               <span className="settings-client-id-hint">{clientId.hint}</span>

@@ -322,7 +322,7 @@ export type ApiHistory = {
 export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
 
 export type GitHubClientIdInfo =
-  | { source: "env"; hint: string }
+  | { source: "environment" | "configuration"; hint: string }
   | { source: "keychain"; hint: string }
   | { source: "none"; hint: "" };
 

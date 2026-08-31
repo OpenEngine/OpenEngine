@@ -30,7 +30,7 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from engine.domain import (
@@ -883,6 +883,7 @@ def create_app(
     default_branch: str = "main",
     credential_store: GitHubCredentialStore | None = None,
     github_client_id: str = "",
+    github_client_id_source: str = "configuration",
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -1751,13 +1752,26 @@ def create_app(
             # No Origin means a same-origin request (form submit, etc.) or a
             # curl call from localhost. Both are fine for a local tool.
             return True
-        host = request.headers.get("host", "")
-        return (
-            origin.startswith("http://localhost")
-            or origin.startswith("https://localhost")
-            or origin.startswith(f"http://{host.split(':')[0]}")
-            or origin.startswith(f"https://{host.split(':')[0]}")
-        )
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            return False
+        # Browser Origin values have no path and lowercase hostnames.  Compare
+        # parsed hosts rather than prefixes: localhost.evil.example is not
+        # localhost.
+        return parsed.hostname.lower() in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            (request.url.hostname or "").lower(),
+        }
 
     def _hint(value: str) -> str:
         """Return first 4 chars + bullets so the UI can confirm which ID is set."""
@@ -1780,7 +1794,9 @@ def create_app(
         # Never return the actual value — only whether one is set and its hint.
         stored = _credential_store.get_client_id()
         if github_client_id:
-            return JSONResponse({"source": "env", "hint": _hint(github_client_id)})
+            return JSONResponse(
+                {"source": github_client_id_source, "hint": _hint(github_client_id)}
+            )
         if stored:
             return JSONResponse({"source": "keychain", "hint": _hint(stored)})
         return JSONResponse({"source": "none", "hint": ""})
