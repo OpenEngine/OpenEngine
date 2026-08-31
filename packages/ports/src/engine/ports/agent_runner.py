@@ -206,6 +206,7 @@ class McpServerConfig:
     name: str
     command: str
     args: tuple[str, ...] = field(default=())
+    requires_network_access: bool = False
 
 
 @runtime_checkable
