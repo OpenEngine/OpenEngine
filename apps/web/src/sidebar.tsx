@@ -313,7 +313,7 @@ export function Sidebar({
               All WorkOrders
             </a>
           </div>
-          <nav className="rail-scroll" aria-label="Recent runs">
+          <nav className="rail-scroll" aria-label="Recent WorkOrders">
             {runs.map((run) => (
               <div className="rail-group" key={run.runId}>
                 <div

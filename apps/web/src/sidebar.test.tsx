@@ -101,6 +101,7 @@ describe("Sidebar", () => {
       "Chats",
     ]);
     expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
     expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
   });

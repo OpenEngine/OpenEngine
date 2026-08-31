@@ -71,7 +71,7 @@ async function verifyPersistedNavigation({
   ).toBeVisible();
   await shot(page, testInfo, "3 seeded implementation history");
 
-  await page.getByRole("link", { name: /Back to run run-seeded-history/ }).click();
+  await page.getByRole("link", { name: /Back to WorkOrder run-seeded-history/ }).click();
   await step(page, "Review").getByRole("link", { name: "Open conversation" }).click();
   await expect(
     page.getByRole("heading", { name: "Seeded review conversation" }),
