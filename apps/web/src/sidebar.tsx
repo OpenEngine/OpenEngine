@@ -300,20 +300,20 @@ export function Sidebar({
             )}
           </nav>
         </Section>
-        <Section id="workflows" title="Workflows" open={open === "workflows"} onToggle={toggle}>
+        <Section id="workflows" title="WorkOrders" open={open === "workflows"} onToggle={toggle}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/runs/new">
-              + New workflow
+              + New WorkOrder
             </a>
             <a
               className="rail-button"
               data-active={activeView === "runs" || undefined}
               href="/runs"
             >
-              All workflow runs
+              All WorkOrders
             </a>
           </div>
-          <nav className="rail-scroll" aria-label="Recent runs">
+          <nav className="rail-scroll" aria-label="Recent WorkOrders">
             {runs.map((run) => (
               <div className="rail-group" key={run.runId}>
                 <div
@@ -328,7 +328,7 @@ export function Sidebar({
                     </span>
                     <span className="rail-item-meta">
                       {IN_PROGRESS_PHASES.has(run.phase) && (
-                        <span className="rail-live" aria-label="Workflow is in progress" />
+                        <span className="rail-live" aria-label="WorkOrder is in progress" />
                       )}
                       {runStatusLabel(run)} · {run.workflowVersion || run.workflowId}
                     </span>

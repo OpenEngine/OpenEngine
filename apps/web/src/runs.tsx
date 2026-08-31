@@ -118,20 +118,20 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
     <main className="panel-scroll">
       <header className="hero">
         <p className="eyebrow">OpenEngine / Work</p>
-        <h1>Workflow runs</h1>
+        <h1>WorkOrders</h1>
         <p className="lede">
-          Each run brings the task, agent steps, outputs, and human decision together.
+          Each WorkOrder brings the task, agent steps, outputs, and human decision together.
         </p>
       </header>
       <StatStrip>
-        <Stat label="Runs" value={runs.length} />
+        <Stat label="WorkOrders" value={runs.length} />
         <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />
         <Stat label="Failed" value={failed} tone={failed ? "alert" : undefined} />
         <Stat label="Conversations" value={conversations} />
       </StatStrip>
       {runs.length > 0 && (
         <div className="toolbar">
-          <div className="segmented" role="group" aria-label="Filter runs by phase">
+          <div className="segmented" role="group" aria-label="Filter WorkOrders by phase">
             <button type="button" aria-pressed={!filter} onClick={() => setFilter("")}>
               All
             </button>
@@ -151,14 +151,14 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
               {shown.length} of {runs.length} shown
             </span>
             <a className="btn" href="/runs/new">
-              Run a workflow
+              New WorkOrder
             </a>
           </div>
         </div>
       )}
       {error ? (
         <p className="notice notice-block">
-          Could not load runs: {error}
+          Could not load WorkOrders: {error}
         </p>
       ) : runs.length ? (
         <div className="cards">
@@ -201,7 +201,7 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
         </div>
       ) : (
         <div className="empty">
-          <h2>No workflow runs yet.</h2>
+          <h2>No WorkOrders yet.</h2>
           <p>Chats remain available from the sidebar.</p>
         </div>
       )}
@@ -254,7 +254,7 @@ export function NewWorkflowPage({
       window.localStorage.removeItem(WORKFLOW_DRAFT_KEY);
       window.location.assign(`/runs/${encodeURIComponent(run.runId)}`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not create workflow run");
+      setError(reason instanceof Error ? reason.message : "Could not create WorkOrder");
       setSubmitting(false);
     }
   }
@@ -263,13 +263,13 @@ export function NewWorkflowPage({
     <main className="panel-scroll">
       <header className="hero hero-narrow">
         <p className="eyebrow">
-          {milestone ? `${project?.name ?? "Project"} / ${milestone.name}` : "OpenEngine / New workflow"}
+          {milestone ? `${project?.name ?? "Project"} / ${milestone.name}` : "OpenEngine / New WorkOrder"}
         </p>
-        <h1>{milestone ? "Create a task" : "Start a workflow"}</h1>
+        <h1>{milestone ? "Create a task" : "Create a WorkOrder"}</h1>
         <p className="lede">
           {milestone
             ? "Start work for this milestone, optionally under one of its workstreams."
-            : "Create one run that keeps its stages, agent conversations, outputs, and final human decision together."}
+            : "Create one WorkOrder that keeps its stages, agent conversations, outputs, and final human decision together."}
         </p>
       </header>
       <form className="form" onSubmit={submit}>
@@ -357,11 +357,11 @@ export function NewWorkflowPage({
             disabled={submitting || !runner || !workflowId}
             type="submit"
           >
-            {submitting ? "Creating…" : milestone ? "Create task" : "Create workflow run"}
+            {submitting ? "Creating…" : milestone ? "Create task" : "Create WorkOrder"}
           </button>
         </div>
         <p className="form-note">
-          The implementation starts after the run is created. Reviewer execution is not
+          The implementation starts after the WorkOrder is created. Reviewer execution is not
           available yet.
         </p>
       </form>
@@ -411,7 +411,7 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
     ...run.steps.map((step) => ({ id: step.stepId, name: step.name, status: step.status })),
   ];
   return (
-    <ol className="stages" aria-label="Current workflow stage">
+    <ol className="stages" aria-label="Current WorkOrder stage">
       {stages.map((stage) => (
         <li
           className="stage"
@@ -469,7 +469,7 @@ function HumanReviewDecision({
           rows={3}
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder="Optional — why this run was approved or rejected."
+          placeholder="Optional — why this WorkOrder was approved or rejected."
         />
       </label>
       {error && (
@@ -592,15 +592,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
     <main className="panel-scroll">
       {error ? (
         <p className="notice notice-block">
-          Could not load run: {error}
+          Could not load WorkOrder: {error}
         </p>
       ) : !run ? (
-        <p className="state-inline">Loading workflow run…</p>
+        <p className="state-inline">Loading WorkOrder…</p>
       ) : (
         <>
           <header className="detail-head">
             <a href="/runs" className="back-link">
-              ← All workflow runs
+              ← All WorkOrders
             </a>
             <div className="detail-title">
               <div>
@@ -622,7 +622,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
           </StatStrip>
           {workspaceThreadId && (
-            <section className="run-workspace" aria-label="Workflow checkout">
+            <section className="run-workspace" aria-label="WorkOrder checkout">
               <WorkspaceControl threadId={workspaceThreadId} />
             </section>
           )}
@@ -652,7 +652,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
               {run.failureReason}
             </p>
           )}
-          <section className="timeline" aria-label="Workflow steps">
+          <section className="timeline" aria-label="WorkOrder steps">
             {run.steps.map((step) => (
               <StepCard
                 key={step.stepId}

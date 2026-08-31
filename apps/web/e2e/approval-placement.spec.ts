@@ -104,7 +104,7 @@ for (const runner of ["codex", "claude"]) {
     await page.getByLabel("Repository").fill(engine.repository);
     await page.getByLabel("Implementation runner").selectOption(runner);
     await page.getByLabel("Task prompt").fill(TASK);
-    await page.getByRole("button", { name: "Create workflow run" }).click();
+    await page.getByRole("button", { name: "Create WorkOrder" }).click();
 
     await expect(page).toHaveURL(/\/runs\/run-/);
     await page

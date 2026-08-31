@@ -238,8 +238,8 @@ function ConversationHeader({
         {workflowConversation && (
           <p className="lede">
             {thread?.editable
-              ? "A workflow step owns this transcript; sending guidance reactivates it if it has closed."
-              : "A workflow step owns this read-only transcript."}
+              ? "A WorkOrder step owns this transcript; sending guidance reactivates it if it has closed."
+              : "A WorkOrder step owns this read-only transcript."}
           </p>
         )}
       </div>

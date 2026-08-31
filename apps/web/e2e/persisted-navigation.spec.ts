@@ -42,7 +42,7 @@ async function verifyPersistedNavigation({
   // page, then follow the same links a person uses instead of addressing each
   // API or detail route directly.
   await page.goto("/runs");
-  await expect(page.getByRole("heading", { name: "Workflow runs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "WorkOrders" })).toBeVisible();
   const seededRunCard = page
     .locator(".cards")
     .getByRole("link", { name: new RegExp(SEEDED_RUN) });
@@ -71,7 +71,7 @@ async function verifyPersistedNavigation({
   ).toBeVisible();
   await shot(page, testInfo, "3 seeded implementation history");
 
-  await page.getByRole("link", { name: /Back to run run-seeded-history/ }).click();
+  await page.getByRole("link", { name: /Back to WorkOrder run-seeded-history/ }).click();
   await step(page, "Review").getByRole("link", { name: "Open conversation" }).click();
   await expect(
     page.getByRole("heading", { name: "Seeded review conversation" }),
@@ -157,13 +157,13 @@ async function verifyPersistedNavigation({
     ],
   };
   engine.script(workflowScript);
-  await page.getByRole("button", { name: "Workflows", exact: true }).click();
-  await page.getByRole("link", { name: "+ New workflow", exact: true }).click();
+  await page.getByRole("button", { name: "WorkOrders", exact: true }).click();
+  await page.getByRole("link", { name: "+ New WorkOrder", exact: true }).click();
   await expect(page).toHaveURL("/runs/new");
-  await expect(page.getByRole("heading", { name: "Start a workflow" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create a WorkOrder" })).toBeVisible();
   await page.getByLabel("Repository").fill(engine.repository);
   await page.getByLabel("Task prompt").fill("Start a fresh workflow beside history.");
-  await page.getByRole("button", { name: "Create workflow run" }).click();
+  await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
   await expect(page.locator(".detail-title .chip")).toHaveText("Human review");
   await expect(step(page, "Implementation")).toContainText(
@@ -173,7 +173,7 @@ async function verifyPersistedNavigation({
 
   // Creating new records did not replace the old ones: the original run is
   // still reachable from the list after both new execution paths completed.
-  await page.getByRole("link", { name: "All workflow runs", exact: true }).click();
+  await page.getByRole("link", { name: "All WorkOrders", exact: true }).click();
   await expect(
     page.locator(".cards").getByRole("link", { name: new RegExp(SEEDED_RUN) }),
   ).toBeVisible();

@@ -3548,6 +3548,29 @@ def test_a_chat_that_never_had_a_workspace_can_be_given_one() -> None:
     assert stored.workspace_id == "ws-1"
 
 
+def test_a_workorder_conversation_reports_a_missing_workorder() -> None:
+    runner = ConcurrentRunner()
+    workspaces = ConversationWorkspaces()
+    store = InMemoryStateStore()
+    session = _workspace_session(runner, workspaces, store)
+    app = create_app(session, {"test": runner})
+
+    async def scenario():
+        instance = await store.create_instance(
+            CODER,
+            workflow_run_id=RunId("missing-workorder"),
+            workflow_step_id=IMPLEMENTATION_STEP,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(f"/api/threads/{instance.instance_id}/workspace")
+
+    refused = asyncio.run(scenario())
+
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "WorkOrder not found"
+
+
 def test_a_process_without_a_workspace_repository_says_so() -> None:
     runner = ConcurrentRunner()
     app = create_app(_session(runner), {"test": runner})
