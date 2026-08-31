@@ -177,7 +177,7 @@ describe("NewWorkflowPage", () => {
     const user = userEvent.setup();
     render(<NewWorkflowPage config={config} />);
     await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
-    const submit = screen.getByRole("button", { name: "Create workflow run" });
+    const submit = screen.getByRole("button", { name: "Create WorkOrder" });
     await waitFor(() => expect(submit).toBeEnabled());
 
     await user.click(submit);
@@ -293,7 +293,7 @@ describe("RunsPage", () => {
   it("renders its empty state", () => {
     render(<RunsPage runs={[]} error="" />);
 
-    expect(screen.getByRole("heading", { name: "No workflow runs yet." })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "No WorkOrders yet." })).toBeVisible();
   });
 
   it("reports a load failure over the empty state", () => {
@@ -301,7 +301,7 @@ describe("RunsPage", () => {
 
     expect(screen.getByText(/runs unavailable/)).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "No workflow runs yet." }),
+      screen.queryByRole("heading", { name: "No WorkOrders yet." }),
     ).not.toBeInTheDocument();
   });
 
@@ -327,7 +327,7 @@ describe("RunsPage", () => {
     expect(within(firstCard as HTMLElement).getByText("1")).toBeInTheDocument();
     expect(within(firstCard as HTMLElement).getAllByText("Implementation")).toHaveLength(2);
 
-    const filters = screen.getByRole("group", { name: "Filter runs by phase" });
+    const filters = screen.getByRole("group", { name: "Filter WorkOrders by phase" });
     expect(within(filters).getByRole("button", { name: "running agent" })).toBeInTheDocument();
     expect(within(filters).getByRole("button", { name: "failed" })).toBeInTheDocument();
     expect(within(filters).queryByRole("button", { name: "pending" })).not.toBeInTheDocument();

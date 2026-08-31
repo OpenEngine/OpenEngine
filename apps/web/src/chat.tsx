@@ -435,7 +435,7 @@ function WorkflowBacklink() {
   if (!custom?.workflowRunId) return null;
   return (
     <a className="backlink" href={`/runs/${custom.workflowRunId}`}>
-      ← Back to run {custom.workflowRunId}
+      ← Back to WorkOrder {custom.workflowRunId}
       {custom.workflowStepId && <> · {custom.workflowStepId} step</>}
     </a>
   );

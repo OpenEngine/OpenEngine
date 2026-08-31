@@ -97,10 +97,10 @@ describe("Sidebar", () => {
     const headers = [...container.querySelectorAll("[aria-expanded]")];
     expect(headers.map((element) => element.textContent)).toEqual([
       "Projects",
-      "Workflows",
+      "WorkOrders",
       "Chats",
     ]);
-    expect(header("Workflows")).toHaveAttribute("aria-expanded", "true");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
     expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
   });
@@ -112,13 +112,13 @@ describe("Sidebar", () => {
     await user.click(header("Chats"));
 
     expect(header("Chats")).toHaveAttribute("aria-expanded", "true");
-    expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
 
     await user.click(header("Projects"));
 
     expect(header("Projects")).toHaveAttribute("aria-expanded", "true");
     expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
-    expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
   });
 
   /** Which section a conversation belongs to is only known once the projects
@@ -134,7 +134,7 @@ describe("Sidebar", () => {
     rerender(<Sidebar runs={[run]} initialSection="workflows" />);
 
     expect(header("Chats")).toHaveAttribute("aria-expanded", "true");
-    expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
   });
 
   /** The header is the whole control, so the way back out of a section is the
@@ -145,39 +145,39 @@ describe("Sidebar", () => {
     const user = userEvent.setup();
     const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
 
-    await user.click(header("Workflows"));
+    await user.click(header("WorkOrders"));
 
-    expect(header("Workflows")).toHaveAttribute("aria-expanded", "false");
-    expect(body("Workflows")).toHaveAttribute("inert");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
+    expect(body("WorkOrders")).toHaveAttribute("inert");
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
     expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
 
     rerender(<Sidebar runs={[run]} initialSection="projects" />);
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
 
-    await user.click(header("Workflows"));
+    await user.click(header("WorkOrders"));
 
-    expect(header("Workflows")).toHaveAttribute("aria-expanded", "true");
-    expect(body("Workflows")).not.toHaveAttribute("inert");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
+    expect(body("WorkOrders")).not.toHaveAttribute("inert");
   });
 
   it("keeps a closed section mounted but out of reach", async () => {
     const user = userEvent.setup();
     render(<Sidebar runs={[run]} initialSection="chats" />);
 
-    expect(body("Workflows")).toHaveAttribute("inert");
-    expect(within(body("Workflows")).getByRole("link", { name: "+ New workflow" })).toBeVisible();
+    expect(body("WorkOrders")).toHaveAttribute("inert");
+    expect(within(body("WorkOrders")).getByRole("link", { name: "+ New WorkOrder" })).toBeVisible();
 
-    await user.click(header("Workflows"));
+    await user.click(header("WorkOrders"));
 
-    expect(body("Workflows")).not.toHaveAttribute("inert");
+    expect(body("WorkOrders")).not.toHaveAttribute("inert");
     expect(body("Chats")).toHaveAttribute("inert");
   });
 
   it("puts each section's new button under its own header", () => {
     render(<Sidebar runs={[run]} initialSection="workflows" />);
 
-    expect(within(body("Workflows")).getByRole("link", { name: "+ New workflow" })).toHaveAttribute(
+    expect(within(body("WorkOrders")).getByRole("link", { name: "+ New WorkOrder" })).toHaveAttribute(
       "href",
       "/runs/new",
     );
@@ -467,12 +467,12 @@ describe("Sidebar", () => {
   it("lists runs with their conversations and marks the one on screen", () => {
     render(<Sidebar runs={[run]} initialSection="workflows" activeRunId="run-1" />);
 
-    const entry = within(body("Workflows")).getByRole("link", { name: /First run/ });
+    const entry = within(body("WorkOrders")).getByRole("link", { name: /First run/ });
     expect(entry).toHaveAttribute("href", "/runs/run-1");
     expect(entry).toHaveTextContent("Implementation · v1");
     expect(entry.closest(".rail-item")).toHaveAttribute("data-active", "true");
     expect(
-      within(body("Workflows")).getByRole("link", { name: "Implementation conversation" }),
+      within(body("WorkOrders")).getByRole("link", { name: "Implementation conversation" }),
     ).toHaveAttribute("href", "/runs/run-1/conversations/conversation");
   });
 
@@ -486,10 +486,10 @@ describe("Sidebar", () => {
       />,
     );
 
-    const entry = within(body("Workflows")).getByRole("link", { name: /First run/ });
+    const entry = within(body("WorkOrders")).getByRole("link", { name: /First run/ });
     expect(entry.closest(".rail-item")).not.toHaveAttribute("data-active");
     expect(
-      within(body("Workflows")).getByRole("link", { name: "Implementation conversation" }),
+      within(body("WorkOrders")).getByRole("link", { name: "Implementation conversation" }),
     ).toHaveAttribute("aria-current", "page");
   });
 
@@ -500,7 +500,7 @@ describe("Sidebar", () => {
     };
     render(<Sidebar runs={[waiting]} initialSection="workflows" />);
 
-    const entry = within(body("Workflows")).getByRole("link", {
+    const entry = within(body("WorkOrders")).getByRole("link", {
       name: "Implementation conversation Waiting for input",
     });
     expect(entry).toHaveTextContent("Implementation conversation ❔");
