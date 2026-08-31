@@ -146,6 +146,11 @@ describe("NewWorkflowPage", () => {
   it("offers every configured workflow definition", () => {
     render(<NewWorkflowPage config={config} />);
 
+    expect(
+      screen.getByText(
+        "Create one WorkOrder that keeps its stages, agent conversations, outputs, and final human decision together.",
+      ),
+    ).toBeVisible();
     const selector = screen.getByRole("combobox", { name: "Workflow definition" });
     expect(within(selector).getByRole("option", { name: "Release · v2" })).toHaveValue(
       "release-v2",
@@ -413,6 +418,10 @@ describe("RunDetailPage", () => {
     const { container } = render(<RunDetailPage runId="run-1" />);
 
     const note = await screen.findByRole("textbox", { name: "Decision note" });
+    expect(note).toHaveAttribute(
+      "placeholder",
+      "Optional — why this WorkOrder was approved or rejected.",
+    );
     await user.type(note, "Reads right.");
     await user.click(screen.getByRole("button", { name: "Approve" }));
 

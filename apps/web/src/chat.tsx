@@ -1048,6 +1048,9 @@ export function ChatThread({ project = false }: { project?: boolean }) {
   );
 }
 
+export const READ_ONLY_WORKORDER_NOTE =
+  "This transcript belongs to a WorkOrder step. Return to the WorkOrder for status and actions.";
+
 function Dock({ project }: { project: boolean }) {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
@@ -1060,9 +1063,7 @@ function Dock({ project }: { project: boolean }) {
         Jump to latest
       </ThreadPrimitive.ScrollToBottom>
       {!editable ? (
-        <p className="step-note">
-          This transcript belongs to a workflow step. Return to the run for status and actions.
-        </p>
+        <p className="step-note">{READ_ONLY_WORKORDER_NOTE}</p>
       ) : (
         <Composer project={project} />
       )}

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiApproval } from "./api";
 import {
   ApprovalEntry,
+  READ_ONLY_WORKORDER_NOTE,
   errorText,
   outcomeText,
   summaryText,
@@ -54,6 +55,12 @@ function questionApproval(overrides: Partial<ApiApproval> = {}): ApiApproval {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("chat display helpers", () => {
+  it("directs read-only WorkOrder conversations back with current terminology", () => {
+    expect(READ_ONLY_WORKORDER_NOTE).toBe(
+      "This transcript belongs to a WorkOrder step. Return to the WorkOrder for status and actions.",
+    );
+  });
+
   it("keeps status and decision-source precedence for every field combination", () => {
     const statuses = ["pending", "decided", "interrupted"] as const;
     const decisions = [null, "accept", "accept_for_session", "cancel"] as const;

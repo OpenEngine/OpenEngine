@@ -431,7 +431,7 @@ class ThreadService:
         if thread.workflow_run_id is not None:
             run = await self.session.state_store.load(thread.workflow_run_id)
             if run is None:
-                raise RuntimeError("workflow run not found")
+                raise RuntimeError("WorkOrder not found")
             repository = run.repository
             definition = run.workflow_definition
             if definition is None and self._workflow_catalog is not None:

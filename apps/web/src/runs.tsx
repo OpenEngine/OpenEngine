@@ -269,7 +269,7 @@ export function NewWorkflowPage({
         <p className="lede">
           {milestone
             ? "Start work for this milestone, optionally under one of its workstreams."
-            : "Create one run that keeps its stages, agent conversations, outputs, and final human decision together."}
+            : "Create one WorkOrder that keeps its stages, agent conversations, outputs, and final human decision together."}
         </p>
       </header>
       <form className="form" onSubmit={submit}>
@@ -469,7 +469,7 @@ function HumanReviewDecision({
           rows={3}
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder="Optional — why this run was approved or rejected."
+          placeholder="Optional — why this WorkOrder was approved or rejected."
         />
       </label>
       {error && (
