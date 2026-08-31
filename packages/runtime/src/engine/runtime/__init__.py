@@ -17,6 +17,7 @@ from engine.runtime.approvals import (
 )
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.config import (
+    CONFIG_ENVIRONMENT_VARIABLE,
     ApprovalCapability,
     ApprovalConfig,
     BashApprovalConfig,
@@ -40,6 +41,11 @@ from engine.runtime.profiles import (
     UnknownAgentError,
     profile_for,
     with_granted_tools,
+)
+from engine.runtime.protocol_diagnostics import (
+    AGENT_PROTOCOL_DIAGNOSTIC_LOG,
+    AgentProtocolDiagnostics,
+    interaction_rejection_message,
 )
 from engine.runtime.planning_tools import (
     PLANNING_TOOL_NAMES,
@@ -102,10 +108,13 @@ __all__ = [
     "INVALID_COMPLETION_ERROR",
     "BUILT_IN",
     "CODER",
+    "CONFIG_ENVIRONMENT_VARIABLE",
     "DEFAULT_RUNNER",
     "FOREMAN",
     "PLANNER",
     "AgentSession",
+    "AgentProtocolDiagnostics",
+    "AGENT_PROTOCOL_DIAGNOSTIC_LOG",
     "ApprovalBroker",
     "ApprovalDecisionNotAllowedError",
     "ApprovalError",
@@ -157,6 +166,7 @@ __all__ = [
     "profile_for",
     "load_engine_config",
     "load_workflow_catalog",
+    "interaction_rejection_message",
     "parse_engine_config",
     "session_grant_from",
     "run_failed_from_tool_call",

@@ -23,6 +23,21 @@ All three entrypoints run today and report their wiring:
 uv run engine-web
 ```
 
+`engine-web` serves the client built into `apps/web/dist` and reads its
+configuration once, so a source edit needs a rebuild, a Ctrl-C, or both. While
+working on OpenEngine itself, run the development server instead:
+
+```bash
+uv run engine-dev
+```
+
+It starts the Vite dev server and a reloading API as one process: a component
+edit is hot-swapped into the open page, and a change to Python, `engine.toml`
+or a workflow restarts the API. Open the address Vite prints. `--no-web` runs
+the API alone, and `--build` serves the built client from the API the way
+`engine-web` does. A restart ends any agent run in flight; the
+[development server plan](docs/dev-server.md) has the rest of the detail.
+
 SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
 history is currently a placeholder; the SQLite state store upgrades its
 database on startup and can also be upgraded explicitly:
@@ -193,6 +208,14 @@ Or via environment variables:
 ```bash
 GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-web
 ```
+
+To diagnose interactive runner protocol incompatibilities, set
+`ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and
+Claude Code record normalized session and interaction events alongside their
+runner-specific request shapes, parser outcomes, response actions, executable,
+and hashed working-directory identity. The trace does not record prompts,
+commands, approval wording, answers, schema property names, or property values.
+The file is created with mode `0600` and rotates at 1 MB with three backups.
 
 ## What is it.
 

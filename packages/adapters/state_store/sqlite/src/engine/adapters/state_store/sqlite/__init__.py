@@ -489,6 +489,41 @@ class SQLiteStateStore:
             messages=tuple(_message_from_row(row) for row in rows),
         )
 
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
+        if not instance_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in instance_ids)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT i.instance_id, i.conversation_id,
+                       m.sequence, m.role, m.content, m.tool_calls, m.tool_call_id
+                FROM agent_instances AS i
+                LEFT JOIN messages AS m ON m.instance_id = i.instance_id
+                WHERE i.instance_id IN ({placeholders})
+                ORDER BY i.sequence, m.sequence
+                """,
+                tuple(instance_ids),
+            ).fetchall()
+        messages: dict[AgentInstanceId, list[Message]] = {}
+        conversation_ids: dict[AgentInstanceId, ConversationId] = {}
+        for row in rows:
+            instance_id = AgentInstanceId(row["instance_id"])
+            conversation_ids[instance_id] = ConversationId(row["conversation_id"])
+            instance_messages = messages.setdefault(instance_id, [])
+            if row["sequence"] is not None:
+                instance_messages.append(_message_from_row(row))
+        return {
+            instance_id: Conversation(
+                conversation_id=conversation_id,
+                instance_id=instance_id,
+                messages=tuple(messages[instance_id]),
+            )
+            for instance_id, conversation_id in conversation_ids.items()
+        }
+
     async def append_messages(
         self, instance_id: AgentInstanceId, messages: Sequence[Message]
     ) -> None:

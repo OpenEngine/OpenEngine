@@ -27,6 +27,10 @@ dependencies = [
 
 [project.scripts]
 engine-web = "engine.apps.web.__main__:main"
+# The source checkout's edit-reload loop. A developer convenience rather than a
+# capability, so it ships from the app it reloads instead of from a package of
+# its own.
+engine-dev = "engine.apps.web.dev:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -141,6 +141,11 @@ class PostgresStateStore:
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         raise NotImplementedError("Conversation reads land with the state-store ticket")
 
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
+        raise NotImplementedError("Conversation reads land with the state-store ticket")
+
     async def append_messages(
         self, instance_id: AgentInstanceId, messages: Sequence[Message]
     ) -> None:
