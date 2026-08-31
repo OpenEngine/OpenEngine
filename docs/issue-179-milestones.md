@@ -21,27 +21,34 @@ LangGraph implementation-review workflow and an agreed configuration boundary.
   user-facing SDLC configuration surface so the graph is built against the
   intended product boundary.
 
-## Durable agent workflow foundation
+## Agent execution contracts established
 
 **Depends on:** Native graph architecture approved.
 
-**Exit criterion:** an `ACPNode` workflow can run with the required tools, persist
-and expose its state, pause safely for a human decision, and recover without
-duplicating external effects. Agent outputs and workflow naming have explicit
-contracts, and rejection behavior is intentional.
+**Exit criterion:** an `ACPNode` workflow can run with the required tools. Agent
+outputs and workflow naming have explicit contracts, and rejection behavior is
+intentional.
 
 - [ ] [#182](https://github.com/spiralsoft-ai/OpenEngine/issues/182) — Expose the
   existing MCP-server path to graph-run agents.
-- [ ] [#183](https://github.com/spiralsoft-ai/OpenEngine/issues/183) — Represent
-  human review as a durable interrupt and surface it in the web UI.
-- [ ] [#184](https://github.com/spiralsoft-ai/OpenEngine/issues/184) — Choose the
-  graph checkpointer/state-store integration and read model.
 - [ ] [#195](https://github.com/spiralsoft-ai/OpenEngine/issues/195) — Define and
   validate typed step output.
 - [ ] [#196](https://github.com/spiralsoft-ai/OpenEngine/issues/196) — Preserve
   terminal rejection or explicitly specify a bounded rework loop.
 - [ ] [#197](https://github.com/spiralsoft-ai/OpenEngine/issues/197) — Preserve or
   deliberately replace workflow auto-naming.
+
+## Durable human review and recovery
+
+**Depends on:** Agent execution contracts established.
+
+**Exit criterion:** graph state is persisted and exposed, human review can pause
+and resume safely, and crash recovery cannot duplicate external effects.
+
+- [ ] [#183](https://github.com/spiralsoft-ai/OpenEngine/issues/183) — Represent
+  human review as a durable interrupt and surface it in the web UI.
+- [ ] [#184](https://github.com/spiralsoft-ai/OpenEngine/issues/184) — Choose the
+  graph checkpointer/state-store integration and read model.
 - [ ] [#198](https://github.com/spiralsoft-ai/OpenEngine/issues/198) — Guarantee
   effectively-once external side effects across crash recovery.
 
@@ -51,7 +58,7 @@ must be resolved before any graph node is allowed to publish GitHub changes.
 
 ## Native implementation-review workflow
 
-**Depends on:** Durable agent workflow foundation.
+**Depends on:** Durable human review and recovery.
 
 **Exit criterion:** the repository-owned implementation-review workflow runs as
 a selectable native LangGraph graph with implementation, review, and human-review
