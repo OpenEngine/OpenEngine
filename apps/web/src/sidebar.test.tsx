@@ -1,45 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ApiWorkflowRun } from "./api";
 import { Sidebar } from "./sidebar";
-
-/** The rail's chat list is assistant-ui's, and mounting the real runtime would
- *  test their thread store rather than our rail. One chat, standing in. */
-vi.mock("@assistant-ui/react", () => {
-  const thread = {
-    remoteId: "thread-1",
-    custom: { agentId: "coder", runner: "claude-code" },
-    isRunning: false,
-  };
-  const Div = ({ children, ...props }: ComponentProps<"div">) => (
-    <div {...props}>{children}</div>
-  );
-  const Button = ({ children, ...props }: ComponentProps<"button">) => (
-    <button type="button" {...props}>
-      {children}
-    </button>
-  );
-  return {
-    useAuiState: (select: (state: { threadListItem: typeof thread }) => unknown) =>
-      select({ threadListItem: thread }),
-    ThreadListPrimitive: {
-      Root: Div,
-      New: Button,
-      Items: ({ archived, children }: { archived?: boolean; children: () => ReactNode }) =>
-        archived ? null : children(),
-    },
-    ThreadListItemPrimitive: {
-      Root: Div,
-      Trigger: Button,
-      Title: () => <>First chat</>,
-      Archive: Button,
-      Unarchive: Button,
-    },
-  };
-});
 
 const run: ApiWorkflowRun = {
   runId: "run-1",
@@ -91,55 +55,51 @@ function body(name: string) {
 }
 
 describe("Sidebar", () => {
-  it("keeps the three sections in one order and opens only the one asked for", () => {
+  it("keeps the two sections in one order and opens only the one asked for", () => {
     const { container } = render(<Sidebar runs={[run]} initialSection="workflows" />);
 
     const headers = [...container.querySelectorAll("[aria-expanded]")];
     expect(headers.map((element) => element.textContent)).toEqual([
       "Projects",
       "WorkOrders",
-      "Chats",
     ]);
     expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
-    expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
   });
 
   it("moves the open state to the clicked section and closes the others", async () => {
     const user = userEvent.setup();
     render(<Sidebar runs={[run]} initialSection="workflows" />);
 
-    await user.click(header("Chats"));
-
-    expect(header("Chats")).toHaveAttribute("aria-expanded", "true");
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
-
     await user.click(header("Projects"));
 
     expect(header("Projects")).toHaveAttribute("aria-expanded", "true");
-    expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
     expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(header("WorkOrders"));
+
+    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
   });
 
   /** Which section a conversation belongs to is only known once the projects
    *  load, so the rail follows a late answer -- but never over the reader. */
   it("follows a late section until the reader opens one themselves", async () => {
     const user = userEvent.setup();
-    const { rerender } = render(<Sidebar runs={[run]} initialSection="chats" />);
+    const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
 
     rerender(<Sidebar runs={[run]} initialSection="projects" />);
     expect(header("Projects")).toHaveAttribute("aria-expanded", "true");
 
-    await user.click(header("Chats"));
+    await user.click(header("WorkOrders"));
     rerender(<Sidebar runs={[run]} initialSection="workflows" />);
 
-    expect(header("Chats")).toHaveAttribute("aria-expanded", "true");
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
   });
 
   /** The header is the whole control, so the way back out of a section is the
-   *  way in: the rail can sit with all three headers stacked and nothing open.
+   *  way in: the rail can sit with both headers stacked and nothing open.
    *  Closing is the reader's choice like any other, so a late answer about
    *  where the page belongs does not fold the rail back open. */
   it("closes the open section when its own header is clicked again", async () => {
@@ -151,7 +111,6 @@ describe("Sidebar", () => {
     expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
     expect(body("WorkOrders")).toHaveAttribute("inert");
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
-    expect(header("Chats")).toHaveAttribute("aria-expanded", "false");
 
     rerender(<Sidebar runs={[run]} initialSection="projects" />);
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
@@ -164,7 +123,7 @@ describe("Sidebar", () => {
 
   it("keeps a closed section mounted but out of reach", async () => {
     const user = userEvent.setup();
-    render(<Sidebar runs={[run]} initialSection="chats" />);
+    render(<Sidebar runs={[run]} initialSection="projects" />);
 
     expect(body("WorkOrders")).toHaveAttribute("inert");
     expect(within(body("WorkOrders")).getByRole("link", { name: "+ New WorkOrder" })).toBeVisible();
@@ -172,7 +131,7 @@ describe("Sidebar", () => {
     await user.click(header("WorkOrders"));
 
     expect(body("WorkOrders")).not.toHaveAttribute("inert");
-    expect(body("Chats")).toHaveAttribute("inert");
+    expect(body("Projects")).toHaveAttribute("inert");
   });
 
   it("puts each section's new button under its own header", () => {
@@ -182,20 +141,10 @@ describe("Sidebar", () => {
       "href",
       "/runs/new",
     );
-    expect(within(body("Chats")).getByRole("button", { name: "+ New chat" })).toBeInTheDocument();
     expect(within(body("Projects")).getByRole("link", { name: "+ New project" })).toHaveAttribute(
       "href",
       "/plan",
     );
-  });
-
-  it("keeps projects and WorkOrders available while chats restore", () => {
-    render(<Sidebar runs={[run]} initialSection="workflows" chatsReady={false} />);
-
-    expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
-    expect(within(body("Projects")).getByRole("link", { name: "+ New project" })).toBeVisible();
-    expect(within(body("Chats")).getByText("Restoring chats…")).toBeInTheDocument();
-    expect(within(body("Chats")).queryByRole("button", { name: "+ New chat" })).toBeNull();
   });
 
   it("matches the new workflow button and lists projects by generated name", () => {
@@ -516,23 +465,4 @@ describe("Sidebar", () => {
     expect(entry).toHaveTextContent("Implementation conversation ❔");
   });
 
-  /** Switching the open conversation in place only means something beside a
-   *  chat of its own; from anywhere else a chat is a link to its own page. */
-  it("links chats away from a page that is not a standalone chat", () => {
-    const { rerender } = render(<Sidebar runs={[]} initialSection="chats" linkChats />);
-
-    expect(within(body("Chats")).getByRole("link", { name: "+ New chat" })).toHaveAttribute(
-      "href",
-      "/conversations",
-    );
-    expect(within(body("Chats")).getByRole("link", { name: /First chat/ })).toHaveAttribute(
-      "href",
-      "/conversations/thread-1",
-    );
-
-    rerender(<Sidebar runs={[]} initialSection="chats" />);
-
-    expect(within(body("Chats")).getByRole("button", { name: "+ New chat" })).toBeInTheDocument();
-    expect(within(body("Chats")).getByRole("button", { name: /First chat/ })).toBeInTheDocument();
-  });
 });

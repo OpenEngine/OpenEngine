@@ -71,9 +71,7 @@ for (const runner of ["codex", "claude"]) {
       ],
     });
 
-    await page.goto("/conversations");
-    await page.getByRole("button", { name: "Projects" }).click();
-    await page.getByRole("link", { name: "+ New project" }).click();
+    await page.goto("/plan");
     await page.getByLabel("Runner").selectOption(runner);
     await page.getByLabel("Message the agent").fill("Add the foundation milestone.");
     await page.getByRole("button", { name: "Send" }).click();
@@ -89,12 +87,10 @@ test("a new project opens a planning conversation and appears in the rail", asyn
 }, testInfo) => {
   engine.script(SCRIPT);
 
-  await page.goto("/conversations");
-  await page.getByRole("button", { name: "Projects" }).click();
-  await page.getByRole("link", { name: "+ New project" }).click();
+  await page.goto("/plan");
 
-  // The new conversation page, on the agent that plans rather than the one
-  // that codes -- which is the whole of what the button settles.
+  // The new conversation page uses the agent that plans rather than the one
+  // that codes.
   await expect(page).toHaveURL(/\/plan$/);
   await expect(
     page.getByRole("heading", { name: "Define a new project with milestones" }),
@@ -292,22 +288,6 @@ test("a project is archived into its own list and restored from it", async ({
   // Written down rather than only redrawn, so a reload finds it back as well.
   await page.reload();
   await expect(rail.getByRole("link", { name: PROJECT_NAME })).toBeVisible();
-});
-
-test("a new chat started from the plan page is not another plan", async ({
-  page,
-  engine,
-}) => {
-  engine.script(SCRIPT);
-
-  await page.goto("/plan");
-  await page.getByRole("button", { name: "Chats" }).click();
-  await page.getByRole("link", { name: "+ New chat" }).click();
-
-  // The plan page's defaults are a plan's, so the control that starts an
-  // ordinary chat has to leave rather than reuse them where it stands.
-  await expect(page).toHaveURL(/\/conversations$/);
-  await expect(page.getByRole("combobox", { name: /^Agent/ })).toHaveValue("coder");
 });
 
 test("new project intent survives closing while its title is pending", async ({

@@ -11,7 +11,7 @@ import {
 
 const SEEDED_RUN = "Seeded navigation coverage";
 const SEEDED_CHAT = "Seeded SQLite conversation";
-const FRESH_CHAT_REPLY = "Fresh chat started without disturbing seeded history.";
+const SEEDED_CHAT_URL = "/conversations/agi-seeded-chat";
 
 function step(page: Page, name: string) {
   return page
@@ -82,33 +82,11 @@ async function verifyPersistedNavigation({
   await shot(page, testInfo, "4 seeded review history");
 
   // Workflow transcripts and ordinary chats share SQLite but have different
-  // routes. Cross that boundary through the rail and verify both turns of the
+  // routes. Cross that boundary directly and verify both turns of the
   // pre-existing standalone conversation survived the cold start.
-  await page.getByRole("button", { name: "Chats", exact: true }).click();
-  await page.getByRole("link", { name: new RegExp(SEEDED_CHAT) }).click();
+  await page.goto(SEEDED_CHAT_URL);
   await expectSeededChatHistory(page);
   await shot(page, testInfo, "5 seeded standalone chat history");
-
-  // Existing rows must not make the create path behave like a restore path.
-  engine.script({
-    title: "Fresh chat beside history",
-    scenarios: [
-      {
-        when: "fresh chat",
-        steps: [{ type: "say", text: FRESH_CHAT_REPLY }],
-      },
-    ],
-  });
-  await page.getByRole("button", { name: "+ New chat", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "New conversation" })).toBeVisible();
-  await page.getByLabel("Message the agent").fill("Start a fresh chat beside history.");
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText(FRESH_CHAT_REPLY)).toBeVisible();
-  const { threads } = await (await page.request.get("/api/threads")).json();
-  expect(
-    threads.some((thread: { title: string }) => thread.title === "Fresh chat beside history"),
-  ).toBe(true);
-  await shot(page, testInfo, "6 fresh chat beside seeded history");
 
   const pullRequest = "https://github.com/acme/engine/pull/42";
   const workflowScript: Script = {
@@ -169,7 +147,7 @@ async function verifyPersistedNavigation({
   await expect(step(page, "Implementation")).toContainText(
     "Started from the populated SQLite database.",
   );
-  await shot(page, testInfo, "7 fresh workflow beside seeded history");
+  await shot(page, testInfo, "6 fresh workflow beside seeded history");
 
   // Creating new records did not replace the old ones: the original run is
   // still reachable from the list after both new execution paths completed.
@@ -179,18 +157,17 @@ async function verifyPersistedNavigation({
   ).toBeVisible();
 
   // The older chat and every message remain reachable after both new records
-  // have been persisted, not merely before the create paths run.
-  await page.getByRole("button", { name: "Chats", exact: true }).click();
-  await page.getByRole("link", { name: new RegExp(SEEDED_CHAT) }).click();
+  // have been persisted, not merely before the new workflow was created.
+  await page.goto(SEEDED_CHAT_URL);
   await expectSeededChatHistory(page);
-  await shot(page, testInfo, "8 seeded chat history after new records");
+  await shot(page, testInfo, "7 seeded chat history after new records");
 }
 
 for (const database of ["current", "v0.0.0"] satisfies SeededDatabase[]) {
   test.describe(`${database} SQLite database`, () => {
     test.use({ seededDatabase: database });
     test(
-      "history stays navigable while new chats and workflows start",
+      "history stays navigable while new workflows start",
       verifyPersistedNavigation,
     );
   });

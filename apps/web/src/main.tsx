@@ -286,12 +286,11 @@ function currentRoute(): Route {
 }
 
 /** Which section of the rail the page on screen came from, so the rail opens
- *  showing where you are. A workflow's own conversation belongs to its run, and
- *  a plan belongs to the project it was named after -- which is what
- *  `projectPage` settles, since a plan's URL is an ordinary chat's. */
-function sectionFor(route: Route, projectPage: boolean): RailSection {
+ *  showing where you are. A workflow's own conversation belongs to its run;
+ *  other conversations open alongside projects. */
+function sectionFor(route: Route): RailSection {
   if (route.kind === "chat")
-    return route.runId ? "workflows" : route.plan || projectPage ? "projects" : "chats";
+    return route.runId ? "workflows" : "projects";
   return route.kind === "project" || route.kind === "milestone" ? "projects" : "workflows";
 }
 
@@ -346,8 +345,8 @@ function useProjects() {
 
 /** One shell for every screen: the rail, and the page beside it.
  *
- *  The rail lists chats wherever it is drawn, so the chat runtime is mounted
- *  around the workflow pages too -- reading the list is all they ask of it. */
+ *  The chat runtime is mounted around every page so conversation routes can
+ *  render their thread while workflow pages keep their own run UI. */
 function App() {
   const route = useMemo(currentRoute, []);
   const [config, setConfig] = useState<EngineConfig | null>(null);
@@ -378,12 +377,6 @@ function App() {
     return <main className="state">Starting openengine…</main>;
 
   const chat = route.kind === "chat";
-  // Switching the open conversation in place is for the rail beside a chat of
-  // its own. A workflow step's transcript is reached through its run, so
-  // leaving one is a move to another page rather than a swap under the URL.
-  // The plan page is the other exception: its defaults are a plan's, so "+ New
-  // chat" there has to leave rather than quietly start a second planner.
-  const standaloneChat = chat && !route.runId && !plan;
   const activeRunId = route.kind === "run" || route.kind === "chat" ? route.runId : undefined;
   // The conversation on screen, and the only thing that says whether it is a
   // project's: a plan's URL is an ordinary chat's, so the projects list is what
@@ -391,13 +384,11 @@ function App() {
   const conversationUrl = chat ? window.location.pathname.replace(/\/$/, "") : undefined;
   const activeProject = projects.find((project) => project.conversationUrl === conversationUrl);
   const projectPage = activeProject !== undefined;
-  const sidebar = (chatsReady: boolean) => (
+  const sidebar = () => (
     <Sidebar
       projects={projects}
       runs={runs}
-      initialSection={sectionFor(route, projectPage)}
-      linkChats={!standaloneChat}
-      chatsReady={chatsReady}
+      initialSection={sectionFor(route)}
       activeRunId={activeRunId}
       activeConversationUrl={conversationUrl}
       activeProjectId={
@@ -422,7 +413,7 @@ function App() {
       deferMount={chat}
       fallback={
         <div className="app-shell">
-          {sidebar(false)}
+          {sidebar()}
           <main className="loading">Restoring chat…</main>
         </div>
       }
@@ -431,7 +422,7 @@ function App() {
         {plan && <PlanPermalink />}
         {/* Every conversation page, not just a workflow's, marks its owning
             project or WorkOrder in the rail. */}
-        {sidebar(true)}
+        {sidebar()}
         {route.kind === "runs" ? (
           <RunsPage runs={runs} error={runsError} />
         ) : route.kind === "new-run" ? (
