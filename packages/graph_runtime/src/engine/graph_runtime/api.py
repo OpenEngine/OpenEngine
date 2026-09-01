@@ -2,8 +2,8 @@
 
 Six things a client can do, and they are the whole reason this package exists:
 start a run, read its current state, describe the graph it is running, subscribe
-to what it raises, steer a node that is already running, and move control to
-another node by hand.
+to what it raises, steer an execution that is already running, and send a run
+back to an earlier position.
 
 The shape follows `engine.apps.web.api` deliberately -- JSON under `/api`,
 snapshots rather than deltas, server-sent events for the feed, and refusals that
@@ -13,12 +13,19 @@ invented its own conventions would make the two impossible to read together.
 
 Events are server-sent with an `id`, so a browser reconnecting sends
 `Last-Event-ID` and is replayed from there without being told to poll.
+
+`POST /api/runs/{run}/transitions` is where this file does real work rather than
+translating. A person says "send it back to implementation"; the runtime's
+primitive is `resume_from(checkpoint)`. Resolving the first into the second is a
+policy decision, and it lives here -- in the layer that exists to serve a UI --
+rather than in the contract, so that the ambiguity a node selector has in a
+graph with a loop is answered in one readable place. See `_position_for_node`.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 
 from engine.domain import ApprovalDecision, ApprovalId, RunId
@@ -27,19 +34,23 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from engine.langgraph_runtime.control import (
+from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
+from engine.graph_runtime.control import (
+    AmbiguousExecutionError,
     ApprovalNotPendingError,
     GraphRuntime,
+    NoSuchPositionError,
     PendingApproval,
     RunNotSteerableError,
     RunSnapshot,
     UnknownApprovalError,
+    UnknownCheckpointError,
     UnknownGraphError,
     UnknownNodeError,
     UnknownRunError,
 )
-from engine.langgraph_runtime.events import EventLog, RuntimeEvent
-from engine.langgraph_runtime.topology import GraphId, GraphTopology, NodeId
+from engine.graph_runtime.events import EventLog, RuntimeEvent
+from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
 
 #: What each refusal means over HTTP. A missing thing is a 404, a malformed
 #: request is a 400, and a request that was well formed but arrived at the wrong
@@ -48,9 +59,12 @@ _STATUS: tuple[tuple[type[Exception], int], ...] = (
     (UnknownGraphError, 404),
     (UnknownRunError, 404),
     (UnknownApprovalError, 404),
+    (UnknownCheckpointError, 404),
     (UnknownNodeError, 400),
+    (NoSuchPositionError, 409),
     (ApprovalNotPendingError, 409),
     (RunNotSteerableError, 409),
+    (AmbiguousExecutionError, 409),
 )
 
 
@@ -92,6 +106,20 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _error("run not found", 404)
         return JSONResponse(_snapshot_json(run))
 
+    async def get_checkpoints(request: Request) -> JSONResponse:
+        """Every position this run has been at, including abandoned attempts.
+
+        What makes a node selector optional: a client that wants the *first*
+        implementation rather than the latest reads this and names the id.
+        """
+        try:
+            history = await runtime.history(_run_id(request))
+        except Exception as error:
+            return _refusal(error)
+        return JSONResponse(
+            {"checkpoints": [_checkpoint_json(point) for point in history]}
+        )
+
     async def run_events(request: Request) -> Response:
         run_id = _run_id(request)
         if await runtime.snapshot(run_id) is None:
@@ -110,22 +138,35 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         body = await _json_body(request)
         try:
             message = _required_string(body, "message")
+            node = _optional_string(body, "node")
         except ValueError as error:
             return _error(str(error), 400)
         try:
-            run = await runtime.steer(_run_id(request), message)
+            run = await runtime.steer(
+                _run_id(request), message, NodeId(node) if node else None
+            )
         except Exception as error:
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
     async def transition_run(request: Request) -> JSONResponse:
+        """Send a run back, by checkpoint or by the node a person names."""
+        run_id = _run_id(request)
         body = await _json_body(request)
         try:
-            node_id = NodeId(_required_string(body, "node"))
+            node = _optional_string(body, "node")
+            named = _optional_string(body, "checkpoint")
         except ValueError as error:
             return _error(str(error), 400)
+        if bool(node) == bool(named):
+            return _error("give exactly one of node or checkpoint", 400)
         try:
-            run = await runtime.transition(_run_id(request), node_id)
+            checkpoint = (
+                CheckpointId(named)
+                if named
+                else await _position_for_node(runtime, run_id, NodeId(node))
+            )
+            run = await runtime.resume_from(run_id, checkpoint)
         except Exception as error:
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
@@ -163,6 +204,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             Route("/api/graphs/{graph_id}", describe_graph),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", get_run),
+            Route("/api/runs/{run_id}/checkpoints", get_checkpoints),
             Route("/api/runs/{run_id}/events", run_events),
             Route("/api/runs/{run_id}/steering", steer_run, methods=["POST"]),
             Route("/api/runs/{run_id}/transitions", transition_run, methods=["POST"]),
@@ -171,11 +213,37 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
                 decide_approval,
                 methods=["POST"],
             ),
-        ]
+        ],
     )
     app.state.runtime = runtime
     app.state.event_log = log
     return app
+
+
+async def _position_for_node(
+    runtime: GraphRuntime, run_id: RunId, node_id: NodeId
+) -> CheckpointId:
+    """The checkpoint "send it back to `node_id`" means.
+
+    The most recent one that was about to run it. A graph with a loop has been
+    about to run `implementation` more than once, and there is no reading of the
+    words that picks between them -- so the selector takes the latest, which is
+    the attempt the person is looking at, and a client that wants an earlier one
+    reads `/checkpoints` and names its id instead.
+
+    Deliberately not `runtime`'s decision. This is what a sentence in a UI means,
+    and a binding should not have to agree with it to be correct.
+    """
+    for checkpoint in reversed(await runtime.history(run_id)):
+        if node_id in checkpoint.next_nodes:
+            return checkpoint.checkpoint_id
+    run = await runtime.snapshot(run_id)
+    if run is None:
+        raise UnknownRunError(f"unknown run: {run_id}")
+    graph = runtime.topology(run.graph_id)
+    if graph is None or graph.node(node_id) is None:
+        raise UnknownNodeError(f"unknown node: {node_id}")
+    raise NoSuchPositionError(f"this run has never been about to run {node_id}")
 
 
 async def _event_stream(
@@ -242,14 +310,29 @@ def _snapshot_json(run: RunSnapshot) -> dict[str, object]:
         "runId": str(run.run_id),
         "graphId": str(run.graph_id),
         "status": run.status.value,
-        "currentNode": str(run.current_node) if run.current_node else None,
-        "visited": [str(node_id) for node_id in run.visited],
+        "activeNodes": _nodes_json(run.active_nodes),
+        "nextNodes": _nodes_json(run.next_nodes),
+        "checkpointId": str(run.checkpoint_id) if run.checkpoint_id else None,
         "values": dict(run.values),
         "pendingApprovals": [
             _approval_json(approval) for approval in run.pending_approvals
         ],
         "error": run.error,
     }
+
+
+def _checkpoint_json(checkpoint: Checkpoint) -> dict[str, object]:
+    return {
+        "checkpointId": str(checkpoint.checkpoint_id),
+        "parentId": str(checkpoint.parent_id) if checkpoint.parent_id else None,
+        "nextNodes": _nodes_json(checkpoint.next_nodes),
+        "values": dict(checkpoint.values),
+        "source": checkpoint.source,
+    }
+
+
+def _nodes_json(nodes: Sequence[NodeId]) -> list[str]:
+    return [str(node_id) for node_id in nodes]
 
 
 def _approval_json(approval: PendingApproval) -> dict[str, object]:
@@ -260,9 +343,7 @@ def _approval_json(approval: PendingApproval) -> dict[str, object]:
         "reason": approval.reason,
         "command": approval.command,
         "toolName": approval.tool_name,
-        "allowedDecisions": [
-            decision.value for decision in approval.allowed_decisions
-        ],
+        "allowedDecisions": [decision.value for decision in approval.allowed_decisions],
     }
 
 
@@ -310,6 +391,13 @@ def _required_string(body: Mapping[str, object], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+def _optional_string(body: Mapping[str, object], name: str) -> str:
+    """The field, or "" when it is absent. A blank one is a client's mistake."""
+    if body.get(name) is None:
+        return ""
+    return _required_string(body, name)
 
 
 def _optional_object(body: Mapping[str, object], name: str) -> Mapping[str, object]:

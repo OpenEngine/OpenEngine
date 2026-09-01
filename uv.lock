@@ -16,7 +16,7 @@ members = [
     "engine-control-server",
     "engine-core",
     "engine-domain",
-    "engine-langgraph-runtime",
+    "engine-graph-runtime",
     "engine-migrations",
     "engine-ports",
     "engine-runtime",
@@ -357,9 +357,9 @@ version = "0.0.0"
 source = { editable = "packages/domain" }
 
 [[package]]
-name = "engine-langgraph-runtime"
+name = "engine-graph-runtime"
 version = "0.0.0"
-source = { editable = "packages/langgraph_runtime" }
+source = { editable = "packages/graph_runtime" }
 dependencies = [
     { name = "engine-domain" },
     { name = "starlette" },

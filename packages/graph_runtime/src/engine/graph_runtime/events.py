@@ -6,9 +6,12 @@ events" is a replay from a cursor followed by a live tail rather than a live
 tail alone: a browser that reconnects asks for what it has not seen instead of
 losing the approval request it was about to show.
 
-The log is the control surface's, not the graph's. A LangGraph binding publishes
-into it through one callback and never has to think about who is listening, how
-many of them there are, or which of them fell over.
+The log is the control surface's, not the graph's. A binding publishes into it
+through one callback and never has to think about who is listening, how many of
+them there are, or which of them fell over. That includes the events a node's
+own execution raises -- an ACP session's tool calls, transcript and permission
+requests are translated into this vocabulary by the node that owns the session,
+so a client watching a run does not need to know one is involved.
 
 It is process-local and unbounded, which is a decision and not an oversight, but
 only for as long as the graph behind it is. `apps/web`'s `ApprovalFeed` is the
@@ -29,7 +32,7 @@ from enum import Enum
 
 from engine.domain import RunId
 
-from engine.langgraph_runtime.topology import NodeId
+from engine.graph_runtime.topology import NodeId
 
 
 class EventKind(Enum):
@@ -40,6 +43,12 @@ class EventKind(Enum):
     """
 
     RUN_STARTED = "run.started"
+    CHECKPOINT = "checkpoint"
+    """A superstep boundary was saved: `checkpointId`, `parentId`, `nextNodes`.
+
+    How a subscriber follows a run's position without polling, and how it learns
+    the ids a resume can name.
+    """
     NODE_STARTED = "node.started"
     NODE_FINISHED = "node.finished"
     TRANSCRIPT = "transcript"
@@ -51,10 +60,14 @@ class EventKind(Enum):
     APPROVAL_REQUESTED = "approval.requested"
     APPROVAL_RESOLVED = "approval.resolved"
     STEERING_RECEIVED = "steering.received"
-    """A message was delivered to the node currently running."""
-    TRANSITION = "transition"
-    """Control was moved by hand rather than by the graph: `from` and `to`."""
-    STATE_UPDATED = "state.updated"
+    """A message was routed to an execution that was already running."""
+    RUN_FORKED = "run.forked"
+    """A resume was asked for: `from`, `checkpointId`, `nodes`.
+
+    Named for what it does. Nothing is rewritten or removed -- the checkpoint it
+    came from keeps its other children, so the attempt being replaced stays
+    readable beside the one replacing it.
+    """
     RUN_FINISHED = "run.finished"
     RUN_FAILED = "run.failed"
 
@@ -113,7 +126,7 @@ class EventLog:
         """Replay from `cursor`, then follow the run for as long as anyone reads.
 
         Never ends on its own, not even once the run has finished: a finished
-        run can be sent back to an earlier node by hand, and a subscription that
+        run can be resumed from an earlier checkpoint, and a subscription that
         closed itself on `run.finished` would miss the run starting again.
         Subscribers stop by stopping.
 

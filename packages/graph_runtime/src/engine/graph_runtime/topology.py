@@ -7,8 +7,9 @@ shape is answerable by a compiled LangGraph, by a definition read off disk, and
 by the scripted stand-in the tests drive, which is what lets the HTTP surface be
 built and checked before any of them exists.
 
-A manual transition names a node from here, so this is also the vocabulary the
-control surface validates "revert to implementation" against.
+Nothing here says a node has one successor. A reviewer pool is several edges out
+of one node, and the runtime executes them together as one superstep; see
+`engine.graph_runtime.checkpoints`.
 """
 
 from __future__ import annotations
@@ -45,7 +46,8 @@ class GraphEdge:
 
     `condition` is the branch's name when the edge is conditional, and empty
     when it is not. Which branch a run will actually take is not knowable from
-    the topology, so it is not claimed here.
+    the topology, so it is not claimed here -- and neither is whether the edges
+    out of a node are alternatives or a fan-out. Both are the run's business.
     """
 
     source: NodeId
