@@ -29,7 +29,7 @@ jobs:
     steps:
       # Hosted runners start empty, so checkout is the fresh clone a new user
       # would begin with. Deliberately do not restore dependency caches here.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -83,7 +83,7 @@ jobs:
     name: web client
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -112,7 +112,7 @@ jobs:
     name: browser end to end
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -171,7 +171,7 @@ jobs:
     name: dependency boundaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -248,7 +248,7 @@ jobs:
       # matrix legs would quietly test the same thing.
       UV_PYTHON: ${{ matrix.python-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
