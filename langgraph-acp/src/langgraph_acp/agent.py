@@ -167,9 +167,10 @@ def default_registry() -> ACPAgentRegistry:
     """
     global _DEFAULT
     if _DEFAULT is None:
+        from langgraph_acp.providers.claude import ClaudeACPProvider
         from langgraph_acp.providers.codex import CodexACPProvider
 
-        _DEFAULT = ACPAgentRegistry([CodexACPProvider()])
+        _DEFAULT = ACPAgentRegistry([CodexACPProvider(), ClaudeACPProvider()])
     return _DEFAULT
 
 

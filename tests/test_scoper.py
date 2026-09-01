@@ -1,11 +1,13 @@
 """Contract tests for the work-order scoper boundary."""
 
-import inspect
 import asyncio
+import inspect
 import json
+import sys
+from pathlib import Path
 
 import pytest
-from langgraph_acp import ACPResult
+from langgraph_acp import ACPAgentRegistry, StdioACPProvider
 
 from engine.domain import (
     MilestoneId,
@@ -54,7 +56,9 @@ def test_scoping_plan_can_describe_all_supported_changes() -> None:
 
 
 @pytest.mark.parametrize("agent", ["codex", "claude"])
-def test_scope_returns_new_scope_from_mocked_agent(agent: str) -> None:
+def test_scope_returns_new_scope_from_mocked_agent(
+    agent: str, tmp_path: Path
+) -> None:
     milestone = MilestoneScope(
         MilestoneId("milestone-authentication"),
         requirements=("Implement login", "Validate browser behavior"),
@@ -82,26 +86,29 @@ def test_scope_returns_new_scope_from_mocked_agent(agent: str) -> None:
         WorkOrderStatus.IN_PROGRESS,
     )
 
-    class MockCLI:
-        async def __call__(self, prompt: str) -> ACPResult:
-            inputs = json.loads(prompt.split("Inputs:\n", 1)[1])
-            assert inputs["workorders"][0]["status"] == "complete"
-            assert inputs["workorders"][1]["status"] == "in_progress"
-            return ACPResult(
-                agent=agent,
-                message=json.dumps({
-                    "create": [{
-                        "milestone_id": "milestone-authentication",
-                        "name": "Security review",
-                        "objective": "Review the completed login implementation.",
-                        "evidence_requirements": ["Security review"],
-                        "dependencies": ["workorder-login"],
-                    }],
-                    "cancel": [],
-                    "supersede": [],
-                    "reasons": ["Implementation is complete and browser validation is underway."],
-                }),
-            )
+    response = json.dumps({
+        "create": [{
+            "milestone_id": "milestone-authentication",
+            "name": "Security review",
+            "objective": "Review the completed login implementation.",
+            "evidence_requirements": ["Security review"],
+            "dependencies": ["workorder-login"],
+        }],
+        "cancel": [],
+        "supersede": [],
+        "reasons": [
+            "Implementation is complete and browser validation is underway."
+        ],
+    })
+    log = tmp_path / f"{agent}-acp.jsonl"
+    fake_agent = Path(__file__).parent.parent / "langgraph-acp/tests/fake_agent.py"
+    registry = ACPAgentRegistry([
+        StdioACPProvider(
+            name=agent,
+            command=(sys.executable, str(fake_agent)),
+            env={"FAKE_AGENT_LOG": str(log), "FAKE_AGENT_RESPONSE": response},
+        )
+    ])
 
     assert tuple(inspect.signature(scope).parameters) == (
         "workorders",
@@ -109,12 +116,22 @@ def test_scope_returns_new_scope_from_mocked_agent(agent: str) -> None:
         "policy",
     )
     plan = asyncio.run(
-        Scoper(agent=agent, node=MockCLI()).scope(
+        Scoper(agent=agent, registry=registry).scope(
             workorders=(completed_implementation, in_progress_validation),
             milestones=(milestone,),
             policy=ScopingPolicy(rules=("Prefer independently reviewable work",)),
         )
     )
+
+    messages = [json.loads(line) for line in log.read_text().splitlines()]
+    prompt = next(
+        message["params"]["prompt"][0]["text"]
+        for message in messages
+        if message.get("method") == "session/prompt"
+    )
+    inputs = json.loads(prompt.split("Inputs:\n", 1)[1])
+    assert inputs["workorders"][0]["status"] == "complete"
+    assert inputs["workorders"][1]["status"] == "in_progress"
 
     assert plan == ScopingPlan(
         create=(WorkOrderSpec(

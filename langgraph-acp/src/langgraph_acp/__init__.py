@@ -59,6 +59,7 @@ from langgraph_acp.errors import (
 )
 from langgraph_acp.events import EVENT_NAMESPACE, ACPEvent, ACPEventType
 from langgraph_acp.node import ACPNode
+from langgraph_acp.providers.claude import CLAUDE_ACP_COMMAND, ClaudeACPProvider
 from langgraph_acp.providers.codex import CODEX_ACP_COMMAND, CodexACPProvider
 from langgraph_acp.result import ACPResult, ACPUsage
 from langgraph_acp.session import (
@@ -93,7 +94,9 @@ __all__ = [
     "ACPSessionStrategy",
     "ACPUsage",
     "ACPWorkspace",
+    "CLAUDE_ACP_COMMAND",
     "CODEX_ACP_COMMAND",
+    "ClaudeACPProvider",
     "CodexACPProvider",
     "EVENT_NAMESPACE",
     "InMemoryACPSessionStore",
