@@ -1209,7 +1209,7 @@ def create_app(
 
     async def list_runs(_request: Request) -> JSONResponse:
         return JSONResponse(
-            {"runs": [_run_json(run) for run in await run_reader.list()]}
+            {"runs": [_run_json(run, listing=True) for run in await run_reader.list()]}
         )
 
     async def open_conversations() -> set[AgentInstanceId]:
@@ -2093,7 +2093,42 @@ def _workflow_step_editable(
     return isinstance(step, AgentStep) and step.editable
 
 
-def _run_json(run: WorkflowRunView) -> dict[str, object]:
+def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, object]:
+    """One WorkOrder, as a client is shown it.
+
+    A listing leaves out the prose an agent wrote: step summaries and outputs,
+    the task prompt, a failure's reason, and the review and decision bodies.
+    Every screen polls `/api/runs` once a second to keep the rail current, so
+    what that list carries is what every screen pays for, on a payload that
+    grows with the transcript of every run ever started. The pages that draw
+    the prose read the one run they are about from `/api/runs/{run_id}`.
+    """
+    steps: list[dict[str, object]] = [
+        {
+            "stepId": str(step.step_id),
+            "name": step.name,
+            "kind": step.kind,
+            "status": step.status,
+            "outcome": step.outcome,
+            "changesRequested": step.changes_requested,
+            "agentId": str(step.agent_id) if step.agent_id else None,
+            "agentInstanceId": (
+                str(step.agent_instance_id) if step.agent_instance_id else None
+            ),
+            "agentRunId": str(step.agent_run_id) if step.agent_run_id else None,
+            "mcpRequestId": step.mcp_request_id,
+            "conversationId": (
+                str(step.conversation_id) if step.conversation_id else None
+            ),
+            "conversationUrl": (
+                f"/runs/{run.run_id}/conversations/{step.agent_instance_id}"
+                if step.agent_instance_id
+                else None
+            ),
+            "waiting": step.waiting,
+        }
+        for step in run.steps
+    ]
     result: dict[str, object] = {
         "runId": str(run.run_id),
         "name": run.name,
@@ -2103,45 +2138,22 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
         "taskId": run.task_id,
         "workstreamId": str(run.workstream_id) if run.workstream_id else None,
         "milestoneId": str(run.milestone_id) if run.milestone_id else None,
-        "taskPrompt": run.task_prompt,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},
         "phase": run.phase,
         "currentStepId": str(run.current_step_id) if run.current_step_id else None,
         "terminalOutcome": run.terminal_outcome,
-        "failureReason": run.failure_reason,
-        "steps": [
-            {
-                "stepId": str(step.step_id),
-                "name": step.name,
-                "kind": step.kind,
-                "status": step.status,
-                "outcome": step.outcome,
-                "summary": step.summary,
-                "outputs": [
-                    {"name": output.name, "value": output.value}
-                    for output in step.outputs
-                ],
-                "changesRequested": step.changes_requested,
-                "agentId": str(step.agent_id) if step.agent_id else None,
-                "agentInstanceId": (
-                    str(step.agent_instance_id) if step.agent_instance_id else None
-                ),
-                "agentRunId": str(step.agent_run_id) if step.agent_run_id else None,
-                "mcpRequestId": step.mcp_request_id,
-                "conversationId": (
-                    str(step.conversation_id) if step.conversation_id else None
-                ),
-                "conversationUrl": (
-                    f"/runs/{run.run_id}/conversations/{step.agent_instance_id}"
-                    if step.agent_instance_id
-                    else None
-                ),
-                "waiting": step.waiting,
-            }
-            for step in run.steps
-        ],
+        "steps": steps,
     }
+    if listing:
+        return result
+    result["taskPrompt"] = run.task_prompt
+    result["failureReason"] = run.failure_reason
+    for step, step_json in zip(run.steps, steps):
+        step_json["summary"] = step.summary
+        step_json["outputs"] = [
+            {"name": output.name, "value": output.value} for output in step.outputs
+        ]
     if run.pending_human_review is not None:
         result["pendingHumanReview"] = {
             "stepId": str(run.pending_human_review.step_id),

@@ -10,7 +10,7 @@ import { useMemo, useState } from "react";
 import {
   milestoneNewTaskUrl,
   projectMilestonesUrl,
-  type ApiWorkflowRun,
+  type ApiWorkflowRunListing,
   type ApiWorkstream,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
@@ -22,8 +22,10 @@ import { phaseAccent, runFinished, runStatusLabel } from "./runs";
  *  Grouped from the run list the shell already polls rather than read per
  *  workstream: a run carries the workstream it was started in, so this page
  *  costs the plan it is already following and nothing more. */
-function tasksByWorkstream(runs: ApiWorkflowRun[]): Map<string, ApiWorkflowRun[]> {
-  const grouped = new Map<string, ApiWorkflowRun[]>();
+function tasksByWorkstream(
+  runs: ApiWorkflowRunListing[],
+): Map<string, ApiWorkflowRunListing[]> {
+  const grouped = new Map<string, ApiWorkflowRunListing[]>();
   for (const run of runs) {
     if (!run.workstreamId) continue;
     const current = grouped.get(run.workstreamId);
@@ -37,13 +39,13 @@ function tasksByWorkstream(runs: ApiWorkflowRun[]): Map<string, ApiWorkflowRun[]
  *  includes one parked on a human review. `IN_PROGRESS_PHASES` would drop those
  *  -- it asks whether a run is moving, and a milestone blocked on the operator
  *  reading this page is the last thing to report as nothing left to do. */
-function unfinishedTasks(tasks: ApiWorkflowRun[]) {
+function unfinishedTasks(tasks: ApiWorkflowRunListing[]) {
   return tasks.filter((task) => !runFinished(task)).length;
 }
 
 /** Those blocked on the operator rather than on the engine, counted apart the
  *  way the runs page counts them: it is the one number a reader can act on. */
-function awaitingReview(tasks: ApiWorkflowRun[]) {
+function awaitingReview(tasks: ApiWorkflowRunListing[]) {
   return tasks.filter((task) => task.phase === "awaiting_human_review").length;
 }
 
@@ -52,7 +54,7 @@ function TaskList({
   label,
   workstreamNames,
 }: {
-  tasks: ApiWorkflowRun[];
+  tasks: ApiWorkflowRunListing[];
   label: string;
   workstreamNames: Map<string, string>;
 }) {
@@ -87,7 +89,7 @@ function WorkstreamCard({
   onSelect,
 }: {
   workstream: ApiWorkstream;
-  tasks: ApiWorkflowRun[];
+  tasks: ApiWorkflowRunListing[];
   /** False until a poll of the run list has answered. An empty list is then
    *  the fact that nothing was started here; before it, it is only the state
    *  the shell began with, and saying "nothing yet" would be a claim made from
@@ -147,7 +149,7 @@ export function MilestoneDetailsPage({
    *  has not arrived is not read as a milestone nothing was started under.
    *  Required rather than defaulted: a caller that forgot would leave the page
    *  loading forever, which is exactly the state these are here to end. */
-  runs: ApiWorkflowRun[];
+  runs: ApiWorkflowRunListing[];
   runsError: string;
   runsLoaded: boolean;
 }) {
