@@ -88,7 +88,7 @@ def _layer_for(root: Path) -> str:
         case ("packages", "engine"):
             return ENGINE
         case ("packages", "scoper"):
-            return ENGINE
+            return RUNTIME
         case ("packages", "ports"):
             return PORTS
         case ("packages", "runtime"):

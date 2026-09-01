@@ -101,7 +101,8 @@ def capabilities(options: set[str]) -> dict[str, Any]:
 
 def run_turn(message_id: Any, options: set[str]) -> None:
     """One prompt turn: some updates, maybe a question, then a stop reason."""
-    message_chunks = ("Look", "ing.") if "--split-message" in options else ("Looking.",)
+    response = os.environ.get("FAKE_AGENT_RESPONSE", "Looking.")
+    message_chunks = (response[:4], response[4:]) if "--split-message" in options else (response,)
     for text in message_chunks:
         update(
             {

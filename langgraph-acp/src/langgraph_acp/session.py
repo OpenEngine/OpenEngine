@@ -23,7 +23,7 @@ selects a conversation, and the session an id names once one has been resolved.
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeAlias, runtime_checkable
 
 from langgraph_acp._json import JSONValue
 from langgraph_acp.events import ACPEvent
@@ -32,7 +32,7 @@ from langgraph_acp.events import ACPEvent
 #: Text is the case every agent must support, so it is the case worth spelling
 #: `session.prompt("Review this change")`; anything richer -- images, embedded
 #: file context -- is passed through as the blocks the protocol defines.
-type ACPPrompt = str | Sequence[Mapping[str, JSONValue]]
+ACPPrompt: TypeAlias = str | Sequence[Mapping[str, JSONValue]]
 
 
 class ACPSessionStrategy(StrEnum):
