@@ -57,7 +57,7 @@ jobs:
     name: Validate commit messages
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history + the real PR head (not the synthetic merge commit) so
           # the base..head range below resolves to exactly this PR's commits.
