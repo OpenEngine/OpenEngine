@@ -49,7 +49,12 @@ review_agent = oe.agent(
         "be carried out. The human reviewer decides what happens to this run -- you "
         "do not approve or reject it."
     ),
-    capabilities=["add_comment"],
+    capabilities=[
+        "view_change_request",
+        "list_pipeline_status",
+        "get_job_logs",
+        "add_comment",
+    ],
     description="Inspects an implementation without modifying it.",
 )
 

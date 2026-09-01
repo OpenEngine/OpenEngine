@@ -37,7 +37,18 @@ from engine.ports.permissions import (
     PermissionScope,
     PermissionTranslator,
 )
-from engine.ports.source_control import GitResult, SourceControl
+from engine.ports.source_control import (
+    ChangeRequest,
+    Discussion,
+    GitResult,
+    JobLogs,
+    Pipeline,
+    PipelineRetry,
+    PipelineStatus,
+    SourceControl,
+    StatusCheck,
+    WorkItem,
+)
 from engine.ports.state_store import StateStore
 from engine.ports.workflow_runtime import WorkflowRuntime
 from engine.ports.workspace_provider import Workspace, WorkspaceProvider, WorkspaceState
@@ -51,17 +62,24 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalResponse",
     "ApprovalCapability",
+    "ChangeRequest",
     "Communications",
+    "Discussion",
     "FinishReason",
     "GitResult",
+    "JobLogs",
     "InteractiveAgentRunner",
     "InteractiveMcpAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
     "PermissionScope",
     "PermissionTranslator",
+    "Pipeline",
+    "PipelineRetry",
+    "PipelineStatus",
     "ResponseStyle",
     "SourceControl",
+    "StatusCheck",
     "StateStore",
     "StreamingAgentRunner",
     "StreamingMcpAgentRunner",
@@ -72,6 +90,7 @@ __all__ = [
     "UserInputQuestion",
     "UserInputResponse",
     "Workspace",
+    "WorkItem",
     "WorkflowRuntime",
     "WorkspaceProvider",
     "WorkspaceState",

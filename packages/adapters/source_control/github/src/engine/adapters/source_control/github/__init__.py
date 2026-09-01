@@ -13,14 +13,26 @@ letting callers pass a path is what keeps the engine from ever holding one.
 from __future__ import annotations
 
 import asyncio
+import io
 import os
+import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 import httpx
 
 from engine.domain.ids import WorkspaceId
-from engine.ports.source_control import GitResult
+from engine.ports.source_control import (
+    ChangeRequest,
+    Discussion,
+    GitResult,
+    JobLogs,
+    Pipeline,
+    PipelineRetry,
+    PipelineStatus,
+    StatusCheck,
+    WorkItem,
+)
 from engine.ports.workspace_provider import WorkspaceProvider
 
 #: The branch prefix `GitWorktreeWorkspaceProvider` gives every workspace. It
@@ -80,6 +92,8 @@ _CHECKED_OUT_REFSPECS = frozenset({"HEAD", "@"})
 #: adapter refuses the ambiguous spellings instead of trying to reproduce
 #: git's configuration-dependent refspec resolution.
 _AMBIGUOUS_PUSH_REFSPECS = frozenset({":", "+:"})
+_MAX_LOG_BYTES = 8 * 1024 * 1024
+_MAX_LOG_CHARACTERS = 48_000
 
 
 class GitHubSourceControl:
@@ -164,11 +178,11 @@ class GitHubSourceControl:
         owner, repo = await self._repo_coords(root_path)
         base = _base_branch(base_ref)
 
-        response = await self._api(
+        response = _object(await self._api(
             "POST",
             f"/repos/{owner}/{repo}/pulls",
             json={"title": title, "body": body, "head": branch, "base": base},
-        )
+        ))
         url = response.get("html_url", "")
         if not url:
             raise GitHubSourceControlError("GitHub API returned no pull-request URL")
@@ -225,6 +239,135 @@ class GitHubSourceControl:
             },
         )
 
+    async def view_change_request(
+        self, workspace_id: WorkspaceId, number: int
+    ) -> ChangeRequest:
+        owner, repo = await self._workspace_repo(workspace_id)
+        number = _positive_number(number, "number")
+        pull = _object(await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}"))
+        reviews = await self._paginated_objects(f"/repos/{owner}/{repo}/pulls/{number}/reviews")
+        issue_comments = await self._paginated_objects(
+            f"/repos/{owner}/{repo}/issues/{number}/comments"
+        )
+        inline_comments = await self._paginated_objects(
+            f"/repos/{owner}/{repo}/pulls/{number}/comments"
+        )
+        return ChangeRequest(
+            number=number,
+            title=_string(pull, "title"),
+            state=_string(pull, "state"),
+            body=_string(pull, "body"),
+            author=_nested_string(pull, "user", "login"),
+            url=_string(pull, "html_url"),
+            head_ref=_nested_string(pull, "head", "ref"),
+            head_sha=_nested_string(pull, "head", "sha"),
+            base_ref=_nested_string(pull, "base", "ref"),
+            reviews=tuple(_discussion(review) for review in reviews),
+            comments=tuple(_discussion(comment) for comment in (*issue_comments, *inline_comments)),
+        )
+
+    async def list_work_items(
+        self,
+        workspace_id: WorkspaceId,
+        state: str = "open",
+        labels: Sequence[str] = (),
+        limit: int = 30,
+    ) -> tuple[WorkItem, ...]:
+        owner, repo = await self._workspace_repo(workspace_id)
+        state = _work_item_state(state)
+        limit = _limit(limit)
+        data = await self._paginated_objects(
+            f"/repos/{owner}/{repo}/issues",
+            {"state": state, "labels": ",".join(labels)},
+        )
+        return tuple(
+            _work_item(issue)
+            for issue in data
+            if not isinstance(issue.get("pull_request"), dict)
+        )[:limit]
+
+    async def view_work_item(self, workspace_id: WorkspaceId, number: int) -> WorkItem:
+        owner, repo = await self._workspace_repo(workspace_id)
+        number = _positive_number(number, "number")
+        issue = _object(await self._api("GET", f"/repos/{owner}/{repo}/issues/{number}"))
+        comments = await self._paginated_objects(f"/repos/{owner}/{repo}/issues/{number}/comments")
+        return _work_item(issue, tuple(_discussion(comment) for comment in comments))
+
+    async def list_pipeline_status(
+        self,
+        workspace_id: WorkspaceId,
+        *,
+        ref: str | None = None,
+        change_request_number: int | None = None,
+    ) -> PipelineStatus:
+        owner, repo = await self._workspace_repo(workspace_id)
+        ref = await self._status_ref(owner, repo, ref, change_request_number)
+        checks = await self._paginated_field(f"/repos/{owner}/{repo}/commits/{ref}/check-runs", "check_runs")
+        runs = await self._paginated_field(f"/repos/{owner}/{repo}/actions/runs", "workflow_runs", {"head_sha": ref})
+        return PipelineStatus(
+            ref=ref,
+            checks=tuple(
+                StatusCheck(
+                    name=_string(check, "name"),
+                    status=_string(check, "status"),
+                    conclusion=_optional_string(check, "conclusion"),
+                    details_url=_string(check, "details_url"),
+                )
+                for check in checks
+            ),
+            pipelines=tuple(
+                Pipeline(
+                    pipeline_id=_positive_number(run.get("id"), "workflow run id"),
+                    name=_string(run, "name"),
+                    status=_string(run, "status"),
+                    conclusion=_optional_string(run, "conclusion"),
+                    url=_string(run, "html_url"),
+                )
+                for run in runs
+            ),
+        )
+
+    async def get_job_logs(
+        self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None
+    ) -> JobLogs:
+        owner, repo = await self._workspace_repo(workspace_id)
+        pipeline_id = _positive_number(pipeline_id, "pipeline_id")
+        if job_id is None:
+            jobs = _object(
+                await self._api("GET", f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/jobs")
+            )
+            candidates = _objects(jobs.get("jobs", []))
+            failed = [job for job in candidates if job.get("conclusion") == "failure"]
+            completed = [job for job in candidates if job.get("status") == "completed"]
+            if not (failed or completed):
+                raise GitHubSourceControlError(
+                    "GitHub returned no completed jobs for workflow run"
+                )
+            job_id = _positive_number((failed or completed)[0].get("id"), "job_id")
+        else:
+            job_id = _positive_number(job_id, "job_id")
+        content = await self._download(f"/repos/{owner}/{repo}/actions/jobs/{job_id}/logs")
+        text = _log_text(content)
+        truncated = len(text) > _MAX_LOG_CHARACTERS
+        return JobLogs(
+            pipeline_id=pipeline_id,
+            job_id=job_id,
+            text=text[-_MAX_LOG_CHARACTERS:] if truncated else text,
+            truncated=truncated,
+        )
+
+    async def retry_pipeline(
+        self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None
+    ) -> PipelineRetry:
+        owner, repo = await self._workspace_repo(workspace_id)
+        pipeline_id = _positive_number(pipeline_id, "pipeline_id")
+        if job_id is None:
+            await self._api("POST", f"/repos/{owner}/{repo}/actions/runs/{pipeline_id}/rerun")
+            return PipelineRetry(pipeline_id=pipeline_id)
+        job_id = _positive_number(job_id, "job_id")
+        await self._api("POST", f"/repos/{owner}/{repo}/actions/jobs/{job_id}/rerun")
+        return PipelineRetry(pipeline_id=pipeline_id, job_id=job_id)
+
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
@@ -236,6 +379,25 @@ class GitHubSourceControl:
                 "so it cannot find the checkout to work in"
             )
         return await self._workspace_provider.root_path(workspace_id)
+
+    async def _workspace_repo(self, workspace_id: WorkspaceId) -> tuple[str, str]:
+        return await self._repo_coords(await self._root_path(workspace_id))
+
+    async def _status_ref(
+        self, owner: str, repo: str, ref: str | None, change_request_number: int | None
+    ) -> str:
+        if (ref is None) == (change_request_number is None):
+            raise ValueError("provide exactly one of ref or change_request_number")
+        if ref is not None:
+            if not ref.strip():
+                raise ValueError("ref must not be empty")
+            return ref
+        number = _positive_number(change_request_number, "change_request_number")
+        pull = _object(await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}"))
+        sha = _nested_string(pull, "head", "sha")
+        if not sha:
+            raise GitHubSourceControlError("GitHub API returned an empty pull-request head SHA")
+        return sha
 
     def _refuse_internal_publication(self, arguments: Sequence[str]) -> None:
         """Stop a push before it puts an Engine branch on somebody's remote."""
@@ -305,7 +467,7 @@ class GitHubSourceControl:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
 
-    async def _api(self, method: str, path: str, **kwargs: object) -> dict:
+    async def _api(self, method: str, path: str, **kwargs: object) -> object:
         """Make one GitHub API call and return the parsed JSON body."""
         url = f"{self._api_url}{path}"
         async with httpx.AsyncClient() as client:
@@ -326,6 +488,50 @@ class GitHubSourceControl:
         if response.status_code == 204 or not response.content:
             return {}
         return response.json()
+
+    async def _paginated_objects(self, path: str, params: Mapping[str, object] | None = None) -> tuple[dict, ...]:
+        """Read every GitHub list page rather than silently accepting page one."""
+
+        items: list[dict] = []
+        page = 1
+        while True:
+            current = _objects(
+                await self._api("GET", path, params={"per_page": 100, "page": page, **(params or {})})
+            )
+            items.extend(current)
+            if len(current) < 100:
+                return tuple(items)
+            page += 1
+
+    async def _paginated_field(self, path: str, field: str, params: Mapping[str, object] | None = None) -> tuple[dict, ...]:
+        items: list[dict] = []
+        page = 1
+        while True:
+            data = _object(await self._api("GET", path, params={"per_page": 100, "page": page, **(params or {})}))
+            current = _objects(data.get(field, []))
+            items.extend(current)
+            if len(items) >= data.get("total_count", 0) or len(current) < 100:
+                return tuple(items)
+            page += 1
+
+    async def _download(self, path: str) -> bytes:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            async with client.stream(
+                "GET", f"{self._api_url}{path}", headers=self._http_headers()
+            ) as response:
+                if response.is_error:
+                    detail = (await response.aread()).decode(errors="replace")
+                    raise GitHubSourceControlError(
+                        f"GitHub API GET {path} failed ({response.status_code}): {detail}"
+                    )
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > _MAX_LOG_BYTES:
+                        raise GitHubSourceControlError("GitHub job logs exceed the download limit")
+                    chunks.append(chunk)
+        return b"".join(chunks)
 
     async def _repo_coords(self, root_path: str) -> tuple[str, str]:
         """The `owner/repo` pair from the workspace's `origin` remote URL."""
@@ -512,6 +718,93 @@ def _parse_repo_coords(remote_url: str) -> tuple[str, str]:
             f"cannot determine owner/repo from remote URL: {remote_url!r}"
         )
     return parts[0], parts[1]
+
+
+def _object(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise GitHubSourceControlError("GitHub API returned an unexpected response")
+    return value
+
+
+def _objects(value: object) -> tuple[dict, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise GitHubSourceControlError("GitHub API returned an unexpected list response")
+    return tuple(value)
+
+
+def _string(value: dict, name: str) -> str:
+    item = value.get(name, "")
+    return item if isinstance(item, str) else ""
+
+
+def _optional_string(value: dict, name: str) -> str | None:
+    item = value.get(name)
+    return item if isinstance(item, str) else None
+
+
+def _nested_string(value: dict, outer: str, inner: str) -> str:
+    nested = value.get(outer)
+    return _string(nested, inner) if isinstance(nested, dict) else ""
+
+
+def _discussion(value: dict) -> Discussion:
+    line = value.get("line")
+    return Discussion(
+        author=_nested_string(value, "user", "login"),
+        body=_string(value, "body"),
+        url=_string(value, "html_url"),
+        path=_optional_string(value, "path"),
+        line=line if isinstance(line, int) and not isinstance(line, bool) else None,
+    )
+
+
+def _work_item(value: dict, comments: tuple[Discussion, ...] = ()) -> WorkItem:
+    labels = value.get("labels", [])
+    names = tuple(
+        _string(label, "name") for label in labels if isinstance(label, dict) and _string(label, "name")
+    )
+    return WorkItem(
+        number=_positive_number(value.get("number"), "issue number"),
+        title=_string(value, "title"),
+        state=_string(value, "state"),
+        body=_string(value, "body"),
+        author=_nested_string(value, "user", "login"),
+        url=_string(value, "html_url"),
+        labels=names,
+        comments=comments,
+    )
+
+
+def _positive_number(value: object, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _limit(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 100:
+        raise ValueError("limit must be an integer from 1 to 100")
+    return value
+
+
+def _work_item_state(value: object) -> str:
+    if value not in {"open", "closed", "all"}:
+        raise ValueError("state must be open, closed, or all")
+    return str(value)
+
+
+def _log_text(content: bytes) -> str:
+    if content.startswith(b"PK\x03\x04"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                return "\n".join(
+                    archive.read(name).decode(errors="replace")
+                    for name in archive.namelist()
+                    if not name.endswith("/")
+                )
+        except (OSError, zipfile.BadZipFile) as error:
+            raise GitHubSourceControlError(f"could not read GitHub job log archive: {error}") from error
+    return content.decode(errors="replace")
 
 
 __all__ = [
