@@ -1,18 +1,13 @@
-/** The rail: Projects, Workflows, Chats, in that order, with at most one open.
+/** The rail: Projects and WorkOrders, in that order, with at most one open.
  *
- *  All three headers stay on screen at all times and the open one takes the
+ *  Both headers stay on screen at all times and the open one takes the
  *  space that is left, so choosing a section slides the headers above it up
  *  and the ones below it down rather than swapping one rail for another. The
  *  open header is printed in white and the closed ones in the rail's muted
  *  ink, which is the whole of the selected state. Clicking the open header
- *  again closes it, leaving the three headers stacked and nothing beneath
+ *  again closes it, leaving the two headers stacked and nothing beneath
  *  them. */
 
-import {
-  ThreadListItemPrimitive,
-  ThreadListPrimitive,
-  useAuiState,
-} from "@assistant-ui/react";
 import { useState, type ReactNode } from "react";
 
 import { projectMilestonesUrl, type ApiProject, type ApiWorkflowRun } from "./api";
@@ -20,7 +15,7 @@ import { RailBrand, RailFoot } from "./brand";
 import { SettingsPanel } from "./settings-panel";
 import { conversationCount, IN_PROGRESS_PHASES, runStatusLabel } from "./runs";
 
-export type RailSection = "projects" | "workflows" | "chats";
+export type RailSection = "projects" | "workflows";
 
 function Section({
   id,
@@ -53,77 +48,6 @@ function Section({
         {children}
       </div>
     </section>
-  );
-}
-
-function ThreadItemMeta() {
-  const custom = useAuiState((state) => state.threadListItem.custom) as
-    | { agentId?: string; runner?: string; workspaceRoot?: string }
-    | undefined;
-  const isRunning = useAuiState((state) => state.threadListItem.isRunning);
-  return (
-    <span className="rail-item-meta">
-      {isRunning && <span className="rail-live" aria-label="Agent is running" />}
-      {[custom?.agentId, custom?.runner].filter(Boolean).join(" · ")}
-    </span>
-  );
-}
-
-/** One chat in the rail.
- *
- *  `linked` is for the rails beside a workflow page, where switching the
- *  runtime's conversation would change nothing anybody can see: there, a chat
- *  is a link to its own page instead. */
-function ThreadListItem({
-  archived = false,
-  linked = false,
-}: {
-  archived?: boolean;
-  linked?: boolean;
-}) {
-  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const copy = (
-    <>
-      <span className="rail-item-title" data-clamp="">
-        <ThreadListItemPrimitive.Title fallback="New chat" />
-      </span>
-      <ThreadItemMeta />
-    </>
-  );
-  return (
-    <ThreadListItemPrimitive.Root className="rail-item">
-      {archived ? (
-        <div className="rail-item-trigger">{copy}</div>
-      ) : linked && remoteId ? (
-        <a
-          className="rail-item-trigger"
-          href={`/conversations/${encodeURIComponent(remoteId)}`}
-        >
-          {copy}
-        </a>
-      ) : (
-        <ThreadListItemPrimitive.Trigger className="rail-item-trigger">
-          {copy}
-        </ThreadListItemPrimitive.Trigger>
-      )}
-      {archived ? (
-        <ThreadListItemPrimitive.Unarchive
-          className="rail-item-action"
-          aria-label="Restore chat"
-          title="Restore chat"
-        >
-          Restore
-        </ThreadListItemPrimitive.Unarchive>
-      ) : (
-        <ThreadListItemPrimitive.Archive
-          className="rail-item-action"
-          aria-label="Archive chat"
-          title="Archive chat"
-        >
-          ×
-        </ThreadListItemPrimitive.Archive>
-      )}
-    </ThreadListItemPrimitive.Root>
   );
 }
 
@@ -212,7 +136,6 @@ export function Sidebar({
   projects = [],
   runs,
   initialSection,
-  linkChats = false,
   activeRunId,
   activeConversationUrl,
   activeProjectId,
@@ -225,7 +148,6 @@ export function Sidebar({
   /** Which section the page on screen belongs to, followed until the reader
    *  opens one themselves. */
   initialSection: RailSection;
-  linkChats?: boolean;
   activeRunId?: string;
   activeConversationUrl?: string;
   /** The project whose milestones are on screen, when that is the page. */
@@ -356,32 +278,6 @@ export function Sidebar({
               </div>
             ))}
           </nav>
-        </Section>
-        <Section id="chats" title="Chats" open={open === "chats"} onToggle={toggle}>
-          <ThreadListPrimitive.Root className="rail-list">
-            <div className="rail-nav">
-              {linkChats ? (
-                <a className="rail-button rail-button-primary" href="/conversations">
-                  + New chat
-                </a>
-              ) : (
-                <ThreadListPrimitive.New className="rail-button rail-button-primary">
-                  + New chat
-                </ThreadListPrimitive.New>
-              )}
-            </div>
-            <div className="rail-scroll">
-              <ThreadListPrimitive.Items>
-                {() => <ThreadListItem linked={linkChats} />}
-              </ThreadListPrimitive.Items>
-              <details className="rail-archive">
-                <summary>Archived</summary>
-                <ThreadListPrimitive.Items archived>
-                  {() => <ThreadListItem archived />}
-                </ThreadListPrimitive.Items>
-              </details>
-            </div>
-          </ThreadListPrimitive.Root>
         </Section>
       </div>
       {settingsOpen ? (
