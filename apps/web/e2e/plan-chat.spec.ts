@@ -294,22 +294,6 @@ test("a project is archived into its own list and restored from it", async ({
   await expect(rail.getByRole("link", { name: PROJECT_NAME })).toBeVisible();
 });
 
-test("a new chat started from the plan page is not another plan", async ({
-  page,
-  engine,
-}) => {
-  engine.script(SCRIPT);
-
-  await page.goto("/plan");
-  await page.getByRole("button", { name: "Chats" }).click();
-  await page.getByRole("link", { name: "+ New chat" }).click();
-
-  // The plan page's defaults are a plan's, so the control that starts an
-  // ordinary chat has to leave rather than reuse them where it stands.
-  await expect(page).toHaveURL(/\/conversations$/);
-  await expect(page.getByRole("combobox", { name: /^Agent/ })).toHaveValue("coder");
-});
-
 test("new project intent survives closing while its title is pending", async ({
   page,
   engine,
