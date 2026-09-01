@@ -30,11 +30,22 @@ error in whatever later sums it.
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
+from typing import TypeAlias, TypeVar
 
-type JSONValue = str | int | float | bool | None | Iterable[JSONValue] | Mapping[str, JSONValue]
+JSONValue: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | Iterable["JSONValue"]
+    | Mapping[str, "JSONValue"]
+)
 
 #: What a `to_dict` returns: a mapping the caller may keep and mutate freely.
-type JSONObject = dict[str, JSONValue]
+JSONObject: TypeAlias = dict[str, JSONValue]
+
+T = TypeVar("T")
 
 
 def copied_mapping(values: Mapping[str, JSONValue] | None) -> JSONObject:
@@ -42,7 +53,7 @@ def copied_mapping(values: Mapping[str, JSONValue] | None) -> JSONObject:
     return deepcopy(dict(values or {}))
 
 
-def checked_sequence[T](values: Iterable[T] | None, *, field: str) -> tuple[T, ...]:
+def checked_sequence(values: Iterable[T] | None, *, field: str) -> tuple[T, ...]:
     """The values as a tuple, refusing the string that is quietly a sequence."""
     if isinstance(values, (str, bytes)):
         raise TypeError(

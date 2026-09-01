@@ -25,7 +25,7 @@ jobs:
     env:
       # Exercise the oldest supported interpreter instead of inheriting the
       # repository's development version from `.python-version`.
-      UV_PYTHON: "3.13"
+      UV_PYTHON: "3.11"
     steps:
       # Hosted runners start empty, so checkout is the fresh clone a new user
       # would begin with. Deliberately do not restore dependency caches here.
@@ -240,11 +240,11 @@ jobs:
       # the others.
       fail-fast: false
       matrix:
-        # The supported range: the workspace floor and the current release.
-        python-version: ["3.13", "3.14"]
+        # The full range the packages claim to support via requires-python.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     env:
       # Set at job level so every uv command in the job agrees on the
-      # interpreter. Without it, `.python-version` (3.14) would win and both
+      # interpreter. Without it, `.python-version` (3.14) would win and all four
       # matrix legs would quietly test the same thing.
       UV_PYTHON: ${{ matrix.python-version }}
     steps:
