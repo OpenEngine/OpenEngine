@@ -16,6 +16,7 @@ members = [
     "engine-control-server",
     "engine-core",
     "engine-domain",
+    "engine-langgraph-runtime",
     "engine-migrations",
     "engine-ports",
     "engine-runtime",
@@ -354,6 +355,21 @@ requires-dist = [{ name = "engine-domain", editable = "packages/domain" }]
 name = "engine-domain"
 version = "0.0.0"
 source = { editable = "packages/domain" }
+
+[[package]]
+name = "engine-langgraph-runtime"
+version = "0.0.0"
+source = { editable = "packages/langgraph_runtime" }
+dependencies = [
+    { name = "engine-domain" },
+    { name = "starlette" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "engine-domain", editable = "packages/domain" },
+    { name = "starlette", specifier = ">=0.52" },
+]
 
 [[package]]
 name = "engine-migrations"
