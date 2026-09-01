@@ -9,14 +9,11 @@ import {
   useToolCallElapsed,
 } from "@assistant-ui/react";
 import {
-  createContext,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent,
-  type ReactNode,
 } from "react";
 
 import {
@@ -191,10 +188,6 @@ export function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="message message-assistant">
       <TextParts />
-      {/* Only what could not be placed beside a call: a request that named no
-          call, or one whose call is not in the transcript. The end of the turn
-          is where a request with nothing to sit beside belongs. */}
-      <TurnApprovals />
       <MessagePrimitive.Error>
         <p className="notice message-error">
           <Ticked text={errorText(error)} />
@@ -824,55 +817,6 @@ export function ApprovalEntry({
   );
 }
 
-/** Every tool call the transcript holds, by id.
- *
- *  What decides where a request is shown: an approval naming a call in here has
- *  somewhere of its own to sit, and is therefore not part of any turn's
- *  leftovers. The whole thread rather than one message, because a restored
- *  transcript anchors its requests to the end while the calls they name are
- *  spread across the turns that made them.
- *
- *  A fact about the thread, so it is derived once above the turns rather than
- *  by each of them. The thread store hands out a new `messages` array on every
- *  streamed chunk, and a turn that read it would rescan every part in the
- *  conversation each time a token landed -- once per turn on screen, over
- *  transcripts that routinely carry hundreds of calls. */
-const ToolCallIds = createContext<ReadonlySet<string>>(new Set<string>());
-
-export function useToolCallIds(): ReadonlySet<string> {
-  return useContext(ToolCallIds);
-}
-
-/** Derive it, and keep the same set while the ids in it are the same.
- *
- *  Identity is the whole point: a new set on every chunk would re-render every
- *  turn that reads one, which is the cost this exists to avoid. Tokens arrive
- *  far more often than tool calls do, so most rescans find nothing new. */
-export function ToolCallIndex({ children }: { children: ReactNode }) {
-  const held = useRef<ReadonlySet<string>>(new Set<string>());
-  const signature = useAuiState((state) => {
-    const ids: string[] = [];
-    for (const message of state.thread.messages) {
-      if (!Array.isArray(message.content)) continue;
-      for (const part of message.content) {
-        if (part.type === "tool-call") ids.push(part.toolCallId);
-      }
-    }
-    return JSON.stringify(ids);
-  });
-  const ids = useMemo(() => {
-    const found = new Set<string>(JSON.parse(signature) as string[]);
-    const previous = held.current;
-    if (previous.size === found.size && [...found].every((id) => previous.has(id))) {
-      return previous;
-    }
-    held.current = found;
-    return found;
-  }, [signature]);
-
-  return <ToolCallIds.Provider value={ids}>{children}</ToolCallIds.Provider>;
-}
-
 function ApprovalList({
   threadId,
   entries,
@@ -911,64 +855,6 @@ function CallApprovals({ toolCallId }: { toolCallId: string }) {
       threadId={remoteId}
       entries={mine}
       className="approvals approvals-call"
-    />
-  );
-}
-
-/** What this assistant turn stopped to ask about and nothing else can hold.
- *
- *  A request that named no call, or that named one this transcript does not
- *  contain -- a provider that paused over something other than a tool call, or
- *  a record written before the pairing existed. Anchored by index rather than
- *  pinned to the newest turn, so it stays with the turn that raised it once the
- *  conversation has moved on. Requests anchored past the mounted transcript
- *  belong exclusively to `UnanchoredApprovals` until their turn appears. */
-function TurnApprovals() {
-  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const index = useAuiState((state) => state.message.index);
-  const approvals = useApprovals(remoteId);
-  const placed = useToolCallIds();
-  const mine = useMemo(
-    () =>
-      approvals.filter(
-        (entry) =>
-          entry.messageIndex === index &&
-          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
-      ),
-    [approvals, index, placed],
-  );
-
-  if (!remoteId) return null;
-  return <ApprovalList threadId={remoteId} entries={mine} className="approvals" />;
-}
-
-/** Requests for a reply assistant-ui has not mounted yet.
- *
- *  Workflow runs can begin outside this browser. Their approval feed must be
- *  visible immediately, before transcript streaming creates the assistant
- *  message that will ultimately own the card. Once that message appears the
- *  normal turn placement takes over and this slot empties itself. */
-export function UnanchoredApprovals() {
-  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const total = useAuiState((state) => state.thread.messages.length);
-  const approvals = useApprovals(remoteId);
-  const placed = useToolCallIds();
-  const unanchored = useMemo(
-    () =>
-      approvals.filter(
-        (entry) =>
-          entry.messageIndex >= total &&
-          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
-      ),
-    [approvals, placed, total],
-  );
-
-  if (!remoteId) return null;
-  return (
-    <ApprovalList
-      threadId={remoteId}
-      entries={unanchored}
-      className="approvals approvals-live"
     />
   );
 }
@@ -1031,17 +917,11 @@ export function ChatThread({ project = false }: { project?: boolean }) {
             </div>
           )}
         </ThreadPrimitive.Empty>
-        {/* Renders no element of its own, so the viewport's children are still
-            the messages. Held above them so the rescan happens once per chunk
-            rather than once per turn per chunk. */}
-        <ToolCallIndex>
-          <ThreadPrimitive.Messages>
-            {({ message }) =>
-              message.role === "user" ? <UserMessage /> : <AssistantMessage />
-            }
-          </ThreadPrimitive.Messages>
-          <UnanchoredApprovals />
-        </ToolCallIndex>
+        <ThreadPrimitive.Messages>
+          {({ message }) =>
+            message.role === "user" ? <UserMessage /> : <AssistantMessage />
+          }
+        </ThreadPrimitive.Messages>
         <Dock project={project} />
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
