@@ -23,13 +23,16 @@ from langgraph_acp.agent import ACPAgentRegistry
 
 ScopingNode = Callable[[str], Awaitable[ACPResult]]
 
-_INSTRUCTIONS = """You are a work-order scoper. Compare the desired milestones with
+INSTRUCTIONS = """You are a work-order scoper. Compare the desired milestones with
 the existing work orders. Completed and in-progress work must be taken into account;
 do not recreate work they already cover. Return only one JSON object with these keys:
 create (work-order specs), cancel (work-order ids), supersede (objects containing a
 workorder_id and replacement specs), and reasons (strings). A work-order spec has
 milestone_id, name, objective, evidence_requirements, and dependencies. Every list
-may be empty. Do not wrap the JSON in Markdown.
+may be empty. Break work into small, single-purpose chunks that can be retried without
+duplicating effects and reviewed independently. Add a dependency only when the work
+cannot start until that existing work order is complete. Never invent dependency IDs.
+Do not wrap the JSON in Markdown.
 
 Inputs:
 """
@@ -45,7 +48,7 @@ def _prompt(
         "workorders": [asdict(item) for item in workorders],
         "policy": asdict(policy),
     }
-    return _INSTRUCTIONS + json.dumps(
+    return INSTRUCTIONS + json.dumps(
         payload,
         default=lambda value: value.value if isinstance(value, Enum) else str(value),
         separators=(",", ":"),
@@ -150,4 +153,4 @@ async def scope(
     )
 
 
-__all__ = ["Scoper", "scope"]
+__all__ = ["INSTRUCTIONS", "Scoper", "scope"]

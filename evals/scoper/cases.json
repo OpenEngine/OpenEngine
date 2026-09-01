@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "greenfield-authentication",
+      "split": "train",
+      "description": "A new feature should separate implementation, review, and browser evidence.",
+      "milestones": [{"milestone_id": "authentication", "requirements": ["Implement password login", "Add rate limiting"], "evidence_requirements": ["Unit tests", "Browser screenshot"]}],
+      "workorders": []
+    },
+    {
+      "name": "do-not-repeat-complete-work",
+      "split": "dev",
+      "description": "Completed implementation must not be recreated when validation remains.",
+      "milestones": [{"milestone_id": "authentication", "requirements": ["Implement password login"], "evidence_requirements": ["Security review"]}],
+      "workorders": [{"workorder_id": "login-implementation", "milestone_id": "authentication", "name": "Implement password login", "objective": "Implement password login.", "status": "complete"}]
+    },
+    {
+      "name": "preserve-parallel-work",
+      "split": "test",
+      "description": "Independent active work should remain parallel and not acquire invented dependencies.",
+      "milestones": [{"milestone_id": "observability", "requirements": ["Add metrics", "Add structured logs"], "evidence_requirements": ["Dashboard screenshot"]}],
+      "workorders": [
+        {"workorder_id": "metrics", "milestone_id": "observability", "name": "Add metrics", "objective": "Publish request metrics.", "status": "in_progress"},
+        {"workorder_id": "logs", "milestone_id": "observability", "name": "Add structured logs", "objective": "Emit structured request logs.", "status": "pending"}
+      ]
+    }
+  ]
+}

@@ -30,6 +30,7 @@ exclude = ["packages/adapters"]
 # because it looks at everything. A development dependency rather than one of
 # `engine-web`'s, because a served interface never reloads.
 dev = ["httpx>=0.28", "pytest>=8.0", "watchfiles>=1.0"]
+scoper-evals = ["dspy>=3.0,<4"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -42,4 +43,5 @@ addopts = "-q -m 'not compatibility'"
 markers = [
     "compatibility: drives a real provider CLI; scheduled rather than per-PR",
     "workflow_removal_acceptance: acceptance gates and legacy fixtures for removing the hardcoded implementation-review workflow",
+    "scoper_eval: live, model-scored scoper quality evaluation",
 ]

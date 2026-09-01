@@ -1,0 +1,28 @@
+name: scoper-evals
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.9.28"
+
+jobs:
+  deterministic:
+    name: deterministic quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked --all-packages
+      - run: uv run pytest tests/test_scoper_evals.py -v
+
+  # DSPy compilation and live judging are deliberately manual follow-up actions:
+  # they require provider credentials, spend money, and update a reviewed artifact.
