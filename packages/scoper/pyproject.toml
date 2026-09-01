@@ -2,8 +2,8 @@
 name = "engine-scoper"
 version = "0.0.0"
 description = "Determines which work orders should exist for desired project state."
-requires-python = ">=3.11"
-dependencies = ["engine-domain"]
+requires-python = ">=3.13"
+dependencies = ["engine-domain", "langgraph-acp"]
 
 [build-system]
 requires = ["hatchling"]
@@ -14,3 +14,4 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-domain = { workspace = true }
+langgraph-acp = { path = "../../langgraph-acp" }

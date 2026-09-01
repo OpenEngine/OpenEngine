@@ -1,8 +1,11 @@
 """Contract tests for the work-order scoper boundary."""
 
 import inspect
+import asyncio
+import json
 
 import pytest
+from langgraph_acp import ACPResult
 
 from engine.domain import (
     MilestoneId,
@@ -15,7 +18,7 @@ from engine.domain import (
     WorkOrderSpec,
     WorkOrderStatus,
 )
-from engine.scoper import scope
+from engine.scoper import Scoper, scope
 
 
 def test_scoping_plan_can_describe_all_supported_changes() -> None:
@@ -50,7 +53,8 @@ def test_scoping_plan_can_describe_all_supported_changes() -> None:
     assert plan.reasons
 
 
-def test_scope_exposes_desired_state_inputs_and_is_stubbed() -> None:
+@pytest.mark.parametrize("agent", ["codex", "claude"])
+def test_scope_returns_new_scope_from_mocked_agent(agent: str) -> None:
     milestone = MilestoneScope(
         MilestoneId("milestone-authentication"),
         requirements=("Implement login", "Validate browser behavior"),
@@ -66,14 +70,59 @@ def test_scope_exposes_desired_state_inputs_and_is_stubbed() -> None:
         WorkOrderStatus.COMPLETE,
     )
 
+    in_progress_validation = WorkOrder(
+        WorkOrderId("workorder-browser-validation"),
+        WorkOrderSpec(
+            milestone.milestone_id,
+            "Browser validation",
+            "Validate the login flow in a browser.",
+            ("Capture a screenshot",),
+            (completed_implementation.workorder_id,),
+        ),
+        WorkOrderStatus.IN_PROGRESS,
+    )
+
+    class MockCLI:
+        async def __call__(self, prompt: str) -> ACPResult:
+            inputs = json.loads(prompt.split("Inputs:\n", 1)[1])
+            assert inputs["workorders"][0]["status"] == "complete"
+            assert inputs["workorders"][1]["status"] == "in_progress"
+            return ACPResult(
+                agent=agent,
+                message=json.dumps({
+                    "create": [{
+                        "milestone_id": "milestone-authentication",
+                        "name": "Security review",
+                        "objective": "Review the completed login implementation.",
+                        "evidence_requirements": ["Security review"],
+                        "dependencies": ["workorder-login"],
+                    }],
+                    "cancel": [],
+                    "supersede": [],
+                    "reasons": ["Implementation is complete and browser validation is underway."],
+                }),
+            )
+
     assert tuple(inspect.signature(scope).parameters) == (
         "workorders",
         "milestones",
         "policy",
     )
-    with pytest.raises(NotImplementedError, match="LangGraph"):
-        scope(
-            workorders=(completed_implementation,),
+    plan = asyncio.run(
+        Scoper(agent=agent, node=MockCLI()).scope(
+            workorders=(completed_implementation, in_progress_validation),
             milestones=(milestone,),
-            policy=ScopingPolicy(),
+            policy=ScopingPolicy(rules=("Prefer independently reviewable work",)),
         )
+    )
+
+    assert plan == ScopingPlan(
+        create=(WorkOrderSpec(
+            milestone.milestone_id,
+            "Security review",
+            "Review the completed login implementation.",
+            ("Security review",),
+            (completed_implementation.workorder_id,),
+        ),),
+        reasons=("Implementation is complete and browser validation is underway.",),
+    )
