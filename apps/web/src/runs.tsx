@@ -202,7 +202,6 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
       ) : (
         <div className="empty">
           <h2>No WorkOrders yet.</h2>
-          <p>Chats remain available from the sidebar.</p>
         </div>
       )}
     </main>
