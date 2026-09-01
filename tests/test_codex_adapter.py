@@ -112,6 +112,36 @@ def test_runner_satisfies_the_port() -> None:
     assert isinstance(runner.permission_translator, PermissionTranslator)
 
 
+def test_cancel_reaps_the_terminated_process() -> None:
+    class Process:
+        returncode: int | None = None
+
+        def __init__(self) -> None:
+            self.terminated = False
+            self.waited = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            raise AssertionError("a cooperative process should not be killed")
+
+        async def wait(self) -> int:
+            self.waited = True
+            self.returncode = -15
+            return self.returncode
+
+    runner = CodexAgentRunner()
+    agent_run_id = AgentRunId("run-1")
+    process = Process()
+    runner._running[agent_run_id] = process  # type: ignore[assignment]
+
+    asyncio.run(runner.cancel(agent_run_id))
+
+    assert process.terminated
+    assert process.waited
+
+
 def test_attribution_can_be_disabled_for_both_codex_transports() -> None:
     runner = CodexAgentRunner(attribution=False)
 
