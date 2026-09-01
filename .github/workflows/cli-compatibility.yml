@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload the redacted protocol transcript
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: transcript-${{ matrix.provider }}-${{ matrix.version }}
           path: ${{ runner.temp }}/compat-artifacts

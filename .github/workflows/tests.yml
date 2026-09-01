@@ -146,7 +146,7 @@ jobs:
         # GitHub serves the artifact as a zip and will not render the HTML, so
         # it has to be downloaded and opened locally.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: apps/web/playwright-report
@@ -155,7 +155,7 @@ jobs:
 
       - name: Upload the traces of what failed
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-traces
           path: apps/web/test-results
