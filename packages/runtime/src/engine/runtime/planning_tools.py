@@ -345,6 +345,7 @@ class PlanningMcpBroker:
                     for argument in ("--capability", capability)
                 ),
             ),
+            requires_network_access=True,
         )
 
     async def _handle_connection(

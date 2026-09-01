@@ -275,6 +275,12 @@ def _require(server: McpServer | None, provider: str) -> McpServer:
     return server
 
 
+def _is_loopback_broker(server: McpServer) -> bool:
+    """Whether this MCP process has to connect back to Engine over TCP."""
+
+    return "engine.runtime.planning_mcp_server" in server.args
+
+
 def _call_tool(
     server: McpServer, name: str, arguments: object
 ) -> tuple[str, bool]:
@@ -432,6 +438,10 @@ def _codex_app_server(arguments: Sequence[str]) -> int:
                 "status": "inProgress",
             }
             _codex_item("item/started", call)
+            sandbox = params.get("sandboxPolicy") or {}
+            if _is_loopback_broker(called) and not sandbox.get("networkAccess"):
+                _codex_item("item/completed", {**call, "status": "cancelled"})
+                continue
             output, failed = _call_tool(called, name, call_arguments)
             _codex_item(
                 "item/completed",

@@ -254,17 +254,22 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
     return tuple(events)
 
 
-def app_server_sandbox_policy(sandbox: str) -> dict[str, Any]:
+def app_server_sandbox_policy(
+    sandbox: str, *, network_access: bool = False
+) -> dict[str, Any]:
     """Translate the stable CLI sandbox names to app-server's v2 schema."""
     match sandbox:
         case "read-only":
-            return {"type": "readOnly"}
+            policy: dict[str, Any] = {"type": "readOnly"}
         case "workspace-write":
-            return {"type": "workspaceWrite"}
+            policy = {"type": "workspaceWrite"}
         case "danger-full-access":
-            return {"type": "dangerFullAccess"}
+            policy = {"type": "dangerFullAccess"}
         case _:  # Construction validates this; keep the helper safe on its own.
             raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
+    if network_access and sandbox != "danger-full-access":
+        policy["networkAccess"] = True
+    return policy
 
 
 def _app_server_thread_params(
@@ -1247,7 +1252,14 @@ class CodexAgentRunner:
                 "input": [{"type": "text", "text": prompt}],
                 "cwd": working_directory,
                 "approvalPolicy": INTERACTIVE_APPROVAL_POLICY,
-                "sandboxPolicy": app_server_sandbox_policy(self._sandbox),
+                "sandboxPolicy": app_server_sandbox_policy(
+                    self._sandbox,
+                    network_access=(
+                        mcp_server.requires_network_access
+                        if mcp_server is not None
+                        else False
+                    ),
+                ),
             }
             if model:
                 turn_params["model"] = model

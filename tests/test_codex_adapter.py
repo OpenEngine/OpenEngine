@@ -460,6 +460,10 @@ def test_app_server_uses_the_v2_sandbox_shapes() -> None:
     assert app_server_sandbox_policy("read-only") == {"type": "readOnly"}
     assert app_server_sandbox_policy("workspace-write") == {"type": "workspaceWrite"}
     assert app_server_sandbox_policy("danger-full-access") == {"type": "dangerFullAccess"}
+    assert app_server_sandbox_policy("read-only", network_access=True) == {
+        "type": "readOnly",
+        "networkAccess": True,
+    }
 
 
 def test_app_server_approval_exposes_only_the_three_engine_decisions() -> None:
