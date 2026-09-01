@@ -189,6 +189,15 @@ describe("Sidebar", () => {
     );
   });
 
+  it("keeps projects and WorkOrders available while chats restore", () => {
+    render(<Sidebar runs={[run]} initialSection="workflows" chatsReady={false} />);
+
+    expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
+    expect(within(body("Projects")).getByRole("link", { name: "+ New project" })).toBeVisible();
+    expect(within(body("Chats")).getByText("Restoring chats…")).toBeInTheDocument();
+    expect(within(body("Chats")).queryByRole("button", { name: "+ New chat" })).toBeNull();
+  });
+
   it("matches the new workflow button and lists projects by generated name", () => {
     render(
       <Sidebar
