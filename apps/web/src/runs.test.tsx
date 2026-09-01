@@ -388,6 +388,7 @@ describe("RunDetailPage", () => {
         stepId: "human-review",
         title: "Review implementation for task-1",
         summary: "Implementation: done",
+        prUrl: null,
       },
     });
     const decided = run({
@@ -451,6 +452,7 @@ describe("RunDetailPage", () => {
         stepId: "human-review",
         title: "Review implementation for task-1",
         summary: "Implementation: done",
+        prUrl: null,
       },
     });
     const decided = run({
@@ -527,6 +529,7 @@ describe("RunDetailPage", () => {
         stepId: "human-review",
         title: "Review implementation for task-1",
         summary: "Implementation: done",
+        prUrl: null,
       },
     });
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -546,6 +549,30 @@ describe("RunDetailPage", () => {
       "run is not awaiting human review",
     );
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+  });
+
+  it("links to the pull request awaiting review", async () => {
+    const awaiting = run({
+      phase: "awaiting_human_review",
+      currentStepId: "human-review",
+      pendingHumanReview: {
+        stepId: "human-review",
+        title: "Review implementation for task-1",
+        summary: "Implementation: done",
+        prUrl: "https://github.com/acme/api/pull/42",
+      },
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(awaiting);
+      return json({ error: "not found" }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    render(<RunDetailPage runId="run-1" />);
+
+    const link = await screen.findByRole("link", { name: /view pull request/i });
+    expect(link).toHaveAttribute("href", "https://github.com/acme/api/pull/42");
   });
 
   it("returns a finished run to the step a new message reopened", async () => {

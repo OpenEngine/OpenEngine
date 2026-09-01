@@ -174,7 +174,12 @@ export type ApiWorkflowRun = {
   terminalOutcome: string | null;
   failureReason: string;
   steps: ApiRunStep[];
-  pendingHumanReview: { stepId: string; title: string; summary: string } | null;
+  pendingHumanReview: {
+    stepId: string;
+    title: string;
+    summary: string;
+    prUrl: string | null;
+  } | null;
   humanDecision: {
     stepId: string;
     approved: boolean;

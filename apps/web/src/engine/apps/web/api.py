@@ -2147,6 +2147,7 @@ def _run_json(run: WorkflowRunView) -> dict[str, object]:
             "stepId": str(run.pending_human_review.step_id),
             "title": run.pending_human_review.title,
             "summary": run.pending_human_review.summary,
+            "prUrl": run.pending_human_review.pull_request_url,
         }
     else:
         result["pendingHumanReview"] = None
