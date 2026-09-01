@@ -14,9 +14,9 @@ anything it does ask for that this version has no answer for gets a JSON-RPC
 "method not found" instead of silence -- an agent waiting forever on a request
 nobody will answer is the worst way for a gap to show up. Permission requests
 are the exception that proves it: they are streamed as `acp.permission.requested`
-and then declined, because the policy that could say otherwise arrives with a
-later ticket, and declining is the answer that cannot approve something nobody
-was asked about.
+and then handed to whatever policy the connection was built with, which is
+`deny_permission` unless the caller supplied one. See
+`langgraph_acp.permissions`.
 
 The child's stderr is drained into a small ring buffer. When a launch fails or
 a process dies mid-request, that tail is the only thing that says why, and a
@@ -45,6 +45,11 @@ from langgraph_acp.errors import (
     ACPSessionError,
 )
 from langgraph_acp.events import ACPEvent, ACPEventType
+from langgraph_acp.permissions import (
+    ACPPermissionHandler,
+    ACPPermissionRequest,
+    deny_permission,
+)
 from langgraph_acp.session import ACPPrompt, ACPSession
 
 #: Room for one JSON-RPC message. ACP carries file contents and diffs inline,
@@ -92,12 +97,16 @@ async def connect_over_stdio(
     command: Sequence[str],
     env: Mapping[str, str] | None = None,
     cwd: str | os.PathLike[str] | None = None,
+    permissions: ACPPermissionHandler | None = None,
 ) -> ACPClient:
     """Launch `command` and initialize ACP against it.
 
     `env` is overlaid on this process's environment rather than replacing it: a
     command found through `PATH` stops being findable the moment `PATH` is not
     inherited, and every agent CLI is found that way.
+
+    `permissions` answers `session/request_permission`; without one the
+    connection declines every request. See `langgraph_acp.permissions`.
     """
     launched = tuple(checked_sequence(command, field="command"))
     try:
@@ -118,7 +127,9 @@ async def connect_over_stdio(
         ) from exc
 
     try:
-        client = StdioACPClient(agent=agent, process=process)
+        client = StdioACPClient(
+            agent=agent, process=process, permissions=permissions
+        )
     except BaseException:
         process.kill()
         raise
@@ -134,7 +145,11 @@ class StdioACPClient:
     """An `ACPClient` backed by a child process speaking ACP on its pipes."""
 
     def __init__(
-        self, *, agent: str, process: asyncio.subprocess.Process
+        self,
+        *,
+        agent: str,
+        process: asyncio.subprocess.Process,
+        permissions: ACPPermissionHandler | None = None,
     ) -> None:
         if process.stdin is None or process.stdout is None:
             raise ACPConnectionError(
@@ -143,6 +158,7 @@ class StdioACPClient:
                 operation="connect",
             )
         self._agent = agent
+        self._permissions = permissions or deny_permission
         self._process = process
         self._capabilities = ACPCapabilities()
         self._stderr: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
@@ -312,10 +328,26 @@ class StdioACPClient:
                 session_id,
                 self.event(session_id, ACPEventType.PERMISSION_REQUESTED, params),
             )
-            # No policy exists yet to say otherwise, and an unanswered request
-            # would hang the turn. Declining is the only answer that cannot
-            # approve something nobody was asked about.
-            return {"outcome": {"outcome": "cancelled"}}
+            # Streamed first, answered second, and in that order deliberately: a
+            # handler that waits for a person may take days or never return at
+            # all, and a subscriber that only learned about the request once it
+            # had been settled could not show anyone the question.
+            outcome = await self._permissions(
+                ACPPermissionRequest.from_params(self._agent, params)
+            )
+            self._deliver(
+                session_id,
+                self.event(
+                    session_id,
+                    ACPEventType.PERMISSION_RESOLVED,
+                    {
+                        "sessionId": session_id,
+                        "optionId": outcome.option_id,
+                        "granted": outcome.granted,
+                    },
+                ),
+            )
+            return outcome.to_acp()
         raise JSONRPCError(
             METHOD_NOT_FOUND,
             f"langgraph-acp does not implement {method}",

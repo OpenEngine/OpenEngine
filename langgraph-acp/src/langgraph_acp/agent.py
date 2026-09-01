@@ -33,6 +33,7 @@ from langgraph_acp._json import checked_sequence
 from langgraph_acp._stdio import connect_over_stdio
 from langgraph_acp.client import ACPClient
 from langgraph_acp.errors import ACPAgentNotFoundError
+from langgraph_acp.permissions import ACPPermissionHandler
 
 
 def launch_command(command: Sequence[str]) -> tuple[str, ...]:
@@ -94,13 +95,24 @@ class StdioACPProvider:
     """Overlaid on this process's environment, never replacing it."""
     cwd: str | os.PathLike[str] | None = None
     """Where to launch the process. Not the workspace a session is given."""
+    permissions: ACPPermissionHandler | None = None
+    """Who answers `session/request_permission`. `None` declines every request.
+
+    Configuration rather than a per-call argument because it is a policy, and a
+    policy that could differ between two connections to the same agent would be
+    a permission granted by whichever code path happened to open the pipe.
+    """
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
 
     async def connect(self) -> ACPClient:
         return await connect_over_stdio(
-            agent=self.name, command=self.command, env=self.env, cwd=self.cwd
+            agent=self.name,
+            command=self.command,
+            env=self.env,
+            cwd=self.cwd,
+            permissions=self.permissions,
         )
 
 

@@ -104,11 +104,27 @@ class ExecutionRegistry:
         cancelled by a resume. An entry left behind by either would take
         steering meant for the run that replaced it.
         """
-        self._active.setdefault(run_id, {})[execution_id] = (node_id, execution)
+        self.register(run_id, execution_id, node_id, execution)
         try:
             yield execution
         finally:
             self.release(run_id, execution_id)
+
+    def register(
+        self,
+        run_id: RunId,
+        execution_id: ExecutionId,
+        node_id: NodeId,
+        execution: ControllableExecution,
+    ) -> None:
+        """Put an execution in flight until something releases it.
+
+        The pair `in_flight` is written in terms of, for the bindings whose
+        executions do not begin and end inside one block: a runtime that learns
+        about a task from a stream registers it there and releases it when the
+        stream says it ended, and has no `with` to hang either on.
+        """
+        self._active.setdefault(run_id, {})[execution_id] = (node_id, execution)
 
     def release(self, run_id: RunId, execution_id: ExecutionId) -> None:
         by_id = self._active.get(run_id)

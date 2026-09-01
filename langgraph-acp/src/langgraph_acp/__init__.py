@@ -50,6 +50,7 @@ from langgraph_acp.agent import (
 )
 from langgraph_acp.client import PROTOCOL_VERSION, ACPCapabilities, ACPClient
 from langgraph_acp.config import ACPConfig, ACPRequirements, UnsupportedOption
+from langgraph_acp.continuation import ACPContinuation, resume_continuation
 from langgraph_acp.errors import (
     ACPAgentCapabilityError,
     ACPAgentNotFoundError,
@@ -59,6 +60,14 @@ from langgraph_acp.errors import (
 )
 from langgraph_acp.events import EVENT_NAMESPACE, ACPEvent, ACPEventType
 from langgraph_acp.node import ACPNode
+from langgraph_acp.permissions import (
+    CANCELLED,
+    ACPPermissionHandler,
+    ACPPermissionOption,
+    ACPPermissionOutcome,
+    ACPPermissionRequest,
+    deny_permission,
+)
 from langgraph_acp.providers.claude import CLAUDE_ACP_COMMAND, ClaudeACPProvider
 from langgraph_acp.providers.codex import CODEX_ACP_COMMAND, CodexACPProvider
 from langgraph_acp.result import ACPResult, ACPUsage
@@ -80,10 +89,15 @@ __all__ = [
     "ACPClient",
     "ACPConfig",
     "ACPConnectionError",
+    "ACPContinuation",
     "ACPError",
     "ACPEvent",
     "ACPEventType",
     "ACPNode",
+    "ACPPermissionHandler",
+    "ACPPermissionOption",
+    "ACPPermissionOutcome",
+    "ACPPermissionRequest",
     "ACPPrompt",
     "ACPRequirements",
     "ACPResult",
@@ -94,6 +108,7 @@ __all__ = [
     "ACPSessionStrategy",
     "ACPUsage",
     "ACPWorkspace",
+    "CANCELLED",
     "CLAUDE_ACP_COMMAND",
     "CODEX_ACP_COMMAND",
     "ClaudeACPProvider",
@@ -106,4 +121,6 @@ __all__ = [
     "StdioACPProvider",
     "UnsupportedOption",
     "default_registry",
+    "deny_permission",
+    "resume_continuation",
 ]

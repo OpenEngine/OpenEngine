@@ -45,7 +45,17 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
     DOMAIN: ("engine.domain",),
     ENGINE: ("engine.domain", "engine.core"),
     PORTS: ("engine.domain", "engine.ports"),
-    RUNTIME: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
+    # `engine.graph_runtime` is here because it is a contract rather than an
+    # implementation: a runtime-layer package may be written against it, which
+    # is what `engine.graph_runtime_langgraph` is. Nothing in it names a vendor,
+    # so depending on it is not depending on a concrete anything.
+    RUNTIME: (
+        "engine.domain",
+        "engine.core",
+        "engine.ports",
+        "engine.runtime",
+        "engine.graph_runtime",
+    ),
     ADAPTER: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
     APP: ("engine.domain", "engine.core", "engine.ports", "engine.runtime", "engine.adapters"),
 }
@@ -90,6 +100,8 @@ def _layer_for(root: Path) -> str:
         case ("packages", "scoper"):
             return RUNTIME
         case ("packages", "graph_runtime"):
+            return RUNTIME
+        case ("packages", "graph_runtime_langgraph"):
             return RUNTIME
         case ("packages", "ports"):
             return PORTS
