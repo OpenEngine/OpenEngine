@@ -1555,6 +1555,11 @@ class CodexAgentRunner:
         if process is None or process.returncode is not None:
             return
         process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
 
 
 def _tail(text: str, lines: int = 5) -> str:

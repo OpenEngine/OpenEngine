@@ -45,6 +45,96 @@ class GitResult:
         return self.exit_code == 0
 
 
+@dataclass(frozen=True, slots=True)
+class Discussion:
+    """One comment or review on a forge change request or work item."""
+
+    author: str
+    body: str
+    url: str
+    path: str | None = None
+    line: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeRequest:
+    """A pull request, merge request, or equivalent proposed change."""
+
+    number: int
+    title: str
+    state: str
+    body: str
+    author: str
+    url: str
+    head_ref: str
+    head_sha: str
+    base_ref: str
+    reviews: tuple[Discussion, ...] = ()
+    comments: tuple[Discussion, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkItem:
+    """A forge issue or equivalent tracked unit of work."""
+
+    number: int
+    title: str
+    state: str
+    body: str
+    author: str
+    url: str
+    labels: tuple[str, ...] = ()
+    comments: tuple[Discussion, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StatusCheck:
+    """One provider status/check associated with a revision."""
+
+    name: str
+    status: str
+    conclusion: str | None
+    details_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class Pipeline:
+    """One provider CI pipeline/workflow run."""
+
+    pipeline_id: int
+    name: str
+    status: str
+    conclusion: str | None
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineStatus:
+    """Checks and CI pipelines for one revision."""
+
+    ref: str
+    checks: tuple[StatusCheck, ...]
+    pipelines: tuple[Pipeline, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class JobLogs:
+    """A bounded text excerpt of one CI job's logs."""
+
+    pipeline_id: int
+    job_id: int
+    text: str
+    truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineRetry:
+    """What CI job or pipeline a retry request was accepted for."""
+
+    pipeline_id: int
+    job_id: int | None = None
+
+
 @runtime_checkable
 class SourceControl(Protocol):
     """Publishes work produced in a workspace and opens it for review."""
@@ -98,5 +188,58 @@ class SourceControl(Protocol):
         """Comment on a review, optionally at a line in a changed file."""
         ...
 
+    async def view_change_request(
+        self, workspace_id: WorkspaceId, number: int
+    ) -> ChangeRequest:
+        """Return a change request and its reviews and discussions."""
+        ...
 
-__all__ = ["GitResult", "SourceControl"]
+    async def list_work_items(
+        self,
+        workspace_id: WorkspaceId,
+        state: str = "open",
+        labels: Sequence[str] = (),
+        limit: int = 30,
+    ) -> tuple[WorkItem, ...]:
+        """List work items in the workspace repository."""
+        ...
+
+    async def view_work_item(self, workspace_id: WorkspaceId, number: int) -> WorkItem:
+        """Return one work item and its discussion."""
+        ...
+
+    async def list_pipeline_status(
+        self,
+        workspace_id: WorkspaceId,
+        *,
+        ref: str | None = None,
+        change_request_number: int | None = None,
+    ) -> PipelineStatus:
+        """Return provider checks and CI pipelines for a ref or change request."""
+        ...
+
+    async def get_job_logs(
+        self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None
+    ) -> JobLogs:
+        """Return a bounded log excerpt for a CI job in a pipeline."""
+        ...
+
+    async def retry_pipeline(
+        self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None
+    ) -> PipelineRetry:
+        """Retry a CI pipeline, or one job and its dependents when supported."""
+        ...
+
+
+__all__ = [
+    "ChangeRequest",
+    "Discussion",
+    "GitResult",
+    "JobLogs",
+    "Pipeline",
+    "PipelineRetry",
+    "PipelineStatus",
+    "SourceControl",
+    "StatusCheck",
+    "WorkItem",
+]

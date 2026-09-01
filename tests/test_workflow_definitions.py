@@ -385,7 +385,12 @@ def test_checked_in_definition_is_the_implementation_review_source_of_truth() ->
     assert isinstance(review, AgentStep)
     assert review.step_id == StepId("review")
     assert review.profile.agent_id == AgentId("review-agent")
-    assert review.profile.capabilities == ("add_comment",)
+    assert review.profile.capabilities == (
+        "view_change_request",
+        "list_pipeline_status",
+        "get_job_logs",
+        "add_comment",
+    )
     assert review.required_outputs == ("findings",)
     assert review.editable is False
     assert review.workspace_access is WorkspaceAccess.READ

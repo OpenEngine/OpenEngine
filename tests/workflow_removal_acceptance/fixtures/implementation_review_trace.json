@@ -93,6 +93,9 @@
               "instance_id": "golden-run:review:instance",
               "agent_id": "review-agent",
               "capabilities": [
+                "view_change_request",
+                "list_pipeline_status",
+                "get_job_logs",
                 "add_comment"
               ],
               "prompt": "Inspect the workspace but do not modify it. Review the implementation below against the original task and report what a human deciding this run needs to know, in the `findings` output.\n\nOriginal task:\nFix the queue race and add a regression test.\n\nImplementation result:\nOutcome: success\nSummary: Implemented the queue fix with a regression test.\nOutputs:\n- pr_url: https://github.com/acme/widgets/pull/n",
@@ -289,6 +292,9 @@
               "instance_id": "golden-run:review:instance",
               "agent_id": "review-agent",
               "capabilities": [
+                "view_change_request",
+                "list_pipeline_status",
+                "get_job_logs",
                 "add_comment"
               ],
               "prompt": "Inspect the workspace but do not modify it. Review the implementation below against the original task and report what a human deciding this run needs to know, in the `findings` output.\n\nOriginal task:\nFix the queue race and add a regression test.\n\nImplementation result:\nOutcome: success\nSummary: Implemented the queue fix with a regression test.\nOutputs:\n- pr_url: https://github.com/acme/widgets/pull/n",
@@ -566,6 +572,9 @@
               "instance_id": "golden-run:review:instance",
               "agent_id": "review-agent",
               "capabilities": [
+                "view_change_request",
+                "list_pipeline_status",
+                "get_job_logs",
                 "add_comment"
               ],
               "prompt": "Inspect the workspace but do not modify it. Review the implementation below against the original task and report what a human deciding this run needs to know, in the `findings` output.\n\nOriginal task:\nFix the queue race and add a regression test.\n\nImplementation result:\nOutcome: success\nSummary: Implemented the queue fix with a regression test.\nOutputs:\n- pr_url: https://github.com/acme/widgets/pull/n",

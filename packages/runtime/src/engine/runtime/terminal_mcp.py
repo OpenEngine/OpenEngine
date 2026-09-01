@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import secrets
 import shlex
@@ -57,6 +58,12 @@ REPOSITORY_TOOL_METHODS: dict[str, str] = {
     "git_subcommand": "run_git",
     "open_pull_request": "request_review",
     "add_comment": "add_comment",
+    "view_change_request": "view_change_request",
+    "list_work_items": "list_work_items",
+    "view_work_item": "view_work_item",
+    "list_pipeline_status": "list_pipeline_status",
+    "get_job_logs": "get_job_logs",
+    "retry_pipeline": "retry_pipeline",
 }
 
 #: The repository tools, in the order a server lists them.
@@ -336,6 +343,50 @@ class TerminalMcpBroker:
                 "output": reported or f"git {git_arguments[0]} exited 0 with no output",
             }
 
+        if name == "view_change_request":
+            try:
+                result = await self._source_control.view_change_request(
+                    self._workspace_id, _number_arguments(name, arguments, "number")
+                )
+            except Exception as error:
+                return {"ok": False, "error": f"could not view change request: {error}"}
+            return _repository_result(result)
+        if name == "list_work_items":
+            try:
+                state, labels, limit = _list_work_items_arguments(arguments)
+                result = await self._source_control.list_work_items(
+                    self._workspace_id, state, labels, limit
+                )
+            except Exception as error:
+                return {"ok": False, "error": f"could not list work items: {error}"}
+            return _repository_result(result)
+        if name == "view_work_item":
+            try:
+                result = await self._source_control.view_work_item(
+                    self._workspace_id, _number_arguments(name, arguments, "number")
+                )
+            except Exception as error:
+                return {"ok": False, "error": f"could not view work item: {error}"}
+            return _repository_result(result)
+        if name == "list_pipeline_status":
+            try:
+                ref, number = _pipeline_status_arguments(arguments)
+                result = await self._source_control.list_pipeline_status(
+                    self._workspace_id, ref=ref, change_request_number=number
+                )
+            except Exception as error:
+                return {"ok": False, "error": f"could not list pipeline status: {error}"}
+            return _repository_result(result)
+        if name in {"get_job_logs", "retry_pipeline"}:
+            try:
+                pipeline_id, job_id = _pipeline_arguments(name, arguments)
+                method = getattr(self._source_control, name)
+                result = await method(self._workspace_id, pipeline_id, job_id)
+            except Exception as error:
+                action = "get job logs" if name == "get_job_logs" else "retry pipeline"
+                return {"ok": False, "error": f"could not {action}: {error}"}
+            return _repository_result(result)
+
         branch, base_ref, title, body = _review_arguments(arguments)
         try:
             url = await self._source_control.request_review(
@@ -528,7 +579,97 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "additionalProperties": False,
         },
     },
+    "view_change_request": {
+        "name": "view_change_request",
+        "description": "View a pull request or merge request in this workspace repository.",
+        "inputSchema": {"type": "object", "properties": {"number": {"type": "integer", "minimum": 1}}, "required": ["number"], "additionalProperties": False},
+    },
+    "list_work_items": {
+        "name": "list_work_items",
+        "description": "List issues in this workspace repository; pull requests are excluded.",
+        "inputSchema": {"type": "object", "properties": {"state": {"enum": ["open", "closed", "all"]}, "labels": {"type": "array", "items": {"type": "string"}}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, "additionalProperties": False},
+    },
+    "view_work_item": {
+        "name": "view_work_item",
+        "description": "View an issue and its comments in this workspace repository.",
+        "inputSchema": {"type": "object", "properties": {"number": {"type": "integer", "minimum": 1}}, "required": ["number"], "additionalProperties": False},
+    },
+    "list_pipeline_status": {
+        "name": "list_pipeline_status",
+        "description": "List checks and CI pipelines for a ref or change request in this workspace repository.",
+        "inputSchema": {"type": "object", "properties": {"ref": {"type": "string", "minLength": 1}, "change_request_number": {"type": "integer", "minimum": 1}}, "oneOf": [{"required": ["ref"]}, {"required": ["change_request_number"]}], "additionalProperties": False},
+    },
+    "get_job_logs": {
+        "name": "get_job_logs",
+        "description": "Get a bounded CI job-log excerpt for a pipeline in this workspace repository.",
+        "inputSchema": {"type": "object", "properties": {"pipeline_id": {"type": "integer", "minimum": 1}, "job_id": {"type": "integer", "minimum": 1}}, "required": ["pipeline_id"], "additionalProperties": False},
+    },
+    "retry_pipeline": {
+        "name": "retry_pipeline",
+        "description": "Retry a CI pipeline, or one job and its dependents, in this workspace repository.",
+        "inputSchema": {"type": "object", "properties": {"pipeline_id": {"type": "integer", "minimum": 1}, "job_id": {"type": "integer", "minimum": 1}}, "required": ["pipeline_id"], "additionalProperties": False},
+    },
 }
+
+
+def _repository_result(result: object) -> dict[str, object]:
+    if dataclasses.is_dataclass(result):
+        value = dataclasses.asdict(result)
+    elif isinstance(result, tuple) and all(dataclasses.is_dataclass(item) for item in result):
+        value = [dataclasses.asdict(item) for item in result]
+    else:
+        value = result
+    return {"ok": True, "acknowledgement": "repository data retrieved", "output": json.dumps(value, sort_keys=True)}
+
+
+def _number_arguments(name: str, arguments: object, field: str) -> int:
+    if not isinstance(arguments, dict) or set(arguments) - {field}:
+        raise ValueError(f"unexpected {name} arguments")
+    if field not in arguments:
+        raise ValueError(f"{field} is required")
+    value = arguments.get(field)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _list_work_items_arguments(arguments: object) -> tuple[str, tuple[str, ...], int]:
+    if not isinstance(arguments, dict) or set(arguments) - {"state", "labels", "limit"}:
+        raise ValueError("unexpected list_work_items arguments")
+    state = arguments.get("state", "open")
+    labels = arguments.get("labels", [])
+    limit = arguments.get("limit", 30)
+    if state not in {"open", "closed", "all"}:
+        raise ValueError("state must be open, closed, or all")
+    if not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels):
+        raise ValueError("labels must be an array of non-empty strings")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer from 1 to 100")
+    return state, tuple(labels), limit
+
+
+def _pipeline_status_arguments(arguments: object) -> tuple[str | None, int | None]:
+    if not isinstance(arguments, dict) or set(arguments) - {"ref", "change_request_number"}:
+        raise ValueError("unexpected list_pipeline_status arguments")
+    ref, number = arguments.get("ref"), arguments.get("change_request_number")
+    if (ref is None) == (number is None):
+        raise ValueError("provide exactly one of ref or change_request_number")
+    if ref is not None and (not isinstance(ref, str) or not ref.strip()):
+        raise ValueError("ref must be a non-empty string")
+    if number is not None and (not isinstance(number, int) or isinstance(number, bool) or number < 1):
+        raise ValueError("change_request_number must be a positive integer")
+    return ref, number
+
+
+def _pipeline_arguments(name: str, arguments: object) -> tuple[int, int | None]:
+    if not isinstance(arguments, dict) or set(arguments) - {"pipeline_id", "job_id"}:
+        raise ValueError(f"unexpected {name} arguments")
+    pipeline_id, job_id = arguments.get("pipeline_id"), arguments.get("job_id")
+    if not isinstance(pipeline_id, int) or isinstance(pipeline_id, bool) or pipeline_id < 1:
+        raise ValueError("pipeline_id must be a positive integer")
+    if job_id is not None and (not isinstance(job_id, int) or isinstance(job_id, bool) or job_id < 1):
+        raise ValueError("job_id must be a positive integer")
+    return pipeline_id, job_id
 
 
 def _git_arguments(arguments: object) -> tuple[str, ...]:
