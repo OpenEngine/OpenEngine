@@ -20,6 +20,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type PropsWithChildren,
 } from "react";
 
@@ -316,15 +317,29 @@ export function EngineRuntimeProvider({
   initialThreadId,
   rememberActiveThread = true,
   restoreActiveThread = rememberActiveThread,
+  fallback,
+  deferMount = false,
 }: PropsWithChildren<{
   defaults: NewChatDefaults;
   initialThreadId?: string;
   rememberActiveThread?: boolean;
   restoreActiveThread?: boolean;
+  fallback?: ReactNode;
+  /** Let the surrounding shell paint before a potentially large transcript is
+   *  mounted and parsed. */
+  deferMount?: boolean;
 }>) {
   const initialThread = useInitialThreadId(initialThreadId, restoreActiveThread);
-  if (initialThread.loading)
-    return <main className="loading">Restoring chats…</main>;
+  const [mountReady, setMountReady] = useState(!deferMount);
+
+  useEffect(() => {
+    if (!deferMount || initialThread.loading) return;
+    const frame = window.requestAnimationFrame(() => setMountReady(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [deferMount, initialThread.loading]);
+
+  if (initialThread.loading || !mountReady)
+    return fallback ?? <main className="loading">Restoring chats…</main>;
 
   return (
     <EngineRuntime

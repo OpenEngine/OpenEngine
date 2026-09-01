@@ -384,6 +384,23 @@ function App() {
   const conversationUrl = chat ? window.location.pathname.replace(/\/$/, "") : undefined;
   const activeProject = projects.find((project) => project.conversationUrl === conversationUrl);
   const projectPage = activeProject !== undefined;
+  const sidebar = () => (
+    <Sidebar
+      projects={projects}
+      runs={runs}
+      initialSection={sectionFor(route)}
+      activeRunId={activeRunId}
+      activeConversationUrl={conversationUrl}
+      activeProjectId={
+        route.kind === "project" || route.kind === "milestone" || route.kind === "new-task"
+          ? route.projectId
+          : undefined
+      }
+      activeMilestonesPage={route.kind === "project"}
+      activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
+      onArchiveProject={archiveProject}
+    />
+  );
   return (
     <EngineRuntimeProvider
       defaults={{ agentId, runner, createProject: plan }}
@@ -393,28 +410,19 @@ function App() {
       // a New Project button that handed you back the chat you were in would not be
       // a plan. What it starts is still an ordinary chat to come back to.
       restoreActiveThread={chat && !plan}
+      deferMount={chat}
+      fallback={
+        <div className="app-shell">
+          {sidebar()}
+          <main className="loading">Restoring chat…</main>
+        </div>
+      }
     >
       <div className="app-shell">
         {plan && <PlanPermalink />}
-        <Sidebar
-          projects={projects}
-          runs={runs}
-          initialSection={sectionFor(route)}
-          activeRunId={activeRunId}
-          // Every conversation page, not just a workflow's: a project is one of
-          // these too, and the rail marks the one you are in. A standalone
-          // chat's path can equal no step's conversation URL, so widening this
-          // leaves the workflow rows reading exactly as they did.
-          activeConversationUrl={conversationUrl}
-          activeProjectId={
-            route.kind === "project" || route.kind === "milestone" || route.kind === "new-task"
-              ? route.projectId
-              : undefined
-          }
-          activeMilestonesPage={route.kind === "project"}
-          activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
-          onArchiveProject={archiveProject}
-        />
+        {/* Every conversation page, not just a workflow's, marks its owning
+            project or WorkOrder in the rail. */}
+        {sidebar()}
         {route.kind === "runs" ? (
           <RunsPage runs={runs} error={runsError} />
         ) : route.kind === "new-run" ? (
