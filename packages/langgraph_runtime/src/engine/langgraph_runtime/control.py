@@ -34,6 +34,16 @@ class RunStatus(Enum):
     """Paused on a question. Nothing else will happen until it is answered."""
     COMPLETED = "completed"
     FAILED = "failed"
+    """Stopped without finishing, with `RunSnapshot.error` saying why.
+
+    A node raising is the ordinary way here, not an exceptional one, so it is
+    part of the contract rather than something a binding may leave undefined: an
+    implementation must publish `run.failed` and reach this status, in the node
+    that raised. A run whose task died silently would report `running` forever,
+    hold a subscriber waiting for a terminal event that never came, and refuse
+    steering as having no node in flight -- three answers a client cannot
+    reconcile, and no way to tell it apart from a node that is still thinking.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,8 +179,24 @@ class GraphRuntime(Protocol):
     ) -> RunSnapshot:
         """Answer what a node stopped to ask, and let it go on.
 
+        The snapshot is the run as the decision left it -- released, or failed
+        when the decision was to cancel -- and not however far the node then got.
+        A reply that waited for the graph would mean something different every
+        time depending on what the node did next; what happens after the release
+        is what the event feed is for.
+
         Raises `UnknownApprovalError` for a request this run never raised, and
         `ApprovalNotPendingError` for one that is no longer waiting.
+        """
+        ...
+
+    async def aclose(self) -> None:
+        """Stop every run this runtime is driving.
+
+        Part of the contract because a control surface is a server: something
+        has to happen on SIGTERM, and an implementation whose runs were only
+        ever background tasks would drop them mid-node with no chance to
+        checkpoint. Idempotent -- shutdown may be reached more than once.
         """
         ...
 

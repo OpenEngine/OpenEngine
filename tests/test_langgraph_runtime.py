@@ -31,6 +31,7 @@ from langgraph_fakes import (
     AwaitSteering,
     Beat,
     Call,
+    Fail,
     Say,
     ScriptedGraph,
     ScriptedLangGraph,
@@ -110,7 +111,7 @@ class _Surface:
         self,
         run_id: str,
         *,
-        cursor: int | None = None,
+        cursor: int | str | None = None,
         last_event_id: int | None = None,
     ):
         return _subscribe(self.app, run_id, cursor=cursor, last_event_id=last_event_id)
@@ -123,7 +124,7 @@ class _Surface:
 
 @asynccontextmanager
 async def _subscribe(
-    app: object, run_id: str, *, cursor: int | None, last_event_id: int | None
+    app: object, run_id: str, *, cursor: int | str | None, last_event_id: int | None
 ) -> AsyncIterator[_Feed]:
     feed = _Feed()
     headers = [(b"host", b"test")]
@@ -165,14 +166,19 @@ async def _subscribe(
 
 @asynccontextmanager
 async def _server(runtime: ScriptedLangGraph) -> AsyncIterator[_Surface]:
+    """A running control server, entered and left the way a real one is.
+
+    Through the app's own lifespan rather than by calling `runtime.aclose()`
+    here, so what stops the run tasks between test cases is the same shutdown a
+    SIGTERM reaches -- a lifespan that stopped nothing would leak tasks into the
+    next test instead of passing quietly.
+    """
     app = create_app(runtime)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        try:
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
             yield _Surface(app, client)
-        finally:
-            await runtime.aclose()
 
 
 async def _start(surface: _Surface, **body: object) -> dict:
@@ -365,6 +371,71 @@ def test_the_feed_carries_transcript_events_and_tool_calls() -> None:
     assert result["payload"]["result"] == "14 passed"
 
 
+def test_one_open_subscription_sees_the_run_it_watched_finish_and_start_again() -> None:
+    """The feed outlives `run.finished`, on the feed rather than on a reconnect.
+
+    A subscription that closed itself on the terminal event would still pass a
+    suite that re-subscribes with a cursor after each transition, so this one
+    holds a single feed open across the whole thing: finish, revert by hand, and
+    watch the same feed carry the run starting again.
+    """
+
+    async def scenario() -> list[dict]:
+        runtime = ScriptedLangGraph(_pipeline(Say("Wrote the code.")))
+        async with _server(runtime) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            async with surface.subscribe(run_id) as feed:
+                await feed.until("run.finished")
+                reverted = await surface.client.post(
+                    f"/api/runs/{run_id}/transitions",
+                    json={"node": str(IMPLEMENTATION)},
+                )
+                assert reverted.status_code == 200, reverted.text
+                return await feed.until("node.started")
+
+    after = asyncio.run(scenario())
+
+    assert _kinds(after) == ["transition", "node.started"]
+    assert after[-1]["nodeId"] == str(IMPLEMENTATION)
+
+
+def test_two_subscribers_at_different_cursors_each_see_the_whole_run() -> None:
+    """Fan-out is the log's job, so more than one reader has to be real.
+
+    Two feeds open at once on the same run, one from the beginning and one from
+    partway through, is where a shared condition and a shared cursor would go
+    wrong. Each sees every event it asked for, in order, and neither advances
+    the other past anything.
+    """
+    graph = _pipeline(Say("Reading the tree."), AwaitSteering(), Say("Renamed it."))
+
+    async def scenario() -> tuple[list[dict], list[dict]]:
+        async with _server(ScriptedLangGraph(graph)) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            async with surface.subscribe(run_id) as first:
+                opening = await first.until("transcript")
+                async with surface.subscribe(
+                    run_id, cursor=opening[-1]["sequence"]
+                ) as second:
+                    await surface.client.post(
+                        f"/api/runs/{run_id}/steering", json={"message": "Rename it."}
+                    )
+                    both = await asyncio.gather(
+                        first.until("run.finished"), second.until("run.finished")
+                    )
+            return opening + both[0], both[1]
+
+    whole, late = asyncio.run(scenario())
+
+    assert _kinds(whole)[:3] == ["run.started", "node.started", "transcript"]
+    assert _kinds(whole)[-1] == "run.finished"
+    assert [event["sequence"] for event in whole] == list(range(1, len(whole) + 1))
+    # The late reader saw everything after its cursor and nothing before it.
+    assert late == whole[3:]
+
+
 def test_a_subscriber_replays_from_its_own_cursor() -> None:
     """A reconnecting client asks for what it missed, not for everything."""
 
@@ -389,6 +460,20 @@ def test_a_subscriber_replays_from_its_own_cursor() -> None:
     assert refused.json() == {"error": "cursor must be an integer"}
 
 
+def test_a_cursor_before_the_beginning_is_refused() -> None:
+    async def scenario() -> httpx.Response:
+        async with _server(ScriptedLangGraph(_pipeline(Say("Done.")))) as surface:
+            run = await _start(surface)
+            return await surface.client.get(
+                f"/api/runs/{run['runId']}/events", params={"cursor": "-1"}
+            )
+
+    refused = asyncio.run(scenario())
+
+    assert refused.status_code == 400
+    assert refused.json() == {"error": "cursor must not be negative"}
+
+
 def test_a_browser_reconnects_with_the_event_id_it_last_saw() -> None:
     """`Last-Event-ID` is what EventSource sends; honouring it avoids a poll."""
 
@@ -407,6 +492,126 @@ def test_a_browser_reconnects_with_the_event_id_it_last_saw() -> None:
 
     assert first == everything[-1]
     assert first["type"] == "run.finished"
+
+
+def test_an_explicit_cursor_beats_the_header_even_when_it_is_empty() -> None:
+    """An empty `cursor` is a position -- the beginning -- not an absent one.
+
+    A client that says `?cursor=` is asking to replay the run from the start,
+    and honouring the browser's memory instead would answer with somewhere it
+    did not ask for.
+    """
+
+    async def scenario() -> tuple[list[dict], dict]:
+        async with _server(ScriptedLangGraph(_pipeline(Say("Done.")))) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            everything = await surface.read(run_id, "run.finished")
+            async with surface.subscribe(
+                run_id, cursor="", last_event_id=everything[-2]["sequence"]
+            ) as feed:
+                async with asyncio.timeout(PATIENCE):
+                    return everything, await feed.event()
+
+    everything, first = asyncio.run(scenario())
+
+    assert first == everything[0]
+    assert first["type"] == "run.started"
+
+
+# --- a node that raises ----------------------------------------------------
+
+
+def test_a_node_that_raises_fails_the_run_where_it_raised() -> None:
+    """The failure path, which is ordinary rather than exceptional.
+
+    A run whose task died silently would report `running` forever, hold every
+    subscriber waiting for a terminal event, and refuse steering as having no
+    node in flight -- three answers a client cannot reconcile.
+    """
+    graph = _pipeline(Say("Running the tests."), Fail("codex is out of quota"))
+
+    async def scenario() -> tuple[list[dict], dict, httpx.Response]:
+        async with _server(ScriptedLangGraph(graph)) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            events = await surface.read(run_id, "run.failed")
+            state = await surface.client.get(f"/api/runs/{run_id}")
+            steered = await surface.client.post(
+                f"/api/runs/{run_id}/steering", json={"message": "try again"}
+            )
+            return events, state.json(), steered
+
+    events, state, steered = asyncio.run(scenario())
+
+    assert events[-1]["payload"] == {"error": "codex is out of quota"}
+    assert state["status"] == "failed"
+    assert state["error"] == "codex is out of quota"
+    # Stopped in the node that raised, so a manual transition can send it back.
+    assert state["currentNode"] == str(IMPLEMENTATION)
+    # Review never ran, and the refusal to steer now agrees with the status.
+    assert [event["nodeId"] for event in _of_kind(events, "node.started")] == [
+        str(IMPLEMENTATION)
+    ]
+    assert steered.status_code == 409
+
+
+def test_a_failed_run_can_be_sent_back_and_run_again() -> None:
+    """Recovery is the reason a failure has to name the node it happened in."""
+    graph = ScriptedGraph(
+        GRAPH,
+        "Implementation and review",
+        (
+            ScriptedNode(
+                IMPLEMENTATION,
+                (Fail("codex is out of quota"),),
+                next_node=REVIEW,
+                name="Implementation",
+            ),
+            ScriptedNode(REVIEW, (Say("Looks right."),), name="Review"),
+        ),
+    )
+
+    async def scenario() -> tuple[list[dict], dict]:
+        async with _server(ScriptedLangGraph(graph)) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            failed = await surface.read(run_id, "run.failed")
+            reverted = await surface.client.post(
+                f"/api/runs/{run_id}/transitions", json={"node": str(IMPLEMENTATION)}
+            )
+            assert reverted.status_code == 200, reverted.text
+            return failed, reverted.json()
+
+    failed, reverted = asyncio.run(scenario())
+
+    assert failed[-1]["type"] == "run.failed"
+    # The error is cleared by the transition: it describes the attempt that is
+    # being replaced, and a run that carried it forward would look failed while
+    # running.
+    assert reverted["status"] == "running"
+    assert reverted["error"] == ""
+    assert reverted["currentNode"] == str(IMPLEMENTATION)
+
+
+# --- shutdown --------------------------------------------------------------
+
+
+def test_shutting_the_server_down_stops_the_runs_it_was_driving() -> None:
+    """Runs outlive the request that started them, so nothing else would.
+
+    Without this a SIGTERM drops whatever node was mid-execution, with no
+    chance for an implementation to checkpoint it.
+    """
+    runtime = ScriptedLangGraph(_pipeline(Say("Reading."), AwaitSteering()))
+
+    async def scenario() -> list[str]:
+        async with _server(runtime) as surface:
+            run = await _start(surface)
+            await surface.read(str(run["runId"]), "transcript")
+        return [str(run.run_id) for run in runtime.running()]
+
+    assert asyncio.run(scenario()) == []
 
 
 # --- approvals -------------------------------------------------------------
@@ -450,11 +655,11 @@ def test_an_approval_is_published_answered_and_answered_only_once() -> None:
     assert answered["garbled"].json() == {
         "error": "decision must be one of: accept, accept_for_session, cancel"
     }
-    # Answered, and the run has taken the answer by the time it is reported: a
-    # snapshot still saying "awaiting approval" would contradict the request it
-    # is the reply to.
+    # The reply is the run as the decision left it -- released, and no longer
+    # asking -- rather than however far the node then got. A reply that waited
+    # for the graph would say `running` or `completed` depending on the script.
     assert answered["accepted"].status_code == 200
-    assert answered["accepted"].json()["status"] != "awaiting_approval"
+    assert answered["accepted"].json()["status"] == "running"
     assert answered["accepted"].json()["pendingApprovals"] == []
     resolved = _of_kind(answered["finished"], "approval.resolved")[0]
     assert resolved["payload"] == {
@@ -468,21 +673,25 @@ def test_an_approval_is_published_answered_and_answered_only_once() -> None:
 def test_cancelling_an_approval_fails_the_run_where_it_asked() -> None:
     graph = _pipeline(Ask("delete the branch", command="git branch -D main"))
 
-    async def scenario() -> tuple[list[dict], dict]:
+    async def scenario() -> tuple[list[dict], dict, dict]:
         async with _server(ScriptedLangGraph(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             asked = await surface.read(run_id, "approval.requested")
-            await surface.client.post(
+            refused = await surface.client.post(
                 f"/api/runs/{run_id}/approvals/{asked[-1]['payload']['approvalId']}",
                 json={"decision": "cancel"},
             )
             events = await surface.read(run_id, "run.failed")
             state = await surface.client.get(f"/api/runs/{run_id}")
-            return events, state.json()
+            return events, state.json(), refused.json()
 
-    events, state = asyncio.run(scenario())
+    events, state, refused = asyncio.run(scenario())
 
+    # The refusal is what the reply reports, without waiting to see the node
+    # notice: the decision is what ended the run, not anything it did after.
+    assert refused["status"] == "failed"
+    assert refused["error"] == "delete the branch was not allowed"
     assert _of_kind(events, "approval.resolved")[0]["payload"]["decision"] == "cancel"
     assert state["status"] == "failed"
     assert state["error"] == "delete the branch was not allowed"
@@ -704,3 +913,28 @@ def test_starting_a_run_refuses_a_body_it_cannot_read(
 
     assert refused.status_code == 400
     assert refused.json() == {"error": message}
+
+
+@pytest.mark.parametrize(
+    "body", [b"not json", b'{"graphId": "\xff"}'], ids=["unparseable", "not utf-8"]
+)
+def test_a_body_that_is_not_json_at_all_is_still_a_400(body: bytes) -> None:
+    """Including one that is not even text.
+
+    Starlette hands raw bytes to `json.loads`, which decodes them itself, so a
+    body that is not UTF-8 raises `UnicodeDecodeError` rather than
+    `JSONDecodeError` -- the one way a client could make this surface 500.
+    """
+
+    async def scenario() -> httpx.Response:
+        async with _server(ScriptedLangGraph(_pipeline(Say("Done.")))) as surface:
+            return await surface.client.post(
+                "/api/runs",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+
+    refused = asyncio.run(scenario())
+
+    assert refused.status_code == 400
+    assert refused.json() == {"error": "graphId must be a non-empty string"}

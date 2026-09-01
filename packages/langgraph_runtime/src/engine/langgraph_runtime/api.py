@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 
 from engine.domain import ApprovalDecision, ApprovalId, RunId
 from starlette.applications import Starlette
@@ -146,7 +147,17 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
+    @asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        # Runs outlive the request that started them, so nothing else would stop
+        # them: without this, SIGTERM drops whatever node was mid-execution.
+        try:
+            yield
+        finally:
+            await runtime.aclose()
+
     app = Starlette(
+        lifespan=lifespan,
         routes=[
             Route("/api/graphs", list_graphs),
             Route("/api/graphs/{graph_id}", describe_graph),
@@ -184,7 +195,12 @@ def _cursor(request: Request) -> int:
     one is replaying deliberately and the header is only what the browser
     remembers.
     """
-    raw = request.query_params.get("cursor") or request.headers.get("last-event-id")
+    raw = request.query_params.get("cursor")
+    if raw is None:
+        # Only an absent cursor falls back. An empty one is still the client
+        # naming its position -- the beginning -- and honouring the browser's
+        # memory instead would replay from somewhere it did not ask for.
+        raw = request.headers.get("last-event-id")
     if raw is None or not raw.strip():
         return 0
     try:
@@ -279,7 +295,12 @@ def _refusal(error: Exception) -> JSONResponse:
 async def _json_body(request: Request) -> dict[str, object]:
     try:
         body = await request.json()
-    except json.JSONDecodeError:
+    except ValueError:
+        # `ValueError` rather than `JSONDecodeError`: Starlette hands raw bytes
+        # to `json.loads`, which decodes them itself, so a body that is not
+        # UTF-8 raises `UnicodeDecodeError`. Both are `ValueError`, and letting
+        # one of them past here is the difference between the 400 every other
+        # unreadable body gets and a 500.
         return {}
     return body if isinstance(body, dict) else {}
 

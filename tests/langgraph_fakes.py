@@ -13,7 +13,8 @@ satisfies the same protocol and the same tests run against it unchanged.
 A node is a tuple of beats. `Say` and `Call` are things it does; `Ask` is a
 pause on consent; `AwaitSteering` is the interruption point steering exists for
 -- the node stops there, and continues with the beats after it once a message
-arrives, rather than starting the node again.
+arrives, rather than starting the node again; `Fail` raises, which is the one
+thing a real node does that none of the others can.
 """
 
 from __future__ import annotations
@@ -77,7 +78,24 @@ class AwaitSteering:
     """The node stops until somebody sends it a message."""
 
 
-Beat = Say | Call | Ask | AwaitSteering
+@dataclass(frozen=True, slots=True)
+class Fail:
+    """The node raises.
+
+    The likeliest thing a real node does that none of the other beats can: an
+    agent whose provider is out of quota, a tool that is not installed, a bug.
+    Scripted so the contract has to say what a run does about it, rather than
+    leaving the answer to whichever binding hits it first.
+    """
+
+    message: str
+
+
+class ScriptedFailure(RuntimeError):
+    """What a `Fail` beat raises. Nothing catches it by type."""
+
+
+Beat = Say | Call | Ask | AwaitSteering | Fail
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,27 +269,61 @@ class ScriptedLangGraph:
                     f"approval is no longer pending: {approval_id}"
                 )
             raise UnknownApprovalError(f"unknown approval: {approval_id}")
-        _, future = found
+        approval, future = found
+        # The decision's own effect is applied here, before the node is woken:
+        # the request is answered, and the run is either released or over. What
+        # the node does next belongs to the node, and waiting for it would make
+        # this reply mean "wherever the graph happened to get to" -- `running`,
+        # `completed` or `failed` depending on the script, and different again
+        # the next time the same request is answered.
+        run.pending.pop(approval_id)
+        run.answered.add(approval_id)
+        if decision is ApprovalDecision.CANCEL:
+            run.status = RunStatus.FAILED
+            run.error = f"{approval.reason} was not allowed"
+        else:
+            run.status = RunStatus.RUNNING
         future.set_result(decision)
-        # Let the node take the answer before reporting what the run is doing:
-        # a snapshot that still said "awaiting approval" would contradict the
-        # request that had just been granted.
-        while approval_id in run.pending:
-            if run.task is None or run.task.done():
-                break
-            await asyncio.sleep(0)
         return run.snapshot()
 
-    # --- test lifecycle ----------------------------------------------------
-
     async def aclose(self) -> None:
-        """Stop every run. Tests call this; the protocol does not require it."""
+        """Stop every run, as the server's shutdown does."""
         for run in self._runs.values():
             await self._stop(run)
+
+    # --- what a test can ask that a client cannot --------------------------
+
+    def running(self) -> tuple[_Run, ...]:
+        """The runs still executing, which shutdown has to leave empty.
+
+        Not part of `GraphRuntime`: "is a task still alive" is an
+        implementation's own question, and the HTTP surface has no way to ask
+        it -- a leaked task looks exactly like a node that is thinking.
+        """
+        return tuple(
+            run
+            for run in self._runs.values()
+            if run.task is not None and not run.task.done()
+        )
 
     # --- execution ---------------------------------------------------------
 
     async def _execute(self, run: _Run, start_node: NodeId) -> None:
+        """Drive the run, and make sure a node that raises is reported as one.
+
+        Without this, the task would die with its exception unretrieved and the
+        run would still claim to be running -- forever, to every client asking.
+        """
+        try:
+            await self._walk(run, start_node)
+        except asyncio.CancelledError:
+            raise
+        except Exception as failure:
+            run.status = RunStatus.FAILED
+            run.error = str(failure)
+            await self._emit(run, EventKind.RUN_FAILED, {"error": run.error})
+
+    async def _walk(self, run: _Run, start_node: NodeId) -> None:
         current: NodeId | None = start_node
         while current is not None:
             node = run.graph.node(current)
@@ -324,6 +376,8 @@ class ScriptedLangGraph:
                 return await self._ask(run, node_id, beat)
             case AwaitSteering():
                 await self._receive(run, node_id, await run.steering.get())
+            case Fail(message=message):
+                raise ScriptedFailure(message)
         return True
 
     async def _ask(self, run: _Run, node_id: NodeId, beat: Ask) -> bool:
@@ -354,9 +408,11 @@ class ScriptedLangGraph:
         try:
             decision = await future
         finally:
+            # `decide` clears these on the way in; this is for the run being
+            # stopped or sent elsewhere while the question is still open.
             run.pending.pop(approval.approval_id, None)
-            run.answered.add(approval.approval_id)
-        run.status = RunStatus.RUNNING
+        # The status the decision left behind is already the run's -- what is
+        # left is to say so on the feed, and to stop if the answer was no.
         await self._emit(
             run,
             EventKind.APPROVAL_RESOLVED,
@@ -367,8 +423,6 @@ class ScriptedLangGraph:
             node_id=node_id,
         )
         if decision is ApprovalDecision.CANCEL:
-            run.status = RunStatus.FAILED
-            run.error = f"{approval.reason} was not allowed"
             run.current_node = node_id
             await self._emit(run, EventKind.RUN_FAILED, {"error": run.error})
             return False
@@ -432,7 +486,9 @@ __all__ = [
     "Ask",
     "AwaitSteering",
     "Call",
+    "Fail",
     "Say",
+    "ScriptedFailure",
     "ScriptedGraph",
     "ScriptedLangGraph",
     "ScriptedNode",

@@ -9,6 +9,15 @@ losing the approval request it was about to show.
 The log is the control surface's, not the graph's. A LangGraph binding publishes
 into it through one callback and never has to think about who is listening, how
 many of them there are, or which of them fell over.
+
+It is process-local and unbounded, which is a decision and not an oversight, but
+only for as long as the graph behind it is. `apps/web`'s `ApprovalFeed` is the
+shape this ends up: persistence is the source of truth and the condition is only
+a wake-up signal, so a reconnect cannot lose an event and nothing has to be kept
+in memory to make replay work. That needs a store to write to, and which store
+is a question for the binding rather than for the mock -- so the eviction hook
+is deliberately absent rather than guessed at, and every run a process has
+handled is replayable until it restarts.
 """
 
 from __future__ import annotations
@@ -88,10 +97,15 @@ class EventLog:
         return numbered
 
     def since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]:
-        """Everything raised for this run after `cursor`."""
-        return tuple(
-            event for event in self._events.get(run_id, ()) if event.sequence > cursor
-        )
+        """Everything raised for this run after `cursor`.
+
+        A slice rather than a scan. `append` numbers events densely from 1 and
+        never reorders them, so the cursor is the index of the next one -- and
+        the difference matters: `stream` asks this question once per event it
+        delivers, per subscriber, so a filter would make one long-lived agent
+        node quadratic in the number of events it raised.
+        """
+        return tuple(self._events.get(run_id, ())[cursor:])
 
     async def stream(
         self, run_id: RunId, cursor: int = 0
@@ -102,15 +116,21 @@ class EventLog:
         run can be sent back to an earlier node by hand, and a subscription that
         closed itself on `run.finished` would miss the run starting again.
         Subscribers stop by stopping.
+
+        Each subscriber has its own cursor and its own generator, so two of them
+        reading the same run at different points cannot advance each other.
         """
         condition = self._condition(run_id)
         while True:
-            pending = self.since(run_id, cursor)
-            for event in pending:
+            for event in self.since(run_id, cursor):
                 cursor = event.sequence
                 yield event
             async with condition:
-                await condition.wait_for(lambda: bool(self.since(run_id, cursor)))
+                # Length rather than `since`, because `Condition.wait_for` calls
+                # this on every `notify_all` and holds the lock `append` needs.
+                await condition.wait_for(
+                    lambda: len(self._events.get(run_id, ())) > cursor
+                )
 
     def _condition(self, run_id: RunId) -> asyncio.Condition:
         return self._changed.setdefault(run_id, asyncio.Condition())
