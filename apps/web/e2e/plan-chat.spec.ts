@@ -71,9 +71,7 @@ for (const runner of ["codex", "claude"]) {
       ],
     });
 
-    await page.goto("/conversations");
-    await page.getByRole("button", { name: "Projects" }).click();
-    await page.getByRole("link", { name: "+ New project" }).click();
+    await page.goto("/plan");
     await page.getByLabel("Runner").selectOption(runner);
     await page.getByLabel("Message the agent").fill("Add the foundation milestone.");
     await page.getByRole("button", { name: "Send" }).click();
@@ -89,12 +87,10 @@ test("a new project opens a planning conversation and appears in the rail", asyn
 }, testInfo) => {
   engine.script(SCRIPT);
 
-  await page.goto("/conversations");
-  await page.getByRole("button", { name: "Projects" }).click();
-  await page.getByRole("link", { name: "+ New project" }).click();
+  await page.goto("/plan");
 
-  // The new conversation page, on the agent that plans rather than the one
-  // that codes -- which is the whole of what the button settles.
+  // The new conversation page uses the agent that plans rather than the one
+  // that codes.
   await expect(page).toHaveURL(/\/plan$/);
   await expect(
     page.getByRole("heading", { name: "Define a new project with milestones" }),
