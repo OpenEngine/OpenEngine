@@ -4,10 +4,12 @@ Driven over HTTP against a scripted graph rather than against the runtime object
 because the HTTP surface is what this package is for -- a test that called
 `ScriptedGraphRuntime.steer` directly would pass whatever the wire format did.
 
-Two graphs are used. A pipeline, implementation then review, which is the shape
-"send it back to implementation" is written in; and a fan-out, implementation
+Three graphs are used. A pipeline, implementation then review, which is the
+shape "send it back to implementation" is written in; a fan-out, implementation
 into three reviewers into a reranker, which is the shape that makes a single
-"current node" a lie. See `tests/graph_runtime_fakes.py` for what a script is.
+"current node" a lie; and the same review node run three times over, which is
+the shape that makes a node *name* useless as an address. See
+`tests/graph_runtime_fakes.py` for what a script is.
 
 Requests are made with httpx, except the event feed. That one is called as ASGI
 directly: httpx's ASGI transport buffers a whole response before returning it,
@@ -47,6 +49,7 @@ from graph_runtime_fakes import (
 
 GRAPH = GraphId("implementation-review")
 POOL = GraphId("reviewer-pool")
+REPEATED = GraphId("repeated-review")
 IMPLEMENTATION = NodeId("implementation")
 REVIEW = NodeId("review")
 RERANKER = NodeId("reranker")
@@ -98,6 +101,29 @@ def _fan_out(*reviewer: Beat) -> ScriptedGraph:
                 for node_id in REVIEWERS
             ),
             ScriptedNode(RERANKER, (Say("Ranked them."),), name="Reranker"),
+        ),
+    )
+
+
+def _repeated(*review: Beat) -> ScriptedGraph:
+    """Implementation, then the *same* review node three times over.
+
+    What `Send` does: one node, several concurrent tasks. The three share a
+    name and nothing else -- separate executions, separate transcripts,
+    separate approvals -- so this is the graph that makes a node name useless
+    as an address.
+    """
+    return ScriptedGraph(
+        REPEATED,
+        "Three passes of one reviewer",
+        (
+            ScriptedNode(
+                IMPLEMENTATION,
+                (Say("Wrote the code."),),
+                next_nodes=(REVIEW,),
+                name="Implementation",
+            ),
+            ScriptedNode(REVIEW, review, tasks=3, name="Review"),
         ),
     )
 
@@ -250,6 +276,15 @@ def _of_kind(events: Sequence[dict], kind: str) -> list[dict]:
     return [event for event in events if event["type"] == kind]
 
 
+def _nodes_of(executions: Sequence[dict]) -> list[str]:
+    """The nodes behind a run's active executions, in the order it reports them."""
+    return [execution["nodeId"] for execution in executions]
+
+
+def _ids_of(executions: Sequence[dict]) -> list[str]:
+    return [execution["executionId"] for execution in executions]
+
+
 def _transcript(events: Sequence[dict]) -> list[tuple[str, str]]:
     return [
         (event["payload"]["role"], event["payload"]["text"])
@@ -337,7 +372,7 @@ def test_starting_a_run_reports_the_frontier_it_begins_at() -> None:
     assert run["status"] == "running"
     # Nothing is executing yet -- the run is standing at its first checkpoint,
     # which is exactly what a resume with no argument would replay.
-    assert run["activeNodes"] == []
+    assert run["activeExecutions"] == []
     assert run["nextNodes"] == [str(IMPLEMENTATION)]
     assert run["checkpointId"] is not None
     assert run["values"] == {"repository": "acme/api"}
@@ -373,7 +408,7 @@ def test_current_state_names_what_a_paused_run_is_waiting_in() -> None:
     paused = asyncio.run(scenario())
 
     assert paused["status"] == "awaiting_approval"
-    assert paused["activeNodes"] == [str(IMPLEMENTATION)]
+    assert _nodes_of(paused["activeExecutions"]) == [str(IMPLEMENTATION)]
     assert paused["nextNodes"] == [str(REVIEW)]
     assert paused["values"] == {str(IMPLEMENTATION): "Ready to run the tests."}
     approval = paused["pendingApprovals"][0]
@@ -406,7 +441,7 @@ def test_a_run_nobody_started_is_not_found() -> None:
 
 
 def test_a_fan_out_reports_every_node_of_the_superstep_at_once() -> None:
-    """The reason `active_nodes` is plural.
+    """The reason `active_executions` is plural.
 
     Three reviewers are one superstep, not three, and there is no truthful value
     for "the current node" while all three are working.
@@ -426,7 +461,9 @@ def test_a_fan_out_reports_every_node_of_the_superstep_at_once() -> None:
     working, events = asyncio.run(scenario())
 
     assert working["status"] == "running"
-    assert working["activeNodes"] == [str(node_id) for node_id in REVIEWERS]
+    assert _nodes_of(working["activeExecutions"]) == [
+        str(node_id) for node_id in REVIEWERS
+    ]
     assert working["nextNodes"] == [str(RERANKER)]
     # One checkpoint per superstep boundary, and the pool is one boundary.
     started = [event["nodeId"] for event in _of_kind(events, "node.started")]
@@ -465,7 +502,7 @@ def test_steering_reaches_the_execution_without_restarting_the_node() -> None:
     waiting, steered, events, final = asyncio.run(scenario())
 
     assert waiting["status"] == "running"
-    assert waiting["activeNodes"] == [str(IMPLEMENTATION)]
+    assert _nodes_of(waiting["activeExecutions"]) == [str(IMPLEMENTATION)]
     assert steered.status_code == 200
     assert runtime.entered(IMPLEMENTATION) == 1
     assert [event["nodeId"] for event in _of_kind(events, "node.started")] == [
@@ -484,6 +521,9 @@ def test_steering_reaches_the_execution_without_restarting_the_node() -> None:
     assert len(steering) == 1
     assert steering[0]["payload"] == {"message": "Rename the flag."}
     assert steering[0]["nodeId"] == str(IMPLEMENTATION)
+    # The id the run reported as active is the one the message went to, so a
+    # client can tell which of several agents was redirected.
+    assert steering[0]["executionId"] == _ids_of(waiting["activeExecutions"])[0]
     assert steering[0]["sequence"] < _of_kind(events, "transcript")[1]["sequence"]
     assert final["status"] == "completed"
     assert final["values"]["steering"] == ["Rename the flag."]
@@ -565,6 +605,7 @@ def test_steering_a_fan_out_has_to_name_which_execution_it_is_for() -> None:
             run = await _start(surface, POOL)
             run_id = str(run["runId"])
             await surface.read(run_id, "transcript", 4)
+            working = await surface.client.get(f"/api/runs/{run_id}")
             steering = f"/api/runs/{run_id}/steering"
             unnamed = await surface.client.post(steering, json={"message": "Focus."})
             named = await surface.client.post(
@@ -573,32 +614,49 @@ def test_steering_a_fan_out_has_to_name_which_execution_it_is_for() -> None:
             idle = await surface.client.post(
                 steering, json={"message": "Rank them.", "node": str(RERANKER)}
             )
+            both = await surface.client.post(
+                steering,
+                json={
+                    "message": "Which?",
+                    "node": str(REVIEWERS[0]),
+                    "execution": _ids_of(working.json()["activeExecutions"])[0],
+                },
+            )
             for node_id in REVIEWERS:
                 await surface.client.post(
                     steering, json={"message": "Wrap up.", "node": str(node_id)}
                 )
             events = await surface.read(run_id, "run.finished")
             return {
+                "working": working.json(),
                 "unnamed": unnamed,
                 "named": named,
                 "idle": idle,
+                "both": both,
                 "events": events,
             }
 
     outcome = asyncio.run(scenario())
 
-    # A race the client can fix by naming a node, not a request that failed.
+    # A race the client can fix by naming one, not a request that failed -- and
+    # the refusal lists what it could have named, ids and nodes together.
     assert outcome["unnamed"].status_code == 409
-    assert outcome["unnamed"].json() == {
-        "error": (
-            "name the node to control: "
-            f"{', '.join(str(node) for node in REVIEWERS)} are executing"
-        )
-    }
+    refusal = outcome["unnamed"].json()["error"]
+    assert refusal.startswith("name the execution to control: ")
+    assert all(f"({node_id})" in refusal for node_id in REVIEWERS)
+    assert all(
+        execution_id in refusal
+        for execution_id in _ids_of(outcome["working"]["activeExecutions"])
+    )
     assert outcome["named"].status_code == 200
     # A node in the graph, but not one of the three in flight.
     assert outcome["idle"].status_code == 409
     assert outcome["idle"].json() == {"error": f"{RERANKER} is not executing"}
+    # Two addresses for one message is a client bug, not something to resolve.
+    assert outcome["both"].status_code == 400
+    assert outcome["both"].json() == {
+        "error": "give at most one of node or execution"
+    }
     # Each reviewer took its own messages, and none of them was restarted.
     assert all(runtime.entered(node_id) == 1 for node_id in REVIEWERS)
     steered = _of_kind(outcome["events"], "steering.received")
@@ -606,6 +664,157 @@ def test_steering_a_fan_out_has_to_name_which_execution_it_is_for() -> None:
         str(REVIEWERS[1]),
         *(str(node_id) for node_id in REVIEWERS),
     ]
+
+
+def test_several_tasks_of_one_node_are_several_executions() -> None:
+    """The reason an execution has an id of its own.
+
+    LangGraph's `Send` fans several tasks into one node, so `review` can be
+    three things at once. A registry keyed by node would have kept the last of
+    them and dropped the other two: the run would report one execution, two
+    agents would be unreachable, and their approvals unanswerable.
+    """
+    runtime = ScriptedGraphRuntime(_repeated(Say("Reviewing."), AwaitSteering()))
+
+    async def scenario() -> dict[str, object]:
+        async with _server(runtime) as surface:
+            run = await _start(surface, REPEATED)
+            run_id = str(run["runId"])
+            events = await surface.read(run_id, "transcript", 4)
+            working = await surface.client.get(f"/api/runs/{run_id}")
+            return {"working": working.json(), "events": events}
+
+    outcome = asyncio.run(scenario())
+    executions = outcome["working"]["activeExecutions"]
+
+    # Three entries, one node, three distinct ids -- and the node still named,
+    # because that is what a client shows a person.
+    assert _nodes_of(executions) == [str(REVIEW)] * 3
+    assert len(set(_ids_of(executions))) == 3
+    assert runtime.entered(REVIEW) == 3
+    # The feed can tell them apart too: three identical transcript lines that
+    # would otherwise be indistinguishable.
+    reviewing = [
+        event
+        for event in _of_kind(outcome["events"], "transcript")
+        if event["payload"]["text"] == "Reviewing."
+    ]
+    assert len(reviewing) == 3
+    assert sorted(event["executionId"] for event in reviewing) == sorted(
+        _ids_of(executions)
+    )
+
+
+def test_steering_one_task_of_a_node_reaches_only_that_task() -> None:
+    """The node name is ambiguous here, and the id is not."""
+    runtime = ScriptedGraphRuntime(
+        _repeated(Say("Reviewing."), AwaitSteering(), Say("Done."))
+    )
+
+    async def scenario() -> dict[str, object]:
+        async with _server(runtime) as surface:
+            run = await _start(surface, REPEATED)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "transcript", 4)
+            working = await surface.client.get(f"/api/runs/{run_id}")
+            ids = _ids_of(working.json()["activeExecutions"])
+            steering = f"/api/runs/{run_id}/steering"
+            # Naming the node is not enough: three of them are running it.
+            by_node = await surface.client.post(
+                steering, json={"message": "Focus.", "node": str(REVIEW)}
+            )
+            targeted = await surface.client.post(
+                steering, json={"message": "Focus on auth.", "execution": ids[1]}
+            )
+            after = await surface.client.get(f"/api/runs/{run_id}")
+            for execution_id in (ids[0], ids[2]):
+                await surface.client.post(
+                    steering, json={"message": "Wrap up.", "execution": execution_id}
+                )
+            events = await surface.read(run_id, "run.finished")
+            return {
+                "ids": ids,
+                "by_node": by_node,
+                "targeted": targeted,
+                "after": after.json(),
+                "events": events,
+            }
+
+    outcome = asyncio.run(scenario())
+    ids = outcome["ids"]
+
+    assert outcome["by_node"].status_code == 409
+    assert outcome["by_node"].json()["error"].startswith(
+        "name the execution to control: "
+    )
+    assert outcome["targeted"].status_code == 200
+    # Only the one that was named was given anything: the other two were sent
+    # nothing and so cannot have moved, which is what "reaches only that task"
+    # has to mean. (Whether the named one has woken yet is its own business.)
+    assert {ids[0], ids[2]} <= set(_ids_of(outcome["after"]["activeExecutions"]))
+    steered = _of_kind(outcome["events"], "steering.received")
+    assert [event["executionId"] for event in steered] == [ids[1], ids[0], ids[2]]
+    assert all(event["nodeId"] == str(REVIEW) for event in steered)
+    # Each took its own instructions in its own order, and none was restarted.
+    assert runtime.entered(REVIEW) == 3
+    delivered = [
+        (event["executionId"], event["payload"]["text"])
+        for event in _of_kind(outcome["events"], "transcript")
+        if event["payload"]["role"] == "user"
+    ]
+    assert delivered.count((ids[1], "Focus on auth.")) == 1
+    assert [entry for entry in delivered if entry[0] == ids[0]] == [
+        (ids[0], "Wrap up.")
+    ]
+
+
+def test_an_approval_goes_back_to_the_task_that_raised_it() -> None:
+    """Routing by node would release whichever of three the dictionary kept."""
+    runtime = ScriptedGraphRuntime(
+        _repeated(Ask("run the tests", command="pytest"), Say("Done."))
+    )
+
+    async def scenario() -> dict[str, object]:
+        async with _server(runtime) as surface:
+            run = await _start(surface, REPEATED)
+            run_id = str(run["runId"])
+            asked = await surface.read(run_id, "approval.requested", 3)
+            waiting = await surface.client.get(f"/api/runs/{run_id}")
+            requests = waiting.json()["pendingApprovals"]
+            answered = await surface.client.post(
+                f"/api/runs/{run_id}/approvals/{requests[1]['approvalId']}",
+                json={"decision": "accept"},
+            )
+            for request in (requests[0], requests[2]):
+                await surface.client.post(
+                    f"/api/runs/{run_id}/approvals/{request['approvalId']}",
+                    json={"decision": "accept"},
+                )
+            events = await surface.read(run_id, "run.finished")
+            return {
+                "asked": asked,
+                "requests": requests,
+                "answered": answered,
+                "events": events,
+            }
+
+    outcome = asyncio.run(scenario())
+    requests = outcome["requests"]
+
+    # Three separate questions from one node, each naming who asked it.
+    assert [request["nodeId"] for request in requests] == [str(REVIEW)] * 3
+    assert len({request["executionId"] for request in requests}) == 3
+    assert len({request["approvalId"] for request in requests}) == 3
+    # Answering one released one: two are still outstanding afterwards.
+    assert outcome["answered"].status_code == 200
+    assert [
+        request["approvalId"]
+        for request in outcome["answered"].json()["pendingApprovals"]
+    ] == [requests[0]["approvalId"], requests[2]["approvalId"]]
+    resolved = _of_kind(outcome["events"], "approval.resolved")
+    assert resolved[0]["payload"]["approvalId"] == requests[1]["approvalId"]
+    assert resolved[0]["executionId"] == requests[1]["executionId"]
+    assert runtime.entered(REVIEW) == 3
 
 
 def test_steering_a_run_with_nothing_in_flight_is_refused() -> None:
@@ -737,7 +946,7 @@ def test_cancelling_an_approval_fails_the_run_where_it_asked() -> None:
     assert _of_kind(events, "approval.resolved")[0]["payload"]["decision"] == "cancel"
     assert state["status"] == "failed"
     assert state["error"] == "delete the branch was not allowed"
-    assert state["activeNodes"] == []
+    assert state["activeExecutions"] == []
     # Review never ran, and the position it stopped at still names the node it
     # was about to run -- which is what a resume needs.
     assert state["nextNodes"] == [str(IMPLEMENTATION)]
@@ -776,7 +985,7 @@ def test_a_node_that_raises_fails_the_run_where_it_raised() -> None:
     assert events[-1]["nodeId"] == str(IMPLEMENTATION)
     assert state["status"] == "failed"
     assert state["error"] == "codex is out of quota"
-    assert state["activeNodes"] == []
+    assert state["activeExecutions"] == []
     assert state["nextNodes"] == [str(IMPLEMENTATION)]
     assert [event["nodeId"] for event in _of_kind(events, "node.started")] == [
         str(IMPLEMENTATION)
@@ -875,7 +1084,7 @@ def test_sending_a_run_back_forks_and_keeps_the_attempt_it_replaces() -> None:
     # The answer to the request is the forked position: standing at a new
     # checkpoint, holding the state the node was entered with, nothing running.
     assert reverted["status"] == "running"
-    assert reverted["activeNodes"] == []
+    assert reverted["activeExecutions"] == []
     assert reverted["nextNodes"] == [str(IMPLEMENTATION)]
     assert reverted["values"] == {}
     assert reverted["checkpointId"] not in {point["checkpointId"] for point in before}

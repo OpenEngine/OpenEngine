@@ -12,13 +12,18 @@ behaviour under steering and resumption are all decided here and checked in
 same protocol and the same tests run against it unchanged.
 
 The important thing this fake models -- and the reason it is not simply a stub
--- is where control goes. Each node in flight registers a `ControllableExecution`
-and keeps it registered for the whole node: while it works, while it waits on an
-approval, and while somebody redirects it. `steer()` and `decide()` are routed
-to that object and the node's coroutine never stops or restarts, which is
-exactly the lifecycle an `ACPNode` holding an `ACPSession` has. A fake that
-implemented approvals by tearing the node down and running it again would pass a
-weaker suite and prove nothing about the binding.
+-- is where control goes. Each task in flight registers a `ControllableExecution`
+under its own `ExecutionId` and keeps it registered for the whole task: while it
+works, while it waits on an approval, and while somebody redirects it. `steer()`
+and `decide()` are routed to that object and the node's coroutine never stops or
+restarts, which is exactly the lifecycle an `ACPNode` holding an `ACPSession`
+has. A fake that implemented approvals by tearing the node down and running it
+again would pass a weaker suite and prove nothing about the binding.
+
+`ScriptedNode.tasks` is how the same node runs more than once at a time, which
+is what LangGraph's `Send` does. Two tasks of one node are two executions with
+two queues and two sets of open questions, and the fake would be misleading if
+they shared either.
 
 A node is a tuple of beats. `Say` and `Call` are things it does; `Ask` is a
 pause on consent, taken by the execution rather than by the graph;
@@ -36,11 +41,13 @@ from itertools import count
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
 from engine.graph_runtime import (
+    ActiveExecution,
     ApprovalNotPendingError,
     Checkpoint,
     CheckpointId,
     EventKind,
     EventObserver,
+    ExecutionId,
     ExecutionRegistry,
     GraphEdge,
     GraphId,
@@ -116,6 +123,14 @@ class ScriptedNode:
     beats: tuple[Beat, ...] = ()
     next_nodes: tuple[NodeId, ...] = ()
     """Every successor, run together as one superstep. Plural on purpose."""
+    tasks: int = 1
+    """How many concurrent executions of this node one superstep starts.
+
+    LangGraph's `Send` fans several tasks into one node -- the same reviewer
+    prompt over three candidate diffs, say. Each is its own execution with its
+    own id, its own approvals and its own transcript, and none of them can be
+    addressed by the node name they share.
+    """
     name: str = ""
     kind: str = "agent"
 
@@ -208,13 +223,13 @@ class _Run:
         self.by_id[checkpoint.checkpoint_id] = checkpoint
         return checkpoint
 
-    def snapshot(self, active: tuple[NodeId, ...]) -> RunSnapshot:
+    def snapshot(self, active: tuple[ActiveExecution, ...]) -> RunSnapshot:
         position = self.position
         return RunSnapshot(
             run_id=self.run_id,
             graph_id=self.graph.graph_id,
             status=self._status(),
-            active_nodes=active,
+            active_executions=active,
             next_nodes=(
                 self.graph.successors(self.frontier)
                 if self.frontier
@@ -239,19 +254,28 @@ class _Run:
 
 
 class _Execution:
-    """One node in flight, and the only thing external control reaches.
+    """One task in flight, and the only thing external control reaches.
 
     Stands in for the session an agent node would be holding. It outlives every
     approval and every steering message: the node's coroutine is inside
     `ScriptedGraphRuntime._run_node` the whole time, and nothing here suspends
     or restarts it.
+
+    One per task rather than per node: two tasks fanned into the same node are
+    two of these, with two queues and two sets of open questions, so a message
+    for one cannot be taken by the other.
     """
 
     def __init__(
-        self, runtime: ScriptedGraphRuntime, run: _Run, node_id: NodeId
+        self,
+        runtime: ScriptedGraphRuntime,
+        run: _Run,
+        execution_id: ExecutionId,
+        node_id: NodeId,
     ) -> None:
         self._runtime = runtime
         self._run = run
+        self.execution_id = execution_id
         self.node_id = node_id
         self._steering: asyncio.Queue[str] = asyncio.Queue()
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
@@ -277,6 +301,7 @@ class _Execution:
         """Raise a request and wait, without going back to the graph."""
         approval = PendingApproval(
             approval_id=ApprovalId(f"approval-{next(self._runtime.ids)}"),
+            execution_id=self.execution_id,
             node_id=self.node_id,
             kind=beat.kind,
             reason=beat.reason,
@@ -299,6 +324,7 @@ class _Execution:
                 "toolName": approval.tool_name,
             },
             node_id=self.node_id,
+            execution_id=self.execution_id,
         )
         try:
             decision = await waiting
@@ -312,6 +338,7 @@ class _Execution:
             EventKind.APPROVAL_RESOLVED,
             {"approvalId": str(approval.approval_id), "decision": decision.value},
             node_id=self.node_id,
+            execution_id=self.execution_id,
         )
         return decision
 
@@ -334,6 +361,7 @@ class _Execution:
             EventKind.TRANSCRIPT,
             {"role": "user", "text": message},
             node_id=self.node_id,
+            execution_id=self.execution_id,
         )
 
 
@@ -422,10 +450,14 @@ class ScriptedGraphRuntime:
         return self._snapshot(run)
 
     async def steer(
-        self, run_id: RunId, message: str, node_id: NodeId | None = None
+        self,
+        run_id: RunId,
+        message: str,
+        execution_id: ExecutionId | None = None,
+        node_id: NodeId | None = None,
     ) -> RunSnapshot:
         run = self._require(run_id)
-        target, execution = self._executions.resolve(run_id, node_id)
+        target, execution = self._executions.resolve(run_id, execution_id, node_id)
         await execution.steer(message)
         # Accepted for delivery, not yet delivered: the execution picks it up at
         # its next interruption point and says so itself, with a transcript
@@ -435,7 +467,8 @@ class ScriptedGraphRuntime:
             run,
             EventKind.STEERING_RECEIVED,
             {"message": message},
-            node_id=target,
+            node_id=target.node_id,
+            execution_id=target.execution_id,
         )
         return self._snapshot(run)
 
@@ -451,8 +484,9 @@ class ScriptedGraphRuntime:
                 )
             raise UnknownApprovalError(f"unknown approval: {approval_id}")
         # Resolved before anything is mutated, so a request that cannot be
-        # delivered does not leave the run half-answered.
-        _, execution = self._executions.resolve(run_id, approval.node_id)
+        # delivered does not leave the run half-answered. By execution rather
+        # than by node: the other two reviewers did not ask this question.
+        _, execution = self._executions.resolve(run_id, approval.execution_id)
         run.pending.pop(approval_id)
         run.answered.add(approval_id)
         if decision is ApprovalDecision.CANCEL:
@@ -508,10 +542,15 @@ class ScriptedGraphRuntime:
     async def _walk(self, run: _Run, checkpoint: Checkpoint) -> None:
         while checkpoint.next_nodes:
             run.frontier = checkpoint.next_nodes
-            # One superstep: every node in the frontier at once, which is what
-            # makes a reviewer pool one step rather than three.
+            # One superstep: every node in the frontier at once, and every task
+            # of each of them, which is what makes a reviewer pool one step
+            # rather than three -- and one node's three tasks one step too.
             outcomes = await asyncio.gather(
-                *(self._run_node(run, node_id) for node_id in checkpoint.next_nodes)
+                *(
+                    self._run_node(run, node_id)
+                    for node_id in checkpoint.next_nodes
+                    for _ in range(self._tasks(run, node_id))
+                )
             )
             run.frontier = ()
             raised = next((one for one in outcomes if one.error), None)
@@ -532,16 +571,29 @@ class ScriptedGraphRuntime:
         run.status = RunStatus.COMPLETED
         await self.emit(run, EventKind.RUN_FINISHED, {"values": dict(run.values)})
 
+    def _tasks(self, run: _Run, node_id: NodeId) -> int:
+        node = run.graph.node(node_id)
+        return node.tasks if node is not None else 1
+
     async def _run_node(self, run: _Run, node_id: NodeId) -> _Outcome:
         node = run.graph.node(node_id)
         assert node is not None
-        execution = _Execution(self, run, node_id)
+        execution = _Execution(
+            self, run, ExecutionId(f"execution-{next(self.ids)}"), node_id
+        )
         self._entries[node_id] = self._entries.get(node_id, 0) + 1
-        # Registered for the whole node, so steering and approvals reach it
+        # Registered for the whole execution, so steering and approvals reach it
         # wherever it has got to -- and released however it ends, including by
         # the cancellation a fork does.
-        with self._executions.in_flight(run.run_id, node_id, execution):
-            await self.emit(run, EventKind.NODE_STARTED, node_id=node_id)
+        with self._executions.in_flight(
+            run.run_id, execution.execution_id, node_id, execution
+        ):
+            await self.emit(
+                run,
+                EventKind.NODE_STARTED,
+                node_id=node_id,
+                execution_id=execution.execution_id,
+            )
             try:
                 for beat in node.beats:
                     await execution.drain()
@@ -556,12 +608,14 @@ class ScriptedGraphRuntime:
                 EventKind.NODE_FINISHED,
                 {"values": dict(run.values)},
                 node_id=node_id,
+                execution_id=execution.execution_id,
             )
         return _Outcome(node_id)
 
     async def _play(self, run: _Run, execution: _Execution, beat: Beat) -> bool:
         """Play one beat. False means the run ended here."""
         node_id = execution.node_id
+        execution_id = execution.execution_id
         match beat:
             case Say(text=text, role=role):
                 run.values[str(node_id)] = text
@@ -570,6 +624,7 @@ class ScriptedGraphRuntime:
                     EventKind.TRANSCRIPT,
                     {"role": role, "text": text},
                     node_id=node_id,
+                    execution_id=execution_id,
                 )
             case Call(name=name, arguments=arguments, result=result):
                 call_id = f"call-{next(self.ids)}"
@@ -578,12 +633,14 @@ class ScriptedGraphRuntime:
                     EventKind.TOOL_CALL,
                     {"callId": call_id, "name": name, "arguments": dict(arguments)},
                     node_id=node_id,
+                    execution_id=execution_id,
                 )
                 await self.emit(
                     run,
                     EventKind.TOOL_RESULT,
                     {"callId": call_id, "name": name, "result": result},
                     node_id=node_id,
+                    execution_id=execution_id,
                 )
             case Ask():
                 return await execution.ask(beat) is not ApprovalDecision.CANCEL
@@ -605,8 +662,8 @@ class ScriptedGraphRuntime:
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        for node_id in self._executions.active(run.run_id):
-            self._executions.release(run.run_id, node_id)
+        for active in self._executions.active(run.run_id):
+            self._executions.release(run.run_id, active.execution_id)
         run.frontier = ()
 
     def _require(self, run_id: RunId) -> _Run:
@@ -642,6 +699,7 @@ class ScriptedGraphRuntime:
         kind: EventKind,
         payload: Mapping[str, object] | None = None,
         node_id: NodeId | None = None,
+        execution_id: ExecutionId | None = None,
     ) -> None:
         if self._observer is None:
             return
@@ -651,6 +709,7 @@ class ScriptedGraphRuntime:
                 kind=kind,
                 payload=dict(payload or {}),
                 node_id=node_id,
+                execution_id=execution_id,
             )
         )
 

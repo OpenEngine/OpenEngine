@@ -19,11 +19,13 @@ first, so a binding arrives with its tests already written.
 Three shapes here are deliberate, and each of them is a place a simpler design
 would have had to be undone later:
 
-**A position is a frontier, not a node.** A superstep may run several nodes at
-once -- a reviewer pool is one step of three -- so `RunSnapshot` reports
-`active_nodes` and `next_nodes` and never claims a single current node. Nor does
-it carry a visited list: a line of nodes reads well for a pipeline and lies
-about fan-out, loops and retries. What happened is `history()` and the feed.
+**A position is a frontier of executions, not a node.** A superstep may run
+several nodes at once -- and several tasks into the *same* node, which is what
+`Send` does -- so `RunSnapshot` reports `active_executions` and `next_nodes` and
+never claims a single current node. Every in-flight thing has an `ExecutionId`,
+and control is addressed to that rather than to a node name. Nor is there a
+visited list: a line of nodes reads well for a pipeline and lies about fan-out,
+loops and retries. What happened is `history()` and the feed.
 
 **A resume names a checkpoint, not a node.** See
 `engine.graph_runtime.checkpoints`: a graph with a loop has been about to run
@@ -62,6 +64,7 @@ from engine.graph_runtime.events import (
     RuntimeEvent,
 )
 from engine.graph_runtime.executions import ControllableExecution, ExecutionRegistry
+from engine.graph_runtime.identity import ActiveExecution, ExecutionId
 from engine.graph_runtime.topology import (
     GraphEdge,
     GraphId,
@@ -71,6 +74,7 @@ from engine.graph_runtime.topology import (
 )
 
 __all__ = [
+    "ActiveExecution",
     "AmbiguousExecutionError",
     "ApprovalNotPendingError",
     "Checkpoint",
@@ -79,6 +83,7 @@ __all__ = [
     "EventKind",
     "EventLog",
     "EventObserver",
+    "ExecutionId",
     "ExecutionRegistry",
     "GraphEdge",
     "GraphId",

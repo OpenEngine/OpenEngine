@@ -7,13 +7,17 @@ protocol: the server, its wire format, and its behaviour under steering and
 resumption are all buildable and checkable before the binding exists, and the
 same tests then run against the binding unchanged.
 
-Two things here are deliberately shaped by what LangGraph actually is, because
+Three things here are deliberately shaped by what LangGraph actually is, because
 getting them wrong would be expensive to undo:
 
 * A run's position is a *frontier*, not a node. LangGraph's execution primitive
   is the superstep, and a superstep may run several nodes at once. There is no
   truthful value for "the current node" while three reviewers are working, so
   the snapshot does not offer one.
+* What is in flight is an *execution*, not a node. A superstep can fan several
+  tasks into the same node -- LangGraph's `Send` does exactly that -- so a node
+  name does not identify one of them. Every in-flight thing has an
+  `ExecutionId`, and that is what control is addressed to.
 * A run is resumed from a *checkpoint*, not a node. "Send it back to
   implementation" is a selector the HTTP layer resolves; the primitive
   underneath is `resume_from`, which forks rather than rewrites. See
@@ -36,6 +40,7 @@ from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.events import EventObserver
+from engine.graph_runtime.identity import ActiveExecution, ExecutionId
 from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
 
 
@@ -73,12 +78,16 @@ class PendingApproval:
     `engine.domain.approvals` keeps its record that way: a stored `command` can
     be compared and shown differently by a different client.
 
-    `node_id` is what routes the answer. The question was raised by whatever the
-    node is driving -- an agent asking to run a command -- and that is where the
-    decision goes back to, not into the graph.
+    `execution_id` is what routes the answer. The question was raised by whatever
+    a node is driving -- an agent asking to run a command -- and the answer goes
+    back to that exact execution, not into the graph and not to the node: with
+    two reviewers running the same node, only one of them asked.
+
+    `node_id` is alongside it for display, and is not the address.
     """
 
     approval_id: ApprovalId
+    execution_id: ExecutionId
     node_id: NodeId
     kind: ApprovalKind
     reason: str = ""
@@ -107,12 +116,17 @@ class RunSnapshot:
     run_id: RunId
     graph_id: GraphId
     status: RunStatus
-    active_nodes: tuple[NodeId, ...] = ()
-    """The nodes executing right now.
+    active_executions: tuple[ActiveExecution, ...] = ()
+    """What is executing right now, each with its own id.
 
-    Plural because a superstep is: a reviewer pool is one step of three nodes,
-    and there is no honest single answer while all three are working. Empty
-    while the run is stopped, finished, or between supersteps.
+    Plural because a superstep is: a reviewer pool is one step of three, and
+    there is no honest single answer while all three are working. Empty while
+    the run is stopped, finished, or between supersteps.
+
+    Executions rather than nodes, and not both: two tasks fanned into the same
+    node are two entries here, and a list of node names beside them could only
+    say `review` once or say it twice without distinguishing them. A client that
+    wants the frontier reads the node ids off these.
     """
     next_nodes: tuple[NodeId, ...] = ()
     """What the run would execute next.
@@ -170,11 +184,12 @@ class RunNotSteerableError(GraphRuntimeError):
 
 
 class AmbiguousExecutionError(GraphRuntimeError):
-    """Several executions are in flight and the request did not name one.
+    """Several executions match, and the request did not name one of them.
 
     The cost of a truthful fan-out: with three reviewers running, "steer this
     run" has three answers, and picking one would be a guess about which agent
-    the person was watching.
+    the person was watching. A node name is not enough either once the same node
+    is running twice -- which is why the answer names the executions.
     """
 
 
@@ -237,7 +252,11 @@ class GraphRuntime(Protocol):
         ...
 
     async def steer(
-        self, run_id: RunId, message: str, node_id: NodeId | None = None
+        self,
+        run_id: RunId,
+        message: str,
+        execution_id: ExecutionId | None = None,
+        node_id: NodeId | None = None,
     ) -> RunSnapshot:
         """Deliver external input to the active execution.
 
@@ -247,9 +266,13 @@ class GraphRuntime(Protocol):
         message for the thing it is running is not a question about what should
         run next. See `engine.graph_runtime.executions` for the boundary.
 
-        `node_id` picks one of several in flight. Raises `RunNotSteerableError`
-        when nothing is executing, and `AmbiguousExecutionError` when more than
-        one is and none was named.
+        `execution_id` is the address. `node_id` is shorthand a client may use
+        when exactly one execution of that node is in flight, which is the
+        common case and the one a person can name from a diagram.
+
+        Raises `RunNotSteerableError` when nothing matches, and
+        `AmbiguousExecutionError` when several do and none was named -- two
+        tasks fanned into the same node make even a node name ambiguous.
         """
         ...
 
@@ -258,9 +281,10 @@ class GraphRuntime(Protocol):
     ) -> RunSnapshot:
         """Answer what an execution stopped to ask, and let it go on.
 
-        Routed the same way steering is, to the execution that raised the
-        request -- which has been alive and waiting the whole time. The graph
-        node was never suspended, so nothing about it is resumed here.
+        Routed to the execution that raised the request -- which has been alive
+        and waiting the whole time -- by the `execution_id` recorded on the
+        request, never by its node. The graph node was never suspended, so
+        nothing about it is resumed here.
 
         The snapshot is the run as the decision left it -- released, or failed
         when the decision was to cancel -- and not however far the execution

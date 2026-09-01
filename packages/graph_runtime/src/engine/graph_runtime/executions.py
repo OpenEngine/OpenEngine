@@ -37,6 +37,11 @@ registers one backed by its session, a test registers one backed by a script,
 and this package imports neither. A generic runtime that reached for ACP,
 Claude or Codex would be a control surface that only works for the agents it
 was written against.
+
+What it is *not* is a node. LangGraph can fan several tasks into one node, so
+`review` may be three executions at once, and a registry keyed by node would
+have kept the last of them and silently dropped the other two. Everything here
+is addressed by `ExecutionId`.
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ from engine.graph_runtime.control import (
     AmbiguousExecutionError,
     RunNotSteerableError,
 )
+from engine.graph_runtime.identity import ActiveExecution, ExecutionId
 from engine.graph_runtime.topology import NodeId
 
 
@@ -70,73 +76,97 @@ class ControllableExecution(Protocol):
 
 
 class ExecutionRegistry:
-    """Which execution is in flight for which node, for as long as it is.
+    """What is in flight for a run, for as long as it is.
 
-    Keyed by node within a run, because a superstep is plural: three reviewers
-    are three registered executions at once, and a message has to be able to
-    name which one it is for.
+    Keyed by `ExecutionId` within a run, so a superstep that fans two tasks into
+    one node registers two entries rather than one overwriting the other. Order
+    is insertion order, which is the order the frontier was started in and the
+    order a client is shown.
     """
 
     def __init__(self) -> None:
-        self._active: dict[RunId, dict[NodeId, ControllableExecution]] = {}
+        self._active: dict[
+            RunId, dict[ExecutionId, tuple[NodeId, ControllableExecution]]
+        ] = {}
 
     @contextmanager
     def in_flight(
-        self, run_id: RunId, node_id: NodeId, execution: ControllableExecution
+        self,
+        run_id: RunId,
+        execution_id: ExecutionId,
+        node_id: NodeId,
+        execution: ControllableExecution,
     ) -> Iterator[ControllableExecution]:
         """Register for the length of the block, and release however it ends.
 
         A context manager rather than a register/release pair because the ways
-        a node stops are not all returns: it can raise, and it can be cancelled
-        by a resume. An entry left behind by either would take steering meant
-        for the run that replaced it.
+        an execution stops are not all returns: it can raise, and it can be
+        cancelled by a resume. An entry left behind by either would take
+        steering meant for the run that replaced it.
         """
-        self._active.setdefault(run_id, {})[node_id] = execution
+        self._active.setdefault(run_id, {})[execution_id] = (node_id, execution)
         try:
             yield execution
         finally:
-            self.release(run_id, node_id)
+            self.release(run_id, execution_id)
 
-    def release(self, run_id: RunId, node_id: NodeId) -> None:
-        by_node = self._active.get(run_id)
-        if by_node is None:
+    def release(self, run_id: RunId, execution_id: ExecutionId) -> None:
+        by_id = self._active.get(run_id)
+        if by_id is None:
             return
-        by_node.pop(node_id, None)
-        if not by_node:
+        by_id.pop(execution_id, None)
+        if not by_id:
             self._active.pop(run_id, None)
 
-    def active(self, run_id: RunId) -> tuple[NodeId, ...]:
-        """The nodes with something in flight, which is a run's frontier."""
-        return tuple(self._active.get(run_id, {}))
+    def active(self, run_id: RunId) -> tuple[ActiveExecution, ...]:
+        """Everything in flight for this run, each with the node it is running."""
+        return tuple(
+            ActiveExecution(execution_id, node_id)
+            for execution_id, (node_id, _) in self._active.get(run_id, {}).items()
+        )
 
     def resolve(
-        self, run_id: RunId, node_id: NodeId | None = None
-    ) -> tuple[NodeId, ControllableExecution]:
-        """The execution a message is for, and the node it belongs to.
+        self,
+        run_id: RunId,
+        execution_id: ExecutionId | None = None,
+        node_id: NodeId | None = None,
+    ) -> tuple[ActiveExecution, ControllableExecution]:
+        """The execution a message is for, and which one it turned out to be.
 
-        The node travels back with it because the caller has to say where the
-        message went -- an event that only reported "somebody was steered" is
-        unreadable once a run has three agents in it.
+        The identity travels back with it because the caller has to say where
+        the message went -- an event that only reported "somebody was steered"
+        is unreadable once a run has three agents in it.
 
-        Raises `RunNotSteerableError` when there is none, and
-        `AmbiguousExecutionError` when there are several and none was named --
-        rather than picking one, which would be a guess about which agent the
-        person was watching.
+        `execution_id` is the address; `node_id` is shorthand, and is only an
+        answer while exactly one execution of that node is in flight. Raises
+        `RunNotSteerableError` when nothing matches, and
+        `AmbiguousExecutionError` when several do -- rather than picking one,
+        which would be a guess about which agent the person was watching.
         """
-        by_node = self._active.get(run_id, {})
-        if not by_node:
+        by_id = self._active.get(run_id, {})
+        if not by_id:
             raise RunNotSteerableError("this run has no execution in flight")
-        if node_id is None:
-            if len(by_node) > 1:
-                running = ", ".join(sorted(str(node) for node in by_node))
-                raise AmbiguousExecutionError(
-                    f"name the node to control: {running} are executing"
-                )
-            return next(iter(by_node.items()))
-        execution = by_node.get(node_id)
-        if execution is None:
+        if execution_id is not None:
+            found = by_id.get(execution_id)
+            if found is None:
+                raise RunNotSteerableError(f"{execution_id} is not executing")
+            return ActiveExecution(execution_id, found[0]), found[1]
+        matching = [
+            (candidate, node, execution)
+            for candidate, (node, execution) in by_id.items()
+            if node_id is None or node == node_id
+        ]
+        if not matching:
             raise RunNotSteerableError(f"{node_id} is not executing")
-        return node_id, execution
+        if len(matching) > 1:
+            running = ", ".join(
+                f"{candidate} ({node})" for candidate, node, _ in matching
+            )
+            raise AmbiguousExecutionError(
+                f"name the execution to control: {running} are executing"
+            )
+        candidate, node, execution = matching[0]
+        return ActiveExecution(candidate, node), execution
 
 
 __all__ = ["ControllableExecution", "ExecutionRegistry"]

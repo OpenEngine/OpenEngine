@@ -32,6 +32,7 @@ from enum import Enum
 
 from engine.domain import RunId
 
+from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.topology import NodeId
 
 
@@ -85,6 +86,13 @@ class RuntimeEvent:
     kind: EventKind
     payload: Mapping[str, object] = field(default_factory=dict)
     node_id: NodeId | None = None
+    execution_id: ExecutionId | None = None
+    """Which in-flight thing raised it, for the events one did.
+
+    Beside `node_id` rather than instead of it: a node name is what a client
+    shows, and an id is what it addresses. Two tasks fanned into the same node
+    raise transcript events that are otherwise indistinguishable.
+    """
     sequence: int = 0
 
 

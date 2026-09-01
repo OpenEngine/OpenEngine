@@ -50,6 +50,7 @@ from engine.graph_runtime.control import (
     UnknownRunError,
 )
 from engine.graph_runtime.events import EventLog, RuntimeEvent
+from engine.graph_runtime.identity import ActiveExecution, ExecutionId
 from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
 
 #: What each refusal means over HTTP. A missing thing is a 404, a malformed
@@ -138,12 +139,21 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         body = await _json_body(request)
         try:
             message = _required_string(body, "message")
+            execution = _optional_string(body, "execution")
             node = _optional_string(body, "node")
         except ValueError as error:
             return _error(str(error), 400)
+        if execution and node:
+            # Both is not an intersection worth supporting: an execution id
+            # already implies its node, and a request naming two addresses that
+            # disagree is a client bug worth surfacing rather than resolving.
+            return _error("give at most one of node or execution", 400)
         try:
             run = await runtime.steer(
-                _run_id(request), message, NodeId(node) if node else None
+                _run_id(request),
+                message,
+                ExecutionId(execution) if execution else None,
+                NodeId(node) if node else None,
             )
         except Exception as error:
             return _refusal(error)
@@ -310,7 +320,9 @@ def _snapshot_json(run: RunSnapshot) -> dict[str, object]:
         "runId": str(run.run_id),
         "graphId": str(run.graph_id),
         "status": run.status.value,
-        "activeNodes": _nodes_json(run.active_nodes),
+        "activeExecutions": [
+            _execution_json(execution) for execution in run.active_executions
+        ],
         "nextNodes": _nodes_json(run.next_nodes),
         "checkpointId": str(run.checkpoint_id) if run.checkpoint_id else None,
         "values": dict(run.values),
@@ -335,9 +347,17 @@ def _nodes_json(nodes: Sequence[NodeId]) -> list[str]:
     return [str(node_id) for node_id in nodes]
 
 
+def _execution_json(execution: ActiveExecution) -> dict[str, object]:
+    return {
+        "executionId": str(execution.execution_id),
+        "nodeId": str(execution.node_id),
+    }
+
+
 def _approval_json(approval: PendingApproval) -> dict[str, object]:
     return {
         "approvalId": str(approval.approval_id),
+        "executionId": str(approval.execution_id),
         "nodeId": str(approval.node_id),
         "kind": approval.kind.value,
         "reason": approval.reason,
@@ -353,6 +373,7 @@ def _event_json(event: RuntimeEvent) -> dict[str, object]:
         "type": event.kind.value,
         "runId": str(event.run_id),
         "nodeId": str(event.node_id) if event.node_id else None,
+        "executionId": str(event.execution_id) if event.execution_id else None,
         "payload": dict(event.payload),
     }
 
