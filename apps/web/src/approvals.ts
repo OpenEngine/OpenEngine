@@ -27,9 +27,10 @@ export type InlineApproval = {
    *  same request is republished as it is decided, and by then the turn it
    *  interrupted may no longer be the last one.
    *
-   *  A record of where it happened, not where it is shown. A request is only
-   *  ever rendered beside the tool call it names, wherever in the transcript
-   *  that call turns out to be; one naming no call is not shown at all. */
+   *  What places a request that names no tool call, and nothing else. One that
+   *  names a call is shown beside that call, wherever in the transcript it
+   *  turns out to be, and is not shown at all if the transcript does not hold
+   *  it. */
   messageIndex: number;
   approval: ApiApproval;
 };

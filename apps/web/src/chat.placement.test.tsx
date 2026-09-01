@@ -140,15 +140,13 @@ describe("where a turn shows what it was asked to allow", () => {
     ]);
   });
 
-  it("shows nothing for a request the transcript cannot place beside a call", () => {
+  it("shows nothing for a request naming a call this transcript does not hold", () => {
     const parts = [call("call-1", "Bash", "ls"), { type: "text" as const, text: "Done." }];
     turn.parts = parts;
     turn.thread.messages = [{ content: parts }];
     const threadId = turn.threadListItem.remoteId;
-    // One naming no call at all, one naming a call this transcript does not
-    // contain: both are requests with nothing to sit beside, and the end of the
-    // conversation is not somewhere they may claim instead.
-    publishApproval(threadId, approval({ id: "approval-3" }), 0);
+    // It named a call, so beside that call is the only place it means anything.
+    // The end of the turn is not somewhere it may claim instead.
     publishApproval(
       threadId,
       approval({ id: "approval-4", toolCallId: "call-gone", command: "git push" }),
@@ -158,5 +156,31 @@ describe("where a turn shows what it was asked to allow", () => {
     render(<AssistantMessage />);
 
     expect(rendered()).toEqual(["ran Bash", "Done."]);
+  });
+
+  it("ends the turn with a request that names no call, which has nowhere else", () => {
+    const parts = [call("call-1", "Bash", "ls"), { type: "text" as const, text: "Done." }];
+    turn.parts = parts;
+    turn.thread.messages = [{ content: parts }];
+    const threadId = turn.threadListItem.remoteId;
+    // A pause over something that is not a tool call. Unrendered, it is a run
+    // waiting on an answer nobody can see to give.
+    publishApproval(
+      threadId,
+      approval({
+        id: "approval-3",
+        kind: "user_input",
+        status: "pending",
+        command: null,
+        toolName: null,
+        decision: null,
+        decisionSource: null,
+      }),
+      0,
+    );
+
+    render(<AssistantMessage />);
+
+    expect(rendered()).toEqual(["ran Bash", "Done.", "Answer needed · Question"]);
   });
 });

@@ -188,6 +188,7 @@ export function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="message message-assistant">
       <TextParts />
+      <TurnApprovals />
       <MessagePrimitive.Error>
         <p className="notice message-error">
           <Ticked text={errorText(error)} />
@@ -857,6 +858,34 @@ function CallApprovals({ toolCallId }: { toolCallId: string }) {
       className="approvals approvals-call"
     />
   );
+}
+
+/** What this turn stopped to ask about that names no call at all.
+ *
+ *  A provider may pause over something that is not a tool call -- a question
+ *  put to the reader, a request the record carries no call id for. There is no
+ *  call for those to sit beside, and leaving them unrendered would leave the
+ *  run waiting on an answer nobody can see to give. So they are shown at the
+ *  end of the turn that raised them, anchored by index so they stay with that
+ *  turn once the conversation has moved on.
+ *
+ *  Only the ones naming no call. A request that names one belongs beside that
+ *  call and nowhere else: if the transcript does not hold the call, the request
+ *  is not shown. */
+function TurnApprovals() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const index = useAuiState((state) => state.message.index);
+  const approvals = useApprovals(remoteId);
+  const mine = useMemo(
+    () =>
+      approvals.filter(
+        (entry) => entry.messageIndex === index && !entry.approval.toolCallId,
+      ),
+    [approvals, index],
+  );
+
+  if (!remoteId) return null;
+  return <ApprovalList threadId={remoteId} entries={mine} className="approvals" />;
 }
 
 /** The line of figures under the conversation heading.
