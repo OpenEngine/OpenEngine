@@ -140,14 +140,14 @@ export function setProjectArchived(
   );
 }
 
-export type ApiRunStep = {
+/** A step as the runs list carries it: what it is and where it stands, which
+ *  is all the rail and the cards read of one. */
+export type ApiRunStepListing = {
   stepId: string;
   name: string;
   kind: "agent" | "human";
   status: string;
   outcome: string | null;
-  summary: string;
-  outputs: { name: string; value: string }[];
   changesRequested: boolean;
   agentId: string | null;
   agentInstanceId: string | null;
@@ -157,7 +157,19 @@ export type ApiRunStep = {
   waiting: boolean;
 };
 
-export type ApiWorkflowRun = {
+/** A step with the prose the agent wrote, which only its own page draws. */
+export type ApiRunStep = ApiRunStepListing & {
+  summary: string;
+  outputs: { name: string; value: string }[];
+};
+
+/** One WorkOrder as `GET /api/runs` lists it.
+ *
+ *  Every screen polls that list once a second to keep the rail current, so it
+ *  carries what a rail, a card and a milestone's task list read and no more.
+ *  The prose an agent wrote is the WorkOrder page's, and comes with the single
+ *  run it fetches. */
+export type ApiWorkflowRunListing = {
   runId: string;
   name: string;
   workflowId: string;
@@ -166,12 +178,18 @@ export type ApiWorkflowRun = {
   taskId: string;
   workstreamId: string | null;
   milestoneId: string | null;
-  taskPrompt: string;
   repository: string;
   repositoryContext: { repository: string };
   phase: string;
   currentStepId: string | null;
   terminalOutcome: string | null;
+  steps: ApiRunStepListing[];
+};
+
+/** One whole WorkOrder, as `GET /api/runs/{runId}` answers for the page about
+ *  it: the listing, and every word written along the way. */
+export type ApiWorkflowRun = Omit<ApiWorkflowRunListing, "steps"> & {
+  taskPrompt: string;
   failureReason: string;
   steps: ApiRunStep[];
   pendingHumanReview: {

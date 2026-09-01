@@ -15,7 +15,7 @@ import {
 } from "@assistant-ui/react";
 import { useState, type ReactNode } from "react";
 
-import { projectMilestonesUrl, type ApiProject, type ApiWorkflowRun } from "./api";
+import { projectMilestonesUrl, type ApiProject, type ApiWorkflowRunListing } from "./api";
 import { RailBrand, RailFoot } from "./brand";
 import { SettingsPanel } from "./settings-panel";
 import { conversationCount, IN_PROGRESS_PHASES, runStatusLabel } from "./runs";
@@ -222,7 +222,7 @@ export function Sidebar({
   onArchiveProject,
 }: {
   projects?: ApiProject[];
-  runs: ApiWorkflowRun[];
+  runs: ApiWorkflowRunListing[];
   /** Which section the page on screen belongs to, followed until the reader
    *  opens one themselves. */
   initialSection: RailSection;

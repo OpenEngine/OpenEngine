@@ -1328,6 +1328,52 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
+def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
+    """Every screen polls `/api/runs` once a second to keep its rail current.
+
+    What that list carries is what every screen pays for, on a payload that
+    grows with the transcript of every run ever started -- so the words an
+    agent wrote stay with the single run the page showing them asks for, and
+    the list keeps what a rail, a card and a milestone's task list read.
+    """
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.AWAITING_HUMAN_REVIEW, HUMAN_REVIEW_STEP)
+    asyncio.run(store.save(state))
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                await client.get("/api/runs"),
+                await client.get(f"/api/runs/{state.run_id}"),
+            )
+
+    listed, detail = asyncio.run(scenario())
+    (run,) = listed.json()["runs"]
+    body = detail.json()
+
+    prose = {"taskPrompt", "failureReason", "pendingHumanReview", "humanDecision"}
+    assert prose.isdisjoint(run)
+    assert prose <= set(body)
+    assert all({"summary", "outputs"}.isdisjoint(step) for step in run["steps"])
+    assert all({"summary", "outputs"} <= set(step) for step in body["steps"])
+
+    # What the rail and the WorkOrder cards do read of a step, which is how far
+    # the listing can be trimmed before a screen loses something it draws.
+    assert [step["stepId"] for step in run["steps"]] == [
+        step["stepId"] for step in body["steps"]
+    ]
+    assert run["steps"][1] == {
+        key: value
+        for key, value in body["steps"][1].items()
+        if key not in {"summary", "outputs"}
+    }
+    assert run["phase"] == body["phase"]
+    assert run["currentStepId"] == body["currentStepId"]
+    assert run["name"] == body["name"]
+
+
 def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     store = InMemoryStateStore()
     implementer = TerminalToolRunner(
