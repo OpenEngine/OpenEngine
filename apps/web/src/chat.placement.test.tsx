@@ -81,6 +81,22 @@ function approval(overrides: Partial<ApiApproval> = {}): ApiApproval {
   };
 }
 
+/** A pause over something that is not a tool call, so it names none: the only
+ *  kind of request with nowhere of its own in the transcript to sit. */
+function unplacedQuestion(overrides: Partial<ApiApproval> = {}): ApiApproval {
+  return approval({
+    id: "approval-3",
+    kind: "user_input",
+    status: "pending",
+    command: null,
+    toolName: null,
+    toolCallId: null,
+    decision: null,
+    decisionSource: null,
+    ...overrides,
+  });
+}
+
 function call(toolCallId: string, toolName: string, detail: string): Part {
   return {
     type: "tool-call",
@@ -158,29 +174,36 @@ describe("where a turn shows what it was asked to allow", () => {
     expect(rendered()).toEqual(["ran Bash", "Done."]);
   });
 
-  it("ends the turn with a request that names no call, which has nowhere else", () => {
+  it("ends the turn with a pending request that names no call, which has nowhere else", () => {
     const parts = [call("call-1", "Bash", "ls"), { type: "text" as const, text: "Done." }];
     turn.parts = parts;
     turn.thread.messages = [{ content: parts }];
     const threadId = turn.threadListItem.remoteId;
     // A pause over something that is not a tool call. Unrendered, it is a run
     // waiting on an answer nobody can see to give.
+    publishApproval(threadId, unplacedQuestion(), 0);
+
+    render(<AssistantMessage />);
+
+    expect(rendered()).toEqual(["ran Bash", "Done.", "Answer needed · Question"]);
+  });
+
+  it("takes that card away once the request has been answered", () => {
+    const parts = [call("call-1", "Bash", "ls"), { type: "text" as const, text: "Done." }];
+    turn.parts = parts;
+    turn.thread.messages = [{ content: parts }];
+    const threadId = turn.threadListItem.remoteId;
+    publishApproval(threadId, unplacedQuestion(), 0);
+    // Answered, it is a result with no call to sit beside, and a result stacked
+    // at the end of the page reads as a comment on whatever the turn did last.
     publishApproval(
       threadId,
-      approval({
-        id: "approval-3",
-        kind: "user_input",
-        status: "pending",
-        command: null,
-        toolName: null,
-        decision: null,
-        decisionSource: null,
-      }),
+      unplacedQuestion({ status: "decided", decision: "accept", decisionSource: "user" }),
       0,
     );
 
     render(<AssistantMessage />);
 
-    expect(rendered()).toEqual(["ran Bash", "Done.", "Answer needed · Question"]);
+    expect(rendered()).toEqual(["ran Bash", "Done."]);
   });
 });

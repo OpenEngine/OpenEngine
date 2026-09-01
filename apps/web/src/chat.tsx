@@ -860,18 +860,23 @@ function CallApprovals({ toolCallId }: { toolCallId: string }) {
   );
 }
 
-/** What this turn stopped to ask about that names no call at all.
+/** What this turn is still waiting on that names no call at all.
  *
  *  A provider may pause over something that is not a tool call -- a question
  *  put to the reader, a request the record carries no call id for. There is no
  *  call for those to sit beside, and leaving them unrendered would leave the
- *  run waiting on an answer nobody can see to give. So they are shown at the
- *  end of the turn that raised them, anchored by index so they stay with that
- *  turn once the conversation has moved on.
+ *  run waiting on an answer nobody can see to give. So while one is pending it
+ *  is shown at the end of the turn that raised it, anchored by index so it
+ *  stays with that turn once the conversation has moved on.
  *
- *  Only the ones naming no call. A request that names one belongs beside that
- *  call and nowhere else: if the transcript does not hold the call, the request
- *  is not shown. */
+ *  Only while it is pending. Answered, it is a result with nothing to sit
+ *  beside, and a result stacked at the end of the page is the thing this slot
+ *  exists not to be: it reads as a comment on whatever the turn did last. The
+ *  card disappears when the run stops needing it.
+ *
+ *  Only the ones naming no call, too. A request that names one belongs beside
+ *  that call and nowhere else: if the transcript does not hold the call, the
+ *  request is not shown. */
 function TurnApprovals() {
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const index = useAuiState((state) => state.message.index);
@@ -879,7 +884,10 @@ function TurnApprovals() {
   const mine = useMemo(
     () =>
       approvals.filter(
-        (entry) => entry.messageIndex === index && !entry.approval.toolCallId,
+        (entry) =>
+          entry.messageIndex === index &&
+          !entry.approval.toolCallId &&
+          entry.approval.status === "pending",
       ),
     [approvals, index],
   );
