@@ -213,6 +213,7 @@ export function Sidebar({
   runs,
   initialSection,
   linkChats = false,
+  chatsReady = true,
   activeRunId,
   activeConversationUrl,
   activeProjectId,
@@ -226,6 +227,9 @@ export function Sidebar({
    *  opens one themselves. */
   initialSection: RailSection;
   linkChats?: boolean;
+  /** False while the conversation runtime is being restored. The rest of the
+   *  rail remains useful without mounting assistant-ui's thread primitives. */
+  chatsReady?: boolean;
   activeRunId?: string;
   activeConversationUrl?: string;
   /** The project whose milestones are on screen, when that is the page. */
@@ -358,30 +362,34 @@ export function Sidebar({
           </nav>
         </Section>
         <Section id="chats" title="Chats" open={open === "chats"} onToggle={toggle}>
-          <ThreadListPrimitive.Root className="rail-list">
-            <div className="rail-nav">
-              {linkChats ? (
-                <a className="rail-button rail-button-primary" href="/conversations">
-                  + New chat
-                </a>
-              ) : (
-                <ThreadListPrimitive.New className="rail-button rail-button-primary">
-                  + New chat
-                </ThreadListPrimitive.New>
-              )}
-            </div>
-            <div className="rail-scroll">
-              <ThreadListPrimitive.Items>
-                {() => <ThreadListItem linked={linkChats} />}
-              </ThreadListPrimitive.Items>
-              <details className="rail-archive">
-                <summary>Archived</summary>
-                <ThreadListPrimitive.Items archived>
-                  {() => <ThreadListItem archived />}
+          {chatsReady ? (
+            <ThreadListPrimitive.Root className="rail-list">
+              <div className="rail-nav">
+                {linkChats ? (
+                  <a className="rail-button rail-button-primary" href="/conversations">
+                    + New chat
+                  </a>
+                ) : (
+                  <ThreadListPrimitive.New className="rail-button rail-button-primary">
+                    + New chat
+                  </ThreadListPrimitive.New>
+                )}
+              </div>
+              <div className="rail-scroll">
+                <ThreadListPrimitive.Items>
+                  {() => <ThreadListItem linked={linkChats} />}
                 </ThreadListPrimitive.Items>
-              </details>
-            </div>
-          </ThreadListPrimitive.Root>
+                <details className="rail-archive">
+                  <summary>Archived</summary>
+                  <ThreadListPrimitive.Items archived>
+                    {() => <ThreadListItem archived />}
+                  </ThreadListPrimitive.Items>
+                </details>
+              </div>
+            </ThreadListPrimitive.Root>
+          ) : (
+            <p className="rail-loading">Restoring chats…</p>
+          )}
         </Section>
       </div>
       {settingsOpen ? (
