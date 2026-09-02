@@ -28,6 +28,7 @@ from dataclasses import dataclass
 import httpx
 import pytest
 
+from engine.domain import RunId
 from engine.graph_runtime import (
     ControllableExecution,
     GraphId,
@@ -950,10 +951,12 @@ def test_cancelling_an_approval_fails_the_run_where_it_asked() -> None:
 
     events, state, refused = asyncio.run(scenario())
 
-    # The refusal is what the reply reports, without waiting to see the agent
-    # notice: the decision is what ended the run, not anything it did after.
+    # A refusal is the end of the run, so the reply is the run already over --
+    # not a status set on something still executing.
     assert refused["status"] == "failed"
     assert refused["error"] == "delete the branch was not allowed"
+    assert refused["activeExecutions"] == []
+    assert refused["pendingApprovals"] == []
     assert _of_kind(events, "approval.resolved")[0]["payload"]["decision"] == "cancel"
     assert state["status"] == "failed"
     assert state["error"] == "delete the branch was not allowed"
@@ -965,6 +968,81 @@ def test_cancelling_an_approval_fails_the_run_where_it_asked() -> None:
         str(IMPLEMENTATION)
     ]
     assert _of_kind(events, "run.failed")[0]["nodeId"] == str(IMPLEMENTATION)
+
+
+def test_refusing_one_task_ends_the_run_and_takes_its_siblings_with_it() -> None:
+    """A refusal is terminal, so it has to actually terminate the run.
+
+    Three tasks of one node each stop to ask permission. Refusing one of them
+    used to set the run's status and nothing else: the superstep went on waiting
+    for the two siblings, whose own questions nobody was going to answer now, so
+    no terminal event was ever published -- and those two carried on accepting
+    steering and decisions while the run reported itself over. `RunStatus.FAILED`
+    exists to stop a client being given two answers it cannot reconcile, so
+    reaching it has to mean the run is really finished.
+    """
+    runtime = ScriptedGraphRuntime(
+        _repeated(Ask("delete the branch", command="git branch -D main"), Say("Done."))
+    )
+
+    async def scenario() -> dict[str, object]:
+        async with _server(runtime) as surface:
+            run = await _start(surface, REPEATED)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "approval.requested", 3)
+            waiting = await surface.client.get(f"/api/runs/{run_id}")
+            requests = waiting.json()["pendingApprovals"]
+            refused = await surface.client.post(
+                f"/api/runs/{run_id}/approvals/{requests[1]['approvalId']}",
+                json={"decision": "cancel"},
+            )
+            # Both aimed at siblings that were mid-question when the run ended.
+            sibling = await surface.client.post(
+                f"/api/runs/{run_id}/approvals/{requests[0]['approvalId']}",
+                json={"decision": "accept"},
+            )
+            steered = await surface.client.post(
+                f"/api/runs/{run_id}/steering",
+                json={"message": "carry on", "execution": requests[2]["executionId"]},
+            )
+            return {
+                "requests": requests,
+                "refused": refused.json(),
+                "sibling": sibling,
+                "steered": steered,
+                "events": await surface.read(run_id, "run.failed"),
+                "executors": len(runtime.executors(RunId(run_id))),
+            }
+
+    outcome = asyncio.run(scenario())
+    requests = outcome["requests"]
+
+    assert len(requests) == 3
+    # The reply is the run over: nothing executing, nothing still being asked.
+    assert outcome["refused"]["status"] == "failed"
+    assert outcome["refused"]["error"] == "delete the branch was not allowed"
+    assert outcome["refused"]["activeExecutions"] == []
+    assert outcome["refused"]["pendingApprovals"] == []
+    assert outcome["executors"] == 0
+    # And the feed says so, once, naming the node that was refused.
+    failures = _of_kind(outcome["events"], "run.failed")
+    assert len(failures) == 1
+    assert failures[0]["payload"] == {"error": "delete the branch was not allowed"}
+    assert failures[0]["nodeId"] == str(REVIEW)
+    # One question was answered; the siblings' were abandoned, not resolved.
+    resolved = _of_kind(outcome["events"], "approval.resolved")
+    assert [event["payload"]["approvalId"] for event in resolved] == [
+        requests[1]["approvalId"]
+    ]
+    assert resolved[0]["executionId"] == requests[1]["executionId"]
+    # Neither sibling is still reachable. The abandoned request is a 409 rather
+    # than a 404: a client showing it should be told it is no longer pending,
+    # not that it never existed.
+    assert outcome["sibling"].status_code == 409
+    assert outcome["steered"].status_code == 409
+    assert outcome["steered"].json() == {
+        "error": "this run has no execution in flight"
+    }
 
 
 # --- a node that raises ----------------------------------------------------
@@ -1237,6 +1315,56 @@ def test_a_resume_can_interrupt_a_superstep_that_is_still_running() -> None:
     assert reverted["nextNodes"] == [str(IMPLEMENTATION)]
     assert _kinds(restarted) == ["run.forked", "node.started"]
     assert restarted[-1]["nodeId"] == str(IMPLEMENTATION)
+
+
+def test_two_resumes_arriving_at_once_do_not_leave_two_executors() -> None:
+    """`resume_from` says anything in flight is stopped first, so it has to be.
+
+    Stopping is asynchronous -- something is cancelled and waited for -- so the
+    guard is a stretch of time rather than a check, and a second request
+    arriving inside it used to walk straight past: the first caller had already
+    let go of the executor, so the second found nothing to stop and started one
+    of its own. Two executors then drove one run, interleaving into one
+    checkpoint list and one values dict and publishing two endings for it.
+
+    Both requests are still honoured -- they are serialised, not dropped -- so
+    what this pins is that only one of them is driving the run afterwards.
+    """
+    graph = _pipeline(Say("Reading the tree."), AwaitSteering())
+    runtime = ScriptedGraphRuntime(graph)
+
+    async def scenario() -> dict[str, object]:
+        async with _server(runtime) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "transcript")
+            transitions = f"/api/runs/{run_id}/transitions"
+            both = await asyncio.gather(
+                surface.client.post(transitions, json={"node": str(IMPLEMENTATION)}),
+                surface.client.post(transitions, json={"node": str(IMPLEMENTATION)}),
+            )
+            return {
+                "both": both,
+                "executors": len(runtime.executors(RunId(run_id))),
+                "history": await _checkpoints(surface, run_id),
+            }
+
+    outcome = asyncio.run(scenario())
+    history = outcome["history"]
+    by_id = {point["checkpointId"]: point for point in history}
+
+    assert [answered.status_code for answered in outcome["both"]] == [200, 200]
+    assert outcome["executors"] == 1
+    # Two forks, each answered to one of the callers, and each a child of a
+    # checkpoint that exists -- rather than two branches appending side by side.
+    forks = [point for point in history if point["source"] == "fork"]
+    assert len(forks) == 2
+    assert [answered.json()["checkpointId"] for answered in outcome["both"]] == [
+        fork["checkpointId"] for fork in forks
+    ]
+    assert all(
+        point["parentId"] is None or point["parentId"] in by_id for point in history
+    )
 
 
 def test_a_transition_the_runtime_cannot_resolve_is_refused() -> None:

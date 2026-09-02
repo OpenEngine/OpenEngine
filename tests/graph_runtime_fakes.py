@@ -198,7 +198,21 @@ class _Run:
         self.answered: set[ApprovalId] = set()
         """Requests that have been resolved, so a repeat is a 409 and not a 404."""
         self.error = ""
-        self.task: asyncio.Task[None] | None = None
+        self.executors: set[asyncio.Task[None]] = set()
+        """Every task driving this run, which must never be more than one.
+
+        A set rather than one slot, because a leaked executor has to be visible
+        to be stopped: a second one started while the first was being cancelled
+        would otherwise be reachable from nothing at all, and would go on
+        writing into the checkpoints and values below.
+        """
+        self.control = asyncio.Lock()
+        """Serialises the operations that stop and restart this run.
+
+        Held for the whole of `resume_from`, because stopping is asynchronous:
+        the guard is not a check but a stretch of time, and a request that
+        arrived in the middle of it used to walk straight past.
+        """
 
     @property
     def position(self) -> Checkpoint | None:
@@ -330,9 +344,13 @@ class _Execution:
             decision = await waiting
         finally:
             # `decide` clears the run's copy on the way in; this is for the run
-            # being stopped or forked while the question is still open.
+            # being stopped or forked while the question is still open. Recorded
+            # as answered either way, so a client still showing an abandoned
+            # request is told it is no longer pending rather than that it never
+            # existed.
             self._waiting.pop(approval.approval_id, None)
             self._run.pending.pop(approval.approval_id, None)
+            self._run.answered.add(approval.approval_id)
         await self._runtime.emit(
             self._run,
             EventKind.APPROVAL_RESOLVED,
@@ -402,7 +420,7 @@ class ScriptedGraphRuntime:
             (graph.nodes[0].node_id,), parent=None, source="start", counter=self.ids
         )
         await self._emit_checkpoint(run, opening)
-        run.task = asyncio.create_task(self._execute(run, opening))
+        self._drive(run, opening)
         return self._snapshot(run)
 
     async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
@@ -419,35 +437,40 @@ class ScriptedGraphRuntime:
         origin = run.by_id.get(checkpoint_id)
         if origin is None:
             raise UnknownCheckpointError(f"unknown checkpoint: {checkpoint_id}")
-        await self._stop(run)
-        # The state that position held, not whatever a later node concluded --
-        # and appended as a child of it, so the attempt being replaced is still
-        # in `history()` for anyone auditing how the run got here.
-        run.values = dict(origin.values)
-        run.error = ""
-        run.status = RunStatus.RUNNING
-        run.frontier = ()
-        forked = run.record(
-            origin.next_nodes,
-            parent=checkpoint_id,
-            source="fork",
-            counter=self.ids,
-        )
-        await self.emit(
-            run,
-            EventKind.RUN_FORKED,
-            {
-                "from": str(checkpoint_id),
-                "checkpointId": str(forked.checkpoint_id),
-                "nodes": [str(node_id) for node_id in forked.next_nodes],
-                "values": dict(run.values),
-            },
-        )
-        # No await between here and the return, so the snapshot the caller is
-        # answered with is the forked position rather than whatever the restarted
-        # superstep has already got to.
-        run.task = asyncio.create_task(self._execute(run, forked))
-        return self._snapshot(run)
+        # Held across the stop *and* the restart. `_stop` awaits a cancellation,
+        # so everything between here and the new executor is a window a second
+        # request would otherwise arrive in -- and it would find nothing in
+        # flight to stop, because the first caller had already let go of it.
+        async with run.control:
+            await self._stop(run)
+            # The state that position held, not whatever a later node concluded
+            # -- and appended as a child of it, so the attempt being replaced is
+            # still in `history()` for anyone auditing how the run got here.
+            run.values = dict(origin.values)
+            run.error = ""
+            run.status = RunStatus.RUNNING
+            run.frontier = ()
+            forked = run.record(
+                origin.next_nodes,
+                parent=checkpoint_id,
+                source="fork",
+                counter=self.ids,
+            )
+            await self.emit(
+                run,
+                EventKind.RUN_FORKED,
+                {
+                    "from": str(checkpoint_id),
+                    "checkpointId": str(forked.checkpoint_id),
+                    "nodes": [str(node_id) for node_id in forked.next_nodes],
+                    "values": dict(run.values),
+                },
+            )
+            # No await between here and the return, so the snapshot the caller
+            # is answered with is the forked position rather than whatever the
+            # restarted superstep has already got to.
+            self._drive(run, forked)
+            return self._snapshot(run)
 
     async def steer(
         self,
@@ -489,16 +512,26 @@ class ScriptedGraphRuntime:
         _, execution = self._executions.resolve(run_id, approval.execution_id)
         run.pending.pop(approval_id)
         run.answered.add(approval_id)
-        if decision is ApprovalDecision.CANCEL:
-            run.status = RunStatus.FAILED
-            run.error = f"{approval.reason} was not allowed"
+        if decision is not ApprovalDecision.CANCEL:
+            await execution.decide(approval_id, decision)
+            return self._snapshot(run)
+        # A refusal is the end of the run rather than a release, so it waits for
+        # the run to actually be over. The reason it has to: the two siblings of
+        # this request are blocked on questions nobody is going to answer now,
+        # and a superstep that sat waiting for them would leave the run saying
+        # `failed` while never publishing a terminal event -- and while those
+        # two went on taking steering. `_walk` unwinds the superstep on the
+        # refusal, which is what makes this wait terminate.
+        run.error = f"{approval.reason} was not allowed"
         await execution.decide(approval_id, decision)
+        await asyncio.gather(*run.executors, return_exceptions=True)
         return self._snapshot(run)
 
     async def aclose(self) -> None:
         """Stop every run, as the server's shutdown does."""
         for run in self._runs.values():
-            await self._stop(run)
+            async with run.control:
+                await self._stop(run)
 
     # --- what a test can ask that a client cannot --------------------------
 
@@ -510,10 +543,21 @@ class ScriptedGraphRuntime:
         it -- a leaked task looks exactly like a node that is thinking.
         """
         return tuple(
-            run
-            for run in self._runs.values()
-            if run.task is not None and not run.task.done()
+            run for run in self._runs.values() if self.executors(run.run_id)
         )
+
+    def executors(self, run_id: RunId) -> tuple[asyncio.Task[None], ...]:
+        """The tasks driving this run, which must never be more than one.
+
+        The same reasoning as `running`, and the same blind spot it exists to
+        cover: two executors over one run are invisible from outside, because
+        everything they do is something one of them could plausibly have done
+        alone -- until their checkpoints and their state start interleaving.
+        """
+        run = self._runs.get(run_id)
+        if run is None:
+            return ()
+        return tuple(executor for executor in run.executors if not executor.done())
 
     def entered(self, node_id: NodeId) -> int:
         """How many times a node has been started, across every attempt.
@@ -525,6 +569,12 @@ class ScriptedGraphRuntime:
         return self._entries.get(node_id, 0)
 
     # --- execution ---------------------------------------------------------
+
+    def _drive(self, run: _Run, checkpoint: Checkpoint) -> None:
+        """Start the one executor this run is allowed, and keep hold of it."""
+        executor = asyncio.create_task(self._execute(run, checkpoint))
+        run.executors.add(executor)
+        executor.add_done_callback(run.executors.discard)
 
     async def _execute(self, run: _Run, checkpoint: Checkpoint) -> None:
         """Drive the run, and make sure a node that raises is reported as one.
@@ -545,21 +595,26 @@ class ScriptedGraphRuntime:
             # One superstep: every node in the frontier at once, and every task
             # of each of them, which is what makes a reviewer pool one step
             # rather than three -- and one node's three tasks one step too.
-            outcomes = await asyncio.gather(
-                *(
-                    self._run_node(run, node_id)
-                    for node_id in checkpoint.next_nodes
-                    for _ in range(self._tasks(run, node_id))
-                )
-            )
+            tasks = [
+                asyncio.create_task(self._run_node(run, node_id))
+                for node_id in checkpoint.next_nodes
+                for _ in range(self._tasks(run, node_id))
+            ]
+            try:
+                ended = await self._superstep(tasks)
+            finally:
+                # Whatever ends the step takes the rest of it: a refusal, a
+                # raise, or the cancellation a fork does. Siblings waiting on
+                # approvals nobody will answer now would otherwise hold the step
+                # -- and the run -- open for good.
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
             run.frontier = ()
-            raised = next((one for one in outcomes if one.error), None)
-            if raised is not None:
-                await self._fail(run, raised.error, raised.node_id)
-                return
-            refused = next((one for one in outcomes if one.refused), None)
-            if refused is not None:
-                await self._fail(run, run.error, refused.node_id)
+            if ended is not None:
+                # `run.error` for a refusal: the reason belongs to the request
+                # that was turned down, and `decide` recorded it there.
+                await self._fail(run, ended.error or run.error, ended.node_id)
                 return
             checkpoint = run.record(
                 run.graph.successors(checkpoint.next_nodes),
@@ -570,6 +625,33 @@ class ScriptedGraphRuntime:
             await self._emit_checkpoint(run, checkpoint)
         run.status = RunStatus.COMPLETED
         await self.emit(run, EventKind.RUN_FINISHED, {"values": dict(run.values)})
+
+    async def _superstep(
+        self, tasks: Sequence[asyncio.Task[_Outcome]]
+    ) -> _Outcome | None:
+        """Wait for the step, and stop waiting as soon as one task ends the run.
+
+        `wait` rather than `gather`, because `gather` only answers once every
+        task has: three reviewers, one of them refused and the other two blocked
+        on their own questions, is a step that never completes and a run that
+        never publishes an ending.
+        """
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            ended = next(
+                (
+                    outcome
+                    for outcome in (task.result() for task in done)
+                    if outcome.error or outcome.refused
+                ),
+                None,
+            )
+            if ended is not None:
+                return ended
+        return None
 
     def _tasks(self, run: _Run, node_id: NodeId) -> int:
         node = run.graph.node(node_id)
@@ -657,11 +739,15 @@ class ScriptedGraphRuntime:
 
     async def _stop(self, run: _Run) -> None:
         run.pending.clear()
-        task = run.task
-        run.task = None
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        # Every executor, not the latest one: if a leak ever does happen, this
+        # is what stops it being permanent. Callers hold `run.control`, which is
+        # what stops one happening in the first place.
+        executors = tuple(run.executors)
+        run.executors.clear()
+        for executor in executors:
+            executor.cancel()
+        if executors:
+            await asyncio.gather(*executors, return_exceptions=True)
         for active in self._executions.active(run.run_id):
             self._executions.release(run.run_id, active.execution_id)
         run.frontier = ()
