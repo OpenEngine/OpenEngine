@@ -102,13 +102,13 @@ def gh_cli_status(binary_path: str = "gh") -> GhCliStatus:
 
 def selected_or_detected_provider(
     preferences: SourceControlPreferences,
-    status: Callable[[], GhCliStatus] = gh_cli_status,
+    status: Callable[[], GhCliStatus] | None = None,
 ) -> tuple[SourceControlProvider, bool]:
     """Return the saved choice, or persist first-run CLI detection exactly once."""
     selected = preferences.get()
     if selected is not None:
         return selected, False
-    detected = status()
+    detected = (status or gh_cli_status)()
     selected = (
         "gh-cli" if detected.installed and detected.authenticated else "github-oauth"
     )

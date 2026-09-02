@@ -267,6 +267,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
           {sourceControl.phase === "loading" && (
             <p className="settings-status settings-status-muted">
+              <span aria-hidden="true" className="settings-spinner" />
               Checking whether GH CLI is installed and authenticated…
             </p>
           )}

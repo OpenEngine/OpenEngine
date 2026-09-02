@@ -42,13 +42,17 @@ class TestGitHubCredentialStore:
         monkeypatch.setattr(
             keyring,
             "set_password",
-            lambda service, username, password: written.append((service, username, password)),
+            lambda service, username, password: written.append(
+                (service, username, password)
+            ),
         )
         GitHubCredentialStore().set("tok-xyz")
         assert written == [("openengine", "github-token", "tok-xyz")]
 
     def test_set_raises_when_no_secure_backend(self, monkeypatch):
-        monkeypatch.setattr(keyring, "get_keyring", lambda: keyring.backends.fail.Keyring())
+        monkeypatch.setattr(
+            keyring, "get_keyring", lambda: keyring.backends.fail.Keyring()
+        )
         with pytest.raises(GitHubAuthError, match="no secure keyring"):
             GitHubCredentialStore().set("tok-xyz")
 
@@ -74,7 +78,9 @@ class TestGitHubCredentialStore:
 
 
 def _mock_response(status_code: int, body: dict) -> httpx.Response:
-    return httpx.Response(status_code, json=body, request=httpx.Request("POST", "https://x"))
+    return httpx.Response(
+        status_code, json=body, request=httpx.Request("POST", "https://x")
+    )
 
 
 class TestStartDeviceFlow:
@@ -99,7 +105,9 @@ class TestStartDeviceFlow:
     def test_raises_on_http_error(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(_mock_response(401, {"message": "Bad credentials"})),
+            lambda: _client_returning(
+                _mock_response(401, {"message": "Bad credentials"})
+            ),
         )
         with pytest.raises(GitHubAuthError, match="401"):
             asyncio.run(start_device_flow("client-id"))
@@ -144,9 +152,7 @@ class TestPollDeviceFlow:
     def test_slow_down_increases_interval_by_five(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(
-                _mock_response(200, {"error": "slow_down"})
-            ),
+            lambda: _client_returning(_mock_response(200, {"error": "slow_down"})),
         )
         result = asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
         assert isinstance(result, DeviceFlowPending)
@@ -156,9 +162,7 @@ class TestPollDeviceFlow:
         """Each slow_down adds 5 s to whatever the caller passes as current_interval."""
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(
-                _mock_response(200, {"error": "slow_down"})
-            ),
+            lambda: _client_returning(_mock_response(200, {"error": "slow_down"})),
         )
         first = asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
         assert isinstance(first, DeviceFlowPending)
@@ -171,9 +175,7 @@ class TestPollDeviceFlow:
     def test_raises_on_expired(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(
-                _mock_response(200, {"error": "expired_token"})
-            ),
+            lambda: _client_returning(_mock_response(200, {"error": "expired_token"})),
         )
         with pytest.raises(GitHubAuthError, match="expired_token"):
             asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
@@ -181,9 +183,7 @@ class TestPollDeviceFlow:
     def test_raises_on_access_denied(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(
-                _mock_response(200, {"error": "access_denied"})
-            ),
+            lambda: _client_returning(_mock_response(200, {"error": "access_denied"})),
         )
         with pytest.raises(GitHubAuthError, match="access_denied"):
             asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
@@ -260,12 +260,17 @@ class TestCsrfGuard:
             "engine.apps.web.api.start_device_flow",
             new=AsyncMock(
                 return_value=DeviceFlowState(
-                    device_code="d", user_code="U", verification_uri="https://gh",
-                    expires_in=900, interval=5,
+                    device_code="d",
+                    user_code="U",
+                    verification_uri="https://gh",
+                    expires_in=900,
+                    interval=5,
                 )
             ),
         ):
-            resp = self._post(app, "/api/github/connect", origin="http://localhost:8000")
+            resp = self._post(
+                app, "/api/github/connect", origin="http://localhost:8000"
+            )
         assert resp.status_code != 403
 
     def test_connect_from_cross_origin_is_rejected(self, tmp_path):
@@ -282,12 +287,16 @@ class TestCsrfGuard:
 
     def test_disconnect_from_cross_origin_is_rejected(self, tmp_path):
         app = _make_github_app(tmp_path)
-        resp = self._post(app, "/api/github/disconnect", origin="https://evil.example.com")
+        resp = self._post(
+            app, "/api/github/disconnect", origin="https://evil.example.com"
+        )
         assert resp.status_code == 403
 
     def test_disconnect_from_https_localhost_is_allowed(self, tmp_path):
         app = _make_github_app(tmp_path)
-        resp = self._post(app, "/api/github/disconnect", origin="https://localhost:8443")
+        resp = self._post(
+            app, "/api/github/disconnect", origin="https://localhost:8443"
+        )
         assert resp.status_code == 204
 
     def test_status_is_exempt_from_csrf_guard(self, tmp_path):
@@ -312,19 +321,26 @@ class TestPollEndpoint:
 
         app = _make_github_app(tmp_path)
         flow = DeviceFlowState(
-            device_code="d", user_code="U", verification_uri="https://gh",
-            expires_in=900, interval=5,
+            device_code="d",
+            user_code="U",
+            verification_uri="https://gh",
+            expires_in=900,
+            interval=5,
         )
-        with patch(
-            "engine.apps.web.api.start_device_flow", new=AsyncMock(return_value=flow)
-        ), patch(
-            "engine.apps.web.api.poll_device_flow",
-            new=AsyncMock(return_value=DeviceFlowComplete(access_token="tok")),
-        ), patch(
-            "engine.apps.web.github_auth.keyring.get_keyring",
-            return_value=_high_priority_backend(),
-        ), patch(
-            "engine.apps.web.github_auth.keyring.set_password"
+        with (
+            patch(
+                "engine.apps.web.api.start_device_flow",
+                new=AsyncMock(return_value=flow),
+            ),
+            patch(
+                "engine.apps.web.api.poll_device_flow",
+                new=AsyncMock(return_value=DeviceFlowComplete(access_token="tok")),
+            ),
+            patch(
+                "engine.apps.web.github_auth.keyring.get_keyring",
+                return_value=_high_priority_backend(),
+            ),
+            patch("engine.apps.web.github_auth.keyring.set_password"),
         ):
             with TestClient(app) as client:
                 client.post("/api/github/connect")
@@ -338,14 +354,21 @@ class TestPollEndpoint:
 
         app = _make_github_app(tmp_path)
         flow = DeviceFlowState(
-            device_code="d", user_code="U", verification_uri="https://gh",
-            expires_in=900, interval=5,
+            device_code="d",
+            user_code="U",
+            verification_uri="https://gh",
+            expires_in=900,
+            interval=5,
         )
-        with patch(
-            "engine.apps.web.api.start_device_flow", new=AsyncMock(return_value=flow)
-        ), patch(
-            "engine.apps.web.api.poll_device_flow",
-            new=AsyncMock(return_value=DeviceFlowPending(next_interval=10)),
+        with (
+            patch(
+                "engine.apps.web.api.start_device_flow",
+                new=AsyncMock(return_value=flow),
+            ),
+            patch(
+                "engine.apps.web.api.poll_device_flow",
+                new=AsyncMock(return_value=DeviceFlowPending(next_interval=10)),
+            ),
         ):
             with TestClient(app) as client:
                 client.post("/api/github/connect")
@@ -362,7 +385,7 @@ class TestSourceControlProviderEndpoint:
         from engine.apps.web.source_control import GhCliStatus
 
         monkeypatch.setattr(
-            "engine.apps.web.api.gh_cli_status",
+            "engine.apps.web.source_control.gh_cli_status",
             lambda: GhCliStatus(True, True, account="octocat"),
         )
         app = _make_github_app(tmp_path)

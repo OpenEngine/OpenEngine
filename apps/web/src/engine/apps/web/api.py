@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
+from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
     DeviceFlowState,
@@ -43,8 +44,6 @@ from engine.apps.web.github_auth import (
 )
 from engine.apps.web.source_control import (
     SourceControlPreferences,
-    gh_cli_status,
-    selected_or_detected_provider,
 )
 from engine.domain import (
     AgentId,
@@ -1808,10 +1807,10 @@ def create_app(
         )
 
     async def source_control_status(_request: Request) -> JSONResponse:
-        provider, auto_selected = selected_or_detected_provider(
+        provider, auto_selected = source_control_settings.selected_or_detected_provider(
             _source_control_preferences
         )
-        cli = gh_cli_status()
+        cli = source_control_settings.gh_cli_status()
         return JSONResponse(
             {
                 "provider": provider,
