@@ -175,13 +175,23 @@ class _Turn:
             request=dict(request.params),
             approval_id=approval_id,
         )
+        # Answered without the process ever going away, so the continuation has
+        # done its job and the approval comes back off it. Deliberately not in a
+        # `finally`: an `ask` that does not return is a process being taken away
+        # mid-question, and that is exactly when the record has to survive.
+        await self._settle()
         return _outcome(decision, request)
 
     async def _settle(self) -> None:
         """Drop the approval from the binding, keeping the conversation.
 
-        Without this the next question in the same session would find a stale
-        answer waiting and apply it to a request nobody had seen.
+        A continuation naming an approval means "this session is mid-question,
+        and here is the question". Once it is answered that stops being true,
+        and leaving it written down is worse than useless: the next entry into
+        this node would find a settled decision waiting, resume a conversation
+        nobody is holding, send the continuation prompt in place of the node's
+        real one, and auto-answer the first permission request it met with an
+        answer given to a different question entirely.
         """
         await self.execution.runtime.store.remember_session(
             self.execution.run_id,

@@ -618,12 +618,24 @@ class LangGraphRuntime:
         node recognizes the continuation it left behind, and the same ACP
         conversation is resumed rather than a second one started. Which is what
         makes "the person answers on Monday" a thing that can work at all.
+
+        And it waits for the last of them. A superstep is plural, so a lost
+        process can leave three agents mid-question, and restarting re-enters
+        all three -- not just the one whose answer arrived. A node whose
+        question is still outstanding has no decision to apply, so it would
+        open a second conversation and put its original prompt to it as fresh
+        work, and the answer sent later would arrive for an execution that no
+        longer exists. So a restart happens once, when nothing is left
+        unanswered, and until then a decision is durable and inert.
         """
         try:
             _, execution = self._registry.resolve(record.run_id, record.execution_id)
         except RunNotSteerableError:
-            if decision is not ApprovalDecision.CANCEL:
-                await self._restart(record.run_id)
+            if decision is ApprovalDecision.CANCEL:
+                return  # `_refuse` ends the run; there is nothing to restart.
+            if await self._store.pending_approvals(record.run_id):
+                return
+            await self._restart(record.run_id)
             return
         await execution.decide(record.approval_id, decision)
 

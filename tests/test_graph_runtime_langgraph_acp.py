@@ -43,7 +43,7 @@ from engine.graph_runtime_langgraph import (
     SqliteGraphRuntimeStore,
     answer_permission,
 )
-from engine.graph_runtime_langgraph.acp import ACPNode
+from engine.graph_runtime_langgraph.acp import APPROVAL_ID, ACPNode
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry, StdioACPProvider
@@ -487,6 +487,83 @@ def test_an_approval_survives_the_runtime_that_raised_it(tmp_path: Path) -> None
     assert PROMPT not in prompts(tmp_path)[1]
 
 
+def test_two_lost_approvals_are_both_answered_before_anything_restarts(
+    tmp_path: Path,
+) -> None:
+    """A superstep is plural, so a lost process can leave several mid-question.
+
+    Restarting on the first answer would re-enter every node of the superstep,
+    including the one still waiting: it has no decision to apply, so it would
+    open a second conversation and put its original prompt to it as fresh work,
+    and the answer sent afterwards would arrive for an execution that no longer
+    exists. So the first decision is durable and inert, and the restart happens
+    once, when nothing is left unanswered.
+    """
+
+    async def raise_them() -> tuple[RunId, list[str]]:
+        async with runtime_over(tmp_path, registry(tmp_path, asks=True), pool) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            await until(log, run.run_id, "approval.requested", 2)
+            waiting = await runtime.snapshot(run.run_id)
+            return run.run_id, [
+                str(one.approval_id) for one in waiting.pending_approvals
+            ]
+
+    async def answer_them(run_id: RunId, approvals: list[str]) -> dict[str, Any]:
+        async with runtime_over(tmp_path, registry(tmp_path, asks=True), pool) as (
+            runtime,
+            log,
+        ):
+            first, second = approvals
+            after_one = await runtime.decide(
+                run_id, first, ApprovalDecision.ACCEPT  # type: ignore[arg-type]
+            )
+            # Nothing may be moving yet. A driver started here would be running
+            # the agent whose question is still on somebody's screen.
+            await asyncio.sleep(0.2)
+            resting = {
+                "snapshot": await runtime.snapshot(run_id),
+                "running": list(runtime.running()),
+                "sessions": len(sent(tmp_path, "session/new")),
+            }
+            await runtime.decide(
+                run_id, second, ApprovalDecision.ACCEPT  # type: ignore[arg-type]
+            )
+            await until(log, run_id, "run.finished")
+            return {
+                "after_one": after_one,
+                "resting": resting,
+                "final": await runtime.snapshot(run_id),
+            }
+
+    run_id, approvals = asyncio.run(raise_them())
+    assert len(approvals) == 2
+    outcome = asyncio.run(answer_them(run_id, approvals))
+
+    # One answered, one outstanding, and the run still going nowhere.
+    assert [str(one.approval_id) for one in outcome["after_one"].pending_approvals] == [
+        approvals[1]
+    ]
+    assert outcome["resting"]["running"] == []
+    assert outcome["resting"]["snapshot"].status.value == "awaiting_approval"
+    assert outcome["resting"]["sessions"] == 2
+
+    assert outcome["final"].status.value == "completed"
+    # Two conversations, started once each in the first process and reloaded
+    # once each in the second. A third `session/new` would be an agent handed
+    # its own outstanding work as a new task.
+    assert len(sent(tmp_path, "session/new")) == 2
+    assert len(sent(tmp_path, "session/load")) == 2
+    assert len(sessions(tmp_path)) == 2
+    assert all(session["granted"] for session in sessions(tmp_path).values())
+    assert all(session["loads"] == 1 for session in sessions(tmp_path).values())
+    for node_id in ("agent-1", "agent-2"):
+        assert prompts(tmp_path).count(f"{PROMPT} ({node_id})") == 1
+
+
 def test_a_reconstructed_runtime_refuses_an_approval_it_already_answered(
     tmp_path: Path,
 ) -> None:
@@ -518,6 +595,60 @@ def test_a_reconstructed_runtime_refuses_an_approval_it_already_answered(
 
     run_id, approval_id = asyncio.run(raise_it())
     assert asyncio.run(answer_twice(run_id, approval_id)) == "ApprovalNotPendingError"
+
+
+def test_an_answered_approval_does_not_follow_the_node_into_its_next_entry(
+    tmp_path: Path,
+) -> None:
+    """A continuation names a question only while there is one outstanding.
+
+    An approval answered without the process ever going away is not something
+    to come back to, and leaving it on the stored continuation is worse than
+    useless. The next entry into the node -- a fork here, but a loop would do --
+    would find a settled decision waiting, resume a conversation nobody is
+    holding, send the continuation prompt in place of its own, and auto-answer
+    the first permission request it met with an answer given to a different
+    question entirely.
+    """
+
+    async def scenario() -> dict[str, Any]:
+        async with runtime_over(tmp_path, registry(tmp_path, asks=True)) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            asked = await until(log, run.run_id, "approval.requested")
+            first = str(asked[-1].payload["approvalId"])
+            await runtime.decide(
+                run.run_id, first, ApprovalDecision.ACCEPT  # type: ignore[arg-type]
+            )
+            done = await until(log, run.run_id, "run.finished")
+            binding = await runtime.store.session(run.run_id, str(IMPLEMENTATION))
+            history = await runtime.history(run.run_id)
+            await runtime.resume_from(run.run_id, history[0].checkpoint_id)
+            # The re-attempt has to ask again. Being answered without asking is
+            # exactly the failure this is here for.
+            again = await until(
+                log, run.run_id, "approval.requested", cursor=done[-1].sequence
+            )
+            second = str(again[-1].payload["approvalId"])
+            await runtime.decide(
+                run.run_id, second, ApprovalDecision.ACCEPT  # type: ignore[arg-type]
+            )
+            await until(log, run.run_id, "run.finished", cursor=again[-1].sequence)
+            return {"binding": binding, "first": first, "second": second}
+
+    outcome = asyncio.run(scenario())
+
+    assert APPROVAL_ID not in outcome["binding"].metadata
+    assert outcome["second"] != outcome["first"]
+    # A fresh conversation for the re-attempt, given the node's own prompt. The
+    # abandoned one is not reloaded: replaying an attempt is a different
+    # attempt, and continuing the old session would hand the agent its own
+    # discarded work as context.
+    assert len(sent(tmp_path, "session/new")) == 2
+    assert sent(tmp_path, "session/load") == []
+    assert prompts(tmp_path) == [PROMPT, PROMPT]
 
 
 # --- durability of position, not just of the question -----------------------
