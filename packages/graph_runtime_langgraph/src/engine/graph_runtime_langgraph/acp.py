@@ -225,6 +225,24 @@ def _outcome(
     return ACPPermissionOutcome.selected(allowing.option_id)
 
 
+class NoWorkingDirectoryError(ValueError):
+    """An agent was about to be started without being told where to work.
+
+    Loud on purpose, because the quiet alternative is the worst outcome this
+    package can produce. ACP resolves an absent working directory against the
+    *client's* process -- `os.path.abspath(os.getcwd())` -- so a node that
+    reached a session with nothing would get one rooted in the server's own
+    checkout, and an agent with permission to edit would begin editing the
+    operator's repository. Nothing in the run would say so: there is no event
+    for "started somewhere unintended", and the transcript of an agent working
+    in the wrong tree reads exactly like one working in the right tree.
+
+    So no directory is never a default here and never a fallback. It is a
+    refusal, at the two moments it can be caught: when a workflow is written,
+    and when a run resolves one.
+    """
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ACPNode:
     """A LangGraph node that runs one ACP turn under the graph runtime.
@@ -232,7 +250,10 @@ class ACPNode:
     An async callable rather than something LangGraph has to know about, which
     is what `langgraph_acp.ACPNode` established and this keeps:
 
-        builder.add_node("implementation", ACPNode(agent="codex", prompt="..."))
+        builder.add_node(
+            "implementation",
+            ACPNode(agent="codex", prompt="...", cwd=checkout),
+        )
 
     What it adds over the minimal node is everything the control surface needs:
     the session becomes the execution's, its updates become runtime events, its
@@ -262,18 +283,51 @@ class ACPNode:
     start over from the words it began with, having discarded everything it had
     worked out since. All it needs to know is that the question was answered.
     """
+    graph_node_name: str = ""
+    """What to call this node on screen. The node's own id when empty."""
     graph_node_kind: str = "agent"
     graph_node_description: str = ""
-    cwd: str | None = None
+    cwd: str | Callable[[Mapping[str, object]], str | None]
+    """Where the session works, or how to read it off the graph's state.
+
+    Required, and with no default, which is the one field on this node worth
+    arguing about. The only default available is "wherever this process happens
+    to be", and that is the server's own checkout -- see
+    `NoWorkingDirectoryError`. Having none is not a state this node can be in,
+    so it is not expressible: omitting it fails at the `add_node` line, under a
+    type checker as well as at runtime.
+
+    A resolver rather than only a string because the directory is usually the
+    run's own: one graph serves every run, and each of them is given a checkout
+    of its own by whichever node provisioned it. `components.checkout` is that
+    resolver for a graph with a `WorkspaceNode` in it. Resolved per invocation,
+    so the node stays a description of the work rather than a copy per checkout.
+    """
     mcp_servers: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        # A literal is checkable now; a resolver is not, and is checked on the
+        # invocation that runs it. Empty rather than absent because `cwd=""` is
+        # the same accident spelled differently: ACP would resolve it against
+        # the process too.
+        if not callable(self.cwd) and not str(self.cwd).strip():
+            raise NoWorkingDirectoryError(
+                f"ACPNode for agent {self.agent!r} was given an empty working "
+                "directory. Name the directory the agent may work in, or pass a "
+                "resolver that reads it off the run's state."
+            )
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
         runtime = execution.runtime
+        # First, before the store is read and before anything is launched: a
+        # node that does not know where to work has nothing to resume into and
+        # no session worth opening, so it fails having done nothing.
+        cwd = self._cwd(state)
         key = self.session_key or str(execution.node_id)
         stored = await runtime.store.session(execution.run_id, key)
         resuming = await self._answer_to_apply(runtime, stored)
-        client, session = await self._open(stored if resuming else None)
+        client, session = await self._open(stored if resuming else None, cwd)
         turn = _Turn(self, execution, key, session.session_id)
         if resuming is not None:
             turn.answer, turn.answered = resuming
@@ -311,7 +365,7 @@ class ACPNode:
         )
 
     async def _open(
-        self, stored: ACPContinuation | None
+        self, stored: ACPContinuation | None, cwd: str
     ) -> tuple[Any, ACPSession]:
         """Reach the conversation: the stored one when resuming, else a new one.
 
@@ -320,16 +374,33 @@ class ACPNode:
         this node does is keep the record and hand it back.
         """
         if stored is not None:
-            return await resume_continuation(
-                stored, registry=self.registry, cwd=self.cwd
-            )
+            return await resume_continuation(stored, registry=self.registry, cwd=cwd)
         provider = (self.registry or default_registry()).resolve(self.agent)
         client = await provider.connect()
         try:
-            return client, await client.new_session(cwd=self.cwd)
+            return client, await client.new_session(cwd=cwd)
         except BaseException:
             await client.close()
             raise
+
+    def _cwd(self, state: Mapping[str, object]) -> str:
+        """Where this invocation works, refusing rather than falling back.
+
+        The resolver is the interesting case and the reachable one: a graph
+        whose `WorkspaceNode` was omitted or ordered after this node, a provider
+        that answered with an empty path, or a fork re-entering this node from a
+        checkpoint taken before anything had been provisioned. Each of those
+        leaves the state key missing, and each of them used to mean the session
+        opened in the server's own tree.
+        """
+        resolved = self.cwd(state) if callable(self.cwd) else self.cwd
+        if not resolved or not str(resolved).strip():
+            raise NoWorkingDirectoryError(
+                f"ACPNode for agent {self.agent!r} resolved no working directory "
+                "from this run's state. A node that provisions one -- "
+                "`WorkspaceNode` -- has to run before it."
+            )
+        return str(resolved)
 
     async def _answer_to_apply(
         self, runtime: Any, stored: ACPContinuation | None

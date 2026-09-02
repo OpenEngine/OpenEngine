@@ -6,9 +6,17 @@ requires-python = ">=3.11"
 dependencies = [
     "engine-domain",
     "engine-graph-runtime",
+    # The capability a workspace component provisions through. The port, not an
+    # adapter: which checkout a deployment gets is its own business, and naming
+    # git here would put an implementation in a package that runs graphs.
+    "engine-ports",
     "langgraph>=1.0",
     "langgraph-acp",
     "langgraph-checkpoint>=2.0",
+    # What `workflows.sqlite_runtime` opens. A deployment needs a durable
+    # checkpointer to have history, resumption or a run that survives a restart,
+    # so the binding ships the one rather than leaving each to wire its own.
+    "langgraph-checkpoint-sqlite>=2.0",
 ]
 
 [build-system]
@@ -21,4 +29,5 @@ packages = ["src/engine"]
 [tool.uv.sources]
 engine-domain = { workspace = true }
 engine-graph-runtime = { workspace = true }
+engine-ports = { workspace = true }
 langgraph-acp = { path = "../../langgraph-acp", editable = true }
