@@ -343,6 +343,15 @@ def test_topology_describes_every_node_and_edge() -> None:
 
 
 def test_topology_describes_a_fan_out_as_several_edges_out_of_one_node() -> None:
+    """Three edges out of implementation, and three back into the reranker.
+
+    Spelled out rather than derived from `REVIEWERS`, because a test that built
+    its expectation the same way the code builds the answer would agree with a
+    fan-out that had gone missing. The order is asserted too: `GraphTopology`
+    requires edges in declaration order, so that a client rendering the same
+    graph twice draws the same diagram.
+    """
+
     async def scenario() -> dict:
         async with _server(ScriptedGraphRuntime(_fan_out(Say("Fine.")))) as surface:
             described = await surface.client.get(f"/api/graphs/{POOL}")
@@ -350,12 +359,14 @@ def test_topology_describes_a_fan_out_as_several_edges_out_of_one_node() -> None
 
     described = asyncio.run(scenario())
 
-    assert [edge["target"] for edge in described["edges"][:3]] == [
-        str(node_id) for node_id in REVIEWERS
+    assert described["edges"] == [
+        {"source": "implementation", "target": "reviewer-1", "condition": ""},
+        {"source": "implementation", "target": "reviewer-2", "condition": ""},
+        {"source": "implementation", "target": "reviewer-3", "condition": ""},
+        {"source": "reviewer-1", "target": "reranker", "condition": ""},
+        {"source": "reviewer-2", "target": "reranker", "condition": ""},
+        {"source": "reviewer-3", "target": "reranker", "condition": ""},
     ]
-    assert {edge["source"] for edge in described["edges"][3:]} == {
-        str(node_id) for node_id in REVIEWERS
-    }
 
 
 # --- starting runs and reading their state ---------------------------------

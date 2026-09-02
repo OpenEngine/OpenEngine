@@ -64,6 +64,17 @@ class GraphTopology:
     entry_point: NodeId
     nodes: tuple[GraphNode, ...] = ()
     edges: tuple[GraphEdge, ...] = field(default_factory=tuple)
+    """Every edge, in the graph's own declaration order.
+
+    Ordered rather than a set, and required to be stable: a client rendering a
+    diagram twice should get the same picture, and one diffing two versions of a
+    graph should see only what changed. An implementation that iterated a set
+    would make both of those flicker for no reason a reader could see.
+
+    Stable is not sorted. The order is whatever the graph declares, which is
+    usually the order a person wrote the nodes in and is more useful than
+    alphabetical; nothing here promises otherwise.
+    """
 
     def node(self, node_id: NodeId) -> GraphNode | None:
         return next((node for node in self.nodes if node.node_id == node_id), None)
