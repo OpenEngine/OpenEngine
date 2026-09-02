@@ -1,4 +1,4 @@
-"""GitHub source control: git for local workspace operations, httpx for the API.
+"""GitHub source control: git locally and a selectable GitHub API transport.
 
 Two mechanisms, one capability. `git` handles everything that happens inside a
 checkout (branching, committing, pushing) and `httpx` handles everything that
@@ -19,8 +19,11 @@ import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
-import httpx
-
+from engine.adapters.source_control.github.transports import (
+    GitHubApiTransport,
+    GitHubOAuthTransport,
+    GitHubTransportError,
+)
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
     ChangeRequest,
@@ -108,17 +111,11 @@ class GitHubSourceControl:
         api_url: str = "https://api.github.com",
         workspace_provider: WorkspaceProvider | None = None,
         git_binary_path: str = "git",
+        transport: GitHubApiTransport | None = None,
     ) -> None:
-        self._token_source = token
-        self._api_url = api_url.rstrip("/")
+        self._transport = transport or GitHubOAuthTransport(token, api_url)
         self._workspace_provider = workspace_provider
         self._git_binary_path = git_binary_path
-
-    @property
-    def _token(self) -> str:
-        if callable(self._token_source):
-            return self._token_source() or ""
-        return self._token_source
 
     async def run_git(
         self, workspace_id: WorkspaceId, arguments: Sequence[str]
@@ -458,36 +455,12 @@ class GitHubSourceControl:
             }
         }
 
-    def _http_headers(self) -> dict[str, str]:
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
-        return headers
-
     async def _api(self, method: str, path: str, **kwargs: object) -> object:
-        """Make one GitHub API call and return the parsed JSON body."""
-        url = f"{self._api_url}{path}"
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method,
-                url,
-                headers=self._http_headers(),
-                **kwargs,
-            )
-        if response.is_error:
-            try:
-                detail = response.json().get("message", response.text)
-            except Exception:
-                detail = response.text or f"HTTP {response.status_code}"
-            raise GitHubSourceControlError(
-                f"GitHub API {method} {path} failed ({response.status_code}): {detail}"
-            )
-        if response.status_code == 204 or not response.content:
-            return {}
-        return response.json()
+        """Make one GitHub request, preserving one adapter-level error shape."""
+        try:
+            return await self._transport.request(method, path, **kwargs)
+        except GitHubTransportError as error:
+            raise GitHubSourceControlError(str(error)) from error
 
     async def _paginated_objects(self, path: str, params: Mapping[str, object] | None = None) -> tuple[dict, ...]:
         """Read every GitHub list page rather than silently accepting page one."""
@@ -515,23 +488,13 @@ class GitHubSourceControl:
             page += 1
 
     async def _download(self, path: str) -> bytes:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            async with client.stream(
-                "GET", f"{self._api_url}{path}", headers=self._http_headers()
-            ) as response:
-                if response.is_error:
-                    detail = (await response.aread()).decode(errors="replace")
-                    raise GitHubSourceControlError(
-                        f"GitHub API GET {path} failed ({response.status_code}): {detail}"
-                    )
-                chunks: list[bytes] = []
-                size = 0
-                async for chunk in response.aiter_bytes():
-                    size += len(chunk)
-                    if size > _MAX_LOG_BYTES:
-                        raise GitHubSourceControlError("GitHub job logs exceed the download limit")
-                    chunks.append(chunk)
-        return b"".join(chunks)
+        try:
+            content = await self._transport.download(path)
+        except GitHubTransportError as error:
+            raise GitHubSourceControlError(str(error)) from error
+        if len(content) > _MAX_LOG_BYTES:
+            raise GitHubSourceControlError("GitHub job logs exceed the download limit")
+        return content
 
     async def _repo_coords(self, root_path: str) -> tuple[str, str]:
         """The `owner/repo` pair from the workspace's `origin` remote URL."""
@@ -808,11 +771,11 @@ def _log_text(content: bytes) -> str:
 
 
 __all__ = [
+    "INTERNAL_BRANCH_PREFIX",
     "GitGlobalOptionError",
     "GitHubSourceControl",
     "GitHubSourceControlError",
     "GitOutsideWorkspaceError",
-    "INTERNAL_BRANCH_PREFIX",
     "InternalBranchPublicationError",
     "UnsafePushSpecificationError",
 ]

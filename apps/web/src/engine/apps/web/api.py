@@ -33,13 +33,25 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
+from engine.apps.web import source_control as source_control_settings
+from engine.apps.web.github_auth import (
+    DeviceFlowComplete,
+    DeviceFlowState,
+    GitHubAuthError,
+    GitHubCredentialStore,
+    poll_device_flow,
+    start_device_flow,
+)
+from engine.apps.web.source_control import (
+    SourceControlPreferences,
+)
 from engine.domain import (
-    AgentStep,
     AgentId,
     AgentInstance,
     AgentInstanceId,
     AgentRunId,
     AgentRunStatus,
+    AgentStep,
     ApprovalDecision,
     ApprovalId,
     ApprovalRecord,
@@ -57,11 +69,11 @@ from engine.domain import (
     StartAgentRun,
     StepId,
     TaskId,
-    WorkflowId,
     WorkflowDefinition,
+    WorkflowId,
+    WorkspaceId,
     Workstream,
     WorkstreamId,
-    WorkspaceId,
     instance_id_for_project,
     project_id_for_instance,
     workstreams_by_milestone,
@@ -84,20 +96,12 @@ from engine.runtime import (
     RunReader,
     UnknownApprovalError,
     UserInputNotAllowedError,
+    WorkflowCatalog,
     WorkflowExecutionError,
     WorkflowExecutor,
-    WorkflowCatalog,
     WorkflowRunView,
     load_engine_config,
     load_workflow_catalog,
-)
-from engine.apps.web.github_auth import (
-    DeviceFlowComplete,
-    DeviceFlowState,
-    GitHubAuthError,
-    GitHubCredentialStore,
-    poll_device_flow,
-    start_device_flow,
 )
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -291,9 +295,7 @@ class ApprovalFeed:
         self._changed: dict[AgentInstanceId, asyncio.Condition] = {}
 
     async def publish(self, approval: ApprovalRecord) -> None:
-        condition = self._changed.setdefault(
-            approval.instance_id, asyncio.Condition()
-        )
+        condition = self._changed.setdefault(approval.instance_id, asyncio.Condition())
         async with condition:
             self._revisions[approval.instance_id] = (
                 self._revisions.get(approval.instance_id, 0) + 1
@@ -436,9 +438,7 @@ class ThreadService:
             definition = run.workflow_definition
             if definition is None and self._workflow_catalog is not None:
                 definition = self._workflow_catalog.get(run.workflow_id)
-            base_ref = (
-                definition.workspace.base_ref if definition is not None else None
-            )
+            base_ref = definition.workspace.base_ref if definition is not None else None
         async with self._locks[instance_id]:
             state = await self.session.attach_workspace(
                 instance_id, repository=repository, base_ref=base_ref
@@ -831,7 +831,9 @@ class ThreadService:
         workspace, and attaching offers it a new one.
         """
         try:
-            return _with_workspace(thread, await self.session.workspace(thread.instance_id))
+            return _with_workspace(
+                thread, await self.session.workspace(thread.instance_id)
+            )
         except KeyError:
             return _with_workspace(thread, None)
 
@@ -901,6 +903,7 @@ def create_app(
     credential_store: GitHubCredentialStore | None = None,
     github_client_id: str = "",
     github_client_id_source: str = "configuration",
+    source_control_preferences: SourceControlPreferences | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -969,9 +972,11 @@ def create_app(
     def track_workflow(run_id: RunId, task: asyncio.Task[None]) -> None:
         workflow_tasks[run_id] = task
         task.add_done_callback(
-            lambda completed: workflow_tasks.pop(run_id, None)
-            if workflow_tasks.get(run_id) is completed
-            else None
+            lambda completed: (
+                workflow_tasks.pop(run_id, None)
+                if workflow_tasks.get(run_id) is completed
+                else None
+            )
         )
 
     async def workflow_runner_for(state: RunState) -> str:
@@ -1060,9 +1065,7 @@ def create_app(
         """Restart an active workflow turn on its conversation's new runner."""
 
         assert thread.workflow_run_id is not None
-        lock = workflow_restart_locks.setdefault(
-            thread.workflow_run_id, asyncio.Lock()
-        )
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
         async with lock:
             task = workflow_tasks.get(thread.workflow_run_id)
             if task is None or task.done():
@@ -1133,8 +1136,7 @@ def create_app(
         )
         track_workflow(thread.workflow_run_id, task)
         while (
-            len(await service.history(thread.instance_id)) <= before
-            and not task.done()
+            len(await service.history(thread.instance_id)) <= before and not task.done()
         ):
             await asyncio.sleep(0)
         if task.done() and not task.cancelled() and task.exception() is not None:
@@ -1188,7 +1190,9 @@ def create_app(
                 # process owns. Empty when no such profile is composed, which is
                 # the client's cue that there is nothing to plan with.
                 "planAgent": (
-                    str(PLANNER.agent_id) if PLANNER.agent_id in session.profiles else ""
+                    str(PLANNER.agent_id)
+                    if PLANNER.agent_id in session.profiles
+                    else ""
                 ),
                 "defaultRunner": session.default_runner,
                 "workflowRunners": list(workflow_executor.runners),
@@ -1205,7 +1209,9 @@ def create_app(
         )
 
     async def list_threads(_request: Request) -> JSONResponse:
-        return JSONResponse({"threads": [_thread_json(t) for t in await service.list()]})
+        return JSONResponse(
+            {"threads": [_thread_json(t) for t in await service.list()]}
+        )
 
     async def list_runs(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -1222,9 +1228,7 @@ def create_app(
         new chat rather than the plan.
         """
         return {
-            thread.instance_id
-            for thread in await service.list()
-            if not thread.archived
+            thread.instance_id for thread in await service.list() if not thread.archived
         }
 
     async def list_projects(_request: Request) -> JSONResponse:
@@ -1384,9 +1388,7 @@ def create_app(
         await session.state_store.append_events(run_id, (event,))
         track_workflow(
             run_id,
-            asyncio.create_task(
-                workflow_executor.start(event, runner_name)
-            ),
+            asyncio.create_task(workflow_executor.start(event, runner_name)),
         )
         run = await run_reader.get(run_id)
         assert run is not None
@@ -1434,9 +1436,7 @@ def create_app(
             if next_state.phase is RunPhase.RUNNING_AGENT:
                 track_workflow(
                     run_id,
-                    asyncio.create_task(
-                        workflow_executor.resume_agent_step(run_id)
-                    ),
+                    asyncio.create_task(workflow_executor.resume_agent_step(run_id)),
                 )
         except WorkflowExecutionError as error:
             return _error(str(error), 409)
@@ -1648,9 +1648,7 @@ def create_app(
                 if runner is not None and runner != thread.runner:
                     if runner not in workflow_executor.runners:
                         return _error(f"unknown workflow runner: {runner}", 400)
-                    thread = await service.update_metadata(
-                        instance_id, runner=runner
-                    )
+                    thread = await service.update_metadata(instance_id, runner=runner)
                 await continue_workflow(thread, text)
                 return StreamingResponse(
                     stream_workflow_conversation(instance_id, thread.workflow_run_id),
@@ -1701,9 +1699,7 @@ def create_app(
         try:
             workflow_agent_run_id = None
             if thread.workflow_run_id is not None:
-                workflow_state = await session.state_store.load(
-                    thread.workflow_run_id
-                )
+                workflow_state = await session.state_store.load(thread.workflow_run_id)
                 if workflow_state is not None:
                     workflow_agent_run_id = workflow_state.current_agent_run_id
             approval_id = ApprovalId(request.path_params["approval_id"])
@@ -1748,6 +1744,9 @@ def create_app(
     # --- GitHub connection endpoints -----------------------------------------
 
     _credential_store = credential_store or GitHubCredentialStore()
+    _source_control_preferences = (
+        source_control_preferences or SourceControlPreferences()
+    )
 
     # The single in-flight device flow. `_active_interval` tracks the current
     # polling interval, which grows when GitHub returns `slow_down`.
@@ -1806,6 +1805,35 @@ def create_app(
                 "clientIdConfigured": bool(_effective_client_id()),
             }
         )
+
+    async def source_control_status(_request: Request) -> JSONResponse:
+        provider, auto_selected = source_control_settings.selected_or_detected_provider(
+            _source_control_preferences
+        )
+        cli = source_control_settings.gh_cli_status()
+        return JSONResponse(
+            {
+                "provider": provider,
+                "autoSelected": auto_selected,
+                "ghCli": {
+                    "installed": cli.installed,
+                    "authenticated": cli.authenticated,
+                    "account": cli.account,
+                    "message": cli.message,
+                },
+            }
+        )
+
+    async def set_source_control_provider(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        provider = (await request.json()).get("provider")
+        if provider == "gitlab":
+            return _error("GitLab is not supported yet", 409)
+        if provider not in {"gh-cli", "github-oauth"}:
+            return _error("provider must be 'gh-cli' or 'github-oauth'", 400)
+        _source_control_preferences.set(provider)
+        return Response(status_code=204)
 
     async def github_get_client_id(_request: Request) -> JSONResponse:
         # Never return the actual value — only whether one is set and its hint.
@@ -1871,7 +1899,9 @@ def create_app(
         if not _is_local_request(request):
             return _error("forbidden", 403)
         if _active_flow is None:
-            return _error("no active device flow; call POST /api/github/connect first", 409)
+            return _error(
+                "no active device flow; call POST /api/github/connect first", 409
+            )
         try:
             result = await poll_device_flow(
                 _effective_client_id(), _active_flow.device_code, _active_interval
@@ -1902,6 +1932,12 @@ def create_app(
     routes = [
         Route("/api/config", config),
         Route("/api/github/status", github_status),
+        Route("/api/source-control/status", source_control_status),
+        Route(
+            "/api/source-control/provider",
+            set_source_control_provider,
+            methods=["POST"],
+        ),
         Route("/api/github/client-id", github_get_client_id),
         Route("/api/github/client-id", github_set_client_id, methods=["POST"]),
         Route("/api/github/connect", github_connect, methods=["POST"]),
@@ -1970,6 +2006,7 @@ def create_app(
         ),
     ]
     if static_directory is not None and (static_directory / "index.html").is_file():
+
         async def spa_page(_request: Request) -> Response:
             return FileResponse(
                 static_directory / "index.html",
@@ -2194,9 +2231,7 @@ def _approval_json(approval: ApprovalRecord) -> dict[str, object]:
         # beside it rather than collecting every request at the end of a turn.
         "toolCallId": approval.tool_call_id,
         "arguments": approval.arguments,
-        "allowedDecisions": [
-            decision.value for decision in approval.allowed_decisions
-        ],
+        "allowedDecisions": [decision.value for decision in approval.allowed_decisions],
         "decision": approval.decision.value if approval.decision else None,
         # Who decided, so the client can tell an answer the user gave from one
         # a grant gave on their behalf. A request nobody was shown still has to
@@ -2289,11 +2324,7 @@ def _latest_assistant_content(
 
 def _tool_call_ids(messages: Iterable[Message]) -> set[str]:
     """Every provider call id already present in a transcript."""
-    return {
-        call.call_id
-        for message in messages
-        for call in message.tool_calls
-    }
+    return {call.call_id for message in messages for call in message.tool_calls}
 
 
 def _merge_message(

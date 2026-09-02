@@ -32,10 +32,18 @@ from engine.adapters.agent_runner.claude_code import (
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
+from engine.adapters.source_control.github.transports import (
+    GitHubCliTransport,
+    GitHubOAuthTransport,
+)
 from engine.adapters.state_store.sqlite import SQLiteStateStore
-from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.source_control import (
+    RoutingSourceControl,
+    SourceControlPreferences,
+)
 from engine.ports import AgentRunner
 from engine.runtime import (
     PLANNING_TOOL_NAMES,
@@ -96,6 +104,7 @@ class Settings:
     temporal_host: str = "localhost:7233"
     github_token: str = ""
     github_client_id: str = ""
+    source_control_preferences: SourceControlPreferences | None = None
     buzz_base_url: str = ""
     buzz_api_token: str = ""
     workspace_root: str = "/tmp/engine-workspaces"
@@ -118,18 +127,34 @@ def build_capabilities(
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     _store = credential_store
+
     def _token() -> str:
         if _store is not None:
             stored = _store.get()
             if stored:
                 return stored
         return settings.github_token
+
+    oauth = GitHubSourceControl(
+        _token,
+        workspace_provider=workspace_provider,
+        transport=GitHubOAuthTransport(_token),
+    )
+    if settings.source_control_preferences is None:
+        source_control = oauth
+    else:
+        source_control = RoutingSourceControl(
+            settings.source_control_preferences,
+            GitHubSourceControl(
+                _token,
+                workspace_provider=workspace_provider,
+                transport=GitHubCliTransport(),
+            ),
+            oauth,
+        )
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
-        source_control=GitHubSourceControl(
-            _token,
-            workspace_provider=workspace_provider,
-        ),
+        source_control=source_control,
         agent_runner=CodexAgentRunner(
             binary_path=settings.codex_binary,
             timeout_seconds=settings.codex_timeout_seconds,
@@ -139,7 +164,9 @@ def build_capabilities(
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
-        communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
+        communications=BuzzCommunications(
+            settings.buzz_base_url, settings.buzz_api_token
+        ),
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
     )
@@ -305,6 +332,6 @@ __all__ = [
     "build_capabilities",
     "build_read_only_runners",
     "build_runners",
-    "build_workflow_runners",
     "build_session",
+    "build_workflow_runners",
 ]
