@@ -8,6 +8,11 @@ requires-python = ">=3.11"
 # dependencies live in this directory's package.json.
 dependencies = [
     "engine-runtime",
+    # The second engine a workflow can run on, composed when the repository
+    # provided a workflow that runs as a graph: the control surface, and the
+    # LangGraph binding that compiles and drives one.
+    "engine-graph-runtime",
+    "engine-graph-runtime-langgraph",
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second. SQLite gives chat durable conversations
     # without requiring an external database service.
@@ -42,6 +47,8 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-runtime = { workspace = true }
+engine-graph-runtime = { workspace = true }
+engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }
 engine-adapter-agent-runner-claude-code = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }

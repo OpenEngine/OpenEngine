@@ -209,6 +209,65 @@ Or via environment variables:
 GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-web
 ```
 
+### Workflows that run as a graph
+
+A workflow in the `workflows/` directory can be written two ways, and which one
+it is decides which engine runs it. There is no setting:
+
+| the file exports | it runs on | what it can do |
+| --- | --- | --- |
+| `openengine.workflow(...)` | the workflow runtime | a sequence of steps with branches |
+| a `graph_workflow(...)` | the graph runtime, over LangGraph | fan-out, forks, resumption from any checkpoint |
+
+`workflows/implementation_review.py` is the first and
+`workflows/implementation_review_graph.py` is the second — the same four
+stages, a checkout, an implementation, a review and the human decision that
+ends it, on either engine. Ship the ones you want; delete the ones you do not.
+
+When a workflow runs as a graph, the server additionally serves that engine's
+control surface under `/graph` — graphs, runs, checkpoints, an event feed,
+steering, and approvals:
+
+```bash
+curl localhost:8000/graph/api/graphs
+curl -X POST localhost:8000/graph/api/runs \
+  -d '{"graphId": "implementation-review-codex",
+       "values": {"task": "...", "repository": "."}}'
+```
+
+Its LangGraph checkpoints and run records are written to `graph-runtime/`
+beside the conversation store. Agent authentication is the CLI's own, as on the
+step path: the ACP adapters use whatever `codex login` or `claude setup-token`
+left behind.
+
+A graph workflow names nodes and edges and nothing else. The reusable nodes —
+a checkout, an agent turn, a human decision — are
+`engine.graph_runtime_langgraph.components`, and a deployment's checkpointer,
+store and HTTP surface are none of the file's business:
+
+```python
+from engine.graph_runtime_langgraph import State, graph_workflow
+from engine.graph_runtime_langgraph.components import (
+    ACPNode,
+    HumanReviewNode,
+    WorkspaceNode,
+    checkout,
+)
+
+@graph_workflow(id="triage", name="Triage")
+def workflow():
+    builder = StateGraph(State)
+    builder.add_node("workspace", WorkspaceNode(provider=..., base_ref="origin/main"))
+    builder.add_node("triage", ACPNode(agent="codex", prompt="...", cwd=checkout))
+    ...
+    return builder
+```
+
+Every agent node has to say where it works, and `checkout` is how it says "the
+one this run was given". There is no default: the only one available would be
+the directory the server itself is running in, which is not somewhere an agent
+should ever be turned loose.
+
 To diagnose interactive runner protocol incompatibilities, set
 `ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and
 Claude Code record normalized session and interaction events alongside their

@@ -17,12 +17,10 @@ files, compiles every workflow against them, and closes both afterwards.
     workflow.py  ->  GraphWorkflow  --+
     workflow.py  ->  GraphWorkflow  --+->  sqlite_runtime(...)  ->  GraphRuntime
 
-Which is also what will make a *variant* cheap: a graph is a value a module
-exports, so a second deployment -- or a test -- runs a different one by being
-handed different values, rather than by a flag whose two settings both have to
-keep working. Nothing here loads a module or decides which graphs a process
-offers; that is the workflow loader's, and arrives with the change that teaches
-it to recognise one of these.
+Which is also what makes a *variant* cheap. A test, or a second deployment, runs
+a different workflow by being pointed at a directory with a different file in
+it; nothing has to be switched on, and there is no flag whose two settings both
+have to keep working.
 """
 
 from __future__ import annotations
@@ -74,10 +72,9 @@ keys they know and leave the rest alone.
 class GraphWorkflow:
     """One graph a deployment can be asked to run, before it is compiled.
 
-    An id and a name, and then the LangGraph part. The first two are deliberately
-    what a value like this leads with: whatever eventually decides which graphs a
-    process offers has to be able to identify one without knowing that a builder,
-    a checkpointer or a compilation step exist. Only `compiled` looks past them.
+    Satisfies `engine.graph_runtime.GraphWorkflow`, which is all a workflow
+    loader is allowed to know about a graph: an id and a name. Everything else
+    here is LangGraph's, and only the code that compiles it looks at it.
     """
 
     graph_id: GraphId

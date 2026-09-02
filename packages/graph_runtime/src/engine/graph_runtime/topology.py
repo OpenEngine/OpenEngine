@@ -15,7 +15,7 @@ of one node, and the runtime executes them together as one superstep; see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import NewType
+from typing import NewType, Protocol, runtime_checkable
 
 GraphId = NewType("GraphId", str)
 """A graph definition: "implementation-review", "triage"."""
@@ -80,4 +80,35 @@ class GraphTopology:
         return next((node for node in self.nodes if node.node_id == node_id), None)
 
 
-__all__ = ["GraphEdge", "GraphId", "GraphNode", "GraphTopology", "NodeId"]
+@runtime_checkable
+class GraphWorkflow(Protocol):
+    """A graph a deployment offers, before anything has compiled it.
+
+    Deliberately two attributes. This exists so that whatever loads a
+    repository's workflow definitions can tell "this one runs as a graph" from
+    "this one runs as steps", and hand the first to a graph runtime -- without
+    the loader having to import a graph engine, or know that a builder, a
+    checkpointer or a compilation step exist at all. Everything past the id and
+    the name belongs to the binding that will run it.
+
+    Structural, and checked at runtime, because a workflow module is trusted
+    Python that imports whichever binding it was written against. Requiring it
+    to inherit from something here would make the repository's own workflows
+    depend on the contract package for no benefit.
+    """
+
+    @property
+    def graph_id(self) -> GraphId: ...
+
+    @property
+    def name(self) -> str: ...
+
+
+__all__ = [
+    "GraphEdge",
+    "GraphId",
+    "GraphNode",
+    "GraphTopology",
+    "GraphWorkflow",
+    "NodeId",
+]

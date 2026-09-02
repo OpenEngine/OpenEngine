@@ -57,7 +57,18 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.graph_runtime",
     ),
     ADAPTER: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
-    APP: ("engine.domain", "engine.core", "engine.ports", "engine.runtime", "engine.adapters"),
+    # An app composes, so it may name the graph contract and the binding that
+    # implements it for the same reason it may name an adapter: choosing which
+    # implementation runs is the composition root's whole job.
+    APP: (
+        "engine.domain",
+        "engine.core",
+        "engine.ports",
+        "engine.runtime",
+        "engine.adapters",
+        "engine.graph_runtime",
+        "engine.graph_runtime_langgraph",
+    ),
 }
 
 

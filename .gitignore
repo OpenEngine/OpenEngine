@@ -12,6 +12,9 @@ build/
 node_modules/
 *.tsbuildinfo
 /conversations.sqlite3
+# What a workflow that runs as a graph writes beside it: LangGraph checkpoints
+# and run records, for a server started in the checkout.
+/graph-runtime/
 .claude/settings.local.json
 .codex/
 test-results/

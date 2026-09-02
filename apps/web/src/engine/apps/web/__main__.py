@@ -17,6 +17,7 @@ from pathlib import Path
 import uvicorn
 from starlette.applications import Starlette
 
+from engine.apps.web import graphs
 from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
@@ -42,7 +43,9 @@ from engine.runtime import (
 STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
 
 
-def report_wiring(settings: Settings) -> None:
+def report_wiring(
+    settings: Settings, workflow_catalog: WorkflowCatalog | None = None
+) -> None:
     """Print the composed capability graph, as the other two roots do."""
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
@@ -81,6 +84,19 @@ def report_wiring(settings: Settings) -> None:
     )
     print(f"read-only agents: {', '.join(read_only_agents) or 'none'}")
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
+    # Which workflows run as graphs, because that -- and nothing else -- decides
+    # whether this process also serves a second control surface.
+    running_as_graphs = workflow_catalog.graphs if workflow_catalog else ()
+    print(
+        "graph runtime: "
+        + (
+            f"serving {graphs.PREFIX} for "
+            + ", ".join(str(graph.graph_id) for graph in running_as_graphs)
+            + f"; state in {graphs.state_directory(settings.sqlite_path)}"
+            if running_as_graphs
+            else "no workflow runs as a graph"
+        )
+    )
 
 
 def _settings(loaded: LoadedEngineConfig) -> Settings:
@@ -122,7 +138,13 @@ def read_configuration(
 def compose_app(
     loaded: LoadedEngineConfig, workflow_catalog: WorkflowCatalog | None
 ) -> Starlette:
-    """Wire the capability graph and hand it to the HTTP surface."""
+    """Wire the capability graph and hand it to the HTTP surface.
+
+    When the repository's workflows include one that runs as a graph, the same
+    application is composed and then served behind the graph control surface as
+    well. Additive, and decided by the workflows rather than by a flag: a
+    deployment with no graph workflow never reaches any of it.
+    """
     settings = _settings(loaded)
     credential_store = GitHubCredentialStore()
     capabilities = build_capabilities(settings, credential_store=credential_store)
@@ -130,7 +152,7 @@ def compose_app(
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
-    return create_app(
+    app = create_app(
         session,
         runners,
         STATIC_DIRECTORY,
@@ -143,6 +165,11 @@ def compose_app(
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
         source_control_preferences=settings.source_control_preferences,
+    )
+    if workflow_catalog is None or not workflow_catalog.graphs:
+        return app
+    return graphs.serve(
+        app, workflow_catalog.graphs, graphs.state_directory(settings.sqlite_path)
     )
 
 
@@ -169,7 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = _settings(loaded)
 
     if args.check:
-        report_wiring(settings)
+        report_wiring(settings, workflow_catalog)
         return 0
 
     app = compose_app(loaded, workflow_catalog)

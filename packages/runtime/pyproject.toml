@@ -3,7 +3,9 @@ name = "engine-runtime"
 version = "0.0.0"
 description = "Dispatches engine commands to capability implementations."
 requires-python = ">=3.11"
-dependencies = ["engine-domain", "engine-core", "engine-ports"]
+# `engine-graph-runtime` is the contract, not an engine: the workflow loader
+# needs to recognise a graph workflow, and recognising one is two attributes.
+dependencies = ["engine-domain", "engine-core", "engine-ports", "engine-graph-runtime"]
 
 [build-system]
 requires = ["hatchling"]
@@ -16,3 +18,4 @@ packages = ["src/engine"]
 engine-domain = { workspace = true }
 engine-core = { workspace = true }
 engine-ports = { workspace = true }
+engine-graph-runtime = { workspace = true }

@@ -212,7 +212,9 @@ def test_web_entrypoint_puts_explicit_config_in_composition_settings(
     path = tmp_path / "permissions.toml"
     path.write_text('[approvals]\nauto_approve = true\nallow = ["read", "bash"]\n')
     seen = []
-    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+    monkeypatch.setattr(
+        web_main, "report_wiring", lambda settings, _catalog=None: seen.append(settings)
+    )
 
     assert web_main.main(["--check", "--config", str(path)]) == 0
 
@@ -236,7 +238,9 @@ def test_web_entrypoint_uses_toml_github_credentials_when_environment_is_unset(
     seen = []
     monkeypatch.delenv("GITHUB_CLIENT_ID", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+    monkeypatch.setattr(
+        web_main, "report_wiring", lambda settings, _catalog=None: seen.append(settings)
+    )
 
     assert web_main.main(["--check", "--config", str(path)]) == 0
 
@@ -255,7 +259,9 @@ def test_web_entrypoint_prefers_environment_github_credentials(
     seen = []
     monkeypatch.setenv("GITHUB_CLIENT_ID", "client-from-environment")
     monkeypatch.setenv("GITHUB_TOKEN", "token-from-environment")
-    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+    monkeypatch.setattr(
+        web_main, "report_wiring", lambda settings, _catalog=None: seen.append(settings)
+    )
 
     assert web_main.main(["--check", "--config", str(path)]) == 0
 
