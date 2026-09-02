@@ -23,9 +23,9 @@ jobs:
     name: README fresh install
     runs-on: ubuntu-latest
     env:
-      # Exercise the oldest supported interpreter instead of inheriting the
-      # repository's development version from `.python-version`.
-      UV_PYTHON: "3.11"
+      # Exercise the oldest interpreter in the test matrix instead of inheriting
+      # the repository's development version from `.python-version`.
+      UV_PYTHON: "3.12"
     steps:
       # Hosted runners start empty, so checkout is the fresh clone a new user
       # would begin with. Deliberately do not restore dependency caches here.
