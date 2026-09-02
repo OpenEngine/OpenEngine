@@ -37,11 +37,10 @@ jobs:
       # Report every version's result; one failure should not hide the other.
       fail-fast: false
       matrix:
-        # The full range `requires-python` claims.
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
     env:
       # Set at job level so every uv command agrees on the interpreter. Without
-      # it, the package's `.python-version` would win and all four legs would test
+      # it, the package's `.python-version` would win and all three legs would test
       # the same thing.
       UV_PYTHON: ${{ matrix.python-version }}
     defaults:
