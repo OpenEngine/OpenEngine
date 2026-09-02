@@ -9,8 +9,10 @@ import {
   disconnectGitHub,
   getGitHubClientId,
   getGitHubStatus,
+  getSourceControlStatus,
   pollGitHubConnect,
   setGitHubClientId,
+  setSourceControlProvider,
   type GitHubClientIdInfo,
   type GitHubConnectResponse,
 } from "./api";
@@ -32,9 +34,28 @@ type ClientIdState =
   | { phase: "unconfigured" }
   | { phase: "editing"; value: string; saving: boolean };
 
+type SourceControlState =
+  | { phase: "loading" }
+  | {
+      phase: "ready";
+      provider: "gh-cli" | "github-oauth";
+      autoSelected: boolean;
+      ghCli: {
+        installed: boolean;
+        authenticated: boolean;
+        account: string;
+        message: string;
+      };
+    };
+
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
-  const [connection, setConnection] = useState<ConnectionState>({ phase: "unknown" });
+  const [connection, setConnection] = useState<ConnectionState>({
+    phase: "unknown",
+  });
   const [clientId, setClientId] = useState<ClientIdState>({ phase: "loading" });
+  const [sourceControl, setSourceControl] = useState<SourceControlState>({
+    phase: "loading",
+  });
   // Holds the next-poll timeout ID, not a fixed interval.
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Holds the device flow expiry timeout ID.
@@ -52,27 +73,57 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, []);
 
   const loadClientId = useCallback(() => {
-    getGitHubClientId().then((info) => {
-      if (info.source === "none") {
+    getGitHubClientId()
+      .then((info) => {
+        if (info.source === "none") {
+          setClientId({ phase: "unconfigured" });
+        } else {
+          setClientId({
+            phase: "configured",
+            hint: info.hint,
+            source: info.source,
+          });
+        }
+      })
+      .catch(() => {
         setClientId({ phase: "unconfigured" });
-      } else {
-        setClientId({ phase: "configured", hint: info.hint, source: info.source });
-      }
-    }).catch(() => {
-      setClientId({ phase: "unconfigured" });
-    });
+      });
   }, []);
 
   // Load status on mount; cancel any timers on unmount.
   useEffect(() => {
-    getGitHubStatus().then(({ connected }) => {
-      setConnection({ phase: connected ? "connected" : "disconnected" });
-    }).catch(() => {
-      setConnection({ phase: "disconnected" });
-    });
+    getGitHubStatus()
+      .then(({ connected }) => {
+        setConnection({ phase: connected ? "connected" : "disconnected" });
+      })
+      .catch(() => {
+        setConnection({ phase: "disconnected" });
+      });
     loadClientId();
+    getSourceControlStatus().then((status) => {
+      setSourceControl({
+        phase: "ready",
+        provider: status.provider,
+        autoSelected: status.autoSelected,
+        ghCli: status.ghCli,
+      });
+    });
     return stopPolling;
   }, [stopPolling, loadClientId]);
+
+  const chooseProvider = useCallback(
+    async (provider: "gh-cli" | "github-oauth") => {
+      await setSourceControlProvider(provider);
+      const status = await getSourceControlStatus();
+      setSourceControl({
+        phase: "ready",
+        provider: status.provider,
+        autoSelected: false,
+        ghCli: status.ghCli,
+      });
+    },
+    [],
+  );
 
   const handleSaveClientId = useCallback(async () => {
     if (clientId.phase !== "editing") return;
@@ -126,13 +177,15 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         stopPolling();
         setConnection({
           phase: "error",
-          message: "The authorisation code expired. Click Try again to start over.",
+          message:
+            "The authorisation code expired. Click Try again to start over.",
         });
       }, flow.expiresIn * 1000);
     } catch (err) {
       setConnection({
         phase: "error",
-        message: err instanceof Error ? err.message : "Could not start connection.",
+        message:
+          err instanceof Error ? err.message : "Could not start connection.",
       });
     }
   }, [schedulePoll, stopPolling]);
@@ -175,181 +228,283 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         <section className="settings-section">
           <h2 className="settings-section-title">GitHub</h2>
 
-          {/* ── Client ID ───────────────────────────────────────── */}
-          {clientId.phase === "loading" && (
-            <p className="settings-status settings-status-muted">Loading…</p>
-          )}
-
-          {clientId.phase === "configured" && (
-            <div className="settings-client-id">
-              <span className="settings-client-id-label">
-                Client ID
-                {clientId.source === "environment" && (
-                  <span className="settings-client-id-source"> (environment)</span>
-                )}
-                {clientId.source === "configuration" && (
-                  <span className="settings-client-id-source"> (configuration)</span>
-                )}
-              </span>
-              <span className="settings-client-id-hint">{clientId.hint}</span>
-              {clientId.source === "keychain" && (
-                <button
-                  className="settings-link-button"
-                  onClick={() =>
-                    setClientId({ phase: "editing", value: "", saving: false })
-                  }
-                  type="button"
-                >
-                  Change
-                </button>
-              )}
-            </div>
-          )}
-
-          {(clientId.phase === "unconfigured" || clientId.phase === "editing") && (
-            <div className="settings-client-id-form">
-              <label className="settings-label" htmlFor="github-client-id">
-                GitHub OAuth Client ID
-              </label>
+          <fieldset className="settings-provider-choice">
+            <legend className="settings-label">Source control provider</legend>
+            <label>
               <input
-                autoComplete="off"
-                className="settings-input"
-                id="github-client-id"
-                onChange={(e) =>
-                  setClientId({
-                    phase: "editing",
-                    value: e.target.value,
-                    saving: false,
-                  })
+                checked={
+                  sourceControl.phase === "ready" &&
+                  sourceControl.provider === "gh-cli"
                 }
-                placeholder="Ov23li…"
-                type="password"
-                value={clientId.phase === "editing" ? clientId.value : ""}
-              />
-              <div className="settings-actions">
-                <button
-                  className="settings-button settings-button-primary"
-                  disabled={
-                    clientId.phase !== "editing" ||
-                    !clientId.value.trim() ||
-                    clientId.saving
-                  }
-                  onClick={handleSaveClientId}
-                  type="button"
-                >
-                  {clientId.phase === "editing" && clientId.saving
-                    ? "Saving…"
-                    : "Save"}
-                </button>
-                {clientId.phase === "editing" && (
-                  <button
-                    className="settings-button"
-                    onClick={loadClientId}
-                    type="button"
-                  >
-                    Cancel
-                  </button>
+                disabled={
+                  sourceControl.phase !== "ready" ||
+                  !sourceControl.ghCli.installed
+                }
+                name="source-control-provider"
+                onChange={() => void chooseProvider("gh-cli")}
+                type="radio"
+              />{" "}
+              GH CLI
+            </label>
+            <label>
+              <input
+                checked={
+                  sourceControl.phase === "ready" &&
+                  sourceControl.provider === "github-oauth"
+                }
+                disabled={sourceControl.phase !== "ready"}
+                name="source-control-provider"
+                onChange={() => void chooseProvider("github-oauth")}
+                type="radio"
+              />{" "}
+              GitHub OAuth
+            </label>
+            <label className="settings-status-muted">
+              <input disabled name="source-control-provider" type="radio" />{" "}
+              GitLab (coming soon)
+            </label>
+          </fieldset>
+
+          {sourceControl.phase === "loading" && (
+            <p className="settings-status settings-status-muted">
+              Checking whether GH CLI is installed and authenticated…
+            </p>
+          )}
+
+          {sourceControl.phase === "ready" &&
+            sourceControl.provider === "gh-cli" && (
+              <p
+                className={
+                  sourceControl.ghCli.authenticated
+                    ? "settings-status settings-status-ok"
+                    : "settings-status settings-status-error"
+                }
+              >
+                {sourceControl.ghCli.message}
+                {sourceControl.ghCli.account
+                  ? `: ${sourceControl.ghCli.account}`
+                  : ""}
+              </p>
+            )}
+
+          {sourceControl.phase === "ready" && sourceControl.autoSelected && (
+            <p className="settings-status settings-status-muted">
+              Auto-selected from your authenticated GH CLI session.
+            </p>
+          )}
+
+          {sourceControl.phase === "ready" &&
+            !sourceControl.ghCli.installed && (
+              <p className="settings-status settings-status-muted">
+                Install it with <code>brew install gh</code>, then run{" "}
+                <code>gh auth login</code>.
+              </p>
+            )}
+
+          {sourceControl.phase === "ready" &&
+            sourceControl.provider === "github-oauth" && (
+              <>
+                {/* ── Client ID ───────────────────────────────────────── */}
+                {clientId.phase === "loading" && (
+                  <p className="settings-status settings-status-muted">
+                    Loading…
+                  </p>
                 )}
-              </div>
-            </div>
-          )}
 
-          {/* ── Connection status (only when a client ID is set) ── */}
-          {clientIdReady && (
-            <>
-              {connection.phase === "unknown" && (
-                <p className="settings-status settings-status-muted">Checking…</p>
-              )}
-
-              {connection.phase === "connected" && (
-                <>
-                  <p className="settings-status settings-status-ok">Connected</p>
-                  <div className="settings-actions">
-                    <button
-                      className="settings-button"
-                      onClick={handleConnect}
-                      type="button"
-                    >
-                      Reconnect
-                    </button>
-                    <button
-                      className="settings-button settings-button-danger"
-                      onClick={handleDisconnect}
-                      type="button"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {connection.phase === "disconnected" && (
-                <>
-                  <p className="settings-status settings-status-muted">
-                    Not connected
-                  </p>
-                  <div className="settings-actions">
-                    <button
-                      className="settings-button settings-button-primary"
-                      onClick={handleConnect}
-                      type="button"
-                    >
-                      Connect GitHub
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {connection.phase === "connecting" && (
-                <>
-                  <p className="settings-status settings-status-muted">
-                    Waiting for authorisation
-                  </p>
-                  <div className="settings-device-flow">
-                    <p className="settings-device-flow-instruction">
-                      Visit{" "}
-                      <a
-                        className="settings-link"
-                        href={connection.flow.verificationUri}
-                        rel="noreferrer"
-                        target="_blank"
+                {clientId.phase === "configured" && (
+                  <div className="settings-client-id">
+                    <span className="settings-client-id-label">
+                      Client ID
+                      {clientId.source === "environment" && (
+                        <span className="settings-client-id-source">
+                          {" "}
+                          (environment)
+                        </span>
+                      )}
+                      {clientId.source === "configuration" && (
+                        <span className="settings-client-id-source">
+                          {" "}
+                          (configuration)
+                        </span>
+                      )}
+                    </span>
+                    <span className="settings-client-id-hint">
+                      {clientId.hint}
+                    </span>
+                    {clientId.source === "keychain" && (
+                      <button
+                        className="settings-link-button"
+                        onClick={() =>
+                          setClientId({
+                            phase: "editing",
+                            value: "",
+                            saving: false,
+                          })
+                        }
+                        type="button"
                       >
-                        {connection.flow.verificationUri}
-                      </a>{" "}
-                      and enter this code:
-                    </p>
-                    <p className="settings-device-code">{connection.flow.userCode}</p>
+                        Change
+                      </button>
+                    )}
                   </div>
-                  <div className="settings-actions">
-                    <button
-                      className="settings-button"
-                      onClick={handleCancelConnect}
-                      type="button"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </>
-              )}
+                )}
 
-              {connection.phase === "error" && (
-                <>
-                  <p className="settings-status settings-status-error">
-                    {connection.message}
-                  </p>
-                  <div className="settings-actions">
-                    <button
-                      className="settings-button settings-button-primary"
-                      onClick={handleConnect}
-                      type="button"
+                {(clientId.phase === "unconfigured" ||
+                  clientId.phase === "editing") && (
+                  <div className="settings-client-id-form">
+                    <label
+                      className="settings-label"
+                      htmlFor="github-client-id"
                     >
-                      Try again
-                    </button>
+                      GitHub OAuth Client ID
+                    </label>
+                    <input
+                      autoComplete="off"
+                      className="settings-input"
+                      id="github-client-id"
+                      onChange={(e) =>
+                        setClientId({
+                          phase: "editing",
+                          value: e.target.value,
+                          saving: false,
+                        })
+                      }
+                      placeholder="Ov23li…"
+                      type="password"
+                      value={clientId.phase === "editing" ? clientId.value : ""}
+                    />
+                    <div className="settings-actions">
+                      <button
+                        className="settings-button settings-button-primary"
+                        disabled={
+                          clientId.phase !== "editing" ||
+                          !clientId.value.trim() ||
+                          clientId.saving
+                        }
+                        onClick={handleSaveClientId}
+                        type="button"
+                      >
+                        {clientId.phase === "editing" && clientId.saving
+                          ? "Saving…"
+                          : "Save"}
+                      </button>
+                      {clientId.phase === "editing" && (
+                        <button
+                          className="settings-button"
+                          onClick={loadClientId}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </>
-              )}
-            </>
-          )}
+                )}
+
+                {/* ── Connection status (only when a client ID is set) ── */}
+                {clientIdReady && (
+                  <>
+                    {connection.phase === "unknown" && (
+                      <p className="settings-status settings-status-muted">
+                        Checking…
+                      </p>
+                    )}
+
+                    {connection.phase === "connected" && (
+                      <>
+                        <p className="settings-status settings-status-ok">
+                          Connected
+                        </p>
+                        <div className="settings-actions">
+                          <button
+                            className="settings-button"
+                            onClick={handleConnect}
+                            type="button"
+                          >
+                            Reconnect
+                          </button>
+                          <button
+                            className="settings-button settings-button-danger"
+                            onClick={handleDisconnect}
+                            type="button"
+                          >
+                            Disconnect
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {connection.phase === "disconnected" && (
+                      <>
+                        <p className="settings-status settings-status-muted">
+                          Not connected
+                        </p>
+                        <div className="settings-actions">
+                          <button
+                            className="settings-button settings-button-primary"
+                            onClick={handleConnect}
+                            type="button"
+                          >
+                            Connect GitHub
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {connection.phase === "connecting" && (
+                      <>
+                        <p className="settings-status settings-status-muted">
+                          Waiting for authorisation
+                        </p>
+                        <div className="settings-device-flow">
+                          <p className="settings-device-flow-instruction">
+                            Visit{" "}
+                            <a
+                              className="settings-link"
+                              href={connection.flow.verificationUri}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              {connection.flow.verificationUri}
+                            </a>{" "}
+                            and enter this code:
+                          </p>
+                          <p className="settings-device-code">
+                            {connection.flow.userCode}
+                          </p>
+                        </div>
+                        <div className="settings-actions">
+                          <button
+                            className="settings-button"
+                            onClick={handleCancelConnect}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {connection.phase === "error" && (
+                      <>
+                        <p className="settings-status settings-status-error">
+                          {connection.message}
+                        </p>
+                        <div className="settings-actions">
+                          <button
+                            className="settings-button settings-button-primary"
+                            onClick={handleConnect}
+                            type="button"
+                          >
+                            Try again
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </>
+            )}
         </section>
       </div>
     </div>

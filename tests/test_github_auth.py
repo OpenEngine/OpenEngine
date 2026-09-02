@@ -215,6 +215,7 @@ def _make_github_app(tmp_path, client_id: str = "test-client-id"):
     from engine.adapters.state_store.sqlite import SQLiteStateStore
     from engine.apps.web.api import create_app
     from engine.apps.web.github_auth import GitHubCredentialStore
+    from engine.apps.web.source_control import SourceControlPreferences
     from engine.runtime import AgentSession, Capabilities
 
     _stub = object()
@@ -238,6 +239,7 @@ def _make_github_app(tmp_path, client_id: str = "test-client-id"):
         review_runners=_runner_stub,
         credential_store=credential_store,
         github_client_id=client_id,
+        source_control_preferences=SourceControlPreferences(tmp_path / "settings.json"),
     )
     return app
 
@@ -351,6 +353,32 @@ class TestPollEndpoint:
         body = resp.json()
         assert body["status"] == "pending"
         assert body["nextInterval"] == 10
+
+
+class TestSourceControlProviderEndpoint:
+    def test_selects_provider_and_rejects_gitlab(self, tmp_path, monkeypatch) -> None:
+        from starlette.testclient import TestClient
+
+        from engine.apps.web.source_control import GhCliStatus
+
+        monkeypatch.setattr(
+            "engine.apps.web.api.gh_cli_status",
+            lambda: GhCliStatus(True, True, account="octocat"),
+        )
+        app = _make_github_app(tmp_path)
+        with TestClient(app) as client:
+            status = client.get("/api/source-control/status")
+            selected = client.post(
+                "/api/source-control/provider", json={"provider": "github-oauth"}
+            )
+            rejected = client.post(
+                "/api/source-control/provider", json={"provider": "gitlab"}
+            )
+
+        assert status.json()["provider"] == "gh-cli"
+        assert status.json()["ghCli"]["account"] == "octocat"
+        assert selected.status_code == 204
+        assert rejected.status_code == 409
 
 
 # ---------------------------------------------------------------------------

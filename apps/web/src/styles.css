@@ -1371,6 +1371,21 @@ select:disabled { cursor: default; }
   text-transform: uppercase;
 }
 
+.settings-provider-choice {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+.settings-provider-choice label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.settings-provider-choice input { margin: 0; }
+
 .settings-status {
   margin: 0 0 10px;
   font: 400 12px/1.4 var(--mono);
