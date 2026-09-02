@@ -504,6 +504,7 @@ dependencies = [
     { name = "engine-adapter-workflow-runtime-temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree" },
     { name = "engine-core" },
+    { name = "engine-graph-runtime-langgraph" },
     { name = "engine-runtime" },
 ]
 
@@ -516,6 +517,7 @@ requires-dist = [
     { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree", editable = "packages/adapters/workspace_provider/git_worktree" },
     { name = "engine-core", editable = "packages/engine" },
+    { name = "engine-graph-runtime-langgraph", editable = "packages/graph_runtime_langgraph" },
     { name = "engine-runtime", editable = "packages/runtime" },
 ]
 
@@ -624,6 +626,7 @@ source = { editable = "packages/runtime" }
 dependencies = [
     { name = "engine-core" },
     { name = "engine-domain" },
+    { name = "engine-graph-runtime" },
     { name = "engine-ports" },
 ]
 
@@ -631,6 +634,7 @@ dependencies = [
 requires-dist = [
     { name = "engine-core", editable = "packages/engine" },
     { name = "engine-domain", editable = "packages/domain" },
+    { name = "engine-graph-runtime", editable = "packages/graph_runtime" },
     { name = "engine-ports", editable = "packages/ports" },
 ]
 
@@ -661,6 +665,7 @@ dependencies = [
     { name = "engine-adapter-state-store-sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree" },
+    { name = "engine-graph-runtime-langgraph" },
     { name = "engine-runtime" },
     { name = "keyring" },
     { name = "platformdirs" },
@@ -677,6 +682,7 @@ requires-dist = [
     { name = "engine-adapter-state-store-sqlite", editable = "packages/adapters/state_store/sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree", editable = "packages/adapters/workspace_provider/git_worktree" },
+    { name = "engine-graph-runtime-langgraph", editable = "packages/graph_runtime_langgraph" },
     { name = "engine-runtime", editable = "packages/runtime" },
     { name = "keyring", specifier = ">=25" },
     { name = "platformdirs", specifier = ">=4" },
@@ -696,6 +702,7 @@ dependencies = [
     { name = "engine-adapter-workflow-runtime-temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree" },
     { name = "engine-core" },
+    { name = "engine-graph-runtime-langgraph" },
     { name = "engine-runtime" },
 ]
 
@@ -708,6 +715,7 @@ requires-dist = [
     { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree", editable = "packages/adapters/workspace_provider/git_worktree" },
     { name = "engine-core", editable = "packages/engine" },
+    { name = "engine-graph-runtime-langgraph", editable = "packages/graph_runtime_langgraph" },
     { name = "engine-runtime", editable = "packages/runtime" },
 ]
 

@@ -15,7 +15,10 @@ from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.postgres import PostgresStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
-from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_ROOT_DIRECTORY,
+    GitWorktreeWorkspaceProvider,
+)
 from engine.runtime import Capabilities, Dispatcher, EngineConfig
 
 
@@ -28,7 +31,7 @@ class Settings:
     github_token: str = ""
     buzz_base_url: str = ""
     buzz_api_token: str = ""
-    workspace_root: str = "/tmp/engine-workspaces"
+    workspace_root: str = DEFAULT_ROOT_DIRECTORY
     postgres_dsn: str = ""
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.
