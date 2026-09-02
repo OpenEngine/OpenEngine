@@ -42,14 +42,23 @@ END = "__end__"
 
 
 class DescribesItself(Protocol):
-    """A node that can say what kind of thing it is, and what it is for.
+    """A node that can say what to call it, what kind of thing it is, and why.
 
     Structural rather than a base class, and read with `getattr` rather than
     `isinstance`: a LangGraph node is any callable at all, and requiring one to
     inherit from something here would make the description available only to
     nodes written against this package. A node that says nothing is a `"node"`
     with no description, which is the truthful answer for somebody else's graph.
+
+    A reusable node knows its own display name -- a checkout step is called
+    "Workspace" in every graph that has one -- so the name comes from the node
+    first and from the graph's `names` override second. That ordering is what
+    keeps a workflow file from restating, in a second table, what the nodes it
+    just assembled already say about themselves.
     """
+
+    @property
+    def graph_node_name(self) -> str: ...
 
     @property
     def graph_node_kind(self) -> str: ...
@@ -74,7 +83,7 @@ class LangGraphDefinition:
     graph: Any
     """A `CompiledStateGraph`. Typed loosely so this module imports no Pregel."""
     names: dict[str, str] = field(default_factory=dict)
-    """Display names per node id, for the ones a client should not see raw."""
+    """Display names per node id, overriding what a node calls itself."""
 
     def __post_init__(self) -> None:
         if getattr(self.graph, "checkpointer", None) is None:
@@ -110,7 +119,7 @@ class LangGraphDefinition:
             nodes=tuple(
                 GraphNode(
                     node_id=NodeId(node.id),
-                    name=self.names.get(node.id, node.id),
+                    name=self.names.get(node.id) or _name_of(node) or node.id,
                     kind=_kind_of(node),
                     description=_description_of(node),
                 )
@@ -151,6 +160,10 @@ def _described(node: Any) -> Any:
     return (
         getattr(wrapper, "afunc", None) or getattr(wrapper, "func", None) or wrapper
     )
+
+
+def _name_of(node: Any) -> str:
+    return str(getattr(_described(node), "graph_node_name", ""))
 
 
 def _kind_of(node: Any) -> str:

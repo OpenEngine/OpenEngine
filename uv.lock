@@ -557,18 +557,22 @@ source = { editable = "packages/graph_runtime_langgraph" }
 dependencies = [
     { name = "engine-domain" },
     { name = "engine-graph-runtime" },
+    { name = "engine-ports" },
     { name = "langgraph" },
     { name = "langgraph-acp" },
     { name = "langgraph-checkpoint" },
+    { name = "langgraph-checkpoint-sqlite" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "engine-domain", editable = "packages/domain" },
     { name = "engine-graph-runtime", editable = "packages/graph_runtime" },
+    { name = "engine-ports", editable = "packages/ports" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-acp", editable = "langgraph-acp" },
     { name = "langgraph-checkpoint", specifier = ">=2.0" },
+    { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
 ]
 
 [[package]]

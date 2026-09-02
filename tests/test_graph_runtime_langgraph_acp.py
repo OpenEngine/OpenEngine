@@ -88,11 +88,14 @@ def registry(
     )
 
 
-def pipeline(saver: Any, agents: ACPAgentRegistry) -> LangGraphDefinition:
+def pipeline(
+    saver: Any, agents: ACPAgentRegistry, where: Path
+) -> LangGraphDefinition:
     """implementation -> review, with the implementation node an ACP agent."""
     builder: StateGraph = StateGraph(State)
     builder.add_node(
-        str(IMPLEMENTATION), ACPNode(agent=AGENT, prompt=PROMPT, registry=agents)
+        str(IMPLEMENTATION),
+        ACPNode(agent=AGENT, prompt=PROMPT, registry=agents, cwd=str(where)),
     )
     builder.add_node(str(REVIEW), _reviewed)
     builder.add_edge(START, str(IMPLEMENTATION))
@@ -103,13 +106,18 @@ def pipeline(saver: Any, agents: ACPAgentRegistry) -> LangGraphDefinition:
     )
 
 
-def pool(saver: Any, agents: ACPAgentRegistry) -> LangGraphDefinition:
+def pool(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
     """Two ACP agents at once, which is what makes routing an answer a question."""
     builder: StateGraph = StateGraph(State)
     for node_id in ("agent-1", "agent-2"):
         builder.add_node(
             node_id,
-            ACPNode(agent=AGENT, prompt=f"{PROMPT} ({node_id})", registry=agents),
+            ACPNode(
+                agent=AGENT,
+                prompt=f"{PROMPT} ({node_id})",
+                registry=agents,
+                cwd=str(where),
+            ),
         )
         builder.add_edge(START, node_id)
         builder.add_edge(node_id, END)
@@ -139,7 +147,7 @@ async def runtime_over(
     async with AsyncSqliteSaver.from_conn_string(
         str(tmp_path / "checkpoints.db")
     ) as saver:
-        runtime = LangGraphRuntime(build(saver, agents), store=store)
+        runtime = LangGraphRuntime(build(saver, agents, tmp_path), store=store)
         log = EventLog()
         runtime.observe(log.append)
         try:
@@ -712,7 +720,7 @@ def test_shutdown_leaves_no_task_and_no_agent_behind(tmp_path: Path) -> None:
         async with AsyncSqliteSaver.from_conn_string(
             str(tmp_path / "checkpoints.db")
         ) as saver:
-            runtime = LangGraphRuntime(pipeline(saver, agents), store=store)
+            runtime = LangGraphRuntime(pipeline(saver, agents, tmp_path), store=store)
             log = EventLog()
             runtime.observe(log.append)
             run = await runtime.start(GRAPH, {})
@@ -730,3 +738,85 @@ def test_shutdown_leaves_no_task_and_no_agent_behind(tmp_path: Path) -> None:
 
     assert still_running == []
     assert after <= before
+
+
+# --- where the agent works --------------------------------------------------
+
+
+def working_in(
+    saver: Any, agents: ACPAgentRegistry, _where: Path
+) -> LangGraphDefinition:
+    """One agent node, told to work wherever the run's state says."""
+    builder: StateGraph = StateGraph(State)
+    builder.add_node(
+        str(IMPLEMENTATION),
+        ACPNode(
+            agent=AGENT,
+            prompt=PROMPT,
+            registry=agents,
+            cwd=lambda state: str(state.get("workspace") or ""),
+        ),
+    )
+    builder.add_edge(START, str(IMPLEMENTATION))
+    builder.add_edge(str(IMPLEMENTATION), END)
+    return LangGraphDefinition(
+        graph_id=GRAPH, name="ACP cwd", graph=builder.compile(checkpointer=saver)
+    )
+
+
+def test_a_node_works_in_the_directory_its_run_was_given(tmp_path: Path) -> None:
+    """The checkout is the run's, so one graph has to serve every run.
+
+    A `cwd` fixed when the graph was written would mean a definition per
+    checkout -- or every run of every graph sharing one working tree, which is
+    the same bug with fewer objects. Read off the state the run was started
+    with, and asserted where it actually lands: the `session/new` the agent was
+    sent.
+    """
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    async def scenario() -> None:
+        async with runtime_over(tmp_path, registry(tmp_path), working_in) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {"workspace": str(checkout)})
+            await until(log, run.run_id, "run.finished")
+
+    asyncio.run(scenario())
+
+    opened = sent(tmp_path, "session/new")
+    assert [message["params"]["cwd"] for message in opened] == [str(checkout)]
+
+
+def test_a_node_that_resolves_no_directory_starts_no_agent(tmp_path: Path) -> None:
+    """The failure that must never be quiet: a run with nowhere to work.
+
+    Starting the same graph without the state its resolver reads is not exotic
+    -- a `WorkspaceNode` omitted or ordered after the agent, a provider that
+    answered with an empty path, a fork re-entering this node from a position
+    taken before anything was provisioned -- and ACP resolves an absent working
+    directory against the *client's* process. So the quiet outcome here is an
+    agent editing the server's own checkout, with nothing in the run saying so.
+
+    Asserted against the agent's own log, which does not exist: the stub never
+    ran, so no session was opened in the server's directory or in any other. A
+    weaker check -- that the `cwd` sent was not the server's -- would pass for a
+    run that started an agent somewhere else nobody chose.
+    """
+
+    async def scenario() -> Any:
+        async with runtime_over(tmp_path, registry(tmp_path), working_in) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            await until(log, run.run_id, "run.failed")
+            return await runtime.snapshot(run.run_id)
+
+    failed = asyncio.run(scenario())
+
+    assert failed.status.value == "failed"
+    assert "no working directory" in failed.error
+    assert not (tmp_path / "agent.log").exists()
