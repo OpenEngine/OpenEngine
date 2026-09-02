@@ -8,6 +8,7 @@ import {
   type ApiProject,
   type ApiRunStep,
   type ApiWorkflowRun,
+  type ApiWorkflowRunListing,
   type EngineConfig,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
@@ -35,13 +36,13 @@ export function phaseLabel(value: string) {
  *  is a run with somewhere left to go, including one parked on a human review.
  *  Not to be confused with `IN_PROGRESS_PHASES`, which is narrower on purpose
  *  -- it answers whether the engine is working on the run right now. */
-export function runFinished(run: ApiWorkflowRun) {
+export function runFinished(run: ApiWorkflowRunListing) {
   return run.phase === "succeeded" || run.phase === "failed";
 }
 
 /** Prefer the workflow's vocabulary while a run is active. The engine phase
  *  still drives behavior, but an operator cares which step is doing the work. */
-export function runStatusLabel(run: ApiWorkflowRun) {
+export function runStatusLabel(run: ApiWorkflowRunListing) {
   if (!runFinished(run)) {
     const current = run.steps.find((step) => step.stepId === run.currentStepId);
     if (current) return current.name;
@@ -57,14 +58,14 @@ export function phaseAccent(phase: string): "flame" | "quiet" | undefined {
   return undefined;
 }
 
-export function conversationCount(run: ApiWorkflowRun) {
+export function conversationCount(run: ApiWorkflowRunListing) {
   return run.steps.filter((step) => step.conversationUrl).length;
 }
 
 /** The runs behind both the workflow pages and the rail's Workflows section,
  *  kept current by the shell so every screen shows the same list. */
 export function useRuns() {
-  const [runs, setRuns] = useState<ApiWorkflowRun[]>([]);
+  const [runs, setRuns] = useState<ApiWorkflowRunListing[]>([]);
   const [error, setError] = useState("");
   // An empty list means "nothing has been run" only once a poll has answered.
   // Until then it is what the state started as, and a page that reads this list
@@ -74,7 +75,7 @@ export function useRuns() {
     let cancelled = false;
     let timer: number | undefined;
     const load = () => {
-      api<{ runs: ApiWorkflowRun[] }>("/api/runs")
+      api<{ runs: ApiWorkflowRunListing[] }>("/api/runs")
         .then((value) => {
           if (cancelled) return;
           setRuns(value.runs);
@@ -97,7 +98,7 @@ export function useRuns() {
   return { runs, error, loaded };
 }
 
-export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: string }) {
+export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error: string }) {
   const [filter, setFilter] = useState<string>("");
 
   // Built from the phases actually present rather than from a fixed list, so a
@@ -202,7 +203,6 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRun[]; error: strin
       ) : (
         <div className="empty">
           <h2>No WorkOrders yet.</h2>
-          <p>Chats remain available from the sidebar.</p>
         </div>
       )}
     </main>

@@ -84,11 +84,17 @@ export function projectMilestonesUrl(projectId: string): string {
  *
  *  Nested under the plan it belongs to rather than named by its id alone: the
  *  page is read as part of a project, and the way back out is the plan. */
-export function milestoneDetailsUrl(projectId: string, milestoneId: string): string {
+export function milestoneDetailsUrl(
+  projectId: string,
+  milestoneId: string,
+): string {
   return `${projectMilestonesUrl(projectId)}/${encodeURIComponent(milestoneId)}`;
 }
 
-export function milestoneNewTaskUrl(projectId: string, milestoneId: string): string {
+export function milestoneNewTaskUrl(
+  projectId: string,
+  milestoneId: string,
+): string {
   return `${milestoneDetailsUrl(projectId, milestoneId)}/tasks/new`;
 }
 
@@ -116,12 +122,18 @@ export function getProjectMilestones(
   projectId: string,
   signal?: AbortSignal,
 ): Promise<ApiProjectMilestones> {
-  return api<ApiProjectMilestones>(`/api/projects/${encodeURIComponent(projectId)}/milestones`, {
-    signal,
-  });
+  return api<ApiProjectMilestones>(
+    `/api/projects/${encodeURIComponent(projectId)}/milestones`,
+    {
+      signal,
+    },
+  );
 }
 
-export function createProject(name: string, signal?: AbortSignal): Promise<ApiProject> {
+export function createProject(
+  name: string,
+  signal?: AbortSignal,
+): Promise<ApiProject> {
   return api<ApiProject>("/api/projects", {
     method: "POST",
     body: JSON.stringify({ name }),
@@ -140,14 +152,14 @@ export function setProjectArchived(
   );
 }
 
-export type ApiRunStep = {
+/** A step as the runs list carries it: what it is and where it stands, which
+ *  is all the rail and the cards read of one. */
+export type ApiRunStepListing = {
   stepId: string;
   name: string;
   kind: "agent" | "human";
   status: string;
   outcome: string | null;
-  summary: string;
-  outputs: { name: string; value: string }[];
   changesRequested: boolean;
   agentId: string | null;
   agentInstanceId: string | null;
@@ -157,7 +169,19 @@ export type ApiRunStep = {
   waiting: boolean;
 };
 
-export type ApiWorkflowRun = {
+/** A step with the prose the agent wrote, which only its own page draws. */
+export type ApiRunStep = ApiRunStepListing & {
+  summary: string;
+  outputs: { name: string; value: string }[];
+};
+
+/** One WorkOrder as `GET /api/runs` lists it.
+ *
+ *  Every screen polls that list once a second to keep the rail current, so it
+ *  carries what a rail, a card and a milestone's task list read and no more.
+ *  The prose an agent wrote is the WorkOrder page's, and comes with the single
+ *  run it fetches. */
+export type ApiWorkflowRunListing = {
   runId: string;
   name: string;
   workflowId: string;
@@ -166,12 +190,18 @@ export type ApiWorkflowRun = {
   taskId: string;
   workstreamId: string | null;
   milestoneId: string | null;
-  taskPrompt: string;
   repository: string;
   repositoryContext: { repository: string };
   phase: string;
   currentStepId: string | null;
   terminalOutcome: string | null;
+  steps: ApiRunStepListing[];
+};
+
+/** One whole WorkOrder, as `GET /api/runs/{runId}` answers for the page about
+ *  it: the listing, and every word written along the way. */
+export type ApiWorkflowRun = Omit<ApiWorkflowRunListing, "steps"> & {
+  taskPrompt: string;
   failureReason: string;
   steps: ApiRunStep[];
   pendingHumanReview: {
@@ -199,17 +229,23 @@ export function completeHumanReview(
   approved: boolean,
   summary: string,
 ): Promise<ApiWorkflowRun> {
-  return api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}/human-review`, {
-    method: "POST",
-    body: JSON.stringify({ approved, summary }),
-  });
+  return api<ApiWorkflowRun>(
+    `/api/runs/${encodeURIComponent(runId)}/human-review`,
+    {
+      method: "POST",
+      body: JSON.stringify({ approved, summary }),
+    },
+  );
 }
 
 /** Choose the runner that answers this conversation from now on.
  *
  * Active workflow conversations restart their current turn on the new runner.
  */
-export function setThreadRunner(threadId: string, runner: string): Promise<ApiThread> {
+export function setThreadRunner(
+  threadId: string,
+  runner: string,
+): Promise<ApiThread> {
   return api<ApiThread>(`/api/threads/${threadId}`, {
     method: "PATCH",
     body: JSON.stringify({ runner }),
@@ -227,11 +263,15 @@ export function setThreadAutoApprove(
 }
 
 export function attachWorkspace(threadId: string): Promise<ApiThread> {
-  return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "POST" });
+  return api<ApiThread>(`/api/threads/${threadId}/workspace`, {
+    method: "POST",
+  });
 }
 
 export function detachWorkspace(threadId: string): Promise<ApiThread> {
-  return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "DELETE" });
+  return api<ApiThread>(`/api/threads/${threadId}/workspace`, {
+    method: "DELETE",
+  });
 }
 
 /** The three answers the product offers. A request may permit fewer: the
@@ -307,7 +347,9 @@ export function answerQuestion(
 /** Stop the run outright. The server cancels whatever it was waiting on first,
  *  which is the approval card's Cancel by another route. */
 export function stopRun(threadId: string): Promise<void> {
-  return api<void>(`/api/threads/${threadId}/runs/current`, { method: "DELETE" });
+  return api<void>(`/api/threads/${threadId}/runs/current`, {
+    method: "DELETE",
+  });
 }
 
 export type ApiMessage = {
@@ -325,6 +367,17 @@ export type ApiHistory = {
 };
 
 export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
+
+export type SourceControlStatus = {
+  provider: "gh-cli" | "github-oauth";
+  autoSelected: boolean;
+  ghCli: {
+    installed: boolean;
+    authenticated: boolean;
+    account: string;
+    message: string;
+  };
+};
 
 export type GitHubClientIdInfo =
   | { source: "environment" | "configuration"; hint: string }
@@ -350,6 +403,19 @@ export function getGitHubStatus(): Promise<GitHubStatus> {
   return api<GitHubStatus>("/api/github/status");
 }
 
+export function getSourceControlStatus(): Promise<SourceControlStatus> {
+  return api<SourceControlStatus>("/api/source-control/status");
+}
+
+export function setSourceControlProvider(
+  provider: "gh-cli" | "github-oauth" | "gitlab",
+): Promise<void> {
+  return api<void>("/api/source-control/provider", {
+    method: "POST",
+    body: JSON.stringify({ provider }),
+  });
+}
+
 export function getGitHubClientId(): Promise<GitHubClientIdInfo> {
   return api<GitHubClientIdInfo>("/api/github/client-id");
 }
@@ -366,7 +432,9 @@ export function connectGitHub(): Promise<GitHubConnectResponse> {
 }
 
 export function pollGitHubConnect(): Promise<GitHubPollResponse> {
-  return api<GitHubPollResponse>("/api/github/connect/poll", { method: "POST" });
+  return api<GitHubPollResponse>("/api/github/connect/poll", {
+    method: "POST",
+  });
 }
 
 export function disconnectGitHub(): Promise<void> {

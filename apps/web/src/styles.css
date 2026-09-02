@@ -244,7 +244,6 @@ ul, ol { padding: 0; list-style: none; }
   line-height: 1.5;
 }
 
-.rail-list { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
 .rail-nav { display: grid; gap: 6px; padding: 2px var(--rail-pad, 18px) 10px; }
 /* Smaller than the entries they sit above: what a section holds is the reading,
    and the button that adds to it is a control, not a heading. */
@@ -1372,6 +1371,21 @@ select:disabled { cursor: default; }
   text-transform: uppercase;
 }
 
+.settings-provider-choice {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+.settings-provider-choice label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.settings-provider-choice input { margin: 0; }
+
 .settings-status {
   margin: 0 0 10px;
   font: 400 12px/1.4 var(--mono);
@@ -1379,6 +1393,20 @@ select:disabled { cursor: default; }
 .settings-status-ok { color: #6bbf6b; }
 .settings-status-muted { color: var(--night-muted); }
 .settings-status-error { color: var(--flame); }
+.settings-spinner {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin: 0 7px 0 1px;
+  border: 1px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: settings-spin .7s linear infinite;
+}
+@keyframes settings-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .settings-spinner { animation: none; }
+}
 
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -1494,9 +1522,9 @@ select:disabled { cursor: default; }
   .rail { --rail-pad: 12px; flex-direction: row; gap: 10px; align-items: center; padding: 10px 12px; overflow-x: auto; }
   .rail-brand { padding: 0; }
   .rail-wordmark, .rail-foot, .settings-panel, .rail-archive, .rail-sub, .rail-note { display: none; }
-  /* No room to stack three sections here, so the rail is one scrolling row.
+  /* No room to stack both sections here, so the rail is one scrolling row.
      The sections stop being boxes -- `contents` lifts their headers and bodies
-     into the row -- and `order` keeps all three headers together at the front,
+     into the row -- and `order` keeps both headers together at the front,
      ahead of whatever the open one is showing. */
   .rail-sections { flex-direction: row; gap: 8px; align-items: center; min-width: 0; border: 0; }
   .rail-section { display: contents; }
@@ -1510,7 +1538,6 @@ select:disabled { cursor: default; }
     align-items: center;
     min-width: 0;
   }
-  .rail-list { flex-direction: row; gap: 8px; align-items: center; min-width: 0; }
   .rail-nav { display: flex; gap: 8px; padding: 0; }
   /* A shade taller than on a wide screen: here these are thumb targets. */
   .rail-button { height: 36px; white-space: nowrap; }

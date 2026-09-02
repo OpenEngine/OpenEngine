@@ -247,7 +247,16 @@ class GraphRuntime(Protocol):
         checkpoint whose parent is the named one, so what is being re-attempted
         is still there.
 
-        Anything in flight is stopped first. Raises `UnknownCheckpointError`.
+        Anything in flight is stopped first, and keeping that promise is what
+        makes two of these arriving at once safe. Stopping is asynchronous --
+        something has to be cancelled and waited for -- so an implementation
+        that let a second call run during it would have two executors driving
+        one run, interleaving into one history and one state, and publishing two
+        endings for it. Control operations on a run are therefore serialised: a
+        second resume waits for the first and then forks from wherever that one
+        left the run, rather than racing it.
+
+        Raises `UnknownCheckpointError`.
         """
         ...
 
@@ -286,11 +295,20 @@ class GraphRuntime(Protocol):
         request, never by its node. The graph node was never suspended, so
         nothing about it is resumed here.
 
-        The snapshot is the run as the decision left it -- released, or failed
+        The snapshot is the run as the decision left it -- released, or over
         when the decision was to cancel -- and not however far the execution
         then got. A reply that waited for the graph would mean something
         different every time depending on what the agent did next; what happens
         after the release is what the event feed is for.
+
+        A refusal is the exception, because it does not release anything: it
+        ends the run, and the answer is not given until it has. The siblings of
+        a refused request may be blocked on questions of their own that nobody
+        will now answer, so a runtime that only set the status would publish no
+        terminal event at all, leave those executions still taking steering and
+        decisions, and report `failed` to one client while another was still
+        driving the same run. `RunStatus.FAILED` exists to prevent exactly that
+        pair of answers, so reaching it has to mean the run is really finished.
 
         Raises `UnknownApprovalError` for a request this run never raised, and
         `ApprovalNotPendingError` for one that is no longer waiting.

@@ -14,8 +14,17 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // `tailscale serve` reaches this dev server under the machine's tailnet
+    // name, which Vite's host check rejects by default. The leading dot admits
+    // any `*.ts.net` host rather than pinning one machine's.
+    allowedHosts: [".ts.net"],
     proxy: {
-      "/api": apiProxyTarget(process.env),
+      // `changeOrigin: false` keeps the browser's Host header, which Vite
+      // otherwise rewrites to the proxy target. The API's CSRF guard accepts
+      // an Origin only when it matches localhost or the request's own host, so
+      // a rewritten Host turns every mutating call made under the tailnet name
+      // into a 403.
+      "/api": { target: apiProxyTarget(process.env), changeOrigin: false },
     },
   },
 });

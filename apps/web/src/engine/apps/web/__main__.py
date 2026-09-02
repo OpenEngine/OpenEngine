@@ -27,6 +27,7 @@ from engine.apps.web.composition import (
     build_workflow_runners,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
     EngineConfigError,
     LoadedEngineConfig,
@@ -92,6 +93,7 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
         github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+        source_control_preferences=SourceControlPreferences(),
     )
 
 
@@ -140,6 +142,7 @@ def compose_app(
         credential_store=credential_store,
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
+        source_control_preferences=settings.source_control_preferences,
     )
 
 

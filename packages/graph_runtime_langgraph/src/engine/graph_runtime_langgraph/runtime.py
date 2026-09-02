@@ -97,10 +97,19 @@ class _Live:
     executions: dict[ExecutionId, NodeExecution] | None = None
     published: set[CheckpointId] | None = None
     """Checkpoints already announced, so a resume does not re-announce one."""
+    control: asyncio.Lock | None = None
+    """Serialises the operations that stop and restart this run.
+
+    Held for the whole of `resume_from`, because stopping is asynchronous: the
+    guard is a stretch of time rather than a check, and a second request
+    arriving inside it would find nothing left to stop and start a driver of its
+    own -- two of them then interleaving into one thread's checkpoints.
+    """
 
     def __post_init__(self) -> None:
         self.executions = {} if self.executions is None else self.executions
         self.published = set() if self.published is None else self.published
+        self.control = asyncio.Lock() if self.control is None else self.control
 
 
 class LangGraphRuntime:
@@ -181,38 +190,48 @@ class LangGraphRuntime:
         live = self._live.setdefault(
             run_id, _Live(run_id, (await self._require(run_id)).graph_id)
         )
-        await self._stop(live)
-        # Questions raised by the attempt being replaced can never be answered:
-        # the executions that asked them are gone, and leaving them pending
-        # would make the forked run look like it was waiting on a person.
-        await self._store.forget_run_approvals(run_id)
-        await self._store.remember_run(
-            replace(await self._require(run_id), error="")
-        )
-        step = saved.metadata.get("step", 0)
-        forked = await definition.graph.checkpointer.aput(
-            saved.config,
-            create_checkpoint(saved.checkpoint, None, step),
-            {"source": "fork", "step": step, "parents": saved.metadata.get("parents", {})},
-            {},
-        )
-        position = await self._position(definition, forked)
-        live.published.add(position.checkpoint_id)
-        await self.publish(
-            run_id,
-            EventKind.RUN_FORKED,
-            {
-                "from": str(checkpoint_id),
-                "checkpointId": str(position.checkpoint_id),
-                "nodes": [str(node_id) for node_id in position.next_nodes],
-                "values": dict(position.values),
-            },
-        )
-        # Nothing is awaited between here and the answer, so the caller is told
-        # about the forked position rather than about whatever the restarted
-        # superstep has already got to.
-        self._launch(live, definition, forked)
-        return await self._snapshot(run_id)
+        # Held across the stop as well as the fork. Two of these arriving at
+        # once are serialised rather than dropped: both are honoured, and the
+        # second one's first act is stopping the driver the first one started.
+        async with live.control:
+            await self._stop(live)
+            # Questions raised by the attempt being replaced can never be
+            # answered: the executions that asked them are gone. Recorded as
+            # settled rather than deleted, so a client still showing one is told
+            # it is no longer pending rather than that it never existed.
+            await self._store.abandon_run_approvals(run_id)
+            await self._store.remember_run(
+                replace(await self._require(run_id), error="")
+            )
+            step = saved.metadata.get("step", 0)
+            forked = await definition.graph.checkpointer.aput(
+                saved.config,
+                create_checkpoint(saved.checkpoint, None, step),
+                {
+                    "source": "fork",
+                    "step": step,
+                    "parents": saved.metadata.get("parents", {}),
+                },
+                {},
+            )
+            position = await self._position(definition, forked)
+            live.published.add(position.checkpoint_id)
+            await self.publish(
+                run_id,
+                EventKind.RUN_FORKED,
+                {
+                    "from": str(checkpoint_id),
+                    "checkpointId": str(position.checkpoint_id),
+                    "nodes": [str(node_id) for node_id in position.next_nodes],
+                    "values": dict(position.values),
+                },
+            )
+            # Read before the driver is started, so the caller is told about the
+            # position it asked for rather than about whatever the restarted
+            # superstep has already got to.
+            answer = await self._snapshot(run_id)
+            self._launch(live, definition, forked)
+            return answer
 
     async def steer(
         self,
@@ -269,10 +288,21 @@ class LangGraphRuntime:
     def running(self) -> tuple[RunId, ...]:
         """Runs whose driver is still alive. Shutdown has to leave this empty."""
         return tuple(
-            live.run_id
-            for live in self._live.values()
-            if live.task is not None and not live.task.done()
+            live.run_id for live in self._live.values() if self.executors(live.run_id)
         )
+
+    def executors(self, run_id: RunId) -> tuple[asyncio.Task[None], ...]:
+        """The tasks driving this run, which must never be more than one.
+
+        Not part of `GraphRuntime`, and the same blind spot the fake's version
+        exists to cover: two drivers over one thread are invisible from outside,
+        because everything either does is something one of them could plausibly
+        have done alone -- until their checkpoints start interleaving.
+        """
+        live = self._live.get(run_id)
+        if live is None or live.task is None or live.task.done():
+            return ()
+        return (live.task,)
 
     def entered(self, node_id: NodeId) -> int:
         """How many LangGraph tasks of this node have been started, ever.
@@ -538,6 +568,13 @@ class LangGraphRuntime:
         carried on would be running an agent that had just been told to stop.
         The position is untouched: the superstep never committed, so the run can
         be sent back and tried again.
+
+        It takes the siblings with it. A superstep is plural, so refusing one of
+        three reviewers ends a run whose other two are mid-question -- and their
+        questions are now unanswerable, because the superstep they were part of
+        is over. Leaving them pending would report a finished run as still
+        waiting on a person, and leave two executions accepting steering and
+        decisions after the run had published its ending.
         """
         run = await self._require(record.run_id)
         live = self._live.setdefault(
@@ -555,6 +592,10 @@ class LangGraphRuntime:
         # either run would leave the agent waiting on a reply nobody sent.
         await asyncio.sleep(0)
         await self._stop(live)
+        # Settled rather than deleted, and without an `approval.resolved` for
+        # any of them: nobody decided these, so a client showing one is told it
+        # is no longer pending rather than that it was answered or never was.
+        await self._store.abandon_run_approvals(record.run_id)
         await self.publish(
             record.run_id,
             EventKind.RUN_FAILED,

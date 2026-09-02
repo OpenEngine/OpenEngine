@@ -38,7 +38,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
+from engine.domain import (
+    ApprovalDecision,
+    ApprovalId,
+    ApprovalKind,
+    ApprovalStatus,
+    RunId,
+)
 from langgraph_acp import ACPContinuation
 
 from engine.graph_runtime.identity import ExecutionId
@@ -84,12 +90,20 @@ class ApprovalRecord:
     """How to reach that conversation again. `None` for a non-ACP execution."""
     request: Mapping[str, object] = field(default_factory=dict)
     """The agent's own `session/request_permission` payload."""
+    status: ApprovalStatus = ApprovalStatus.PENDING
     decision: ApprovalDecision | None = None
-    """The answer, once there is one. `None` while the request is pending."""
+    """The answer, once somebody gave one. `None` for the other two states.
+
+    Which is why `status` is here rather than being read off this field. An
+    `INTERRUPTED` request has no decision and never will -- the execution that
+    asked is gone -- but it is also not pending, and a node re-entered later
+    must be able to tell the two apart: one has an answer to apply, and the
+    other is a question that died with the attempt that asked it.
+    """
 
     @property
     def pending(self) -> bool:
-        return self.decision is None
+        return self.status is ApprovalStatus.PENDING
 
 
 @runtime_checkable
@@ -132,12 +146,17 @@ class GraphRuntimeStore(Protocol):
         """Write the answer down before anyone acts on it."""
         ...
 
-    async def forget_run_approvals(self, run_id: RunId) -> None:
-        """Drop every request this run raised. What a fork does to them.
+    async def abandon_run_approvals(self, run_id: RunId) -> None:
+        """Settle every open request this run raised, without deciding one.
 
-        A question asked by an attempt that has been replaced can never be
-        answered -- the execution that asked it is gone -- and leaving it
-        pending would make the forked run look like it was waiting on a person.
+        What a fork and a refusal both do to the questions still outstanding: an
+        execution that has been stopped cannot be told anything, so its question
+        can never be answered, and leaving it pending would report a run that is
+        over as still waiting on a person.
+
+        Settled rather than deleted, because a client may still be showing one.
+        It should be told the request is no longer pending, not that it never
+        existed.
         """
         ...
 
@@ -194,12 +213,16 @@ class InMemoryGraphRuntimeStore:
     ) -> None:
         record = self._approvals.get(approval_id)
         if record is not None:
-            self._approvals[approval_id] = replace(record, decision=decision)
+            self._approvals[approval_id] = replace(
+                record, status=ApprovalStatus.DECIDED, decision=decision
+            )
 
-    async def forget_run_approvals(self, run_id: RunId) -> None:
+    async def abandon_run_approvals(self, run_id: RunId) -> None:
         for approval_id, record in tuple(self._approvals.items()):
-            if record.run_id == run_id:
-                self._approvals.pop(approval_id, None)
+            if record.run_id == run_id and record.pending:
+                self._approvals[approval_id] = replace(
+                    record, status=ApprovalStatus.INTERRUPTED
+                )
 
 
 #: The schema, applied on construction. Three tables because there are three
@@ -222,6 +245,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     approval_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
     record TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
     decision TEXT,
     ordinal INTEGER
 );
@@ -301,13 +325,16 @@ class SqliteGraphRuntimeStore:
 
     async def remember_approval(self, record: ApprovalRecord) -> None:
         self._connection.execute(
-            "INSERT INTO approvals (approval_id, run_id, record, decision, ordinal) "
-            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (approval_id) DO UPDATE SET "
-            "record = excluded.record, decision = excluded.decision",
+            "INSERT INTO approvals "
+            "(approval_id, run_id, record, status, decision, ordinal) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (approval_id) DO UPDATE SET "
+            "record = excluded.record, status = excluded.status, "
+            "decision = excluded.decision",
             (
                 str(record.approval_id),
                 str(record.run_id),
                 json.dumps(_approval_to_json(record)),
+                record.status.value,
                 None if record.decision is None else record.decision.value,
                 self._next(),
             ),
@@ -321,9 +348,8 @@ class SqliteGraphRuntimeStore:
 
     async def pending_approvals(self, run_id: RunId) -> tuple[ApprovalRecord, ...]:
         rows = self._connection.execute(
-            "SELECT * FROM approvals WHERE run_id = ? AND decision IS NULL "
-            "ORDER BY ordinal",
-            (str(run_id),),
+            "SELECT * FROM approvals WHERE run_id = ? AND status = ? ORDER BY ordinal",
+            (str(run_id), ApprovalStatus.PENDING.value),
         ).fetchall()
         return tuple(_approval_from(row) for row in rows)
 
@@ -331,13 +357,18 @@ class SqliteGraphRuntimeStore:
         self, approval_id: ApprovalId, decision: ApprovalDecision
     ) -> None:
         self._connection.execute(
-            "UPDATE approvals SET decision = ? WHERE approval_id = ?",
-            (decision.value, str(approval_id)),
+            "UPDATE approvals SET status = ?, decision = ? WHERE approval_id = ?",
+            (ApprovalStatus.DECIDED.value, decision.value, str(approval_id)),
         )
 
-    async def forget_run_approvals(self, run_id: RunId) -> None:
+    async def abandon_run_approvals(self, run_id: RunId) -> None:
         self._connection.execute(
-            "DELETE FROM approvals WHERE run_id = ?", (str(run_id),)
+            "UPDATE approvals SET status = ? WHERE run_id = ? AND status = ?",
+            (
+                ApprovalStatus.INTERRUPTED.value,
+                str(run_id),
+                ApprovalStatus.PENDING.value,
+            ),
         )
 
 
@@ -389,6 +420,7 @@ def _approval_from(row: sqlite3.Row) -> ApprovalRecord:
             None if continuation is None else ACPContinuation.from_dict(continuation)
         ),
         request=stored.get("request") or {},
+        status=ApprovalStatus(row["status"]),
         decision=(
             None if row["decision"] is None else ApprovalDecision(row["decision"])
         ),
