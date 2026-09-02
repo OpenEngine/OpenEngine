@@ -28,6 +28,13 @@ and each is something a test run must not share or send anywhere:
 | scripted `codex` and `claude` executables | a model is the one part of this that cannot be asserted on |
 | a `gh` that records instead of commenting | the reviewer leaves its findings on a pull request, and that is somebody's repository |
 
+A spec that sets `graphRuntime: true` gets the same server pointed at
+`e2e/workflows` -- a workflow directory whose definitions run as graphs, which
+is how a deployment chooses too. It calls the repository's own graph rather than
+restating it, and resolves both runner names to `tests/acp_provider_fakes.py`:
+an ACP-speaking fake reading the very same script file. One `engine.script` call
+therefore drives either backend.
+
 The fake CLIs are `tests/provider_fakes.py`, shared with the pytest tier that
 runs the approval contract against them. They are not mocks of our adapters:
 they are real subprocesses speaking Codex's app-server JSON-RPC and Claude
@@ -138,6 +145,13 @@ unzip it, and point `show-report` at the directory.
   carries the declared `pr_url` -- advances through a review that leaves its
   finding on `gh` to "Action required". Approving there ends it, and a reload
   shows the same finished run: `succeeded`, `approved`, every stage behind it.
+* `graph-workflow-run.spec.ts` -- the same run as `workflow-run.spec.ts`, on the
+  other backend: a server pointed at a workflow variant that runs as a graph, so
+  the WorkOrder pages drive `engine.graph_runtime` and the agents are reached
+  over ACP. Provisioning is a graph node, the command streams into the run page
+  while the step is still running, the review's own words are the node's output,
+  and the human decision is an approval that releases the node holding it.
+  Opted into per spec with `test.use({ graphRuntime: true })`.
 * `persisted-navigation.spec.ts` -- cold starts over both a SQLite file populated
   through the current production state-store adapter and the frozen
   `fixtures/v0.0.0.sqlite3` artifact. The run list, run detail, implementation

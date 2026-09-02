@@ -14,6 +14,11 @@ import {
   type RunnerOption,
 } from "./api";
 import { ChatThread, ConversationStats } from "./chat";
+import {
+  GraphNewRunPage,
+  GraphRunDetailPage,
+  GraphRunsPage,
+} from "./graph-runs";
 import { MilestoneDetailsPage } from "./milestone-details";
 import { MilestoneTimeline } from "./milestone-timeline";
 import { ProjectMilestonesPage } from "./project-milestones";
@@ -423,10 +428,21 @@ function App() {
         {/* Every conversation page, not just a workflow's, marks its owning
             project or WorkOrder in the rail. */}
         {sidebar()}
+        {/* The WorkOrder screens are the one surface with two backends behind
+            it. Which set is mounted is the deployment's answer, read once with
+            the rest of the configuration. */}
         {route.kind === "runs" ? (
-          <RunsPage runs={runs} error={runsError} />
+          config.graphRuntime ? (
+            <GraphRunsPage />
+          ) : (
+            <RunsPage runs={runs} error={runsError} />
+          )
         ) : route.kind === "new-run" ? (
-          <NewWorkflowPage config={config} />
+          config.graphRuntime ? (
+            <GraphNewRunPage config={config} />
+          ) : (
+            <NewWorkflowPage config={config} />
+          )
         ) : route.kind === "new-task" ? (
           <NewTaskPage
             config={config}
@@ -434,7 +450,11 @@ function App() {
             milestoneId={route.milestoneId}
           />
         ) : route.kind === "run" ? (
-          <RunDetailPage runId={route.runId} />
+          config.graphRuntime ? (
+            <GraphRunDetailPage runId={route.runId} />
+          ) : (
+            <RunDetailPage runId={route.runId} />
+          )
         ) : route.kind === "project" ? (
           <ProjectMilestonesPage projectId={route.projectId} />
         ) : route.kind === "milestone" ? (

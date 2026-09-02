@@ -74,11 +74,19 @@ def _legacy_imports() -> list[str]:
     return sorted(violations)
 
 
+#: Tests that live under an application rather than in `tests/`. The gate is
+#: about *production* naming one workflow; a test necessarily names the workflow
+#: it drives, and the browser tier's fixtures are tests wherever they sit.
+TEST_DIRECTORIES = (ROOT / "apps" / "web" / "e2e",)
+
+
 def _workflow_specific_production_references() -> list[str]:
     violations: list[str] = []
     for source_root in (ROOT / "packages", ROOT / "apps"):
         for path in source_root.rglob("*"):
             if path.suffix not in {".py", ".ts", ".tsx"}:
+                continue
+            if any(path.is_relative_to(directory) for directory in TEST_DIRECTORIES):
                 continue
             for line_number, line in enumerate(path.read_text().splitlines(), start=1):
                 if any(token in line for token in WORKFLOW_SPECIFIC_TOKENS):

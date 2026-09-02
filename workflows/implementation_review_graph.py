@@ -41,6 +41,7 @@ from engine.graph_runtime_langgraph.components import (
     checkout,
 )
 from langgraph.graph import END, START, StateGraph
+from langgraph_acp import ACPAgentRegistry
 from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
 
 #: Where this deployment's checkouts live. The interface's own default, stated
@@ -81,20 +82,30 @@ REVIEW_PROMPT = (
 )
 
 
-def pipeline(runner: str) -> StateGraph:
-    """The four stages, with both agent nodes run by `runner`."""
+def pipeline(
+    runner: str,
+    agents: ACPAgentRegistry = AGENTS,
+    workspace_root: str = WORKSPACE_ROOT,
+) -> StateGraph:
+    """The four stages, with both agent nodes run by `runner`.
+
+    The two arguments are what a *variant* of this workflow replaces and what
+    nothing else should: which agents answer, and where the checkouts go. A
+    test pointed at another directory reuses this rather than restating the
+    graph, so it cannot pass against a shape production does not have.
+    """
     builder: StateGraph = StateGraph(State)
     builder.add_node(
         WORKSPACE,
         WorkspaceNode(
-            provider=GitWorktreeWorkspaceProvider(WORKSPACE_ROOT), base_ref=BASE_REF
+            provider=GitWorktreeWorkspaceProvider(workspace_root), base_ref=BASE_REF
         ),
     )
     builder.add_node(
         IMPLEMENTATION,
         ACPNode(
             agent=runner,
-            registry=AGENTS,
+            registry=agents,
             prompt=lambda state: IMPLEMENTATION_PROMPT.format(
                 task=state.get("task", "")
             ),
@@ -110,7 +121,7 @@ def pipeline(runner: str) -> StateGraph:
         REVIEW,
         ACPNode(
             agent=runner,
-            registry=AGENTS,
+            registry=agents,
             prompt=lambda state: REVIEW_PROMPT.format(
                 task=state.get("task", ""),
                 implementation=state.get(IMPLEMENTATION, ""),

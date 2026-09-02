@@ -9,6 +9,7 @@ approval policy plumbing -- and changes only what a test must own:
     what it remembers     a SQLite file under the test's own directory
     which CLI it runs     `tests/provider_fakes.py`, scripted per test
     GitHub API calls      stubbed so tests run without a real token or network
+    which workflows       a directory, when the spec asks for a variant
 
 Everything else is production wiring, including the parts that are easy to get
 wrong: the interactive runners, the write-enabled workflow runners, and the
@@ -23,6 +24,7 @@ is killed.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -34,6 +36,7 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import uvicorn  # noqa: E402
 
+from engine.apps.web import graphs  # noqa: E402
 from engine.apps.web.__main__ import STATIC_DIRECTORY  # noqa: E402
 from engine.apps.web.api import create_app  # noqa: E402
 from engine.apps.web.composition import (  # noqa: E402
@@ -47,11 +50,33 @@ from engine.apps.web.composition import (  # noqa: E402
 from engine.runtime import (  # noqa: E402
     EngineConfigError,
     LoadedEngineConfig,
+    WorkflowCatalog,
+    WorkflowLoadError,
     describe_loaded_config,
     load_engine_config,
+    load_workflow_catalog,
 )
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
+import acp_provider_fakes  # noqa: E402
 from provider_fakes import fake_claude, fake_codex  # noqa: E402
+
+
+def _graph_workflows(directory: str, state: Path, binaries: Path) -> WorkflowCatalog:
+    """Load the variant this test was pointed at, with a scripted agent behind it.
+
+    Same substitution the rest of this harness makes, one protocol over. The
+    variant is an ordinary workflow directory -- `apps/web/e2e/workflows` -- and
+    what it needs from the test is named here rather than hardcoded there: the
+    ACP agent to launch, and a worktree root that goes away with the test.
+    """
+    os.environ["ENGINE_E2E_ACP_AGENT"] = acp_provider_fakes.install(
+        "acp-agent", binaries
+    )
+    os.environ["ENGINE_E2E_WORKSPACE_ROOT"] = str(state / "workspaces")
+    # Inherited by the agent process the provider spawns, which is where the
+    # sessions it has to be able to reload are kept.
+    os.environ[acp_provider_fakes.STATE_ENVIRONMENT_VARIABLE] = str(state / "acp")
+    return load_workflow_catalog(directory)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
         help="scratch directory for the database, worktrees, and fake CLIs",
     )
     parser.add_argument(
+        "--graph-workflows",
+        help=(
+            "a workflow directory whose definitions run as graphs. Omitted, "
+            "this server is the application without a graph runtime in it."
+        ),
+    )
+    parser.add_argument(
         "--config",
         help=(
             "an engine.toml for this run. Omitted, the built-in defaults apply "
@@ -81,7 +113,12 @@ def main(argv: list[str] | None = None) -> int:
     binaries.mkdir(parents=True, exist_ok=True)
     try:
         loaded = load_engine_config(args.config) if args.config else LoadedEngineConfig()
-    except EngineConfigError as error:
+        catalog = (
+            _graph_workflows(args.graph_workflows, state, binaries)
+            if args.graph_workflows
+            else None
+        )
+    except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
 
@@ -118,7 +155,10 @@ def main(argv: list[str] | None = None) -> int:
         review_runners=read_only_runners,
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
+        graph_runtime=catalog is not None and bool(catalog.graphs),
     )
+    if catalog is not None and catalog.graphs:
+        app = graphs.serve(app, catalog.graphs, state / "graph-runtime")
     # Stub out real GitHub API calls so e2e tests work without a token.
     # Comment POSTs are recorded to gh.jsonl so tests can assert on them.
     gh_log = state / "gh.jsonl"

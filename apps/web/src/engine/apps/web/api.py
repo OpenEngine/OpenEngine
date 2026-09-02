@@ -904,6 +904,7 @@ def create_app(
     github_client_id: str = "",
     github_client_id_source: str = "configuration",
     source_control_preferences: SourceControlPreferences | None = None,
+    graph_runtime: bool = False,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -1205,6 +1206,13 @@ def create_app(
                     }
                     for definition in catalog
                 ],
+                # Whether any workflow this deployment loaded runs as a graph,
+                # and therefore whether the WorkOrder pages should be the ones
+                # driving that surface. Answered here rather than probed for:
+                # every client already reads this once at startup, and a
+                # deployment with no such workflow says so instead of a request
+                # having to 404 to mean "no".
+                "graphRuntime": graph_runtime,
             }
         )
 

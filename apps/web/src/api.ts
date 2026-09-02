@@ -34,6 +34,11 @@ export type EngineConfig = {
   workflowRunners: string[];
   defaultWorkflowRunner: string;
   workflows: { id: string; name: string; version: string }[];
+  /** Whether this deployment's workflows run as graphs, and so whether the
+   *  WorkOrder pages are the ones driving that surface. Decided on the server by
+   *  the workflow definitions it loaded; absent from an older one, which reads
+   *  as off. */
+  graphRuntime?: boolean;
 };
 
 /** Which agent the next conversation starts on, for a plan or an ordinary chat.

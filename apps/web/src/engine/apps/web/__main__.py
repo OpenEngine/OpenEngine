@@ -165,6 +165,7 @@ def compose_app(
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
         source_control_preferences=settings.source_control_preferences,
+        graph_runtime=workflow_catalog is not None and bool(workflow_catalog.graphs),
     )
     if workflow_catalog is None or not workflow_catalog.graphs:
         return app

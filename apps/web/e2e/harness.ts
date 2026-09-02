@@ -27,6 +27,9 @@ import { test as base, type Page, type TestInfo } from "@playwright/test";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
 const SERVER = path.join(HERE, "harness", "server.py");
+/** The workflow variant whose definitions run as graphs, behind a scripted
+ *  ACP agent. See `e2e/workflows/implementation_review_graph.py`. */
+const GRAPH_WORKFLOWS = path.join(HERE, "workflows");
 const SEED = path.join(HERE, "harness", "seed.py");
 const V0_DATABASE = path.join(HERE, "fixtures", "v0.0.0.sqlite3");
 
@@ -78,9 +81,20 @@ export class Engine {
 
 export type SeededDatabase = false | "current" | "v0.0.0";
 
-export const test = base.extend<{ engine: Engine; seededDatabase: SeededDatabase }>({
+export const test = base.extend<{
+  engine: Engine;
+  seededDatabase: SeededDatabase;
+  /** Run this spec's WorkOrders on the graph runtime.
+   *
+   *  Not a switch: the server is pointed at `e2e/workflows`, a workflow
+   *  directory whose definitions run as graphs, exactly the way a deployment
+   *  chooses -- so a spec opting in exercises the path a deployment gets rather
+   *  than a test-only arrangement. */
+  graphRuntime: boolean;
+}>({
   seededDatabase: [false, { option: true }],
-  engine: async ({ seededDatabase }, use, testInfo) => {
+  graphRuntime: [false, { option: true }],
+  engine: async ({ seededDatabase, graphRuntime }, use, testInfo) => {
     const root = mkdtempSync(path.join(tmpdir(), "engine-e2e-"));
     const state = path.join(root, "state");
     mkdirSync(state);
@@ -99,7 +113,13 @@ export const test = base.extend<{ engine: Engine; seededDatabase: SeededDatabase
       scenarios: [{ steps: [{ type: "say", text: "This turn was not scripted." }] }],
     });
 
-    const server = startServer(engine.url, repository, state, scriptPath);
+    const server = startServer(
+      engine.url,
+      repository,
+      state,
+      scriptPath,
+      graphRuntime,
+    );
     try {
       await waitUntilServing(engine.url, server);
       await use(engine);
@@ -186,6 +206,7 @@ function startServer(
   repository: string,
   state: string,
   scriptPath: string,
+  graphRuntime: boolean,
 ): Server {
   // `uv run` composes the workspace the way every other entry point does. A
   // prepared interpreter is offered as an override for anyone who would rather
@@ -204,10 +225,14 @@ function startServer(
       repository,
       "--state",
       state,
+      ...(graphRuntime ? ["--graph-workflows", GRAPH_WORKFLOWS] : []),
     ],
     {
       cwd: REPO_ROOT,
-      env: { ...process.env, ENGINE_FAKE_SCRIPT: scriptPath },
+      env: {
+        ...process.env,
+        ENGINE_FAKE_SCRIPT: scriptPath,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
