@@ -1,8 +1,16 @@
 """The graph control surface: runs, state, topology, events, steering, resumption.
 
-Driven over HTTP against a scripted graph rather than against the runtime object,
-because the HTTP surface is what this package is for -- a test that called
-`ScriptedGraphRuntime.steer` directly would pass whatever the wire format did.
+Driven over HTTP rather than against the runtime object, because the HTTP
+surface is what this package is for -- a test that called `steer` directly would
+pass whatever the wire format did.
+
+Every test here runs twice: once against the scripted stand-in the contract was
+written with, and once against `engine-graph-runtime-langgraph` driving a real
+compiled LangGraph built from the same description. That is what `build` is --
+see `tests/graph_runtime_backends.py`. The suite is deliberately not duplicated
+per implementation: a binding that only had to pass tests written after it would
+say nothing about the contract, and the two implementations disagreeing about
+one of these assertions is exactly the news worth having.
 
 Three graphs are used. A pipeline, implementation then review, which is the
 shape "send it back to implementation" is written in; a fan-out, implementation
@@ -36,6 +44,7 @@ from engine.graph_runtime import (
     NodeId,
     create_app,
 )
+from graph_runtime_backends import BACKENDS, Backend
 from graph_runtime_fakes import (
     Ask,
     AwaitSteering,
@@ -44,7 +53,6 @@ from graph_runtime_fakes import (
     Fail,
     Say,
     ScriptedGraph,
-    ScriptedGraphRuntime,
     ScriptedNode,
 )
 
@@ -59,6 +67,12 @@ REVIEWERS = (NodeId("reviewer-1"), NodeId("reviewer-2"), NodeId("reviewer-3"))
 #: How long a test waits for an event before deciding the run is stuck. Generous,
 #: because it only bounds a failure -- a passing run never waits.
 PATIENCE = 5.0
+
+
+@pytest.fixture(params=BACKENDS, ids=[backend.name for backend in BACKENDS])
+def build(request: pytest.FixtureRequest) -> Backend:
+    """The runtime under test: the scripted stand-in, then the LangGraph one."""
+    return request.param
 
 
 def _pipeline(*implementation: Beat) -> ScriptedGraph:
@@ -239,7 +253,7 @@ async def _subscribe(
 
 
 @asynccontextmanager
-async def _server(runtime: ScriptedGraphRuntime) -> AsyncIterator[_Surface]:
+async def _server(runtime: GraphRuntime) -> AsyncIterator[_Surface]:
     """A running control server, entered and left the way a real one is.
 
     Through the app's own lifespan rather than by calling `runtime.aclose()`
@@ -296,17 +310,17 @@ def _transcript(events: Sequence[dict]) -> list[tuple[str, str]]:
 # --- the contract itself ---------------------------------------------------
 
 
-def test_the_scripted_graph_satisfies_the_runtime_contract() -> None:
-    """The fake is a `GraphRuntime`, so the binding that replaces it is comparable."""
-    assert isinstance(ScriptedGraphRuntime(_pipeline(Say("Done."))), GraphRuntime)
+def test_every_backend_satisfies_the_runtime_contract(build: Backend) -> None:
+    """Both are `GraphRuntime`s, which is what makes running one suite honest."""
+    assert isinstance(build(_pipeline(Say("Done."))), GraphRuntime)
 
 
 # --- topology --------------------------------------------------------------
 
 
-def test_topology_describes_every_node_and_edge() -> None:
+def test_topology_describes_every_node_and_edge(build: Backend) -> None:
     async def scenario() -> tuple[httpx.Response, httpx.Response, httpx.Response]:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             return (
                 await surface.client.get("/api/graphs"),
                 await surface.client.get(f"/api/graphs/{GRAPH}"),
@@ -343,7 +357,7 @@ def test_topology_describes_every_node_and_edge() -> None:
     assert missing.json() == {"error": "graph not found"}
 
 
-def test_topology_describes_a_fan_out_as_several_edges_out_of_one_node() -> None:
+def test_topology_describes_a_fan_out_as_several_edges_out_of_one_node(build: Backend) -> None:
     """Three edges out of implementation, and three back into the reranker.
 
     Spelled out rather than derived from `REVIEWERS`, because a test that built
@@ -354,7 +368,7 @@ def test_topology_describes_a_fan_out_as_several_edges_out_of_one_node() -> None
     """
 
     async def scenario() -> dict:
-        async with _server(ScriptedGraphRuntime(_fan_out(Say("Fine.")))) as surface:
+        async with _server(build(_fan_out(Say("Fine.")))) as surface:
             described = await surface.client.get(f"/api/graphs/{POOL}")
             return described.json()
 
@@ -373,9 +387,9 @@ def test_topology_describes_a_fan_out_as_several_edges_out_of_one_node() -> None
 # --- starting runs and reading their state ---------------------------------
 
 
-def test_starting_a_run_reports_the_frontier_it_begins_at() -> None:
+def test_starting_a_run_reports_the_frontier_it_begins_at(build: Backend) -> None:
     async def scenario() -> dict:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             return await _start(surface, values={"repository": "acme/api"})
 
     run = asyncio.run(scenario())
@@ -391,9 +405,9 @@ def test_starting_a_run_reports_the_frontier_it_begins_at() -> None:
     assert run["pendingApprovals"] == []
 
 
-def test_starting_a_graph_nobody_registered_is_refused() -> None:
+def test_starting_a_graph_nobody_registered_is_refused(build: Backend) -> None:
     async def scenario() -> httpx.Response:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             return await surface.client.post(
                 "/api/runs", json={"graphId": "nonexistent"}
             )
@@ -404,14 +418,14 @@ def test_starting_a_graph_nobody_registered_is_refused() -> None:
     assert refused.json() == {"error": "unknown graph: nonexistent"}
 
 
-def test_current_state_names_what_a_paused_run_is_waiting_in() -> None:
+def test_current_state_names_what_a_paused_run_is_waiting_in(build: Backend) -> None:
     """The pause is the case reading state exists for: nothing else will move."""
     graph = _pipeline(
         Say("Ready to run the tests."), Ask("run the tests", command="pytest")
     )
 
     async def scenario() -> dict:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             await surface.read(str(run["runId"]), "approval.requested")
             paused = await surface.client.get(f"/api/runs/{run['runId']}")
@@ -422,7 +436,17 @@ def test_current_state_names_what_a_paused_run_is_waiting_in() -> None:
     assert paused["status"] == "awaiting_approval"
     assert _nodes_of(paused["activeExecutions"]) == [str(IMPLEMENTATION)]
     assert paused["nextNodes"] == [str(REVIEW)]
-    assert paused["values"] == {str(IMPLEMENTATION): "Ready to run the tests."}
+    # The graph's state, as the graph itself would report it -- which is where
+    # the two runtimes genuinely differ rather than merely disagree. A superstep
+    # is LangGraph's unit of durability, so a node's output is not part of the
+    # state until the node returns; the scripted runtime mutates as it goes.
+    # Both are truthful about their own graph, and the contract asks for exactly
+    # that, so the test asks each for what it has.
+    assert paused["values"] == (
+        {str(IMPLEMENTATION): "Ready to run the tests."}
+        if build.commits_mid_node
+        else {}
+    )
     approval = paused["pendingApprovals"][0]
     assert approval["nodeId"] == str(IMPLEMENTATION)
     assert approval["command"] == "pytest"
@@ -431,9 +455,9 @@ def test_current_state_names_what_a_paused_run_is_waiting_in() -> None:
     assert approval["allowedDecisions"] == ["accept", "cancel"]
 
 
-def test_a_run_nobody_started_is_not_found() -> None:
+def test_a_run_nobody_started_is_not_found(build: Backend) -> None:
     async def scenario() -> tuple[httpx.Response, httpx.Response, httpx.Response]:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             return (
                 await surface.client.get("/api/runs/run-404"),
                 await surface.client.get("/api/runs/run-404/events"),
@@ -452,7 +476,7 @@ def test_a_run_nobody_started_is_not_found() -> None:
 # --- supersteps ------------------------------------------------------------
 
 
-def test_a_fan_out_reports_every_node_of_the_superstep_at_once() -> None:
+def test_a_fan_out_reports_every_node_of_the_superstep_at_once(build: Backend) -> None:
     """The reason `active_executions` is plural.
 
     Three reviewers are one superstep, not three, and there is no truthful value
@@ -461,7 +485,7 @@ def test_a_fan_out_reports_every_node_of_the_superstep_at_once() -> None:
     graph = _fan_out(Say("Reviewing."), AwaitSteering(), Say("Approved."))
 
     async def scenario() -> tuple[dict, list[dict]]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface, POOL)
             run_id = str(run["runId"])
             # Four transcripts: the implementation's, then one per reviewer, so
@@ -487,7 +511,7 @@ def test_a_fan_out_reports_every_node_of_the_superstep_at_once() -> None:
 # --- steering: routed to the execution, not through the graph ---------------
 
 
-def test_steering_reaches_the_execution_without_restarting_the_node() -> None:
+def test_steering_reaches_the_execution_without_restarting_the_node(build: Backend) -> None:
     """The whole requirement: a message to something already running.
 
     What must be true afterwards is that `implementation` was entered exactly
@@ -496,7 +520,7 @@ def test_steering_reaches_the_execution_without_restarting_the_node() -> None:
     behind it would have been torn down mid-turn to receive one sentence.
     """
     graph = _pipeline(Say("Reading the tree."), AwaitSteering(), Say("Renamed it."))
-    runtime = ScriptedGraphRuntime(graph)
+    runtime = build(graph)
 
     async def scenario() -> tuple[dict, httpx.Response, list[dict], dict]:
         async with _server(runtime) as surface:
@@ -541,7 +565,7 @@ def test_steering_reaches_the_execution_without_restarting_the_node() -> None:
     assert final["values"]["steering"] == ["Rename the flag."]
 
 
-def test_an_execution_waiting_on_an_approval_can_still_be_steered() -> None:
+def test_an_execution_waiting_on_an_approval_can_still_be_steered(build: Backend) -> None:
     """The lifecycle this package exists to get right.
 
     An agent that has asked to run a command is not suspended: its session is
@@ -555,7 +579,7 @@ def test_an_execution_waiting_on_an_approval_can_still_be_steered() -> None:
         Ask("run the tests", command="pytest", tool_name="shell"),
         Say("Tests pass."),
     )
-    runtime = ScriptedGraphRuntime(graph)
+    runtime = build(graph)
 
     async def scenario() -> dict[str, object]:
         async with _server(runtime) as surface:
@@ -607,10 +631,10 @@ def test_an_execution_waiting_on_an_approval_can_still_be_steered() -> None:
     assert _of_kind(events, "approval.resolved")[0]["payload"]["decision"] == "accept"
 
 
-def test_steering_a_fan_out_has_to_name_which_execution_it_is_for() -> None:
+def test_steering_a_fan_out_has_to_name_which_execution_it_is_for(build: Backend) -> None:
     """Three agents running is three answers to "steer this run"."""
     graph = _fan_out(Say("Reviewing."), AwaitSteering(), Say("Approved."))
-    runtime = ScriptedGraphRuntime(graph)
+    runtime = build(graph)
 
     async def scenario() -> dict[str, object]:
         async with _server(runtime) as surface:
@@ -678,7 +702,7 @@ def test_steering_a_fan_out_has_to_name_which_execution_it_is_for() -> None:
     ]
 
 
-def test_several_tasks_of_one_node_are_several_executions() -> None:
+def test_several_tasks_of_one_node_are_several_executions(build: Backend) -> None:
     """The reason an execution has an id of its own.
 
     LangGraph's `Send` fans several tasks into one node, so `review` can be
@@ -686,7 +710,7 @@ def test_several_tasks_of_one_node_are_several_executions() -> None:
     them and dropped the other two: the run would report one execution, two
     agents would be unreachable, and their approvals unanswerable.
     """
-    runtime = ScriptedGraphRuntime(_repeated(Say("Reviewing."), AwaitSteering()))
+    runtime = build(_repeated(Say("Reviewing."), AwaitSteering()))
 
     async def scenario() -> dict[str, object]:
         async with _server(runtime) as surface:
@@ -717,9 +741,9 @@ def test_several_tasks_of_one_node_are_several_executions() -> None:
     )
 
 
-def test_steering_one_task_of_a_node_reaches_only_that_task() -> None:
+def test_steering_one_task_of_a_node_reaches_only_that_task(build: Backend) -> None:
     """The node name is ambiguous here, and the id is not."""
-    runtime = ScriptedGraphRuntime(
+    runtime = build(
         _repeated(Say("Reviewing."), AwaitSteering(), Say("Done."))
     )
 
@@ -780,9 +804,9 @@ def test_steering_one_task_of_a_node_reaches_only_that_task() -> None:
     ]
 
 
-def test_an_approval_goes_back_to_the_task_that_raised_it() -> None:
+def test_an_approval_goes_back_to_the_task_that_raised_it(build: Backend) -> None:
     """Routing by node would release whichever of three the dictionary kept."""
-    runtime = ScriptedGraphRuntime(
+    runtime = build(
         _repeated(Ask("run the tests", command="pytest"), Say("Done."))
     )
 
@@ -829,9 +853,9 @@ def test_an_approval_goes_back_to_the_task_that_raised_it() -> None:
     assert runtime.entered(REVIEW) == 3
 
 
-def test_steering_a_run_with_nothing_in_flight_is_refused() -> None:
+def test_steering_a_run_with_nothing_in_flight_is_refused(build: Backend) -> None:
     async def scenario() -> tuple[httpx.Response, httpx.Response, httpx.Response]:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             await surface.read(run_id, "run.finished")
@@ -880,11 +904,11 @@ def test_a_controllable_execution_is_all_the_runtime_asks_of_a_node() -> None:
 # --- approvals -------------------------------------------------------------
 
 
-def test_an_approval_is_published_answered_and_answered_only_once() -> None:
+def test_an_approval_is_published_answered_and_answered_only_once(build: Backend) -> None:
     graph = _pipeline(Ask("run the tests", command="pytest", tool_name="shell"))
 
     async def scenario() -> dict[str, object]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             asked = await surface.read(run_id, "approval.requested")
@@ -933,11 +957,11 @@ def test_an_approval_is_published_answered_and_answered_only_once() -> None:
     assert answered["again"].status_code == 409
 
 
-def test_cancelling_an_approval_fails_the_run_where_it_asked() -> None:
+def test_cancelling_an_approval_fails_the_run_where_it_asked(build: Backend) -> None:
     graph = _pipeline(Ask("delete the branch", command="git branch -D main"))
 
     async def scenario() -> tuple[list[dict], dict, dict]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             asked = await surface.read(run_id, "approval.requested")
@@ -970,7 +994,7 @@ def test_cancelling_an_approval_fails_the_run_where_it_asked() -> None:
     assert _of_kind(events, "run.failed")[0]["nodeId"] == str(IMPLEMENTATION)
 
 
-def test_refusing_one_task_ends_the_run_and_takes_its_siblings_with_it() -> None:
+def test_refusing_one_task_ends_the_run_and_takes_its_siblings_with_it(build: Backend) -> None:
     """A refusal is terminal, so it has to actually terminate the run.
 
     Three tasks of one node each stop to ask permission. Refusing one of them
@@ -981,7 +1005,7 @@ def test_refusing_one_task_ends_the_run_and_takes_its_siblings_with_it() -> None
     exists to stop a client being given two answers it cannot reconcile, so
     reaching it has to mean the run is really finished.
     """
-    runtime = ScriptedGraphRuntime(
+    runtime = build(
         _repeated(Ask("delete the branch", command="git branch -D main"), Say("Done."))
     )
 
@@ -1048,7 +1072,7 @@ def test_refusing_one_task_ends_the_run_and_takes_its_siblings_with_it() -> None
 # --- a node that raises ----------------------------------------------------
 
 
-def test_a_node_that_raises_fails_the_run_where_it_raised() -> None:
+def test_a_node_that_raises_fails_the_run_where_it_raised(build: Backend) -> None:
     """The failure path, which is ordinary rather than exceptional.
 
     A run whose task died silently would report `running` forever, hold every
@@ -1058,7 +1082,7 @@ def test_a_node_that_raises_fails_the_run_where_it_raised() -> None:
     graph = _pipeline(Say("Running the tests."), Fail("codex is out of quota"))
 
     async def scenario() -> tuple[list[dict], dict, httpx.Response]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             events = await surface.read(run_id, "run.failed")
@@ -1086,19 +1110,19 @@ def test_a_node_that_raises_fails_the_run_where_it_raised() -> None:
 # --- shutdown --------------------------------------------------------------
 
 
-def test_shutting_the_server_down_stops_the_runs_it_was_driving() -> None:
+def test_shutting_the_server_down_stops_the_runs_it_was_driving(build: Backend) -> None:
     """Runs outlive the request that started them, so nothing else would.
 
     Without this a SIGTERM drops whatever node was mid-execution, with no
     chance for an implementation to checkpoint it.
     """
-    runtime = ScriptedGraphRuntime(_pipeline(Say("Reading."), AwaitSteering()))
+    runtime = build(_pipeline(Say("Reading."), AwaitSteering()))
 
     async def scenario() -> list[str]:
         async with _server(runtime) as surface:
             run = await _start(surface)
             await surface.read(str(run["runId"]), "transcript")
-        return [str(run.run_id) for run in runtime.running()]
+        return [str(run_id) for run_id in runtime.running()]
 
     assert asyncio.run(scenario()) == []
 
@@ -1106,9 +1130,9 @@ def test_shutting_the_server_down_stops_the_runs_it_was_driving() -> None:
 # --- checkpoints and resumption --------------------------------------------
 
 
-def test_a_run_saves_a_checkpoint_at_every_superstep_boundary() -> None:
+def test_a_run_saves_a_checkpoint_at_every_superstep_boundary(build: Backend) -> None:
     async def scenario() -> list[dict]:
-        runtime = ScriptedGraphRuntime(_pipeline(Say("Wrote it.")))
+        runtime = build(_pipeline(Say("Wrote it.")))
         async with _server(runtime) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
@@ -1132,7 +1156,7 @@ def test_a_run_saves_a_checkpoint_at_every_superstep_boundary() -> None:
     assert history[1]["values"] == {str(IMPLEMENTATION): "Wrote it."}
 
 
-def test_sending_a_run_back_forks_and_keeps_the_attempt_it_replaces() -> None:
+def test_sending_a_run_back_forks_and_keeps_the_attempt_it_replaces(build: Backend) -> None:
     """"Send it back to implementation" resolved to a checkpoint, and appended.
 
     A destructive rewind would be cheaper and would throw away the thing the
@@ -1143,7 +1167,7 @@ def test_sending_a_run_back_forks_and_keeps_the_attempt_it_replaces() -> None:
     elsewhere from being vacuous: `entered` counts a second pass when there
     genuinely is one, and here there is.
     """
-    runtime = ScriptedGraphRuntime(_pipeline(Say("Wrote the code.")))
+    runtime = build(_pipeline(Say("Wrote the code.")))
 
     async def scenario() -> dict[str, object]:
         async with _server(runtime) as surface:
@@ -1205,7 +1229,7 @@ def test_sending_a_run_back_forks_and_keeps_the_attempt_it_replaces() -> None:
     assert runtime.entered(IMPLEMENTATION) == 2
 
 
-def test_a_node_selector_takes_the_latest_position() -> None:
+def test_a_node_selector_takes_the_latest_position(build: Backend) -> None:
     """The ambiguity a node has, answered where it belongs.
 
     After one fork there are two checkpoints that were about to run
@@ -1216,7 +1240,7 @@ def test_a_node_selector_takes_the_latest_position() -> None:
     """
 
     async def scenario() -> dict[str, object]:
-        runtime = ScriptedGraphRuntime(_pipeline(Say("Wrote the code.")))
+        runtime = build(_pipeline(Say("Wrote the code.")))
         async with _server(runtime) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
@@ -1254,7 +1278,7 @@ def test_a_node_selector_takes_the_latest_position() -> None:
     assert outcome["named"]["values"] == history[1]["values"]
 
 
-def test_a_failed_run_can_be_sent_back_and_run_again() -> None:
+def test_a_failed_run_can_be_sent_back_and_run_again(build: Backend) -> None:
     """Recovery is the reason a failure leaves a resumable position behind."""
     graph = ScriptedGraph(
         GRAPH,
@@ -1271,7 +1295,7 @@ def test_a_failed_run_can_be_sent_back_and_run_again() -> None:
     )
 
     async def scenario() -> tuple[list[dict], dict]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             failed = await surface.read(run_id, "run.failed")
@@ -1291,12 +1315,12 @@ def test_a_failed_run_can_be_sent_back_and_run_again() -> None:
     assert reverted["nextNodes"] == [str(IMPLEMENTATION)]
 
 
-def test_a_resume_can_interrupt_a_superstep_that_is_still_running() -> None:
+def test_a_resume_can_interrupt_a_superstep_that_is_still_running(build: Backend) -> None:
     """Reverting is not something only a finished run can be asked for."""
     graph = _pipeline(Say("Reading the tree."), AwaitSteering(), Say("Never reached."))
 
     async def scenario() -> tuple[dict, list[dict]]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             waiting = await surface.read(run_id, "transcript")
@@ -1317,7 +1341,7 @@ def test_a_resume_can_interrupt_a_superstep_that_is_still_running() -> None:
     assert restarted[-1]["nodeId"] == str(IMPLEMENTATION)
 
 
-def test_two_resumes_arriving_at_once_do_not_leave_two_executors() -> None:
+def test_two_resumes_arriving_at_once_do_not_leave_two_executors(build: Backend) -> None:
     """`resume_from` says anything in flight is stopped first, so it has to be.
 
     Stopping is asynchronous -- something is cancelled and waited for -- so the
@@ -1331,7 +1355,7 @@ def test_two_resumes_arriving_at_once_do_not_leave_two_executors() -> None:
     what this pins is that only one of them is driving the run afterwards.
     """
     graph = _pipeline(Say("Reading the tree."), AwaitSteering())
-    runtime = ScriptedGraphRuntime(graph)
+    runtime = build(graph)
 
     async def scenario() -> dict[str, object]:
         async with _server(runtime) as surface:
@@ -1367,11 +1391,11 @@ def test_two_resumes_arriving_at_once_do_not_leave_two_executors() -> None:
     )
 
 
-def test_a_transition_the_runtime_cannot_resolve_is_refused() -> None:
+def test_a_transition_the_runtime_cannot_resolve_is_refused(build: Backend) -> None:
     graph = _pipeline(Fail("codex is out of quota"))
 
     async def scenario() -> dict[str, httpx.Response]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             transitions = f"/api/runs/{run_id}/transitions"
@@ -1419,7 +1443,7 @@ def test_a_transition_the_runtime_cannot_resolve_is_refused() -> None:
 # --- subscribing to events -------------------------------------------------
 
 
-def test_the_feed_carries_transcript_events_and_tool_calls() -> None:
+def test_the_feed_carries_transcript_events_and_tool_calls(build: Backend) -> None:
     graph = _pipeline(
         Say("Reading the tree."),
         Call("shell", {"command": "pytest"}, result="14 passed"),
@@ -1427,7 +1451,7 @@ def test_the_feed_carries_transcript_events_and_tool_calls() -> None:
     )
 
     async def scenario() -> list[dict]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             return await surface.read(str(run["runId"]), "run.finished")
 
@@ -1463,7 +1487,7 @@ def test_the_feed_carries_transcript_events_and_tool_calls() -> None:
     assert result["payload"]["result"] == "14 passed"
 
 
-def test_one_open_subscription_sees_the_run_it_watched_finish_and_start_again() -> None:
+def test_one_open_subscription_sees_the_run_it_watched_finish_and_start_again(build: Backend) -> None:
     """The feed outlives `run.finished`, on the feed rather than on a reconnect.
 
     A subscription that closed itself on the terminal event would still pass a
@@ -1473,7 +1497,7 @@ def test_one_open_subscription_sees_the_run_it_watched_finish_and_start_again() 
     """
 
     async def scenario() -> list[dict]:
-        runtime = ScriptedGraphRuntime(_pipeline(Say("Wrote the code.")))
+        runtime = build(_pipeline(Say("Wrote the code.")))
         async with _server(runtime) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
@@ -1492,7 +1516,7 @@ def test_one_open_subscription_sees_the_run_it_watched_finish_and_start_again() 
     assert after[-1]["nodeId"] == str(IMPLEMENTATION)
 
 
-def test_two_subscribers_at_different_cursors_each_see_the_whole_run() -> None:
+def test_two_subscribers_at_different_cursors_each_see_the_whole_run(build: Backend) -> None:
     """Fan-out is the log's job, so more than one reader has to be real.
 
     Two feeds open at once on the same run, one from the beginning and one from
@@ -1503,7 +1527,7 @@ def test_two_subscribers_at_different_cursors_each_see_the_whole_run() -> None:
     graph = _pipeline(Say("Reading the tree."), AwaitSteering(), Say("Renamed it."))
 
     async def scenario() -> tuple[list[dict], list[dict]]:
-        async with _server(ScriptedGraphRuntime(graph)) as surface:
+        async with _server(build(graph)) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             async with surface.subscribe(run_id) as first:
@@ -1529,11 +1553,11 @@ def test_two_subscribers_at_different_cursors_each_see_the_whole_run() -> None:
     assert late[0]["sequence"] == whole[len(whole) - len(late)]["sequence"]
 
 
-def test_a_subscriber_replays_from_its_own_cursor() -> None:
+def test_a_subscriber_replays_from_its_own_cursor(build: Backend) -> None:
     """A reconnecting client asks for what it missed, not for everything."""
 
     async def scenario() -> tuple[list[dict], list[dict], httpx.Response]:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             everything = await surface.read(run_id, "run.finished")
@@ -1553,9 +1577,9 @@ def test_a_subscriber_replays_from_its_own_cursor() -> None:
     assert refused.json() == {"error": "cursor must be an integer"}
 
 
-def test_a_cursor_before_the_beginning_is_refused() -> None:
+def test_a_cursor_before_the_beginning_is_refused(build: Backend) -> None:
     async def scenario() -> httpx.Response:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             run = await _start(surface)
             return await surface.client.get(
                 f"/api/runs/{run['runId']}/events", params={"cursor": "-1"}
@@ -1567,11 +1591,11 @@ def test_a_cursor_before_the_beginning_is_refused() -> None:
     assert refused.json() == {"error": "cursor must not be negative"}
 
 
-def test_a_browser_reconnects_with_the_event_id_it_last_saw() -> None:
+def test_a_browser_reconnects_with_the_event_id_it_last_saw(build: Backend) -> None:
     """`Last-Event-ID` is what EventSource sends; honouring it avoids a poll."""
 
     async def scenario() -> tuple[list[dict], dict]:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             everything = await surface.read(run_id, "run.finished")
@@ -1587,7 +1611,7 @@ def test_a_browser_reconnects_with_the_event_id_it_last_saw() -> None:
     assert first["type"] == "run.finished"
 
 
-def test_an_explicit_cursor_beats_the_header_even_when_it_is_empty() -> None:
+def test_an_explicit_cursor_beats_the_header_even_when_it_is_empty(build: Backend) -> None:
     """An empty `cursor` is a position -- the beginning -- not an absent one.
 
     A client that says `?cursor=` is asking to replay the run from the start,
@@ -1596,7 +1620,7 @@ def test_an_explicit_cursor_beats_the_header_even_when_it_is_empty() -> None:
     """
 
     async def scenario() -> tuple[list[dict], dict]:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             everything = await surface.read(run_id, "run.finished")
@@ -1623,11 +1647,9 @@ def test_an_explicit_cursor_beats_the_header_even_when_it_is_empty() -> None:
         ({"graphId": str(GRAPH), "values": []}, "values must be an object"),
     ],
 )
-def test_starting_a_run_refuses_a_body_it_cannot_read(
-    body: dict[str, object], message: str
-) -> None:
+def test_starting_a_run_refuses_a_body_it_cannot_read(build: Backend, body: dict[str, object], message: str) -> None:
     async def scenario() -> httpx.Response:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             return await surface.client.post("/api/runs", json=body)
 
     refused = asyncio.run(scenario())
@@ -1639,7 +1661,7 @@ def test_starting_a_run_refuses_a_body_it_cannot_read(
 @pytest.mark.parametrize(
     "body", [b"not json", b'{"graphId": "\xff"}'], ids=["unparseable", "not utf-8"]
 )
-def test_a_body_that_is_not_json_at_all_is_still_a_400(body: bytes) -> None:
+def test_a_body_that_is_not_json_at_all_is_still_a_400(build: Backend, body: bytes) -> None:
     """Including one that is not even text.
 
     Starlette hands raw bytes to `json.loads`, which decodes them itself, so a
@@ -1648,7 +1670,7 @@ def test_a_body_that_is_not_json_at_all_is_still_a_400(body: bytes) -> None:
     """
 
     async def scenario() -> httpx.Response:
-        async with _server(ScriptedGraphRuntime(_pipeline(Say("Done.")))) as surface:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
             return await surface.client.post(
                 "/api/runs",
                 content=body,

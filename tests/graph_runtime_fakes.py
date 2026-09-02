@@ -535,15 +535,16 @@ class ScriptedGraphRuntime:
 
     # --- what a test can ask that a client cannot --------------------------
 
-    def running(self) -> tuple[_Run, ...]:
+    def running(self) -> tuple[RunId, ...]:
         """The runs still executing, which shutdown has to leave empty.
 
         Not part of `GraphRuntime`: "is a task still alive" is an
         implementation's own question, and the HTTP surface has no way to ask
-        it -- a leaked task looks exactly like a node that is thinking.
+        it -- a leaked task looks exactly like a node that is thinking. Spelled
+        the same way in every implementation, so one test can ask both.
         """
         return tuple(
-            run for run in self._runs.values() if self.executors(run.run_id)
+            run.run_id for run in self._runs.values() if self.executors(run.run_id)
         )
 
     def executors(self, run_id: RunId) -> tuple[asyncio.Task[None], ...]:

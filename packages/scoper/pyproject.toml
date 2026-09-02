@@ -14,4 +14,4 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-domain = { workspace = true }
-langgraph-acp = { path = "../../langgraph-acp" }
+langgraph-acp = { path = "../../langgraph-acp", editable = true }
