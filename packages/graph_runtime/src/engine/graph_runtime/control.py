@@ -143,6 +143,26 @@ class RunSnapshot:
     error: str = ""
 
 
+class GraphCompilationError(Exception):
+    """A graph this deployment was given cannot be built, and this says which.
+
+    Deliberately *not* a `GraphRuntimeError`: those are refusals of a request
+    somebody made, answerable with a status code. This is a deployment that
+    cannot be assembled -- a graph in the workflow directory whose nodes and
+    edges do not make a graph -- and there is nobody to answer, because it
+    happens while the process is starting.
+
+    It names the graph, because "a graph failed to compile" is not actionable
+    in a directory holding several, and carries the original failure as its
+    cause so a traceback still points at the line in the workflow file.
+    """
+
+    def __init__(self, graph_id: GraphId, cause: BaseException) -> None:
+        super().__init__(f"graph workflow {str(graph_id)!r} does not compile: {cause}")
+        self.graph_id = graph_id
+        self.reason = str(cause)
+
+
 class GraphRuntimeError(Exception):
     """Anything the control surface refuses, in one catchable family."""
 

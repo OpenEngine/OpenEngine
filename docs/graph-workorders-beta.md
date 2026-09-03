@@ -99,11 +99,29 @@ forever.
 
 ## If something is wrong with the graph engine itself
 
-If the engine cannot open — the state directory is not writable, a checkpoint
-file is corrupt, a graph no longer compiles after a dependency upgrade — it
-refuses to start and writes the error to the server log. The rest of the
-application starts normally, and no `[BETA]` entries appear in the dropdown,
-because nothing in this process could run one.
+Two different things can go wrong here, and the server treats them differently
+on purpose.
+
+**A graph that does not compile** — a workflow file describes something that is
+not a graph, perhaps after a dependency upgrade changed what LangGraph accepts.
+The server **does not start**. The log says which graph it was and what was
+wrong with it:
+
+```
+[BETA] workflow 'implementation-review-codex' does not compile, so this server
+will not start: Graph must have an entrypoint: add at least one edge from START
+```
+
+This is a file somebody has to fix, and nothing improves by starting without it:
+a server that quietly dropped the graph would be running a deployment nobody
+configured, and you would find out the first time someone picked the workflow.
+
+**Anything else about the engine's files** — the `graph-state/` directory is not
+writable, a checkpoint file is being held by another process. That is about this
+machine rather than about any graph, so the graph engine simply does not run:
+the error is logged, the rest of the application starts normally, and no
+`[BETA]` entries appear in the dropdown because nothing in this process could
+run one.
 
 ## If no `[BETA]` entries appear
 

@@ -33,7 +33,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Annotated, Any, overload
 
-from engine.graph_runtime import GraphId
+from engine.graph_runtime import GraphCompilationError, GraphId
 from engine.graph_runtime_langgraph.acp import answer_permission
 from engine.graph_runtime_langgraph.graphs import LangGraphDefinition
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
@@ -187,6 +187,20 @@ def agent_registry(providers: Iterable[Any]) -> ACPAgentRegistry:
     )
 
 
+def _compiled(workflow: GraphWorkflow, checkpointer: Any) -> LangGraphDefinition:
+    """Compile one graph, and name it if it will not compile.
+
+    LangGraph's own complaint is about a node or an edge and says nothing about
+    which graph it came from. In a workflow directory holding several that is
+    the one fact a person needs to fix it, so it is added here rather than left
+    to be guessed from a traceback.
+    """
+    try:
+        return workflow.compiled(checkpointer)
+    except Exception as broken:
+        raise GraphCompilationError(workflow.graph_id, broken) from broken
+
+
 @asynccontextmanager
 async def sqlite_runtime(
     workflows: Sequence[GraphWorkflow], directory: str | Path
@@ -197,6 +211,13 @@ async def sqlite_runtime(
     store is an open connection, so composing them without also owning their
     shutdown leaves SQLite handles open past the process that made them -- which
     is why this is a context manager and why nothing above it holds either file.
+
+    Compiling comes first and says which graph it was compiling. A graph that
+    does not compile is a broken definition rather than a broken deployment, and
+    telling the two apart is what lets a caller treat them differently -- see
+    `GraphCompilationError`. Doing it before the second file is opened also
+    means a failure here leaves nothing behind but the checkpoint file the
+    `async with` is already closing.
     """
     if not workflows:
         raise ValueError("a graph runtime needs at least one workflow")
@@ -208,10 +229,9 @@ async def sqlite_runtime(
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
     async with AsyncSqliteSaver.from_conn_string(str(root / CHECKPOINTS)) as saver:
+        definitions = tuple(_compiled(workflow, saver) for workflow in workflows)
         store = SqliteGraphRuntimeStore(root / RUNS)
-        runtime = LangGraphRuntime(
-            *(workflow.compiled(saver) for workflow in workflows), store=store
-        )
+        runtime = LangGraphRuntime(*definitions, store=store)
         try:
             yield runtime
         finally:

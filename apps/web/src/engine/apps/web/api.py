@@ -82,6 +82,7 @@ from engine.domain import (
 from engine.graph_runtime import (
     EventKind,
     EventLog,
+    GraphCompilationError,
     GraphId,
     GraphRuntime,
     GraphWorkflow,
@@ -949,9 +950,12 @@ class _GraphSurface:
     rather than something building one does. A request that arrives before then
     is told the graph engine is not running rather than being given half of it.
 
-    They stay empty when the engine refuses to open, which is what keeps a
-    `[BETA]` failure to the `[BETA]` feature: no engine, no `[BETA]` entries in
-    the dropdown, and the rest of the application carries on.
+    They stay empty when the engine could not be opened for a reason outside
+    the graphs themselves, which is what keeps that kind of failure to the
+    `[BETA]` feature: no engine, no `[BETA]` entries in the dropdown, and the
+    rest of the application carries on. A graph that does not *compile* never
+    gets this far -- it stops the server, because it is a definition somebody
+    has to fix.
     """
 
     runtime: GraphRuntime | None = None
@@ -1227,15 +1231,34 @@ def create_app(
                 # stack closes it again when the server stops, which is the
                 # only thing that closes those files.
                 #
-                # Guarded, because everything it does can fail for reasons that
-                # have nothing to do with the rest of this application: a state
-                # directory it cannot write, a checkpoint file another process
-                # is holding, a graph that no longer compiles. The engine then
-                # refuses to start and says so in the log, and chats, projects
-                # and the step WorkOrders carry on without it -- rather than the
-                # whole server failing to start over a feature marked `[BETA]`.
+                # It can fail two ways, and they are not the same kind of news.
+                #
+                # A graph that does not compile is a broken definition: a file
+                # in this deployment's workflow directory says something that is
+                # not a graph. Nothing about it improves by carrying on, and a
+                # server that quietly dropped it would be running a deployment
+                # nobody configured. So the graph is named, the reason is logged
+                # in full, and startup fails -- loudly, at the moment somebody
+                # is looking, rather than the first time a person picks it.
+                #
+                # Anything else is the environment around the graphs rather than
+                # the graphs themselves: a state directory this process cannot
+                # write, a checkpoint file another process is holding. That is
+                # not a reason for chats, projects and the step WorkOrders to go
+                # down with it, so it is logged and contained -- no engine, and
+                # therefore no `[BETA]` entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
+                except GraphCompilationError as broken:
+                    log.error(
+                        "%s workflow %r does not compile, so this server will "
+                        "not start: %s",
+                        BETA,
+                        str(broken.graph_id),
+                        broken.reason,
+                        exc_info=True,
+                    )
+                    raise
                 except Exception:
                     log.exception(
                         "the graph engine did not start; %s WorkOrders are not "

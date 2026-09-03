@@ -94,6 +94,7 @@ from engine.runtime import (
 )
 from engine.graph_runtime import (
     CheckpointId,
+    GraphCompilationError,
     GraphId,
     NodeId,
     RunSnapshot,
@@ -5054,15 +5055,66 @@ def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working
     assert "no record" in restored.failure_reason
 
 
+def _app_over(store: InMemoryStateStore, engine):
+    """The web app with a graph engine that behaves however a test needs."""
+    return _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+        graph_runtime=engine,
+    )
+
+
+def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A broken definition is not something to carry on without.
+
+    A graph that does not compile means a file in this deployment's workflow
+    directory says something that is not a graph. Starting anyway would serve a
+    deployment nobody configured, and the person who could fix it would find out
+    the first time somebody picked the workflow. So startup fails.
+
+    What is logged is the only way anybody learns which one: the graph's id and
+    the reason it would not compile. "a graph failed to compile" is not
+    actionable in a directory holding several.
+    """
+    store = InMemoryStateStore()
+
+    @asynccontextmanager
+    async def broken(_app=None):
+        raise GraphCompilationError(
+            GraphId("implementation-review-codex"),
+            ValueError("node 'review' is not reachable from '__start__'"),
+        )
+        yield  # pragma: no cover -- unreachable, and required to make this a CM
+
+    app = _app_over(store, broken())
+
+    async def scenario():
+        async with app.router.lifespan_context(app):  # pragma: no cover -- raises
+            pass
+
+    with caplog.at_level(logging.ERROR, logger="engine.apps.web.api"):
+        with pytest.raises(GraphCompilationError):
+            asyncio.run(scenario())
+
+    assert "implementation-review-codex" in caplog.text
+    assert "not reachable" in caplog.text
+
+
 def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A `[BETA]` failure stays inside the `[BETA]` feature.
+    """Everything else that can go wrong stays inside the `[BETA]` feature.
 
-    Opening the engine creates a directory, opens two SQLite files and compiles
-    every graph. Any of those can fail on its own -- an unwritable directory, a
-    graph that no longer compiles after a dependency was upgraded -- and none of
-    them is a reason for chats, projects and the step WorkOrders to go down.
+    Opening the engine also creates a directory and opens two SQLite files, and
+    those fail for reasons that are about this machine rather than about any
+    graph: a state directory it cannot write, a checkpoint file another process
+    is holding. None of them is a reason for chats, projects and the step
+    WorkOrders to go down, so the engine simply does not run here.
 
     The failure is logged, because it is the only place anybody could find out.
     """
@@ -5070,17 +5122,10 @@ def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
 
     @asynccontextmanager
     async def refusing(_app=None):
-        raise RuntimeError("graph 'implementation-review-codex' does not compile")
+        raise PermissionError("graph-state/: read-only file system")
         yield  # pragma: no cover -- unreachable, and required to make this a CM
 
-    app = _workflow_app(
-        store,
-        ConcurrentRunner(),
-        workflow_catalog=WorkflowCatalog.from_definitions(
-            (_catalog_definition(),), (_review_graph(),)
-        ),
-        graph_runtime=refusing(),
-    )
+    app = _app_over(store, refusing())
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -5109,4 +5154,4 @@ def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
     # not exist rather than something that cannot be started.
     assert refused.status_code == 400
     assert graph.status_code == 503
-    assert "does not compile" in caplog.text
+    assert "read-only file system" in caplog.text
