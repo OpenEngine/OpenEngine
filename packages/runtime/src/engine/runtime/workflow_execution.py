@@ -1,6 +1,7 @@
 """Execute compiled sequential/branching workflows with durable transitions."""
 
 import asyncio
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
@@ -40,6 +41,10 @@ from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
 from engine.runtime.step_results import requests_clarification_or_escalation
 from engine.runtime.workflows import WorkflowCatalog
+
+
+logger = logging.getLogger(__name__)
+_HUMAN_REVIEW_CHANNEL = "OpenEngine"
 
 
 class WorkflowExecutionError(RuntimeError):
@@ -258,6 +263,7 @@ class WorkflowExecutor:
                 )
             command = commands[0]
             if isinstance(command, RequestHumanReview):
+                await self._notify_human_review(command)
                 return state
             if not isinstance(command, StartAgentRun) or command.step is None:
                 raise WorkflowExecutionError(
@@ -288,6 +294,21 @@ class WorkflowExecutor:
                 return state
             state, commands = outcome.state, outcome.commands
         return state
+
+    async def _notify_human_review(self, command: RequestHumanReview) -> None:
+        """Notify operators without making Slack availability block a workflow."""
+        try:
+            await self._capabilities.communications.post(
+                _HUMAN_REVIEW_CHANNEL,
+                f"Work order step complete and ready for human review: "
+                f"{command.title}\n{command.summary}",
+                command.run_id,
+            )
+        except Exception:
+            logger.exception(
+                "could not send human-review notification for run %s",
+                command.run_id,
+            )
 
     async def _runner_name_for_step(
         self, state: RunState, step: AgentStep, fallback: str

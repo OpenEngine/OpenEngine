@@ -7,10 +7,33 @@ from starlette.testclient import TestClient
 
 from engine.apps.web.slack_auth import (
     SlackAuthError,
+    SlackCommunications,
     SlackCredentialStore,
     SlackCredentials,
     authorization_url,
 )
+
+
+def test_slack_communications_posts_to_requested_channel() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": True, "ts": "123.456"}
+
+    with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
+        client_type.return_value.__aenter__.return_value.post = AsyncMock(
+            return_value=response
+        )
+        message_id = __import__("asyncio").run(
+            SlackCommunications(store).post("OpenEngine", "Review run-42")
+        )
+
+    assert message_id == "123.456"
+    client_type.return_value.__aenter__.return_value.post.assert_awaited_once_with(
+        "https://slack.com/api/chat.postMessage",
+        headers={"Authorization": "Bearer xoxb-token"},
+        json={"channel": "OpenEngine", "text": "Review run-42"},
+    )
 
 
 def test_authorization_url_requests_notification_scope_and_state() -> None:

@@ -31,7 +31,6 @@ from engine.adapters.agent_runner.claude_code import (
     allowed_tools_for,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
-from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
@@ -44,6 +43,7 @@ from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeWorkspaceProvider,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.slack_auth import SlackCommunications, SlackCredentialStore
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.apps.web.source_control import (
@@ -138,6 +138,7 @@ class Settings:
 def build_capabilities(
     settings: Settings,
     credential_store: GitHubCredentialStore | None = None,
+    slack_credential_store: SlackCredentialStore | None = None,
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
@@ -179,8 +180,8 @@ def build_capabilities(
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
-        communications=BuzzCommunications(
-            settings.buzz_base_url, settings.buzz_api_token
+        communications=SlackCommunications(
+            slack_credential_store or SlackCredentialStore()
         ),
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),

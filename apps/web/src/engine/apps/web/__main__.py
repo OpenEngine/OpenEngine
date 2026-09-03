@@ -127,7 +127,12 @@ def compose_app(
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
     credential_store = GitHubCredentialStore()
-    capabilities = build_capabilities(settings, credential_store=credential_store)
+    slack_credential_store = SlackCredentialStore()
+    capabilities = build_capabilities(
+        settings,
+        credential_store=credential_store,
+        slack_credential_store=slack_credential_store,
+    )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
@@ -152,7 +157,7 @@ def compose_app(
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
         source_control_preferences=settings.source_control_preferences,
-        slack_credential_store=SlackCredentialStore(),
+        slack_credential_store=slack_credential_store,
     )
 
 

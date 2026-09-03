@@ -15,6 +15,7 @@ _ACCESS_TOKEN = "slack-access-token"
 _TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 _REVOKE_URL = "https://slack.com/api/auth.revoke"
 _AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
+_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 
 
 class SlackAuthError(RuntimeError):
@@ -86,6 +87,37 @@ class SlackCredentialStore:
                 pass
 
 
+class SlackCommunications:
+    """Deliver Engine notifications through the connected Slack workspace."""
+
+    def __init__(self, credential_store: SlackCredentialStore) -> None:
+        self._credential_store = credential_store
+
+    async def post(self, channel: str, message: str, run_id=None) -> str:
+        token = self._credential_store.token()
+        if not token:
+            return ""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                _POST_MESSAGE_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"channel": channel, "text": message},
+            )
+        if response.is_error:
+            raise SlackAuthError(
+                f"Slack returned {response.status_code} while posting a notification"
+            )
+        body = response.json()
+        if not body.get("ok"):
+            raise SlackAuthError(
+                f"Slack notification failed: {body.get('error', 'message was not sent')}"
+            )
+        return str(body.get("ts", ""))
+
+    async def reply(self, message_id: str, message: str) -> str:
+        raise NotImplementedError("Slack notification threads are not supported")
+
+
 def authorization_url(client_id: str, redirect_uri: str, state: str) -> str:
     return _AUTHORIZE_URL + "?" + urlencode(
         {
@@ -124,6 +156,7 @@ async def revoke_token(token: str) -> None:
 
 __all__ = [
     "SlackAuthError",
+    "SlackCommunications",
     "SlackCredentialStore",
     "authorization_url",
     "exchange_code",
