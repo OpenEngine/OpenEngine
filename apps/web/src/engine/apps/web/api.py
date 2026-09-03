@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -39,6 +40,7 @@ from engine.apps.web.github_auth import (
     DeviceFlowState,
     GitHubAuthError,
     GitHubCredentialStore,
+    credentials_from_device_flow,
     poll_device_flow,
     start_device_flow,
 )
@@ -1798,10 +1800,25 @@ def create_app(
         return github_client_id or _credential_store.get_client_id() or ""
 
     async def github_status(_request: Request) -> JSONResponse:
-        token = _credential_store.get()
+        credentials = _credential_store.get_credentials()
+        now = time.time()
+        connected = bool(
+            credentials
+            and (
+                credentials.expires_at is None
+                or credentials.expires_at > now
+                or (
+                    credentials.refresh_token is not None
+                    and (
+                        credentials.refresh_token_expires_at is None
+                        or credentials.refresh_token_expires_at > now
+                    )
+                )
+            )
+        )
         return JSONResponse(
             {
-                "connected": bool(token),
+                "connected": connected,
                 "clientIdConfigured": bool(_effective_client_id()),
             }
         )
@@ -1911,7 +1928,7 @@ def create_app(
             return _error(str(error), 502)
         if isinstance(result, DeviceFlowComplete):
             try:
-                _credential_store.set(result.access_token)
+                _credential_store.set_credentials(credentials_from_device_flow(result))
             except GitHubAuthError as error:
                 _active_flow = None
                 return _error(str(error), 500)

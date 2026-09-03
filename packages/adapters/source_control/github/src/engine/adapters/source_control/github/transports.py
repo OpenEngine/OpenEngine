@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
 import httpx
@@ -32,9 +32,11 @@ class GitHubOAuthTransport:
         self,
         token: str | Callable[[], str | None],
         api_url: str = "https://api.github.com",
+        on_token_unauthorized: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self._token_source = token
         self._api_url = api_url.rstrip("/")
+        self._on_token_unauthorized = on_token_unauthorized
 
     @property
     def _token(self) -> str:
@@ -44,28 +46,31 @@ class GitHubOAuthTransport:
             else self._token_source
         )
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, token: str) -> dict[str, str]:
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         return headers
 
     async def request(self, method: str, path: str, **kwargs: object) -> object:
+        token = self._token
         async with httpx.AsyncClient() as client:
             response = await client.request(
-                method, f"{self._api_url}{path}", headers=self._headers(), **kwargs
+                method, f"{self._api_url}{path}", headers=self._headers(token), **kwargs
             )
+        if await self._refresh_after_unauthorized(response, token):
+            async with httpx.AsyncClient() as client:
+                response = await client.request(
+                    method,
+                    f"{self._api_url}{path}",
+                    headers=self._headers(self._token),
+                    **kwargs,
+                )
         if response.is_error:
-            try:
-                detail = response.json().get("message", response.text)
-            except ValueError:
-                detail = response.text or f"HTTP {response.status_code}"
-            raise GitHubTransportError(
-                f"GitHub API {method} {path} failed ({response.status_code}): {detail}"
-            )
+            raise self._request_error(method, path, response)
         return (
             {}
             if response.status_code == 204 or not response.content
@@ -73,15 +78,42 @@ class GitHubOAuthTransport:
         )
 
     async def download(self, path: str) -> bytes:
+        token = self._token
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.get(
-                f"{self._api_url}{path}", headers=self._headers()
+                f"{self._api_url}{path}", headers=self._headers(token)
             )
+        if await self._refresh_after_unauthorized(response, token):
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                response = await client.get(
+                    f"{self._api_url}{path}", headers=self._headers(self._token)
+                )
         if response.is_error:
-            raise GitHubTransportError(
-                f"GitHub API GET {path} failed ({response.status_code}): {response.text}"
-            )
+            raise self._request_error("GET", path, response)
         return response.content
+
+    async def _refresh_after_unauthorized(
+        self, response: httpx.Response, failed_token: str
+    ) -> bool:
+        """Refresh once after a 401, leaving other HTTP errors untouched."""
+        return bool(
+            response.status_code == 401
+            and failed_token
+            and self._on_token_unauthorized is not None
+            and await self._on_token_unauthorized(failed_token)
+        )
+
+    @staticmethod
+    def _request_error(
+        method: str, path: str, response: httpx.Response
+    ) -> GitHubTransportError:
+        try:
+            detail = response.json().get("message", response.text)
+        except ValueError:
+            detail = response.text or f"HTTP {response.status_code}"
+        return GitHubTransportError(
+            f"GitHub API {method} {path} failed ({response.status_code}): {detail}"
+        )
 
 
 class GitHubCliTransport:

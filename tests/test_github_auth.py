@@ -15,7 +15,11 @@ from engine.apps.web.github_auth import (
     DeviceFlowState,
     GitHubAuthError,
     GitHubCredentialStore,
+    GitHubRefreshTokenInvalidError,
+    StoredCredentials,
+    credentials_from_device_flow,
     poll_device_flow,
+    refresh_access_token,
     start_device_flow,
 )
 
@@ -47,7 +51,37 @@ class TestGitHubCredentialStore:
             ),
         )
         GitHubCredentialStore().set("tok-xyz")
-        assert written == [("openengine", "github-token", "tok-xyz")]
+        assert written == [
+            (
+                "openengine",
+                "github-token",
+                (
+                    '{"access_token":"tok-xyz","refresh_token":null,'
+                    '"expires_at":null,"refresh_token_expires_at":null}'
+                ),
+            )
+        ]
+
+    def test_get_credentials_migrates_legacy_bare_token(self, monkeypatch):
+        monkeypatch.setattr(keyring, "get_password", lambda *_: "tok-abc")
+        assert GitHubCredentialStore().get_credentials() == StoredCredentials(
+            access_token="tok-abc"
+        )
+
+    def test_credentials_round_trip_as_one_keychain_value(self, monkeypatch):
+        saved: dict[str, str] = {}
+        backend = _high_priority_backend()
+        monkeypatch.setattr(keyring, "get_keyring", lambda: backend)
+        monkeypatch.setattr(
+            keyring,
+            "set_password",
+            lambda _s, _u, value: saved.setdefault("value", value),
+        )
+        monkeypatch.setattr(keyring, "get_password", lambda *_: saved.get("value"))
+        credentials = StoredCredentials("access", "refresh", 10.0, 20.0)
+        store = GitHubCredentialStore()
+        store.set_credentials(credentials)
+        assert store.get_credentials() == credentials
 
     def test_set_raises_when_no_secure_backend(self, monkeypatch):
         monkeypatch.setattr(
@@ -120,6 +154,29 @@ class TestStartDeviceFlow:
         with pytest.raises(GitHubAuthError, match="not_found"):
             asyncio.run(start_device_flow("client-id"))
 
+    def test_requests_offline_access_scope(self, monkeypatch):
+        seen: dict[str, object] = {}
+
+        class Client(_AsyncContextManager):
+            async def post(self, url, **kwargs):
+                seen["url"] = url
+                seen.update(kwargs)
+                return self._response
+
+        response = _mock_response(
+            200,
+            {
+                "device_code": "dev-1",
+                "user_code": "ABCD-EFGH",
+                "verification_uri": "https://github.com/login/device",
+            },
+        )
+        monkeypatch.setattr(
+            "engine.apps.web.github_auth.httpx.AsyncClient", lambda: Client(response)
+        )
+        asyncio.run(start_device_flow("client-id"))
+        assert seen["data"] == {"client_id": "client-id", "scope": "repo offline_access"}
+
 
 # ---------------------------------------------------------------------------
 # poll_device_flow
@@ -138,6 +195,122 @@ class TestPollDeviceFlow:
         assert isinstance(result, DeviceFlowComplete)
         assert result.access_token == "ghs_secret"
 
+    def test_captures_expiring_token_fields(self, monkeypatch):
+        monkeypatch.setattr(
+            "engine.apps.web.github_auth.httpx.AsyncClient",
+            lambda: _client_returning(
+                _mock_response(
+                    200,
+                    {
+                        "access_token": "access",
+                        "refresh_token": "refresh",
+                        "expires_in": 28800,
+                        "refresh_token_expires_in": 15897600,
+                    },
+                )
+            ),
+        )
+        result = asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
+        assert result == DeviceFlowComplete("access", "refresh", 28800, 15897600)
+
+
+class TestRefreshAccessToken:
+    def test_returns_rotated_token_pair(self, monkeypatch):
+        monkeypatch.setattr(
+            "engine.apps.web.github_auth.httpx.AsyncClient",
+            lambda: _client_returning(
+                _mock_response(
+                    200,
+                    {
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh",
+                        "expires_in": 60,
+                        "refresh_token_expires_in": 120,
+                    },
+                )
+            ),
+        )
+        with patch("engine.apps.web.github_auth.time.time", return_value=100.0):
+            result = asyncio.run(refresh_access_token("cid", "old-refresh"))
+        assert result == StoredCredentials("new-access", "new-refresh", 160.0, 220.0)
+
+    def test_rejects_missing_rotated_refresh_token(self, monkeypatch):
+        monkeypatch.setattr(
+            "engine.apps.web.github_auth.httpx.AsyncClient",
+            lambda: _client_returning(_mock_response(200, {"access_token": "access"})),
+        )
+        with pytest.raises(GitHubAuthError, match="no refresh_token"):
+            asyncio.run(refresh_access_token("cid", "old-refresh"))
+
+    def test_raises_a_typed_error_for_invalid_refresh_token(self, monkeypatch):
+        monkeypatch.setattr(
+            "engine.apps.web.github_auth.httpx.AsyncClient",
+            lambda: _client_returning(_mock_response(200, {"error": "bad_refresh_token"})),
+        )
+        with pytest.raises(GitHubRefreshTokenInvalidError):
+            asyncio.run(refresh_access_token("cid", "old-refresh"))
+
+    def test_uses_the_device_flow_refresh_grant(self, monkeypatch):
+        seen: dict[str, object] = {}
+
+        class Client(_AsyncContextManager):
+            async def post(self, url, **kwargs):
+                seen["url"] = url
+                seen.update(kwargs)
+                return self._response
+
+        monkeypatch.setattr(
+            "engine.apps.web.github_auth.httpx.AsyncClient",
+            lambda: Client(
+                _mock_response(
+                    200,
+                    {"access_token": "access", "refresh_token": "refresh"},
+                )
+            ),
+        )
+        asyncio.run(refresh_access_token("cid", "old-refresh"))
+        assert seen["data"] == {
+            "client_id": "cid",
+            "grant_type": "refresh_token",
+            "refresh_token": "old-refresh",
+        }
+
+
+class TestRefreshRecovery:
+    def test_does_not_delete_a_legacy_token_that_cannot_refresh(
+        self, tmp_path
+    ) -> None:
+        from engine.apps.web.composition import Settings, build_capabilities
+
+        class Store:
+            def __init__(self) -> None:
+                self.credentials = StoredCredentials("legacy-token")
+                self.deleted = False
+
+            def get(self) -> str:
+                return self.credentials.access_token
+
+            def get_credentials(self) -> StoredCredentials:
+                return self.credentials
+
+            def get_client_id(self) -> str:
+                return "client-id"
+
+            def delete(self) -> None:
+                self.deleted = True
+
+        store = Store()
+        capabilities = build_capabilities(
+            Settings(workspace_root=str(tmp_path)), credential_store=store  # type: ignore[arg-type]
+        )
+        callback = capabilities.source_control._transport._on_token_unauthorized
+        assert callback is not None
+        assert asyncio.run(callback("legacy-token")) is False
+        assert store.deleted is False
+
+
+
+class TestPollDeviceFlowErrors:
     def test_returns_pending_for_authorization_pending(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
@@ -203,6 +376,14 @@ class TestPollDeviceFlow:
         )
         with pytest.raises(GitHubAuthError, match="no access_token"):
             asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
+
+
+def test_device_flow_expiries_become_absolute_timestamps():
+    with patch("engine.apps.web.github_auth.time.time", return_value=100.0):
+        result = credentials_from_device_flow(
+            DeviceFlowComplete("access", "refresh", 60, 120)
+        )
+    assert result == StoredCredentials("access", "refresh", 160.0, 220.0)
 
 
 # ---------------------------------------------------------------------------
