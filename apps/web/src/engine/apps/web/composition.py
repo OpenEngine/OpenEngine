@@ -74,6 +74,8 @@ class Settings:
 
     host: str = "localhost"
     port: int = 8000
+    public_url: str = ""
+    slack_channel_id: str = ""
     codex_binary: str = "codex"
     codex_sandbox: str = "read-only"
     """What a turn nobody is watching may do: read, and nothing else.
@@ -182,7 +184,8 @@ def build_capabilities(
         ),
         communications=SlackCommunications(
             slack_credential_store or SlackCredentialStore(),
-            f"http://{settings.host}:{settings.port}",
+            settings.public_url or f"http://{settings.host}:{settings.port}",
+            settings.slack_channel_id,
         ),
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),

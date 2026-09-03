@@ -26,9 +26,9 @@ def test_slack_communications_posts_to_requested_channel() -> None:
             return_value=response
         )
         message_id = __import__("asyncio").run(
-            SlackCommunications(store, "http://localhost:8000/").post(
-                "OpenEngine", "Review run-42", RunId("run-42")
-            )
+            SlackCommunications(
+                store, "https://sheas-mac-mini.taileb7fdb.ts.net/", "C123"
+            ).post("OpenEngine", "Review run-42", RunId("run-42"))
         )
 
     assert message_id == "123.456"
@@ -36,17 +36,35 @@ def test_slack_communications_posts_to_requested_channel() -> None:
         "https://slack.com/api/chat.postMessage",
         headers={"Authorization": "Bearer xoxb-token"},
         json={
-            "channel": "OpenEngine",
+            "channel": "C123",
             "text": "Review run-42\n"
-            "<http://localhost:8000/runs/run-42|Open human review task>",
+            "<https://sheas-mac-mini.taileb7fdb.ts.net/runs/run-42|Open human review task>",
         },
     )
+
+
+def test_slack_communications_reports_slack_delivery_errors() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": False, "error": "channel_not_found"}
+
+    with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
+        client_type.return_value.__aenter__.return_value.post = AsyncMock(
+            return_value=response
+        )
+        with pytest.raises(SlackAuthError, match="channel_not_found"):
+            __import__("asyncio").run(
+                SlackCommunications(store, "https://engine.example", "C123").post(
+                    "OpenEngine", "Review run-42"
+                )
+            )
 
 
 def test_authorization_url_requests_notification_scope_and_state() -> None:
     url = authorization_url("123", "http://localhost/api/slack/callback", "nonce")
     assert url.startswith("https://slack.com/oauth/v2/authorize?")
-    assert "scope=chat%3Awrite" in url
+    assert "scope=chat%3Awrite%2Cchat%3Awrite.public" in url
     assert "state=nonce" in url
 
 

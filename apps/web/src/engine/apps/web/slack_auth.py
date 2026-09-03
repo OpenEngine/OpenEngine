@@ -90,13 +90,19 @@ class SlackCredentialStore:
 class SlackCommunications:
     """Deliver Engine notifications through the connected Slack workspace."""
 
-    def __init__(self, credential_store: SlackCredentialStore, web_base_url: str) -> None:
+    def __init__(
+        self,
+        credential_store: SlackCredentialStore,
+        web_base_url: str,
+        channel_id: str,
+    ) -> None:
         self._credential_store = credential_store
         self._web_base_url = web_base_url.rstrip("/")
+        self._channel_id = channel_id
 
     async def post(self, channel: str, message: str, run_id=None) -> str:
         token = self._credential_store.token()
-        if not token:
+        if not token or not self._channel_id:
             return ""
         if run_id is not None:
             message += f"\n<{self._web_base_url}/runs/{run_id}|Open human review task>"
@@ -104,7 +110,7 @@ class SlackCommunications:
             response = await client.post(
                 _POST_MESSAGE_URL,
                 headers={"Authorization": f"Bearer {token}"},
-                json={"channel": channel, "text": message},
+                json={"channel": self._channel_id, "text": message},
             )
         if response.is_error:
             raise SlackAuthError(
@@ -125,7 +131,7 @@ def authorization_url(client_id: str, redirect_uri: str, state: str) -> str:
     return _AUTHORIZE_URL + "?" + urlencode(
         {
             "client_id": client_id,
-            "scope": "chat:write",
+            "scope": "chat:write,chat:write.public",
             "redirect_uri": redirect_uri,
             "state": state,
         }

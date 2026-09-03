@@ -271,6 +271,22 @@ def test_web_entrypoint_prefers_environment_github_credentials(
     assert seen[0].github_token == "token-from-environment"
 
 
+def test_web_entrypoint_loads_public_url_and_slack_channel_from_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = []
+    monkeypatch.setenv(
+        "ENGINE_PUBLIC_URL", "https://sheas-mac-mini.taileb7fdb.ts.net/"
+    )
+    monkeypatch.setenv("SLACK_CHANNEL_ID", "C123")
+    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+
+    assert web_main.main(["--check"]) == 0
+
+    assert seen[0].public_url == "https://sheas-mac-mini.taileb7fdb.ts.net/"
+    assert seen[0].slack_channel_id == "C123"
+
+
 @pytest.mark.parametrize(
     "entrypoint,arguments",
     [

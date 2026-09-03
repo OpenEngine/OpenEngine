@@ -95,6 +95,8 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
         github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+        public_url=os.environ.get("ENGINE_PUBLIC_URL", "").strip(),
+        slack_channel_id=os.environ.get("SLACK_CHANNEL_ID", "").strip(),
         source_control_preferences=SourceControlPreferences(),
     )
 
