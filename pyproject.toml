@@ -49,5 +49,6 @@ testpaths = ["tests"]
 addopts = "-q -m 'not compatibility'"
 markers = [
     "compatibility: drives a real provider CLI; scheduled rather than per-PR",
+    "integration: boots a real local dependency and exercises its public interface",
     "workflow_removal_acceptance: acceptance gates and legacy fixtures for removing the hardcoded implementation-review workflow",
 ]

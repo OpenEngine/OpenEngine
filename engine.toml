@@ -1,6 +1,11 @@
 attribution = false
 default_branch = "main"
 
+[orchestrator]
+host = "127.0.0.1:7233"
+database = ".engine/temporal.sqlite3"
+health_check_interval = 5.0
+
 [claude]
 output_style = "concise"
 
