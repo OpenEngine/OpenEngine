@@ -27,7 +27,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -78,6 +78,16 @@ from engine.domain import (
     project_id_for_instance,
     workstreams_by_milestone,
 )
+from engine.graph_runtime import (
+    EventKind,
+    EventLog,
+    GraphId,
+    GraphRuntime,
+    GraphWorkflow,
+    RunStatus,
+    RuntimeEvent,
+)
+from engine.graph_runtime import create_app as create_graph_app
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
@@ -108,7 +118,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
-from starlette.types import Scope
+from starlette.types import Receive, Scope, Send
 
 
 @dataclass(slots=True)
@@ -890,6 +900,52 @@ class ThreadService:
         return state.name or state.prompt or str(state.run_id)
 
 
+#: What the dropdown puts in front of a graph workflow's name.
+#:
+#: Plain English: these workflows are new and not finished yet. The label is
+#: there so nobody picks one expecting it to behave like the ones that have
+#: been running for months. It is a prefix on the *name* rather than a separate
+#: field so that every list, however it is drawn, carries the warning.
+BETA = "[BETA]"
+
+#: Where the graph runtime's sub-application is served from, so its addresses
+#: are `/graph/api/runs/...` and cannot collide with this app's own `/api`.
+GRAPH_PREFIX = "/graph"
+
+#: The two things the graph engine says that change what a WorkOrder row should
+#: read: it finished, or it stopped. Everything else it says is about positions
+#: inside the graph, which this app's row has no way to show.
+GRAPH_ENDINGS: Mapping[EventKind, RunPhase] = {
+    EventKind.RUN_FINISHED: RunPhase.SUCCEEDED,
+    EventKind.RUN_FAILED: RunPhase.FAILED,
+}
+
+#: The same three answers, as the graph engine reports them when asked rather
+#: than when it announces them. A run waiting on a person is still working as
+#: far as a WorkOrder row is concerned: what it is waiting for is a question
+#: only the graph engine's own API can show today.
+GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
+    RunStatus.RUNNING: RunPhase.RUNNING_AGENT,
+    RunStatus.AWAITING_APPROVAL: RunPhase.RUNNING_AGENT,
+    RunStatus.COMPLETED: RunPhase.SUCCEEDED,
+    RunStatus.FAILED: RunPhase.FAILED,
+}
+
+
+@dataclass(slots=True)
+class _GraphSurface:
+    """The graph engine, once the server has started it.
+
+    Both fields are empty until the application starts, because opening the
+    engine means opening files and that is something a running server owns
+    rather than something building one does. A request that arrives before then
+    is told the graph engine is not running rather than being given half of it.
+    """
+
+    runtime: GraphRuntime | None = None
+    app: Starlette | None = None
+
+
 def create_app(
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -898,6 +954,7 @@ def create_app(
     workflow_runners: Mapping[str, AgentRunner] | None = None,
     review_runners: Mapping[str, AgentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
+    graph_runtime: AbstractAsyncContextManager[GraphRuntime] | None = None,
     approval_policy: ApprovalConfig = ApprovalConfig(),
     default_branch: str = "main",
     credential_store: GitHubCredentialStore | None = None,
@@ -917,6 +974,21 @@ def create_app(
         )
     else:
         catalog = workflow_catalog
+    # The graph workflows this deployment could run, looked up by the id the
+    # dropdown sends back. A graph is the newer kind of workflow: the catalog
+    # keeps it apart from the step workflows because a different engine runs
+    # it, and this is the interface's half of that -- the one list a person
+    # picks from, with each entry remembering which engine it belongs to.
+    graph_workflows: Mapping[str, GraphWorkflow] = (
+        {str(graph.graph_id): graph for graph in catalog.graphs}
+        if graph_runtime is not None
+        else {}
+    )
+    surface = _GraphSurface()
+    # Filled by the graph engine while a run is going, and read by the feed the
+    # graph's own sub-application serves. Built here rather than when the
+    # server starts so that the observer below can be written once.
+    graph_events = EventLog()
     approval_feed = ApprovalFeed(session.state_store)
     service = ThreadService(
         session,
@@ -1009,6 +1081,12 @@ def create_app(
                 state.phase is not RunPhase.RUNNING_AGENT
                 or state.agent_paused
                 or state.run_id in workflow_tasks
+                # A graph WorkOrder is not this executor's to restart. It has
+                # no steps to pick back up: the graph engine wrote down where
+                # it had got to, and it carries on from there when somebody
+                # answers the question it stopped on. Trying to resume it here
+                # would look for a step list that a graph does not have.
+                or str(state.workflow_id) in graph_workflows
             ):
                 continue
             runner_name = await workflow_runner_for(state)
@@ -1021,16 +1099,60 @@ def create_app(
                 ),
             )
 
+    async def graph_event(event: RuntimeEvent) -> None:
+        """Everything the graph engine says, kept where two readers can see it.
+
+        The feed is one reader: a browser or a script watching a graph run gets
+        these back in order from the sub-application below.
+
+        The WorkOrder row is the other. A graph run keeps its real progress in
+        the graph engine's own files, and this app only holds a row for it, so
+        without this the row would say "an agent is working" long after the run
+        had finished or fallen over. Only the two endings are copied across;
+        the rest of what a graph says is about positions inside the graph, and
+        a row has nowhere to put them.
+        """
+        await graph_events.append(event)
+        phase = GRAPH_ENDINGS.get(event.kind)
+        if phase is None:
+            return
+        state = await session.state_store.load(event.run_id)
+        if state is None:
+            return
+        await session.state_store.save(
+            replace(
+                state,
+                phase=phase,
+                failure_reason=str(event.payload.get("error", ""))
+                or state.failure_reason,
+            )
+        )
+
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        await restore_agent_steps()
-        try:
-            yield
-        finally:
-            tasks = tuple(workflow_tasks.values())
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        async with AsyncExitStack() as opened:
+            if graph_runtime is not None:
+                # Opening the graph engine is what makes a `[BETA]` WorkOrder
+                # startable: it compiles every graph in the workflow directory
+                # and opens the files they remember their progress in. The exit
+                # stack closes it again when the server stops, which is the
+                # only thing that closes those files.
+                surface.runtime = await opened.enter_async_context(graph_runtime)
+                # The graph engine's own control surface, so a run started here
+                # can be watched and answered. Built first because it installs
+                # a listener of its own, and this app wants that listener *and*
+                # the WorkOrder row kept up to date -- so ours is installed
+                # afterwards and does both.
+                surface.app = create_graph_app(surface.runtime, graph_events)
+                surface.runtime.observe(graph_event)
+            await restore_agent_steps()
+            try:
+                yield
+            finally:
+                tasks = tuple(workflow_tasks.values())
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
@@ -1197,6 +1319,13 @@ def create_app(
                 "defaultRunner": session.default_runner,
                 "workflowRunners": list(workflow_executor.runners),
                 "defaultWorkflowRunner": workflow_executor.default_runner,
+                # One dropdown, two kinds of workflow. The step workflows come
+                # first and read as they always have; the graph ones follow,
+                # wearing `[BETA]` and no version, because a graph does not
+                # have one yet. Only the graphs this process can actually start
+                # are here: `graph_workflows` is empty when no graph engine was
+                # composed, and an entry nobody could run would be a choice
+                # that fails after it was made.
                 "workflows": [
                     {
                         "id": str(definition.workflow_id),
@@ -1204,6 +1333,14 @@ def create_app(
                         "version": definition.version,
                     }
                     for definition in catalog
+                ]
+                + [
+                    {
+                        "id": str(graph.graph_id),
+                        "name": f"{BETA} {graph.name}",
+                        "version": "",
+                    }
+                    for graph in graph_workflows.values()
                 ],
             }
         )
@@ -1319,6 +1456,73 @@ def create_app(
             }
         )
 
+    async def start_graph_run(
+        graph: GraphWorkflow,
+        *,
+        prompt: str,
+        repository: str,
+        workstream_id: WorkstreamId | None,
+        milestone_id: MilestoneId | None,
+    ) -> JSONResponse:
+        """Hand a `[BETA]` WorkOrder to the graph engine and keep a row for it.
+
+        What actually starts the work is one call: the graph engine is given
+        the graph's id and the two things every one of these graphs asks for --
+        the task to do, and the repository to do it in. It provisions the
+        checkout, runs the agents and stops for a person by itself, and it
+        remembers all of that in its own files.
+
+        The row saved afterwards is this app's, and it is a record rather than
+        a driver: it is what puts the WorkOrder in the list, on the sidebar and
+        at a URL. It carries the graph engine's own run id, so the two halves
+        are talking about the same run and nothing has to translate between two
+        sets of ids.
+
+        No runner is passed on, because a graph already names the agent it runs
+        -- picking "Implementation review (claude)" *is* picking Claude, which
+        is why there is one entry per agent in the dropdown rather than a
+        separate choice.
+        """
+        runtime = surface.runtime
+        if runtime is None:
+            # Only reachable when the graph engine failed to open or the
+            # application was built without one. Said plainly, because the
+            # person picked something the dropdown offered them.
+            return _error("this process is not running graph workflows", 503)
+        snapshot = await runtime.start(
+            GraphId(str(graph.graph_id)),
+            {"task": prompt, "repository": repository},
+        )
+        state = RunState(
+            run_id=snapshot.run_id,
+            task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+            workflow_id=WorkflowId(str(graph.graph_id)),
+            workstream_id=workstream_id,
+            milestone_id=milestone_id,
+            # Working, as the engine has just reported it. `graph_event` above
+            # moves this when the run ends. It is never picked back up by the
+            # step executor -- see `restore_agent_steps`.
+            phase=GRAPH_PHASES[snapshot.status],
+            prompt=prompt,
+            repository=repository,
+        )
+        await session.state_store.save(state)
+        # A very short run can be over before the row above exists, and the
+        # ending it announced would then have had nothing to land on -- leaving
+        # a WorkOrder that claims to be working forever. So the engine is asked
+        # once more, now that there is a row for its answer.
+        latest = await runtime.snapshot(state.run_id)
+        if latest is not None and GRAPH_PHASES[latest.status] is not state.phase:
+            state = replace(
+                state,
+                phase=GRAPH_PHASES[latest.status],
+                failure_reason=latest.error,
+            )
+            await session.state_store.save(state)
+        run = await run_reader.get(state.run_id)
+        assert run is not None
+        return JSONResponse(_run_json(run), status_code=201)
+
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
         body = await _json_body(request)
@@ -1331,7 +1535,8 @@ def create_app(
         except ValueError as error:
             return _error(str(error), 400)
         definition = catalog.get(workflow_id)
-        if definition is None:
+        graph = graph_workflows.get(str(workflow_id))
+        if definition is None and graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
         runner_name = str(body.get("runner") or workflow_executor.default_runner)
         if runner_name not in workflow_executor.runners:
@@ -1362,6 +1567,15 @@ def create_app(
         # A selected workstream is the more specific relationship. The
         # milestone is retained only for a task created without one.
         direct_milestone_id = milestone_id if workstream_id is None else None
+
+        if graph is not None:
+            return await start_graph_run(
+                graph,
+                prompt=prompt,
+                repository=repository,
+                workstream_id=workstream_id,
+                milestone_id=direct_milestone_id,
+            )
 
         run_id = RunId(f"run-{uuid4().hex[:12]}")
         task_id = TaskId(f"task-{uuid4().hex[:12]}")
@@ -1929,6 +2143,28 @@ def create_app(
         _credential_store.delete()
         return Response(status_code=204)
 
+    async def graph_surface(scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass anything under `/graph` to the graph engine's own server.
+
+        The graph engine ships a small API of its own -- what a run is doing,
+        what it has raised, and the two things a person can send back: a
+        message for whichever agent is working, and an answer to a question it
+        stopped on. That is how a `[BETA]` run gets approved today, and this
+        app's pages cannot do it yet.
+
+        A hop rather than a re-implementation, and behind a prefix of its own
+        because both servers call their runs `/api/runs`. It has to be a
+        forwarder rather than a plain mount because the engine on the far side
+        does not exist until the server starts.
+        """
+        if surface.app is None:
+            await JSONResponse(
+                {"error": "this process is not running graph workflows"},
+                status_code=503,
+            )(scope, receive, send)
+            return
+        await surface.app(scope, receive, send)
+
     routes = [
         Route("/api/config", config),
         Route("/api/github/status", github_status),
@@ -1966,6 +2202,9 @@ def create_app(
             complete_human_review,
             methods=["POST"],
         ),
+        # The `[BETA]` half of the runs above, served by the engine that runs
+        # them rather than by this file.
+        Mount(GRAPH_PREFIX, app=graph_surface),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}", get_thread),

@@ -194,7 +194,9 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
                   </div>
                 </dl>
                 <footer>
-                  {run.workflowName} · {run.workflowVersion}
+                  {run.workflowVersion
+                    ? `${run.workflowName} · ${run.workflowVersion}`
+                    : run.workflowName}
                 </footer>
               </a>
             );
@@ -280,9 +282,12 @@ export function NewWorkflowPage({
             value={workflowId}
             onChange={(event) => setWorkflowId(event.target.value)}
           >
+            {/* The version is only shown when there is one. A [BETA] graph
+                workflow has no version yet, and "name · " reads like something
+                failed to load. */}
             {config.workflows.map((workflow) => (
               <option key={workflow.id} value={workflow.id}>
-                {workflow.name} · {workflow.version}
+                {workflow.version ? `${workflow.name} · ${workflow.version}` : workflow.name}
               </option>
             ))}
           </select>
@@ -605,7 +610,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <div className="detail-title">
               <div>
                 <p className="eyebrow">
-                  {run.workflowName} / {run.workflowVersion}
+                  {run.workflowVersion
+                    ? `${run.workflowName} / ${run.workflowVersion}`
+                    : run.workflowName}
                 </p>
                 <h1>{run.name}</h1>
                 <p className="lede">{run.taskPrompt}</p>
@@ -627,6 +634,20 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </section>
           )}
           <StageProgress run={run} />
+          {/* A [BETA] WorkOrder is run by the graph engine, which keeps its own
+              record of where it got to. This page only holds the row, so there
+              are no stage cards to show and nothing here to say yes to yet --
+              which would otherwise look like a WorkOrder that never started. */}
+          {run.steps.length === 0 && !run.workflowVersion && (
+            <section className="callout">
+              <p className="eyebrow">Beta workflow</p>
+              <p>
+                This WorkOrder is running on the new graph engine. Its stages,
+                conversations and approvals are not on this page yet — they are
+                served under <code>/graph/api/runs/{run.runId}</code>.
+              </p>
+            </section>
+          )}
           {run.pendingHumanReview && (
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>

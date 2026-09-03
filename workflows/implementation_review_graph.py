@@ -9,10 +9,12 @@ Both files are workflow definitions this repository owns, and a definition is
 classified by which kind it is rather than by a setting. A deployment that wants
 only one of them ships only one of these files.
 
-**Nothing runs this yet.** The loader reads it and sets it aside; no interface
-offers it and no process starts one, so adding it changes nothing an operator
-can see. It is here so the change that teaches a process to run it has something
-to run.
+**This is offered, and it is new.** The web interface lists it in the WorkOrder
+dropdown behind a `[BETA]` label, and creating a WorkOrder with it starts the
+graph below on the graph engine. Beta because the interface can start one and
+then has nowhere to show it: a run's stages, its agents' conversations and the
+question it stops on are served by the graph engine's own API, under `/graph`,
+rather than by the WorkOrder page. See `docs/graph-workorders-beta.md`.
 
 Three things the graph runtime can do that the step runtime cannot, which is
 what makes this more than a translation:
@@ -104,10 +106,11 @@ def pipeline(
 
         pipeline("codex", workspace_provider=..., agents=...)
 
-    Nothing passes either one today, because nothing composes a graph runtime
-    yet; the defaults are what a plain deployment would build. Whichever
-    composition root learns to run a graph passes its configured workspace root
-    through here.
+    Nothing passes either one today: a workflow file is read before any
+    composition root has built anything, so what a deployment gets is the
+    default below -- the same worktree root every app here is configured with.
+    A composition root that needs its checkouts somewhere else calls `pipeline`
+    with its own provider rather than copying this file.
     """
     builder: StateGraph = StateGraph(State)
     builder.add_node(

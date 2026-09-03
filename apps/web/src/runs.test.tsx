@@ -157,6 +157,25 @@ describe("NewWorkflowPage", () => {
     );
   });
 
+  it("offers a beta workflow by its name alone, with no version to show", async () => {
+    // A [BETA] entry is a graph workflow. It has no version, and "name · "
+    // with nothing after it reads like something failed to load.
+    const beta = {
+      ...config,
+      workflows: [
+        ...config.workflows,
+        { id: "implementation-review-codex", name: "[BETA] Implementation review (codex)", version: "" },
+      ],
+    };
+
+    render(<NewWorkflowPage config={beta} />);
+
+    const selector = screen.getByRole("combobox", { name: "Workflow definition" });
+    expect(
+      within(selector).getByRole("option", { name: "[BETA] Implementation review (codex)" }),
+    ).toHaveValue("implementation-review-codex");
+  });
+
   it("restores a prompt after unmounting and remounting", async () => {
     vi.stubGlobal("fetch", stubPageApi());
     const user = userEvent.setup();
@@ -344,6 +363,25 @@ describe("RunsPage", () => {
 });
 
 describe("RunDetailPage", () => {
+  it("says where to look for a beta WorkOrder that has no stages here", async () => {
+    // A graph WorkOrder has no steps to draw, because a graph is not made of
+    // them. Without a word of explanation the page reads as one that never
+    // started.
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      workflowName: "Implementation review (codex)",
+      workflowVersion: "",
+      currentStepId: null,
+      steps: [],
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(graphRun)));
+
+    render(<RunDetailPage runId="run-1" />);
+
+    expect(await screen.findByText("Beta workflow")).toBeVisible();
+    expect(screen.getByText("Implementation review (codex)")).toBeVisible();
+  });
+
   it("renders steps from an arbitrary workflow definition", async () => {
     const generic = run({
       workflowId: "release-v2",

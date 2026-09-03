@@ -21,6 +21,7 @@ from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_graph_runtime,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -130,6 +131,12 @@ def compose_app(
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
+    # The second engine, for the `[BETA]` workflows in the same directory. It
+    # is `None` when that directory holds no graphs, and then the interface
+    # offers none of them.
+    graph_runtime = build_graph_runtime(
+        settings, workflow_catalog.graphs if workflow_catalog is not None else ()
+    )
     return create_app(
         session,
         runners,
@@ -137,6 +144,7 @@ def compose_app(
         workflow_runners=workflow_runners,
         review_runners=read_only_runners,
         workflow_catalog=workflow_catalog,
+        graph_runtime=graph_runtime,
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
         credential_store=credential_store,
