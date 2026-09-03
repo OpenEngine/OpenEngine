@@ -50,6 +50,15 @@ class WorkflowsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OrchestratorConfig:
+    """Settings for the local Temporal service owned by the orchestrator."""
+
+    host: str = "127.0.0.1:7233"
+    database: str = ".engine/temporal.sqlite3"
+    health_check_interval: float = 5.0
+
+
+@dataclass(frozen=True, slots=True)
 class ClaudeConfig:
     """Settings that only apply when Claude Code is the runner.
 
@@ -75,6 +84,7 @@ class EngineConfig:
     github_token: str = ""
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
+    orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
     attribution: bool = True
 
@@ -93,6 +103,12 @@ class LoadedEngineConfig:
             return None
         base = self.path.parent if self.path is not None else Path.cwd()
         return _relative_to(Path(configured), base).resolve()
+
+    @property
+    def orchestrator_database(self) -> Path:
+        """Resolve the Temporal database beside the selected configuration."""
+        base = self.path.parent if self.path is not None else Path.cwd()
+        return _relative_to(Path(self.config.orchestrator.database), base).resolve()
 
 
 def load_engine_config(
@@ -150,6 +166,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "default_branch",
             "github_client_id",
             "github_token",
+            "orchestrator",
             "workflows",
         },
         "configuration",
@@ -202,6 +219,27 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     if workflow_directory and not workflow_directory.strip():
         raise EngineConfigError("workflows.directory must not be blank")
 
+    orchestrator = _table(document.get("orchestrator", {}), "orchestrator")
+    _reject_unknown(
+        orchestrator, {"host", "database", "health_check_interval"}, "orchestrator"
+    )
+    orchestrator_host = _nonblank_string(
+        orchestrator.get("host", "127.0.0.1:7233"), "orchestrator.host"
+    )
+    orchestrator_database = _nonblank_string(
+        orchestrator.get("database", ".engine/temporal.sqlite3"),
+        "orchestrator.database",
+    )
+    health_check_interval = orchestrator.get("health_check_interval", 5.0)
+    if (
+        not isinstance(health_check_interval, (int, float))
+        or isinstance(health_check_interval, bool)
+        or health_check_interval <= 0
+    ):
+        raise EngineConfigError(
+            "orchestrator.health_check_interval must be a positive number"
+        )
+
     return EngineConfig(
         attribution=attribution,
         default_branch=default_branch,
@@ -218,6 +256,11 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             ),
         ),
         workflows=WorkflowsConfig(directory=workflow_directory),
+        orchestrator=OrchestratorConfig(
+            host=orchestrator_host,
+            database=orchestrator_database,
+            health_check_interval=float(health_check_interval),
+        ),
     )
 
 
@@ -229,6 +272,13 @@ def _optional_nonblank_string(value: object, name: str) -> str:
     if value and not value.strip():
         raise EngineConfigError(f"{name} must not be blank")
     return value.strip()
+
+
+def _nonblank_string(value: object, name: str) -> str:
+    value = _optional_nonblank_string(value, name)
+    if not value:
+        raise EngineConfigError(f"{name} must not be blank")
+    return value
 
 
 def describe_loaded_config(loaded: LoadedEngineConfig) -> str:

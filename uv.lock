@@ -614,12 +614,14 @@ name = "engine-orchestrator"
 version = "0.0.0"
 source = { editable = "packages/orchestrator" }
 dependencies = [
+    { name = "engine-runtime" },
     { name = "structlog" },
     { name = "temporalio" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "engine-runtime", editable = "packages/runtime" },
     { name = "structlog", specifier = ">=25.0" },
     { name = "temporalio", specifier = ">=1.17" },
 ]

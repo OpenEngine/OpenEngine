@@ -13,6 +13,7 @@ import structlog
 
 from engine.orchestrator.logging import configure_logging
 from engine.orchestrator.temporal import TemporalService
+from engine.runtime.config import EngineConfigError, load_engine_config
 
 WORKFLOWS: tuple[type[Any], ...] = ()
 
@@ -70,19 +71,26 @@ async def run(
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the SQLite-backed local Temporal orchestrator."""
     parser = argparse.ArgumentParser(description="Run the OpenEngine orchestrator.")
-    parser.add_argument("--host", default="127.0.0.1:7233")
-    parser.add_argument(
-        "--database", type=Path, default=Path(".engine/temporal.sqlite3")
-    )
-    parser.add_argument("--health-check-interval", type=float, default=5.0)
+    parser.add_argument("--config")
+    parser.add_argument("--host")
+    parser.add_argument("--database", type=Path)
+    parser.add_argument("--health-check-interval", type=float)
     args = parser.parse_args(argv)
+    try:
+        loaded = load_engine_config(args.config)
+    except EngineConfigError as error:
+        parser.error(str(error))
+    config = loaded.config.orchestrator
+    database = args.database or loaded.orchestrator_database
+    target_host = args.host or config.host
+    health_check_interval = args.health_check_interval or config.health_check_interval
     configure_logging()
     logger.info("orchestrator.booting")
     asyncio.run(
         run(
-            database=args.database,
-            target_host=args.host,
-            health_check_interval=args.health_check_interval,
+            database=database,
+            target_host=target_host,
+            health_check_interval=health_check_interval,
         )
     )
     return 0
