@@ -116,30 +116,40 @@ class SlackCommunications:
             )
         return str(body.get("ts", ""))
 
-    async def _resolve_channel(self, client, token: str, channel: str) -> str:
+    async def _resolve_channel(
+        self, client: httpx.AsyncClient, token: str, channel: str
+    ) -> str:
         if channel.startswith(("C", "G", "D")):
             return channel
-        response = await client.get(
-            _LIST_CONVERSATIONS_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            params={"types": "public_channel", "limit": 200},
-        )
-        body = response.json()
-        if response.is_error or not body.get("ok"):
-            raise SlackAuthError(
-                f"Slack channel lookup failed: {body.get('error', response.status_code)}"
+        cursor = ""
+        while True:
+            params = {"types": "public_channel", "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            response = await client.get(
+                _LIST_CONVERSATIONS_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
             )
-        match = next(
-            (
-                item
-                for item in body.get("channels", [])
-                if item.get("name") == channel
-            ),
-            None,
-        )
-        if match is None:
-            raise SlackAuthError(f"Slack channel not found: {channel}")
-        return str(match["id"])
+            body = response.json()
+            if response.is_error or not body.get("ok"):
+                raise SlackAuthError(
+                    "Slack channel lookup failed: "
+                    f"{body.get('error', response.status_code)}"
+                )
+            match = next(
+                (
+                    item
+                    for item in body.get("channels", [])
+                    if str(item.get("name", "")).casefold() == channel.casefold()
+                ),
+                None,
+            )
+            if match is not None:
+                return str(match["id"])
+            cursor = str(body.get("response_metadata", {}).get("next_cursor", ""))
+            if not cursor:
+                raise SlackAuthError(f"Slack channel not found: {channel}")
 
     async def reply(self, message_id: str, message: str) -> str:
         raise NotImplementedError("Slack notification threads are not supported")

@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import keyring
 import pytest
@@ -12,15 +12,24 @@ from engine.apps.web.slack_auth import (
     SlackCredentials,
     authorization_url,
 )
+
+
 def test_slack_communications_posts_to_requested_channel() -> None:
     store = MagicMock(spec=SlackCredentialStore)
     store.token.return_value = "xoxb-token"
     response = MagicMock(is_error=False)
     response.json.return_value = {"ok": True, "ts": "123.456"}
-    channels = MagicMock(is_error=False)
-    channels.json.return_value = {
+    first_page = MagicMock(is_error=False)
+    first_page.json.return_value = {
         "ok": True,
-        "channels": [{"id": "C123", "name": "OpenEngine"}],
+        "channels": [{"id": "C999", "name": "general"}],
+        "response_metadata": {"next_cursor": "next-page"},
+    }
+    second_page = MagicMock(is_error=False)
+    second_page.json.return_value = {
+        "ok": True,
+        "channels": [{"id": "C123", "name": "openengine"}],
+        "response_metadata": {"next_cursor": ""},
     }
 
     with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
@@ -28,7 +37,7 @@ def test_slack_communications_posts_to_requested_channel() -> None:
             return_value=response
         )
         client_type.return_value.__aenter__.return_value.get = AsyncMock(
-            return_value=channels
+            side_effect=[first_page, second_page]
         )
         message_id = __import__("asyncio").run(
             SlackCommunications(store).post("OpenEngine", "Review run-42")
@@ -43,7 +52,22 @@ def test_slack_communications_posts_to_requested_channel() -> None:
             "text": "Review run-42",
         },
     )
-    client_type.return_value.__aenter__.return_value.get.assert_awaited_once()
+    assert client_type.return_value.__aenter__.return_value.get.await_args_list == [
+        call(
+            "https://slack.com/api/conversations.list",
+            headers={"Authorization": "Bearer xoxb-token"},
+            params={"types": "public_channel", "limit": 200},
+        ),
+        call(
+            "https://slack.com/api/conversations.list",
+            headers={"Authorization": "Bearer xoxb-token"},
+            params={
+                "types": "public_channel",
+                "limit": 200,
+                "cursor": "next-page",
+            },
+        ),
+    ]
 
 
 def test_slack_communications_reports_slack_delivery_errors() -> None:
