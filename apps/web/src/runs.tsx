@@ -604,6 +604,78 @@ export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId
   );
 }
 
+function GraphApprovalDecision({
+  runId,
+  approval,
+  onDecided,
+}: {
+  runId: string;
+  approval: ApiGraphRun["pendingApprovals"][number];
+  onDecided: (run: ApiGraphRun) => void;
+}) {
+  const [submitting, setSubmitting] = useState<string>();
+  const [error, setError] = useState("");
+
+  const decide = async (decision: string) => {
+    setSubmitting(decision);
+    setError("");
+    try {
+      onDecided(
+        await api<ApiGraphRun>(
+          `/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approval.approvalId)}`,
+          { method: "POST", body: JSON.stringify({ decision }) },
+        ),
+      );
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setSubmitting(undefined);
+    }
+  };
+
+  return (
+    <div className="decision">
+      <label>
+        <span>Decision note</span>
+        <textarea rows={3} />
+      </label>
+      {error && <p className="notice">Could not record decision: {error}</p>}
+      <div className="decision-actions">
+        {approval.allowedDecisions.includes("accept") && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={submitting !== undefined}
+            onClick={() => void decide("accept")}
+          >
+            {submitting === "accept" ? "Approving…" : "Approve"}
+          </button>
+        )}
+        {approval.allowedDecisions.includes("accept_for_session") && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={submitting !== undefined}
+            onClick={() => void decide("accept_for_session")}
+          >
+            {submitting === "accept_for_session" ? "Approving…" : "Approve for session"}
+          </button>
+        )}
+        {approval.allowedDecisions.includes("cancel") && (
+          <button
+            type="button"
+            className="btn"
+            disabled={submitting !== undefined}
+            onClick={() => void decide("cancel")}
+          >
+            {submitting === "cancel" ? "Rejecting…" : "Reject"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
   const [baseRun, setRun] = useState<ApiWorkflowRun>();
   const [graph, setGraph] = useState<ApiGraphRun>();
@@ -617,32 +689,28 @@ export function RunDetailPage({ runId }: { runId: string }) {
     // editable step reopens when its conversation is written to, so a page that
     // stopped reading at "succeeded" would go on saying so while the
     // implementation it names is working again.
-    const load = () => {
-      api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`)
-        .then((value) => {
+    const load = async () => {
+      try {
+        const value = await api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`);
+        if (cancelled) return;
+        setRun(value);
+        if (!value.workflowVersion) {
+          const [nextGraph, nextTopology, eventLog] = await Promise.all([
+            api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`),
+            api<ApiGraphTopology>(`/graph/api/graphs/${encodeURIComponent(value.workflowId)}`),
+            api<{ events: ApiGraphEvent[] }>(`/api/runs/${encodeURIComponent(runId)}/graph-events`),
+          ]);
           if (cancelled) return;
-          setRun(value);
-          setError("");
-          if (!value.workflowVersion) {
-            void Promise.all([
-              api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`),
-              api<ApiGraphTopology>(`/graph/api/graphs/${encodeURIComponent(value.workflowId)}`),
-              api<{ events: ApiGraphEvent[] }>(`/api/runs/${encodeURIComponent(runId)}/graph-events`),
-            ]).then(([nextGraph, nextTopology, eventLog]) => {
-              if (!cancelled) {
-                setGraph(nextGraph);
-                setTopology(nextTopology);
-                setGraphEvents(eventLog.events);
-              }
-            });
-          }
-        })
-        .catch((reason: Error) => {
-          if (!cancelled) setError(reason.message);
-        })
-        .finally(() => {
-          if (!cancelled) timer = window.setTimeout(load, 1000);
-        });
+          setGraph(nextGraph);
+          setTopology(nextTopology);
+          setGraphEvents(eventLog.events);
+        }
+        setError("");
+      } catch (reason) {
+        if (!cancelled) setError((reason as Error).message);
+      } finally {
+        if (!cancelled) timer = window.setTimeout(load, 1000);
+      }
     };
     load();
     return () => {
@@ -758,10 +826,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
               <h2>{run.pendingHumanReview.title}</h2>
-              <div className="decision"><label><span>Decision note</span><textarea rows={3} /></label><div className="decision-actions">
-                <button type="button" className="btn btn-primary" onClick={() => void api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(graph.pendingApprovals[0].approvalId)}`, { method: "POST", body: JSON.stringify({ decision: "accept" }) }).then(setGraph)}>Approve</button>
-                <button type="button" className="btn" onClick={() => void api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(graph.pendingApprovals[0].approvalId)}`, { method: "POST", body: JSON.stringify({ decision: "cancel" }) }).then(setGraph)}>Reject</button>
-              </div></div>
+              <GraphApprovalDecision
+                runId={runId}
+                approval={graph.pendingApprovals[0]}
+                onDecided={setGraph}
+              />
             </section>
           ) : run.pendingHumanReview && (
             <section className="callout callout-action">
