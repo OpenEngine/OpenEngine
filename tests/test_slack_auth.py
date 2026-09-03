@@ -114,6 +114,8 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
         review_runners=runners,
         workflow_catalog=MagicMock(),
         slack_credential_store=slack_store,
+        slack_channel_id="C123",
+        public_url="https://engine.example",
     )
 
     with (
@@ -126,11 +128,57 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
         callback = client.get("/api/slack/callback?code=code&state=nonce")
         after = client.get("/api/slack/status")
 
-    assert before.json() == {"configured": True, "connected": False}
+    assert before.json() == {
+        "configured": True,
+        "connected": False,
+        "ready": False,
+        "channelConfigured": True,
+        "publicUrlConfigured": True,
+    }
     assert "client_id=client" in connect.json()["authorizationUrl"]
     assert callback.status_code == 200
     slack_store.set_token.assert_called_once_with("xoxb-token")
-    assert after.json() == {"configured": True, "connected": True}
+    assert after.json() == {
+        "configured": True,
+        "connected": True,
+        "ready": True,
+        "channelConfigured": True,
+        "publicUrlConfigured": True,
+    }
+
+
+def test_slack_status_is_not_ready_without_notification_destination(tmp_path) -> None:
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.apps.web.api import create_app
+    from engine.runtime import AgentSession, Capabilities
+
+    stub = object()
+    capabilities = Capabilities(
+        stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "state.sqlite3"))
+    )
+    runners = {"default": stub}
+    store = MagicMock(spec=SlackCredentialStore)
+    store.credentials.return_value = SlackCredentials("client", "secret")
+    store.token.return_value = "xoxb-token"
+    app = create_app(
+        AgentSession(capabilities, profiles={}, runners=runners),
+        runners,
+        workflow_runners=runners,
+        review_runners=runners,
+        workflow_catalog=MagicMock(),
+        slack_credential_store=store,
+    )
+
+    with TestClient(app) as client:
+        status = client.get("/api/slack/status")
+
+    assert status.json() == {
+        "configured": True,
+        "connected": True,
+        "ready": False,
+        "channelConfigured": False,
+        "publicUrlConfigured": False,
+    }
 
 
 def test_slack_callback_rejects_wrong_state(tmp_path) -> None:

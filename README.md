@@ -123,6 +123,19 @@ ask = ["git push **"]
 deny = ["sudo **"]
 ```
 
+Slack human-review notifications require the public URL reviewers use to reach
+Engine and the Slack conversation ID for the `OpenEngine` channel. Configure
+both before starting `engine-web`:
+
+```bash
+ENGINE_PUBLIC_URL=https://sheas-mac-mini.taileb7fdb.ts.net/ \
+SLACK_CHANNEL_ID=C0123456789 uv run engine-web
+```
+
+Find the conversation ID in Slack by opening the channel details and choosing
+**About → Copy channel ID**. The settings panel reports whether the OAuth
+connection and both notification settings are ready.
+
 Set `attribution = false` to keep both Codex and Claude Code from adding agent
 attribution to commits and pull requests. Attribution is enabled by default.
 

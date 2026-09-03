@@ -24,6 +24,9 @@ import {
 type SlackState = {
   configured: boolean;
   connected: boolean;
+  ready: boolean;
+  channelConfigured: boolean;
+  publicUrlConfigured: boolean;
   loading: boolean;
   editing: boolean;
   clientId: string;
@@ -73,6 +76,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [slack, setSlack] = useState<SlackState>({
     configured: false,
     connected: false,
+    ready: false,
+    channelConfigured: false,
+    publicUrlConfigured: false,
     loading: true,
     editing: false,
     clientId: "",
@@ -251,6 +257,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         ...value,
         configured: true,
         connected: false,
+        ready: false,
         loading: false,
         editing: false,
         clientId: "",
@@ -303,7 +310,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     setSlack((value) => ({ ...value, loading: true, error: undefined }));
     try {
       await disconnectSlack();
-      setSlack((value) => ({ ...value, connected: false, loading: false }));
+      setSlack((value) => ({ ...value, connected: false, ready: false, loading: false }));
     } catch (err) {
       setSlack((value) => ({
         ...value,
@@ -635,9 +642,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           )}
           {!slack.loading && slack.configured && !slack.editing && (
             <>
-              <p className={`settings-status ${slack.connected ? "settings-status-ok" : "settings-status-muted"}`}>
-                {slack.connected ? "Connected" : "OAuth credentials saved"}
+              <p className={`settings-status ${slack.ready ? "settings-status-ok" : "settings-status-muted"}`}>
+                {slack.ready ? "Connected and ready" : slack.connected ? "Connected; notifications not ready" : "OAuth credentials saved"}
               </p>
+              {slack.connected && !slack.ready && (
+                <p className="settings-status settings-status-error">
+                  Configure {!slack.channelConfigured && <code>SLACK_CHANNEL_ID</code>}
+                  {!slack.channelConfigured && !slack.publicUrlConfigured && " and "}
+                  {!slack.publicUrlConfigured && <code>ENGINE_PUBLIC_URL</code>} and restart Engine to enable notifications.
+                </p>
+              )}
               <div className="settings-actions">
                 <button className="settings-button settings-button-primary" type="button" onClick={() => void startSlackConnect()}>
                   {slack.connected ? "Reconnect" : "Connect Slack"}
