@@ -38,7 +38,7 @@ from uuid import uuid4
 import pytest
 
 from engine.domain import ApprovalDecision, ApprovalKind, RunId, WorkspaceId
-from engine.graph_runtime import EventLog, RuntimeEvent
+from engine.graph_runtime import EventLog, GraphCompilationError, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
     LangGraphRuntime,
@@ -275,6 +275,36 @@ def test_a_runtime_compiles_every_workflow_and_closes_its_files(
     assert runtime.running() == ()
     with pytest.raises(sqlite3.ProgrammingError):
         asyncio.run(runtime.store.runs())
+
+
+def test_a_graph_that_does_not_compile_says_which_one_it_was(tmp_path: Path) -> None:
+    """The one fact LangGraph's own complaint leaves out.
+
+    "Graph must have an entrypoint" is about a node and an edge and says nothing
+    about which file it came from, which is useless in a workflow directory
+    holding several graphs. Wrapped so the id travels with it, and typed so a
+    caller can tell a broken *definition* -- someone has to fix a file -- from a
+    machine that could not open the files a graph's progress is kept in.
+    """
+    unreachable: StateGraph = StateGraph(State)
+    unreachable.add_node("only", lambda _state: {})
+    workflows = [
+        graph_workflow(trivial(), id="fine", name="Fine"),
+        graph_workflow(unreachable, id="broken", name="Broken"),
+    ]
+
+    async def scenario() -> None:
+        async with sqlite_runtime(workflows, tmp_path / "state"):
+            pass  # pragma: no cover -- compiling never gets this far
+
+    with pytest.raises(GraphCompilationError) as raised:
+        asyncio.run(scenario())
+
+    assert str(raised.value.graph_id) == "broken"
+    assert "entrypoint" in raised.value.reason
+    # And the original failure is still the cause, so a traceback points at the
+    # workflow file rather than stopping here.
+    assert isinstance(raised.value.__cause__, ValueError)
 
 
 def test_a_runtime_needs_something_to_run(tmp_path: Path) -> None:

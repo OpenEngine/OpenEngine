@@ -194,7 +194,9 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
                   </div>
                 </dl>
                 <footer>
-                  {run.workflowName} · {run.workflowVersion}
+                  {run.workflowVersion
+                    ? `${run.workflowName} · ${run.workflowVersion}`
+                    : run.workflowName}
                 </footer>
               </a>
             );
@@ -227,6 +229,12 @@ export function NewWorkflowPage({
   const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // A graph workflow — the [BETA] kind — names the agent it runs, so there is
+  // one entry per agent and nothing left for a runner field to decide. Asking
+  // anyway would be a control that looks like a choice and is not: the server
+  // reads no runner for these.
+  const selected = config.workflows.find((workflow) => workflow.id === workflowId);
+  const picksItsOwnAgent = selected?.kind === "graph";
 
   useEffect(() => {
     if (prompt) window.localStorage.setItem(WORKFLOW_DRAFT_KEY, prompt);
@@ -244,7 +252,7 @@ export function NewWorkflowPage({
           workflowId,
           prompt,
           repository,
-          runner,
+          ...(picksItsOwnAgent ? {} : { runner }),
           ...(milestone
             ? { milestoneId: milestone.milestoneId, workstreamId: workstreamId || undefined }
             : {}),
@@ -280,9 +288,12 @@ export function NewWorkflowPage({
             value={workflowId}
             onChange={(event) => setWorkflowId(event.target.value)}
           >
+            {/* The version is only shown when there is one. A [BETA] graph
+                workflow has no version yet, and "name · " reads like something
+                failed to load. */}
             {config.workflows.map((workflow) => (
               <option key={workflow.id} value={workflow.id}>
-                {workflow.name} · {workflow.version}
+                {workflow.version ? `${workflow.name} · ${workflow.version}` : workflow.name}
               </option>
             ))}
           </select>
@@ -312,20 +323,27 @@ export function NewWorkflowPage({
             placeholder="owner/repository or local path"
           />
         </label>
-        <label>
-          <span>Implementation runner</span>
-          <select
-            required
-            value={runner}
-            onChange={(event) => setRunner(event.target.value)}
-          >
-            {config.workflowRunners.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {picksItsOwnAgent ? (
+          <p className="form-note">
+            This workflow runs the agent named in its own definition, so there is no
+            runner to choose.
+          </p>
+        ) : (
+          <label>
+            <span>Implementation runner</span>
+            <select
+              required
+              value={runner}
+              onChange={(event) => setRunner(event.target.value)}
+            >
+              {config.workflowRunners.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           <span>Task prompt</span>
           <textarea
@@ -354,7 +372,7 @@ export function NewWorkflowPage({
           </a>
           <button
             className="btn btn-primary"
-            disabled={submitting || !runner || !workflowId}
+            disabled={submitting || (!runner && !picksItsOwnAgent) || !workflowId}
             type="submit"
           >
             {submitting ? "Creating…" : milestone ? "Create task" : "Create WorkOrder"}
@@ -605,7 +623,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <div className="detail-title">
               <div>
                 <p className="eyebrow">
-                  {run.workflowName} / {run.workflowVersion}
+                  {run.workflowVersion
+                    ? `${run.workflowName} / ${run.workflowVersion}`
+                    : run.workflowName}
                 </p>
                 <h1>{run.name}</h1>
                 <p className="lede">{run.taskPrompt}</p>
@@ -627,6 +647,20 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </section>
           )}
           <StageProgress run={run} />
+          {/* A [BETA] WorkOrder is run by the graph engine, which keeps its own
+              record of where it got to. This page only holds the row, so there
+              are no stage cards to show and nothing here to say yes to yet --
+              which would otherwise look like a WorkOrder that never started. */}
+          {run.steps.length === 0 && !run.workflowVersion && (
+            <section className="callout">
+              <p className="eyebrow">Beta workflow</p>
+              <p>
+                This WorkOrder is running on the new graph engine. Its stages,
+                conversations and approvals are not on this page yet — they are
+                served under <code>/graph/api/runs/{run.runId}</code>.
+              </p>
+            </section>
+          )}
           {run.pendingHumanReview && (
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>

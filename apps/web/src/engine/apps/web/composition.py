@@ -19,7 +19,8 @@ The state store is SQLite rather than Postgres: conversations survive a process
 restart without requiring an external database service.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +44,8 @@ from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeWorkspaceProvider,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.graph_runtime import GraphRuntime, GraphWorkflow
+from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
@@ -112,6 +115,15 @@ class Settings:
     buzz_api_token: str = ""
     workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"
+    graph_state_directory: str = "graph-state"
+    """Where a graph workflow's saved progress is kept.
+
+    Plain English: the new graph workflows remember where they got to by
+    writing two small database files. This is the folder those files go in, so
+    a run that was half finished when the process stopped is still there when
+    it starts again. A folder rather than a file because there are two of them,
+    and the graph engine names them itself.
+    """
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.
 
@@ -173,6 +185,31 @@ def build_capabilities(
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
     )
+
+
+def build_graph_runtime(
+    settings: Settings, graphs: Sequence[GraphWorkflow]
+) -> AbstractAsyncContextManager[GraphRuntime] | None:
+    """The engine that runs graph workflows, or nothing when there are none.
+
+    Two kinds of workflow live in the `workflows` directory. The older kind is
+    a list of steps, and the executor wired above runs those. The newer kind --
+    the ones the interface marks `[BETA]` -- is a graph, and LangGraph runs
+    those. This builds the second engine.
+
+    It hands back an *unopened* context manager rather than a running engine,
+    because starting one opens database files that somebody then has to close.
+    The web application opens it when the server starts and closes it when the
+    server stops, which is the only lifetime that gets that right.
+
+    `None` when this deployment's workflow directory holds no graphs: there is
+    nothing to run, so there is no reason to open the files. The interface then
+    offers no `[BETA]` entries, which is what keeps a person from picking one
+    that nothing here could start.
+    """
+    if not graphs:
+        return None
+    return sqlite_runtime(tuple(graphs), settings.graph_state_directory)
 
 
 def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:

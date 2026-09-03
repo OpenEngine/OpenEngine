@@ -58,7 +58,20 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.orchestrator",
     ),
     ADAPTER: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
-    APP: ("engine.domain", "engine.core", "engine.ports", "engine.runtime", "engine.adapters"),
+    # The graph packages are here for the same reason `engine.adapters` is: an
+    # app is where the pieces are wired together, and one of the pieces it can
+    # wire now is the engine that runs graph workflows. The contract and its
+    # LangGraph binding are both named, because a composition root is the one
+    # place allowed to name a concrete implementation.
+    APP: (
+        "engine.domain",
+        "engine.core",
+        "engine.ports",
+        "engine.runtime",
+        "engine.adapters",
+        "engine.graph_runtime",
+        "engine.graph_runtime_langgraph",
+    ),
 }
 
 

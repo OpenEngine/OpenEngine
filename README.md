@@ -95,6 +95,12 @@ the v1 DSL. Workflow files are trusted configuration and execute once during
 startup. A compiled definition is snapshotted onto every run so editing or
 removing a file does not change an in-flight run.
 
+A file in the same directory may instead export a **graph** workflow, which is
+run by LangGraph rather than by the step executor. The web interface lists
+those in the WorkOrder dropdown behind a `[BETA]` label and starts them on the
+graph engine; see [`docs/graph-workorders-beta.md`](docs/graph-workorders-beta.md)
+for what that does and what it cannot do yet.
+
 Engine also supports agent attribution, runner-specific settings, and
 provider-neutral approval policy:
 

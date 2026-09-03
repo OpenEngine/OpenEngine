@@ -6,12 +6,11 @@ there is classified by what it exports:
     openengine.workflow(...)   steps      -> the workflow runtime
     a `GraphWorkflow`          a graph    -> a graph runtime
 
-Recognising a graph workflow is all this module does with one so far. It is
-loaded, checked for an id nothing else claims, and set aside in `graphs`;
-nothing here runs or serves it. That is what lets a repository hold a graph
-workflow before anything can run one -- the alternative is a directory that
-refuses to load, taking the deployment down over a definition nobody asked it
-to start.
+Recognising a graph workflow is all this module does with one. It is loaded,
+checked for an id nothing else claims, and set aside in `graphs`; nothing here
+runs or serves it. An app that has a graph engine -- `apps/web` -- reads that
+list and runs them, and one that has not simply ignores it, rather than the
+directory refusing to load and taking the deployment down.
 
 `GraphWorkflow` is `engine.graph_runtime`'s protocol: an id and a name. So no
 graph engine is imported here, and this module never learns what a graph is.
@@ -44,10 +43,10 @@ class WorkflowCatalog:
     what every caller means by "the workflows": the ones that can be started.
     `get`, `require`, `in` and `len` answer about the same set.
 
-    That is also what keeps a graph workflow out of the interface. The workflow
-    list `/api/config` reports is this iteration, so a workflow nothing here can
-    start is never offered -- one place, rather than a filter in each client
-    that grows a dropdown.
+    That is also what keeps a graph workflow away from the step executor: it
+    iterates a catalog to find what to run, and a graph is not something it
+    could run. An interface that offers both reads both -- `graphs` beside this
+    iteration -- and says which is which.
 
     A catalog holding nothing but graphs is therefore falsy. Ask what you mean:
     `catalog is not None`, or `catalog.graphs`.
@@ -57,8 +56,10 @@ class WorkflowCatalog:
     graphs: tuple[GraphWorkflow, ...] = ()
     """Workflows that run as a graph, in the order the directory declares them.
 
-    Set aside rather than offered: reachable by whatever learns to run one, and
-    invisible to everything that lists what can be started today.
+    Set aside rather than mixed in: a graph has no steps, so anything that
+    iterates this catalog to run something must never be handed one. Whoever
+    can run a graph asks for them here by name -- `apps/web` does, and offers
+    them in its dropdown behind a `[BETA]` label.
     """
 
     @classmethod
