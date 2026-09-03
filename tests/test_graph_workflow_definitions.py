@@ -256,6 +256,12 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
     graphs after it wearing `[BETA]`. The prefix is the warning that these are
     new -- picking one runs it on the graph engine, which this deployment
     starts because its workflow directory holds graphs.
+
+    Asked of a *started* application, which is the whole condition for a graph
+    being offered: the engine that runs one is opened on startup, and an engine
+    that did not open means no `[BETA]` entries rather than entries nothing can
+    start. Starting it here also compiles every graph in the directory against
+    real files, so a graph this repository could not actually run fails this.
     """
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
     monkeypatch.chdir(tmp_path)
@@ -265,7 +271,8 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            answered = await client.get("/api/config")
+            async with app.router.lifespan_context(app):
+                answered = await client.get("/api/config")
             assert answered.status_code == 200
             return answered.json()
 

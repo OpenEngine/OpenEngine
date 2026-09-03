@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import (
     AsyncIterator,
@@ -932,6 +933,13 @@ GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
 }
 
 
+#: Where this module says what went wrong with something nobody asked it about
+#: -- a graph engine that would not open, a stranded run it could not pick back
+#: up. Those go to the log rather than to a person, because the person who
+#: would read them is not in the room when a server starts.
+log = logging.getLogger(__name__)
+
+
 @dataclass(slots=True)
 class _GraphSurface:
     """The graph engine, once the server has started it.
@@ -940,6 +948,10 @@ class _GraphSurface:
     engine means opening files and that is something a running server owns
     rather than something building one does. A request that arrives before then
     is told the graph engine is not running rather than being given half of it.
+
+    They stay empty when the engine refuses to open, which is what keeps a
+    `[BETA]` failure to the `[BETA]` feature: no engine, no `[BETA]` entries in
+    the dropdown, and the rest of the application carries on.
     """
 
     runtime: GraphRuntime | None = None
@@ -979,6 +991,9 @@ def create_app(
     # keeps it apart from the step workflows because a different engine runs
     # it, and this is the interface's half of that -- the one list a person
     # picks from, with each entry remembering which engine it belongs to.
+    #
+    # "Could", not "does": whether they are actually offered is `offered_graphs`
+    # below, which additionally asks whether the engine is running.
     graph_workflows: Mapping[str, GraphWorkflow] = (
         {str(graph.graph_id): graph for graph in catalog.graphs}
         if graph_runtime is not None
@@ -989,6 +1004,18 @@ def create_app(
     # graph's own sub-application serves. Built here rather than when the
     # server starts so that the observer below can be written once.
     graph_events = EventLog()
+
+    def offered_graphs() -> Mapping[str, GraphWorkflow]:
+        """The `[BETA]` entries a person may pick, right now.
+
+        Two things have to be true, and the second one is only knowable once
+        the server is up: this deployment has graph workflows, and the engine
+        that runs them opened. If it did not -- an unwritable state directory,
+        a graph that no longer compiles -- there are no `[BETA]` entries at
+        all, rather than entries that fail the moment somebody picks one.
+        """
+        return graph_workflows if surface.runtime is not None else {}
+
     approval_feed = ApprovalFeed(session.state_store)
     service = ThreadService(
         session,
@@ -1081,11 +1108,10 @@ def create_app(
                 state.phase is not RunPhase.RUNNING_AGENT
                 or state.agent_paused
                 or state.run_id in workflow_tasks
-                # A graph WorkOrder is not this executor's to restart. It has
-                # no steps to pick back up: the graph engine wrote down where
-                # it had got to, and it carries on from there when somebody
-                # answers the question it stopped on. Trying to resume it here
-                # would look for a step list that a graph does not have.
+                # A graph WorkOrder is not this executor's to restart: it has
+                # no steps to pick back up, and looking for a step list a graph
+                # does not have would fail a run that is perfectly healthy.
+                # `restore_graph_runs` is the one that picks these up.
                 or str(state.workflow_id) in graph_workflows
             ):
                 continue
@@ -1128,6 +1154,69 @@ def create_app(
             )
         )
 
+    async def restore_graph_runs(runtime: GraphRuntime) -> None:
+        """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
+
+        A run's progress lives in the graph engine's files, but the *driver* --
+        the thing actually working through the graph -- is a task in a process,
+        and a process that stops takes its drivers with it. Nothing rebuilds
+        them on its own, so without this a run that was mid-agent when the
+        server was restarted would sit at "working" forever, saying nothing and
+        doing nothing.
+
+        Three answers, one per thing the engine can say about a run:
+
+        * **working** -- there is no driver for it in this fresh process, so it
+          is sent back to the last position it saved and carried on from there.
+          Whatever the interrupted agent had done since that position is lost,
+          which is the honest cost of the process having died mid-sentence;
+        * **waiting on a person** -- left exactly as it is. Answering the
+          question is what starts it again, and that already works;
+        * **finished or failed** -- the row missed the ending because the
+          process was gone when it was announced, so it is copied over now.
+
+        A run the engine has never heard of is one whose state was deleted from
+        under it. It cannot be recovered and cannot be waited for, so the row is
+        failed with a reason rather than left claiming to be working.
+        """
+        for state in await session.state_store.list_runs():
+            if state.is_terminal or str(state.workflow_id) not in graph_workflows:
+                continue
+            try:
+                snapshot = await runtime.snapshot(state.run_id)
+                if snapshot is None:
+                    await session.state_store.save(
+                        replace(
+                            state,
+                            phase=RunPhase.FAILED,
+                            failure_reason=(
+                                "the graph engine has no record of this run"
+                            ),
+                        )
+                    )
+                    continue
+                if snapshot.status is RunStatus.RUNNING:
+                    # A restart is the only way to be here: a run that is
+                    # working has a driver, and this runs before any request
+                    # could have started one.
+                    if snapshot.checkpoint_id is None:
+                        continue
+                    await runtime.resume_from(state.run_id, snapshot.checkpoint_id)
+                    continue
+                phase = GRAPH_PHASES[snapshot.status]
+                if phase is not state.phase or snapshot.error != state.failure_reason:
+                    await session.state_store.save(
+                        replace(
+                            state,
+                            phase=phase,
+                            failure_reason=snapshot.error or state.failure_reason,
+                        )
+                    )
+            except Exception:
+                # One unrecoverable run must not stop the others from being
+                # recovered, and none of them may stop the server from serving.
+                log.exception("could not restore graph WorkOrder %s", state.run_id)
+
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         async with AsyncExitStack() as opened:
@@ -1137,14 +1226,31 @@ def create_app(
                 # and opens the files they remember their progress in. The exit
                 # stack closes it again when the server stops, which is the
                 # only thing that closes those files.
-                surface.runtime = await opened.enter_async_context(graph_runtime)
-                # The graph engine's own control surface, so a run started here
-                # can be watched and answered. Built first because it installs
-                # a listener of its own, and this app wants that listener *and*
-                # the WorkOrder row kept up to date -- so ours is installed
-                # afterwards and does both.
-                surface.app = create_graph_app(surface.runtime, graph_events)
-                surface.runtime.observe(graph_event)
+                #
+                # Guarded, because everything it does can fail for reasons that
+                # have nothing to do with the rest of this application: a state
+                # directory it cannot write, a checkpoint file another process
+                # is holding, a graph that no longer compiles. The engine then
+                # refuses to start and says so in the log, and chats, projects
+                # and the step WorkOrders carry on without it -- rather than the
+                # whole server failing to start over a feature marked `[BETA]`.
+                try:
+                    surface.runtime = await opened.enter_async_context(graph_runtime)
+                except Exception:
+                    log.exception(
+                        "the graph engine did not start; %s WorkOrders are not "
+                        "being offered in this process",
+                        BETA,
+                    )
+                else:
+                    # The graph engine's own control surface, so a run started
+                    # here can be watched and answered. Built first because it
+                    # installs a listener of its own, and this app wants that
+                    # listener *and* the WorkOrder row kept up to date -- so
+                    # ours is installed afterwards and does both.
+                    surface.app = create_graph_app(surface.runtime, graph_events)
+                    surface.runtime.observe(graph_event)
+                    await restore_graph_runs(surface.runtime)
             await restore_agent_steps()
             try:
                 yield
@@ -1323,14 +1429,20 @@ def create_app(
                 # first and read as they always have; the graph ones follow,
                 # wearing `[BETA]` and no version, because a graph does not
                 # have one yet. Only the graphs this process can actually start
-                # are here: `graph_workflows` is empty when no graph engine was
-                # composed, and an entry nobody could run would be a choice
-                # that fails after it was made.
+                # are here -- see `offered_graphs` -- because an entry nobody
+                # could run would be a choice that fails after it was made.
+                #
+                # `kind` is what each entry belongs to, said rather than left to
+                # be guessed. The form reads it: a graph names its own agent, so
+                # the runner field is not shown for one, and a client that
+                # worked that out from the empty version would break the day a
+                # graph gets versioned.
                 "workflows": [
                     {
                         "id": str(definition.workflow_id),
                         "name": definition.name,
                         "version": definition.version,
+                        "kind": "steps",
                     }
                     for definition in catalog
                 ]
@@ -1339,8 +1451,9 @@ def create_app(
                         "id": str(graph.graph_id),
                         "name": f"{BETA} {graph.name}",
                         "version": "",
+                        "kind": "graph",
                     }
-                    for graph in graph_workflows.values()
+                    for graph in offered_graphs().values()
                 ],
             }
         )
@@ -1457,6 +1570,7 @@ def create_app(
         )
 
     async def start_graph_run(
+        runtime: GraphRuntime,
         graph: GraphWorkflow,
         *,
         prompt: str,
@@ -1481,14 +1595,13 @@ def create_app(
         No runner is passed on, because a graph already names the agent it runs
         -- picking "Implementation review (claude)" *is* picking Claude, which
         is why there is one entry per agent in the dropdown rather than a
-        separate choice.
+        separate choice, and why the form hides the runner field for one.
+
+        The engine is an argument rather than something read here, because
+        having one is what made this graph offerable in the first place: a
+        caller that got a graph out of `offered_graphs` has already established
+        that the engine is running, and passing it on says so.
         """
-        runtime = surface.runtime
-        if runtime is None:
-            # Only reachable when the graph engine failed to open or the
-            # application was built without one. Said plainly, because the
-            # person picked something the dropdown offered them.
-            return _error("this process is not running graph workflows", 503)
         snapshot = await runtime.start(
             GraphId(str(graph.graph_id)),
             {"task": prompt, "repository": repository},
@@ -1535,11 +1648,14 @@ def create_app(
         except ValueError as error:
             return _error(str(error), 400)
         definition = catalog.get(workflow_id)
-        graph = graph_workflows.get(str(workflow_id))
+        graph = offered_graphs().get(str(workflow_id))
         if definition is None and graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
         runner_name = str(body.get("runner") or workflow_executor.default_runner)
-        if runner_name not in workflow_executor.runners:
+        # A graph names the agent it runs, so there is no runner to check and
+        # none is sent: the form does not offer the field for one. Validating
+        # it anyway would refuse a WorkOrder over a value nothing reads.
+        if graph is None and runner_name not in workflow_executor.runners:
             return _error(f"unknown workflow runner: {runner_name}", 400)
         workstream_id = (
             WorkstreamId(workstream_value) if workstream_value is not None else None
@@ -1569,7 +1685,11 @@ def create_app(
         direct_milestone_id = milestone_id if workstream_id is None else None
 
         if graph is not None:
+            # `offered_graphs` only answers with a graph while the engine is
+            # running, so this cannot be `None` here.
+            assert surface.runtime is not None
             return await start_graph_run(
+                surface.runtime,
                 graph,
                 prompt=prompt,
                 repository=repository,

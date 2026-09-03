@@ -40,6 +40,7 @@ from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeWorkspaceProvider,
 )
 from engine.graph_runtime_langgraph import (
+    GraphWorkflow,
     State,
     agent_registry,
     graph_workflow,
@@ -161,11 +162,28 @@ def pipeline(
     return builder
 
 
-workflow = tuple(
-    graph_workflow(
-        pipeline(runner),
+#: One graph per agent. Picking a runner is picking one of these.
+RUNNERS = ("codex", "claude")
+
+
+def graph_for(
+    runner: str,
+    *,
+    workspace_provider: WorkspaceProvider | None = None,
+    agents: ACPAgentRegistry = AGENTS,
+) -> GraphWorkflow:
+    """This workflow, for one agent, named the way everything else names it.
+
+    The id and the name are built in one place rather than at each call, so
+    that the graph a deployment starts and the graph a test drives are the same
+    graph under the same name. What a caller may replace is what `pipeline`
+    accepts: where the checkouts go, and which agents answer.
+    """
+    return graph_workflow(
+        pipeline(runner, workspace_provider=workspace_provider, agents=agents),
         id=f"implementation-review-{runner}",
         name=f"Implementation review ({runner})",
     )
-    for runner in ("codex", "claude")
-)
+
+
+workflow = tuple(graph_for(runner) for runner in RUNNERS)

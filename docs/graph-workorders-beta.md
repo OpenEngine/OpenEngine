@@ -38,7 +38,8 @@ underneath can do, which is the reason the second one exists:
 2. The web server hands the task and the repository to the graph engine and
    asks it to start that graph. The agent is not a separate choice here: there
    is one `[BETA]` entry per agent (`(codex)`, `(claude)`), so picking the
-   entry is picking the agent.
+   entry is picking the agent — which is why the form stops asking you which
+   runner to use as soon as you select one.
 3. The graph engine gives the run an id, and the WorkOrder you see is saved
    under that same id — so both halves are talking about the same run.
 4. You land on the WorkOrder page, which shows the task, the repository and
@@ -75,12 +76,34 @@ outstanding, with the id to answer.
   `graph-state/` next to where you started the server (`graph_state_directory`
   in `apps/web/.../composition.py`). Delete that folder and the beta runs are
   forgotten; the WorkOrder rows in `conversations.sqlite3` would remain.
-- Because the graph engine keeps its own record, a restart does not lose a run
-  that was waiting for you. It picks the run back up when your answer arrives,
-  rather than when the server starts.
 - The step executor is told to leave graph WorkOrders alone on startup. It
   would otherwise try to resume one and look for a list of steps that a graph
   does not have.
+
+## What a restart does to a run
+
+Where a run got to is written down; the thing actually *working* through the
+graph is not — it is a task inside the server process, and stopping the server
+ends it. So when the server starts, it goes through every unfinished `[BETA]`
+WorkOrder and does one of three things:
+
+| What the engine says about the run | What happens |
+| --- | --- |
+| It was working | It is sent back to the last position it saved, and carries on from there. Whatever the agent did after that position is lost — the process died mid-sentence, and there is no record of the rest. |
+| It is waiting for you | Nothing. Your answer is what starts it again, and that works whether or not the server was restarted in between. |
+| It finished or failed while the server was down | The WorkOrder row catches up to that ending, which it could not hear at the time. |
+
+A run the engine has no record of at all — you deleted `graph-state/`, say — is
+marked failed with that as the reason, rather than left claiming to be working
+forever.
+
+## If something is wrong with the graph engine itself
+
+If the engine cannot open — the state directory is not writable, a checkpoint
+file is corrupt, a graph no longer compiles after a dependency upgrade — it
+refuses to start and writes the error to the server log. The rest of the
+application starts normally, and no `[BETA]` entries appear in the dropdown,
+because nothing in this process could run one.
 
 ## If no `[BETA]` entries appear
 

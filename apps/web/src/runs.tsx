@@ -229,6 +229,12 @@ export function NewWorkflowPage({
   const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // A graph workflow — the [BETA] kind — names the agent it runs, so there is
+  // one entry per agent and nothing left for a runner field to decide. Asking
+  // anyway would be a control that looks like a choice and is not: the server
+  // reads no runner for these.
+  const selected = config.workflows.find((workflow) => workflow.id === workflowId);
+  const picksItsOwnAgent = selected?.kind === "graph";
 
   useEffect(() => {
     if (prompt) window.localStorage.setItem(WORKFLOW_DRAFT_KEY, prompt);
@@ -246,7 +252,7 @@ export function NewWorkflowPage({
           workflowId,
           prompt,
           repository,
-          runner,
+          ...(picksItsOwnAgent ? {} : { runner }),
           ...(milestone
             ? { milestoneId: milestone.milestoneId, workstreamId: workstreamId || undefined }
             : {}),
@@ -317,20 +323,27 @@ export function NewWorkflowPage({
             placeholder="owner/repository or local path"
           />
         </label>
-        <label>
-          <span>Implementation runner</span>
-          <select
-            required
-            value={runner}
-            onChange={(event) => setRunner(event.target.value)}
-          >
-            {config.workflowRunners.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {picksItsOwnAgent ? (
+          <p className="form-note">
+            This workflow runs the agent named in its own definition, so there is no
+            runner to choose.
+          </p>
+        ) : (
+          <label>
+            <span>Implementation runner</span>
+            <select
+              required
+              value={runner}
+              onChange={(event) => setRunner(event.target.value)}
+            >
+              {config.workflowRunners.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           <span>Task prompt</span>
           <textarea
@@ -359,7 +372,7 @@ export function NewWorkflowPage({
           </a>
           <button
             className="btn btn-primary"
-            disabled={submitting || !runner || !workflowId}
+            disabled={submitting || (!runner && !picksItsOwnAgent) || !workflowId}
             type="submit"
           >
             {submitting ? "Creating…" : milestone ? "Create task" : "Create WorkOrder"}

@@ -2,9 +2,10 @@
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 
 import httpx
 import openengine as oe
@@ -91,9 +92,16 @@ from engine.runtime import (
     ResponseStyle,
     WorkflowCatalog,
 )
-from engine.graph_runtime import GraphId, NodeId
+from engine.graph_runtime import (
+    CheckpointId,
+    GraphId,
+    NodeId,
+    RunSnapshot,
+    RunStatus,
+)
 from engine.runtime.terminal_mcp import _mcp_response
 from graph_runtime_fakes import (
+    Fail,
     Say,
     ScriptedGraph,
     ScriptedGraphRuntime,
@@ -4643,22 +4651,29 @@ def test_a_graph_workflow_is_offered_as_a_beta_choice() -> None:
     Both kinds in one list -- steps first, then the graphs wearing `[BETA]` --
     because a person choosing what to run is choosing what should happen, not
     which engine should do it.
+
+    Asked of a started server, because that is when a graph is offerable: the
+    engine that would run one is opened on startup.
     """
     app, _ = _graph_app(InMemoryStateStore(), _review_graph())
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return (await client.get("/api/config")).json()["workflows"]
+            async with app.router.lifespan_context(app):
+                return (await client.get("/api/config")).json()["workflows"]
 
     offered = asyncio.run(scenario())
 
     assert offered == [
-        {"id": "steps-v1", "name": "Steps", "version": "v1"},
+        {"id": "steps-v1", "name": "Steps", "version": "v1", "kind": "steps"},
         {
             "id": "implementation-review-codex",
             "name": "[BETA] Implementation review (codex)",
             "version": "",
+            # Said rather than left to be guessed: the form reads this to
+            # decide whether to ask which runner to use.
+            "kind": "graph",
         },
     ]
 
@@ -4799,17 +4814,140 @@ def test_the_graph_engine_answers_under_its_own_prefix() -> None:
     ]
 
 
-def test_a_graph_work_order_is_not_restarted_as_a_step_run() -> None:
-    """What a restart must not do to a graph run.
+def test_a_failed_graph_run_says_why_on_its_row() -> None:
+    """The other ending, and the reason that comes with it.
 
-    A run left in `running_agent` is picked back up by the step executor when
-    the process starts again. A graph run has no steps for it to pick up: the
-    graph engine has its own record of where the run got to, and resumes it
-    from there when the question it stopped on is answered.
+    The reason is read out of the event the engine publishes, so the row and
+    the graph engine's own API give the same answer to "why did this stop?".
+    A renamed key on that event would leave a failed WorkOrder with nothing to
+    show, which is what this is here to catch.
     """
     store = InMemoryStateStore()
-    app, _ = _graph_app(store, _review_graph())
-    graph_run = RunState(
+    broken = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Fail("codex is out of quota"),)),),
+    )
+    app, _ = _graph_app(store, broken)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                return (await _await_phase(client, run_id, "failed")).json()
+
+    ended = asyncio.run(scenario())
+
+    assert ended["phase"] == "failed"
+    assert ended["failureReason"] == "codex is out of quota"
+
+
+def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded() -> None:
+    """The narrowest bit of ordering in the whole change.
+
+    A graph short enough to be over before `start` answers announces its ending
+    to nobody: there is no row yet for the announcement to land on. So the
+    engine is asked once more after the row is saved, and this is the case that
+    exists for -- a graph with no work in it at all.
+    """
+    store = InMemoryStateStore()
+    instant = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation")),),
+    )
+    app, _ = _graph_app(store, instant)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+
+    created = asyncio.run(scenario())
+
+    # Whether the ending arrived before or after the row was saved, the answer
+    # a person is handed is never "an agent is working" on a run that is over.
+    assert created.json()["phase"] in {"succeeded", "running_agent"}
+    assert created.status_code == 201
+
+
+# --- a `[BETA]` WorkOrder across a restart -------------------------------------
+#
+# What a graph run keeps in the engine's files is where it got to. What it does
+# not keep is the *driver* -- the task working through the graph -- because that
+# lives in a process, and a process that stops takes its drivers with it.
+#
+# Driven against a double rather than the scripted engine, because the thing
+# under test is a second process finding runs a first one left behind, and the
+# scripted engine keeps everything in the process that started it: a run it
+# knows about is, by construction, one it is still driving.
+
+
+@dataclass
+class _EngineAfterARestart:
+    """A graph engine that remembers runs but is driving none of them.
+
+    Everything the recovery pass calls, and nothing else. `resumed` is what a
+    test asserts on: relaunching a stranded run is invisible in this app's own
+    state, because the run carries on being a run that is working.
+    """
+
+    answers: dict[RunId, RunSnapshot | None]
+    resumed: list[tuple[RunId, CheckpointId]] = field(default_factory=list)
+
+    def observe(self, observer) -> None:
+        self._observer = observer
+
+    async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
+        return self.answers.get(run_id)
+
+    async def resume_from(self, run_id: RunId, checkpoint_id: CheckpointId):
+        self.resumed.append((run_id, checkpoint_id))
+        return self.answers[run_id]
+
+    def graphs(self) -> tuple:
+        return ()
+
+
+def _restarted(
+    store: InMemoryStateStore, answers: dict[RunId, RunSnapshot | None]
+) -> tuple[object, _EngineAfterARestart]:
+    runtime = _EngineAfterARestart(answers)
+
+    @asynccontextmanager
+    async def running(_app=None):
+        yield runtime
+
+    app = _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+        graph_runtime=running(),
+    )
+    return app, runtime
+
+
+def _interrupted_run() -> RunState:
+    return RunState(
         run_id=RunId("run-graph"),
         task_id=TaskId("task-graph"),
         workflow_id=WorkflowId("implementation-review-codex"),
@@ -4818,16 +4956,157 @@ def test_a_graph_work_order_is_not_restarted_as_a_step_run() -> None:
         repository="acme/api",
     )
 
+
+def _graph_snapshot(status: RunStatus, error: str = "") -> RunSnapshot:
+    return RunSnapshot(
+        run_id=RunId("run-graph"),
+        graph_id=GraphId("implementation-review-codex"),
+        status=status,
+        checkpoint_id=CheckpointId("checkpoint-3"),
+        error=error,
+    )
+
+
+def _after_a_restart(app, store: InMemoryStateStore, run: RunState) -> RunState:
     async def scenario():
-        await store.save(graph_run)
+        await store.save(run)
         async with app.router.lifespan_context(app):
             await asyncio.sleep(0)
-        return await store.load(graph_run.run_id)
+        restored = await store.load(run.run_id)
+        assert restored is not None
+        return restored
 
-    restored = asyncio.run(scenario())
+    return asyncio.run(scenario())
 
-    # Untouched: no step was started for it, and nothing failed it for having
-    # no steps to start.
-    assert restored is not None
+
+def test_a_graph_run_interrupted_mid_execution_is_picked_back_up() -> None:
+    """The reason this pass exists at all.
+
+    A run that was working when the process died has no driver in the process
+    that replaces it, and nothing else would build one: the step executor
+    cannot -- a graph has no steps -- and the engine only builds one when a run
+    is started or a decision arrives. So the run is sent back to the last
+    position it saved and carried on from there.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(store, {RunId("run-graph"): _graph_snapshot(RunStatus.RUNNING)})
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == [(RunId("run-graph"), CheckpointId("checkpoint-3"))]
+    # Still working, and still not the step executor's: a resumed graph run is
+    # a graph run, and nothing here started a step for it.
     assert restored.phase is RunPhase.RUNNING_AGENT
     assert restored.failure_reason == ""
+
+
+def test_a_graph_run_waiting_on_a_person_is_left_where_it_is() -> None:
+    """The case that already worked, and must not be disturbed.
+
+    A run parked on a question is picked back up by the answer, not by the
+    restart. Resuming it here would throw the question away -- the execution
+    that asked it is gone, so the person's answer would have nowhere to go.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(
+        store, {RunId("run-graph"): _graph_snapshot(RunStatus.AWAITING_APPROVAL)}
+    )
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == []
+    assert restored.phase is RunPhase.RUNNING_AGENT
+
+
+def test_a_graph_run_that_ended_while_the_server_was_down_catches_up() -> None:
+    """An ending announced to a process that was not there to hear it.
+
+    `graph_event` only moves a row while this process is running. A run that
+    finished during a restart would otherwise be a row that says "working"
+    about a run the engine considers over.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(
+        store,
+        {RunId("run-graph"): _graph_snapshot(RunStatus.FAILED, "the checkout vanished")},
+    )
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == []
+    assert restored.phase is RunPhase.FAILED
+    assert restored.failure_reason == "the checkout vanished"
+
+
+def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working() -> None:
+    """State deleted from under a row -- `graph-state/` thrown away, say.
+
+    Nothing can recover it and nobody will ever answer it, so it is failed with
+    a reason. The alternative is a WorkOrder that claims to be working for as
+    long as the database survives.
+    """
+    store = InMemoryStateStore()
+    app, _ = _restarted(store, {})
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert restored.phase is RunPhase.FAILED
+    assert "no record" in restored.failure_reason
+
+
+def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A `[BETA]` failure stays inside the `[BETA]` feature.
+
+    Opening the engine creates a directory, opens two SQLite files and compiles
+    every graph. Any of those can fail on its own -- an unwritable directory, a
+    graph that no longer compiles after a dependency was upgraded -- and none of
+    them is a reason for chats, projects and the step WorkOrders to go down.
+
+    The failure is logged, because it is the only place anybody could find out.
+    """
+    store = InMemoryStateStore()
+
+    @asynccontextmanager
+    async def refusing(_app=None):
+        raise RuntimeError("graph 'implementation-review-codex' does not compile")
+        yield  # pragma: no cover -- unreachable, and required to make this a CM
+
+    app = _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+        graph_runtime=refusing(),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return (
+                    await client.get("/api/config"),
+                    await client.post(
+                        "/api/runs",
+                        json={
+                            "workflowId": "implementation-review-codex",
+                            "prompt": "Add cancellation handling.",
+                            "repository": "acme/api",
+                        },
+                    ),
+                    await client.get("/graph/api/graphs"),
+                )
+
+    with caplog.at_level(logging.ERROR, logger="engine.apps.web.api"):
+        config, refused, graph = asyncio.run(scenario())
+
+    # The application is up, and answering about everything it can still do.
+    assert config.status_code == 200
+    assert [one["id"] for one in config.json()["workflows"]] == ["steps-v1"]
+    # Nothing offers the graph, so picking one is picking something that does
+    # not exist rather than something that cannot be started.
+    assert refused.status_code == 400
+    assert graph.status_code == 503
+    assert "does not compile" in caplog.text
