@@ -13,6 +13,7 @@ _CLIENT_ID = "slack-client-id"
 _CLIENT_SECRET = "slack-client-secret"
 _ACCESS_TOKEN = "slack-access-token"
 _TOKEN_URL = "https://slack.com/api/oauth.v2.access"
+_REVOKE_URL = "https://slack.com/api/auth.revoke"
 _AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
 
 
@@ -46,8 +47,23 @@ class SlackCredentialStore:
 
     def set_credentials(self, client_id: str, client_secret: str) -> None:
         self._check_backend()
-        keyring.set_password(_SERVICE, _CLIENT_ID, client_id)
-        keyring.set_password(_SERVICE, _CLIENT_SECRET, client_secret)
+        previous = {
+            _CLIENT_ID: keyring.get_password(_SERVICE, _CLIENT_ID),
+            _CLIENT_SECRET: keyring.get_password(_SERVICE, _CLIENT_SECRET),
+        }
+        try:
+            keyring.set_password(_SERVICE, _CLIENT_ID, client_id)
+            keyring.set_password(_SERVICE, _CLIENT_SECRET, client_secret)
+        except keyring.errors.KeyringError as error:
+            for username, value in previous.items():
+                try:
+                    if value is None:
+                        keyring.delete_password(_SERVICE, username)
+                    else:
+                        keyring.set_password(_SERVICE, username, value)
+                except keyring.errors.KeyringError:
+                    pass
+            raise SlackAuthError("could not securely save Slack credentials") from error
         # A token belongs to the app that issued it. Changing apps requires a
         # fresh authorization rather than retaining a misleading connection.
         self.disconnect()
@@ -96,4 +112,20 @@ async def exchange_code(credentials: SlackCredentials, code: str, redirect_uri: 
     return str(body["access_token"])
 
 
-__all__ = ["SlackAuthError", "SlackCredentialStore", "authorization_url", "exchange_code"]
+async def revoke_token(token: str) -> None:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(_REVOKE_URL, headers={"Authorization": f"Bearer {token}"})
+    if response.is_error:
+        raise SlackAuthError(f"Slack returned {response.status_code} while disconnecting")
+    body = response.json()
+    if not body.get("ok"):
+        raise SlackAuthError(f"Slack disconnect failed: {body.get('error', 'token was not revoked')}")
+
+
+__all__ = [
+    "SlackAuthError",
+    "SlackCredentialStore",
+    "authorization_url",
+    "exchange_code",
+    "revoke_token",
+]

@@ -1,8 +1,12 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import keyring
+import pytest
+
 from starlette.testclient import TestClient
 
 from engine.apps.web.slack_auth import (
+    SlackAuthError,
     SlackCredentialStore,
     SlackCredentials,
     authorization_url,
@@ -14,6 +18,26 @@ def test_authorization_url_requests_notification_scope_and_state() -> None:
     assert url.startswith("https://slack.com/oauth/v2/authorize?")
     assert "scope=chat%3Awrite" in url
     assert "state=nonce" in url
+
+
+def test_credentials_are_restored_when_secret_write_fails() -> None:
+    values = {"slack-client-id": "old-id", "slack-client-secret": "old-secret"}
+
+    def set_password(_service: str, username: str, value: str) -> None:
+        if username == "slack-client-secret" and value == "new-secret":
+            raise keyring.errors.PasswordSetError("failed")
+        values[username] = value
+
+    with (
+        patch("engine.apps.web.slack_auth.keyring.get_keyring", return_value=MagicMock(priority=1)),
+        patch("engine.apps.web.slack_auth.keyring.get_password", side_effect=lambda _s, u: values.get(u)),
+        patch("engine.apps.web.slack_auth.keyring.set_password", side_effect=set_password),
+        patch("engine.apps.web.slack_auth.keyring.delete_password"),
+    ):
+        with pytest.raises(SlackAuthError):
+            SlackCredentialStore().set_credentials("new-id", "new-secret")
+
+    assert values == {"slack-client-id": "old-id", "slack-client-secret": "old-secret"}
 
 
 def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
@@ -79,3 +103,48 @@ def test_slack_callback_rejects_wrong_state(tmp_path) -> None:
         response = client.get("/api/slack/callback?code=code&state=wrong")
     assert response.status_code == 400
     store.set_token.assert_not_called()
+
+
+def test_slack_disconnect_revokes_before_forgetting_token(tmp_path) -> None:
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.apps.web.api import create_app
+    from engine.runtime import AgentSession, Capabilities
+
+    stub = object()
+    capabilities = Capabilities(stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "s.sqlite3")))
+    runners = {"default": stub}
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    app = create_app(AgentSession(capabilities, profiles={}, runners=runners), runners,
+                     workflow_runners=runners, review_runners=runners,
+                     workflow_catalog=MagicMock(), slack_credential_store=store)
+    revoke = AsyncMock()
+
+    with patch("engine.apps.web.api.revoke_slack_token", new=revoke), TestClient(app) as client:
+        response = client.post("/api/slack/disconnect")
+
+    assert response.status_code == 204
+    revoke.assert_awaited_once_with("xoxb-token")
+    store.disconnect.assert_called_once_with()
+
+
+def test_slack_disconnect_preserves_token_when_revocation_fails(tmp_path) -> None:
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.apps.web.api import create_app
+    from engine.runtime import AgentSession, Capabilities
+
+    stub = object()
+    capabilities = Capabilities(stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "s.sqlite3")))
+    runners = {"default": stub}
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    app = create_app(AgentSession(capabilities, profiles={}, runners=runners), runners,
+                     workflow_runners=runners, review_runners=runners,
+                     workflow_catalog=MagicMock(), slack_credential_store=store)
+    revoke = AsyncMock(side_effect=SlackAuthError("Slack unavailable"))
+
+    with patch("engine.apps.web.api.revoke_slack_token", new=revoke), TestClient(app) as client:
+        response = client.post("/api/slack/disconnect")
+
+    assert response.status_code == 502
+    store.disconnect.assert_not_called()

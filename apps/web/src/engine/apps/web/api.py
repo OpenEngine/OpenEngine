@@ -50,6 +50,7 @@ from engine.apps.web.slack_auth import (
     SlackCredentialStore,
     authorization_url as slack_authorization_url,
     exchange_code as exchange_slack_code,
+    revoke_token as revoke_slack_token,
 )
 from engine.domain import (
     AgentId,
@@ -2000,6 +2001,12 @@ def create_app(
     async def slack_disconnect(request: Request) -> Response:
         if not _is_local_request(request):
             return _error("forbidden", 403)
+        token = _slack_store.token()
+        if token:
+            try:
+                await revoke_slack_token(token)
+            except SlackAuthError as error:
+                return _error(str(error), 502)
         _slack_store.disconnect()
         return Response(status_code=204)
 

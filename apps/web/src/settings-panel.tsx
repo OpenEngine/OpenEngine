@@ -271,12 +271,20 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       setSlack((value) => ({ ...value, loading: true, error: undefined }));
       const deadline = Date.now() + 120_000;
       const poll = async () => {
-        const status = await getSlackStatus();
-        if (status.connected || Date.now() >= deadline) {
-          setSlack((value) => ({ ...value, ...status, loading: false }));
-          return;
+        try {
+          const status = await getSlackStatus();
+          if (status.connected || Date.now() >= deadline) {
+            setSlack((value) => ({ ...value, ...status, loading: false }));
+            return;
+          }
+          slackPollTimeoutRef.current = setTimeout(() => void poll(), 1000);
+        } catch (err) {
+          setSlack((value) => ({
+            ...value,
+            loading: false,
+            error: err instanceof Error ? err.message : "Could not check Slack connection.",
+          }));
         }
-        slackPollTimeoutRef.current = setTimeout(() => void poll(), 1000);
       };
       void poll();
     } catch (err) {
