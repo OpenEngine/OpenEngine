@@ -70,6 +70,34 @@ def test_slack_communications_posts_to_requested_channel() -> None:
     ]
 
 
+def test_slack_communications_resolves_name_that_starts_like_an_id() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    channels = MagicMock(is_error=False)
+    channels.json.return_value = {
+        "ok": True,
+        "channels": [{"id": "C12345678", "name": "codex"}],
+        "response_metadata": {"next_cursor": ""},
+    }
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": True, "ts": "123.456"}
+
+    with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
+        client = client_type.return_value.__aenter__.return_value
+        client.get = AsyncMock(return_value=channels)
+        client.post = AsyncMock(return_value=response)
+        __import__("asyncio").run(
+            SlackCommunications(store).post("Codex", "Review run-42")
+        )
+
+    client.get.assert_awaited_once()
+    client.post.assert_awaited_once_with(
+        "https://slack.com/api/chat.postMessage",
+        headers={"Authorization": "Bearer xoxb-token"},
+        json={"channel": "C12345678", "text": "Review run-42"},
+    )
+
+
 def test_slack_communications_reports_slack_delivery_errors() -> None:
     store = MagicMock(spec=SlackCredentialStore)
     store.token.return_value = "xoxb-token"
@@ -82,7 +110,7 @@ def test_slack_communications_reports_slack_delivery_errors() -> None:
         )
         with pytest.raises(SlackAuthError, match="channel_not_found"):
             __import__("asyncio").run(
-                SlackCommunications(store).post("C123", "Review run-42")
+                SlackCommunications(store).post("C12345678", "Review run-42")
             )
 
 

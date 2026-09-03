@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -119,7 +120,7 @@ class SlackCommunications:
     async def _resolve_channel(
         self, client: httpx.AsyncClient, token: str, channel: str
     ) -> str:
-        if channel.startswith(("C", "G", "D")):
+        if re.fullmatch(r"[CGD][A-Z0-9]{8,}", channel):
             return channel
         cursor = ""
         while True:
