@@ -263,7 +263,7 @@ class WorkflowExecutor:
                 )
             command = commands[0]
             if isinstance(command, RequestHumanReview):
-                await self._notify_human_review(command)
+                await self._notify_human_review(state, command)
                 return state
             if not isinstance(command, StartAgentRun) or command.step is None:
                 raise WorkflowExecutionError(
@@ -295,13 +295,29 @@ class WorkflowExecutor:
             state, commands = outcome.state, outcome.commands
         return state
 
-    async def _notify_human_review(self, command: RequestHumanReview) -> None:
+    async def _notify_human_review(
+        self, state: RunState, command: RequestHumanReview
+    ) -> None:
         """Notify operators without making Slack availability block a workflow."""
+        pull_request_url = next(
+            (
+                output.value
+                for result in reversed(state.step_results)
+                for output in result.outputs
+                if output.name == "pr_url" and output.value
+            ),
+            None,
+        )
+        message = (
+            f"Work order step complete and ready for human review: "
+            f"{command.title}\n{command.summary}"
+        )
+        if pull_request_url:
+            message += f"\n<{pull_request_url}|Open pull request>"
         try:
             await self._capabilities.communications.post(
                 _HUMAN_REVIEW_CHANNEL,
-                f"Work order step complete and ready for human review: "
-                f"{command.title}\n{command.summary}",
+                message,
                 command.run_id,
             )
         except Exception:

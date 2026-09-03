@@ -90,13 +90,16 @@ class SlackCredentialStore:
 class SlackCommunications:
     """Deliver Engine notifications through the connected Slack workspace."""
 
-    def __init__(self, credential_store: SlackCredentialStore) -> None:
+    def __init__(self, credential_store: SlackCredentialStore, web_base_url: str) -> None:
         self._credential_store = credential_store
+        self._web_base_url = web_base_url.rstrip("/")
 
     async def post(self, channel: str, message: str, run_id=None) -> str:
         token = self._credential_store.token()
         if not token:
             return ""
+        if run_id is not None:
+            message += f"\n<{self._web_base_url}/runs/{run_id}|Open human review task>"
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 _POST_MESSAGE_URL,

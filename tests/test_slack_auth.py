@@ -12,6 +12,7 @@ from engine.apps.web.slack_auth import (
     SlackCredentials,
     authorization_url,
 )
+from engine.domain import RunId
 
 
 def test_slack_communications_posts_to_requested_channel() -> None:
@@ -25,14 +26,20 @@ def test_slack_communications_posts_to_requested_channel() -> None:
             return_value=response
         )
         message_id = __import__("asyncio").run(
-            SlackCommunications(store).post("OpenEngine", "Review run-42")
+            SlackCommunications(store, "http://localhost:8000/").post(
+                "OpenEngine", "Review run-42", RunId("run-42")
+            )
         )
 
     assert message_id == "123.456"
     client_type.return_value.__aenter__.return_value.post.assert_awaited_once_with(
         "https://slack.com/api/chat.postMessage",
         headers={"Authorization": "Bearer xoxb-token"},
-        json={"channel": "OpenEngine", "text": "Review run-42"},
+        json={
+            "channel": "OpenEngine",
+            "text": "Review run-42\n"
+            "<http://localhost:8000/runs/run-42|Open human review task>",
+        },
     )
 
 

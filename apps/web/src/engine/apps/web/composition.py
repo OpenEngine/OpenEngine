@@ -181,7 +181,8 @@ def build_capabilities(
             workspace_provider=workspace_provider,
         ),
         communications=SlackCommunications(
-            slack_credential_store or SlackCredentialStore()
+            slack_credential_store or SlackCredentialStore(),
+            f"http://{settings.host}:{settings.port}",
         ),
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
