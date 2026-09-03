@@ -45,6 +45,13 @@ from engine.apps.web.github_auth import (
 from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
+from engine.apps.web.slack_auth import (
+    SlackAuthError,
+    SlackCredentialStore,
+    authorization_url as slack_authorization_url,
+    exchange_code as exchange_slack_code,
+    revoke_token as revoke_slack_token,
+)
 from engine.domain import (
     AgentId,
     AgentInstance,
@@ -904,6 +911,7 @@ def create_app(
     github_client_id: str = "",
     github_client_id_source: str = "configuration",
     source_control_preferences: SourceControlPreferences | None = None,
+    slack_credential_store: SlackCredentialStore | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -1929,6 +1937,92 @@ def create_app(
         _credential_store.delete()
         return Response(status_code=204)
 
+    # --- Slack connection endpoints ------------------------------------------
+
+    _slack_store = slack_credential_store or SlackCredentialStore()
+    _slack_state: str | None = None
+    _slack_redirect_uri: str | None = None
+
+    async def slack_status(_request: Request) -> JSONResponse:
+        credentials = _slack_store.credentials()
+        return JSONResponse(
+            {"configured": credentials is not None, "connected": bool(_slack_store.token())}
+        )
+
+    async def slack_set_credentials(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        client_id = (body.get("clientId") or "").strip()
+        client_secret = (body.get("clientSecret") or "").strip()
+        if not client_id or not client_secret:
+            return _error("clientId and clientSecret are required", 400)
+        token = _slack_store.token()
+        if token:
+            try:
+                await revoke_slack_token(token)
+            except SlackAuthError as error:
+                return _error(str(error), 502)
+            _slack_store.disconnect()
+        try:
+            _slack_store.set_credentials(client_id, client_secret)
+        except SlackAuthError as error:
+            return _error(str(error), 500)
+        _slack_state = None
+        _slack_redirect_uri = None
+        return Response(status_code=204)
+
+    async def slack_connect(request: Request) -> JSONResponse:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        credentials = _slack_store.credentials()
+        if credentials is None:
+            return _error("Slack OAuth credentials are not configured", 503)
+        _slack_state = uuid4().hex
+        _slack_redirect_uri = str(request.url_for("slack_callback"))
+        return JSONResponse(
+            {"authorizationUrl": slack_authorization_url(credentials.client_id, _slack_redirect_uri, _slack_state)}
+        )
+
+    async def slack_callback(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _slack_state or request.query_params.get("state") != _slack_state:
+            return _error("invalid OAuth state", 400)
+        code = request.query_params.get("code")
+        credentials = _slack_store.credentials()
+        if not code or credentials is None or _slack_redirect_uri is None:
+            return _error(request.query_params.get("error", "authorization was not completed"), 400)
+        try:
+            token = await exchange_slack_code(credentials, code, _slack_redirect_uri)
+            _slack_store.set_token(token)
+        except SlackAuthError as error:
+            return _error(str(error), 502)
+        finally:
+            _slack_state = None
+            _slack_redirect_uri = None
+        return Response(
+            "<html><body><p>Slack connected. You can close this window.</p>"
+            "<script>window.close()</script></body></html>",
+            media_type="text/html",
+        )
+
+    async def slack_disconnect(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        token = _slack_store.token()
+        if token:
+            try:
+                await revoke_slack_token(token)
+            except SlackAuthError as error:
+                return _error(str(error), 502)
+        _slack_store.disconnect()
+        _slack_state = None
+        _slack_redirect_uri = None
+        return Response(status_code=204)
+
     routes = [
         Route("/api/config", config),
         Route("/api/github/status", github_status),
@@ -1943,6 +2037,11 @@ def create_app(
         Route("/api/github/connect", github_connect, methods=["POST"]),
         Route("/api/github/connect/poll", github_connect_poll, methods=["POST"]),
         Route("/api/github/disconnect", github_disconnect, methods=["POST"]),
+        Route("/api/slack/status", slack_status),
+        Route("/api/slack/credentials", slack_set_credentials, methods=["POST"]),
+        Route("/api/slack/connect", slack_connect, methods=["POST"]),
+        Route("/api/slack/callback", slack_callback, name="slack_callback"),
+        Route("/api/slack/disconnect", slack_disconnect, methods=["POST"]),
         Route("/api/projects", list_projects),
         Route("/api/projects", create_project, methods=["POST"]),
         Route(

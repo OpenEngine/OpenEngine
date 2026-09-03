@@ -13,9 +13,23 @@ import {
   pollGitHubConnect,
   setGitHubClientId,
   setSourceControlProvider,
+  connectSlack,
+  disconnectSlack,
+  getSlackStatus,
+  setSlackCredentials,
   type GitHubClientIdInfo,
   type GitHubConnectResponse,
 } from "./api";
+
+type SlackState = {
+  configured: boolean;
+  connected: boolean;
+  loading: boolean;
+  editing: boolean;
+  clientId: string;
+  clientSecret: string;
+  error?: string;
+};
 
 type ConnectionState =
   | { phase: "unknown" }
@@ -56,10 +70,19 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [sourceControl, setSourceControl] = useState<SourceControlState>({
     phase: "loading",
   });
+  const [slack, setSlack] = useState<SlackState>({
+    configured: false,
+    connected: false,
+    loading: true,
+    editing: false,
+    clientId: "",
+    clientSecret: "",
+  });
   // Holds the next-poll timeout ID, not a fixed interval.
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Holds the device flow expiry timeout ID.
   const expiryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const slackPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollTimeoutRef.current !== null) {
@@ -69,6 +92,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     if (expiryTimeoutRef.current !== null) {
       clearTimeout(expiryTimeoutRef.current);
       expiryTimeoutRef.current = null;
+    }
+    if (slackPollTimeoutRef.current !== null) {
+      clearTimeout(slackPollTimeoutRef.current);
+      slackPollTimeoutRef.current = null;
     }
   }, []);
 
@@ -108,6 +135,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         ghCli: status.ghCli,
       });
     });
+    getSlackStatus()
+      .then((status) => setSlack((value) => ({ ...value, ...status, loading: false })))
+      .catch(() => setSlack((value) => ({ ...value, loading: false })));
     return stopPolling;
   }, [stopPolling, loadClientId]);
 
@@ -209,6 +239,79 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, [stopPolling]);
 
   const clientIdReady = clientId.phase === "configured";
+
+  const saveSlackCredentials = useCallback(async () => {
+    const clientId = slack.clientId.trim();
+    const clientSecret = slack.clientSecret.trim();
+    if (!clientId || !clientSecret) return;
+    setSlack((value) => ({ ...value, loading: true, error: undefined }));
+    try {
+      await setSlackCredentials(clientId, clientSecret);
+      setSlack((value) => ({
+        ...value,
+        configured: true,
+        connected: false,
+        loading: false,
+        editing: false,
+        clientId: "",
+        clientSecret: "",
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not save Slack credentials.";
+      try {
+        const status = await getSlackStatus();
+        setSlack((value) => ({ ...value, ...status, loading: false, error: message }));
+      } catch {
+        setSlack((value) => ({ ...value, loading: false, error: message }));
+      }
+    }
+  }, [slack.clientId, slack.clientSecret]);
+
+  const startSlackConnect = useCallback(async () => {
+    try {
+      const { authorizationUrl } = await connectSlack();
+      window.open(authorizationUrl, "slack-oauth", "popup,width=720,height=800");
+      setSlack((value) => ({ ...value, loading: true, error: undefined }));
+      const deadline = Date.now() + 120_000;
+      const poll = async () => {
+        try {
+          const status = await getSlackStatus();
+          if (status.connected || Date.now() >= deadline) {
+            setSlack((value) => ({ ...value, ...status, loading: false }));
+            return;
+          }
+          slackPollTimeoutRef.current = setTimeout(() => void poll(), 1000);
+        } catch (err) {
+          setSlack((value) => ({
+            ...value,
+            loading: false,
+            error: err instanceof Error ? err.message : "Could not check Slack connection.",
+          }));
+        }
+      };
+      void poll();
+    } catch (err) {
+      setSlack((value) => ({
+        ...value,
+        loading: false,
+        error: err instanceof Error ? err.message : "Could not connect Slack.",
+      }));
+    }
+  }, []);
+
+  const removeSlackConnection = useCallback(async () => {
+    setSlack((value) => ({ ...value, loading: true, error: undefined }));
+    try {
+      await disconnectSlack();
+      setSlack((value) => ({ ...value, connected: false, loading: false }));
+    } catch (err) {
+      setSlack((value) => ({
+        ...value,
+        loading: false,
+        error: err instanceof Error ? err.message : "Could not disconnect Slack.",
+      }));
+    }
+  }, []);
 
   return (
     <div className="settings-panel">
@@ -506,6 +609,47 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 )}
               </>
             )}
+        </section>
+        <section className="settings-section">
+          <h2 className="settings-section-title">Slack</h2>
+          {slack.loading && (
+            <p className="settings-status settings-status-muted">
+              <span aria-hidden="true" className="settings-spinner" /> Checking…
+            </p>
+          )}
+          {slack.error && <p className="settings-status settings-status-error">{slack.error}</p>}
+          {!slack.loading && (!slack.configured || slack.editing) && (
+            <div className="settings-client-id-form">
+              <label className="settings-label" htmlFor="slack-client-id">Slack OAuth Client ID</label>
+              <input className="settings-input" id="slack-client-id" autoComplete="off"
+                value={slack.clientId} onChange={(event) => setSlack((value) => ({ ...value, clientId: event.target.value }))} />
+              <label className="settings-label" htmlFor="slack-client-secret">Slack OAuth Client Secret</label>
+              <input className="settings-input" id="slack-client-secret" autoComplete="off" type="password"
+                value={slack.clientSecret} onChange={(event) => setSlack((value) => ({ ...value, clientSecret: event.target.value }))} />
+              <div className="settings-actions">
+                <button className="settings-button settings-button-primary" type="button"
+                  disabled={!slack.clientId.trim() || !slack.clientSecret.trim()} onClick={() => void saveSlackCredentials()}>Save credentials</button>
+                {slack.editing && <button className="settings-button" type="button" onClick={() => setSlack((value) => ({ ...value, editing: false }))}>Cancel</button>}
+              </div>
+            </div>
+          )}
+          {!slack.loading && slack.configured && !slack.editing && (
+            <>
+              <p className={`settings-status ${slack.connected ? "settings-status-ok" : "settings-status-muted"}`}>
+                {slack.connected ? "Connected" : "OAuth credentials saved"}
+              </p>
+              <div className="settings-actions">
+                <button className="settings-button settings-button-primary" type="button" onClick={() => void startSlackConnect()}>
+                  {slack.connected ? "Reconnect" : "Connect Slack"}
+                </button>
+                <button className="settings-button" type="button" onClick={() => setSlack((value) => ({ ...value, editing: true }))}>Change credentials</button>
+                {slack.connected && <button className="settings-button settings-button-danger" type="button" onClick={() => void removeSlackConnection()}>Disconnect</button>}
+              </div>
+              <p className="settings-status settings-status-muted">
+                Add <code>{`${window.location.origin}/api/slack/callback`}</code> as a redirect URL in your Slack app.
+              </p>
+            </>
+          )}
         </section>
       </div>
     </div>
