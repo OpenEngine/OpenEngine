@@ -54,6 +54,14 @@ own -- CI runs it only when that directory changes.
 ```bash
 cd langgraph-acp && uv run pytest
 ```
+## Concepts
+
+OpenEngine has two main concepts. Work Orders:
+<img width="1099" height="522" alt="Screenshot 2026-09-03 at 9 23 59 AM" src="https://github.com/user-attachments/assets/65b49489-96ed-4a2c-806f-ec9ac185956b" />
+are for doing a single change according to your SDLC. Each work order comes by default with agentic reviews, and the number of reviewers is customizable. 
+
+Projects: TBD
+
 
 ## Configuration
 
