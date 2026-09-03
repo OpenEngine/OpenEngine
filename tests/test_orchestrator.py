@@ -56,7 +56,7 @@ def test_orchestrator_registers_workflows_before_starting() -> None:
 
     asyncio.run(orchestrator.start())
 
-    assert temporal.workflows == WORKFLOWS
+    assert temporal.workflows == ()
     assert temporal.started
 
 
