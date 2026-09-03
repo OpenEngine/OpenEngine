@@ -38,7 +38,10 @@ from engine.adapters.source_control.github.transports import (
 )
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
-from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_ROOT_DIRECTORY,
+    GitWorktreeWorkspaceProvider,
+)
 from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.apps.web.source_control import (
     RoutingSourceControl,
@@ -107,7 +110,7 @@ class Settings:
     source_control_preferences: SourceControlPreferences | None = None
     buzz_base_url: str = ""
     buzz_api_token: str = ""
-    workspace_root: str = "/tmp/engine-workspaces"
+    workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.

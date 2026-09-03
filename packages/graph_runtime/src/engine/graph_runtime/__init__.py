@@ -70,6 +70,7 @@ from engine.graph_runtime.topology import (
     GraphId,
     GraphNode,
     GraphTopology,
+    GraphWorkflow,
     NodeId,
 )
 
@@ -91,6 +92,7 @@ __all__ = [
     "GraphRuntime",
     "GraphRuntimeError",
     "GraphTopology",
+    "GraphWorkflow",
     "NoSuchPositionError",
     "NodeId",
     "PendingApproval",
