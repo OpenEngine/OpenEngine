@@ -5,6 +5,9 @@ import {
   completeHumanReview,
   milestoneDetailsUrl,
   type ApiMilestone,
+  type ApiGraphEvent,
+  type ApiGraphRun,
+  type ApiGraphTopology,
   type ApiProject,
   type ApiRunStep,
   type ApiWorkflowRun,
@@ -569,8 +572,43 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   );
 }
 
+export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId: string }) {
+  const [events, setEvents] = useState<ApiGraphEvent[]>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api<{ events: ApiGraphEvent[] }>(
+      `/api/runs/${encodeURIComponent(runId)}/graph-events`,
+    )
+      .then((value) => setEvents(value.events.filter((event) => event.nodeId === nodeId)))
+      .catch((reason: Error) => setError(reason.message));
+  }, [runId, nodeId]);
+  return (
+    <main className="panel-scroll">
+      <header className="hero hero-narrow">
+        <a className="back-link" href={`/runs/${encodeURIComponent(runId)}`}>← WorkOrder</a>
+        <p className="eyebrow">Graph conversation</p>
+        <h1>{phaseLabel(nodeId)}</h1>
+      </header>
+      {error ? <p className="notice notice-block">{error}</p> : !events ? (
+        <p className="state-inline">Loading conversation…</p>
+      ) : (
+        <section className="timeline" aria-label="Conversation transcript">
+          {events.filter((event) => event.type === "transcript").map((event) => (
+            <article className="callout" key={event.sequence}>
+              <p>{String(event.payload.text ?? "")}</p>
+            </article>
+          ))}
+        </section>
+      )}
+    </main>
+  );
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
-  const [run, setRun] = useState<ApiWorkflowRun>();
+  const [baseRun, setRun] = useState<ApiWorkflowRun>();
+  const [graph, setGraph] = useState<ApiGraphRun>();
+  const [topology, setTopology] = useState<ApiGraphTopology>();
+  const [graphEvents, setGraphEvents] = useState<ApiGraphEvent[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
@@ -585,6 +623,19 @@ export function RunDetailPage({ runId }: { runId: string }) {
           if (cancelled) return;
           setRun(value);
           setError("");
+          if (!value.workflowVersion) {
+            void Promise.all([
+              api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`),
+              api<ApiGraphTopology>(`/graph/api/graphs/${encodeURIComponent(value.workflowId)}`),
+              api<{ events: ApiGraphEvent[] }>(`/api/runs/${encodeURIComponent(runId)}/graph-events`),
+            ]).then(([nextGraph, nextTopology, eventLog]) => {
+              if (!cancelled) {
+                setGraph(nextGraph);
+                setTopology(nextTopology);
+                setGraphEvents(eventLog.events);
+              }
+            });
+          }
         })
         .catch((reason: Error) => {
           if (!cancelled) setError(reason.message);
@@ -599,6 +650,44 @@ export function RunDetailPage({ runId }: { runId: string }) {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runId]);
+  const shownRun = useMemo(() => {
+    if (!baseRun || !graph || !topology) return baseRun;
+    const completed = new Set(
+      graphEvents.filter((event) => event.type === "node.finished").map((event) => event.nodeId),
+    );
+    const active = new Set(graph.activeExecutions.map((execution) => execution.nodeId));
+    const waiting = new Set(graph.pendingApprovals.map((approval) => approval.nodeId));
+    return {
+      ...baseRun,
+      phase: graph.status === "awaiting_approval" ? "awaiting_human_review" : baseRun.phase,
+      currentStepId: graph.activeExecutions[0]?.nodeId ?? graph.nextNodes[0] ?? null,
+      failureReason: graph.error || baseRun.failureReason,
+      steps: topology.nodes.filter((node) => node.kind !== "workspace").map((node) => ({
+        stepId: node.nodeId,
+        name: node.name,
+        kind: node.kind === "human" ? "human" as const : "agent" as const,
+        status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed" : "pending",
+        outcome: completed.has(node.nodeId) ? "completed" : null,
+        changesRequested: false,
+        agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
+        agentInstanceId: null,
+        agentRunId: null,
+        conversationId: null,
+        conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && event.type === "transcript")
+          ? `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(node.nodeId)}` : null,
+        waiting: waiting.has(node.nodeId),
+        summary: typeof graph.values[node.nodeId] === "string" ? String(graph.values[node.nodeId]) : "",
+        outputs: [],
+      })),
+      pendingHumanReview: graph.pendingApprovals[0] ? {
+        stepId: graph.pendingApprovals[0].nodeId,
+        title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
+        summary: "",
+        prUrl: null,
+      } : null,
+    } satisfies ApiWorkflowRun;
+  }, [baseRun, graph, topology, graphEvents, runId]);
+  const run = shownRun;
   const workspaceThreadId = run
     ? (run.steps.find(
         (step) => step.stepId === run.currentStepId && step.agentInstanceId,
@@ -641,7 +730,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
           </StatStrip>
-          {workspaceThreadId && (
+          {graph && typeof graph.values.workspace === "string" ? (
+            <section className="run-workspace" aria-label="WorkOrder checkout">
+              <div className="workspace-control"><span className="micro">Working in</span><code className="dock-path">cd {graph.values.workspace}</code></div>
+            </section>
+          ) : workspaceThreadId && (
             <section className="run-workspace" aria-label="WorkOrder checkout">
               <WorkspaceControl threadId={workspaceThreadId} />
             </section>
@@ -661,7 +754,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
               </p>
             </section>
           )}
-          {run.pendingHumanReview && (
+          {run.pendingHumanReview && graph?.pendingApprovals[0] ? (
+            <section className="callout callout-action">
+              <p className="eyebrow">Action required</p>
+              <h2>{run.pendingHumanReview.title}</h2>
+              <div className="decision"><label><span>Decision note</span><textarea rows={3} /></label><div className="decision-actions">
+                <button type="button" className="btn btn-primary" onClick={() => void api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(graph.pendingApprovals[0].approvalId)}`, { method: "POST", body: JSON.stringify({ decision: "accept" }) }).then(setGraph)}>Approve</button>
+                <button type="button" className="btn" onClick={() => void api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(graph.pendingApprovals[0].approvalId)}`, { method: "POST", body: JSON.stringify({ decision: "cancel" }) }).then(setGraph)}>Reject</button>
+              </div></div>
+            </section>
+          ) : run.pendingHumanReview && (
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
               <h2>{run.pendingHumanReview.title}</h2>
