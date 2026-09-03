@@ -95,8 +95,6 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
         github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
-        public_url=os.environ.get("ENGINE_PUBLIC_URL", "").strip(),
-        slack_channel_id=os.environ.get("SLACK_CHANNEL_ID", "").strip(),
         source_control_preferences=SourceControlPreferences(),
     )
 
@@ -160,8 +158,6 @@ def compose_app(
         github_client_id_source=_github_client_id_source(),
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
-        slack_channel_id=settings.slack_channel_id,
-        public_url=settings.public_url,
     )
 
 

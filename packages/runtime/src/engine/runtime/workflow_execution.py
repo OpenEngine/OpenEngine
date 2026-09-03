@@ -18,6 +18,7 @@ from engine.domain import (
     Command,
     Event,
     HumanReviewCompleted,
+    HumanReviewStep,
     Message,
     ProvisionWorkspace,
     RequestHumanReview,
@@ -44,9 +45,6 @@ from engine.runtime.workflows import WorkflowCatalog
 
 
 logger = logging.getLogger(__name__)
-_HUMAN_REVIEW_CHANNEL = "OpenEngine"
-
-
 class WorkflowExecutionError(RuntimeError):
     """The workflow or local composition cannot execute the requested transition."""
 
@@ -263,7 +261,7 @@ class WorkflowExecutor:
                 )
             command = commands[0]
             if isinstance(command, RequestHumanReview):
-                await self._notify_human_review(state, command)
+                await self._notify_human_review(state, command, definition)
                 return state
             if not isinstance(command, StartAgentRun) or command.step is None:
                 raise WorkflowExecutionError(
@@ -296,9 +294,15 @@ class WorkflowExecutor:
         return state
 
     async def _notify_human_review(
-        self, state: RunState, command: RequestHumanReview
+        self,
+        state: RunState,
+        command: RequestHumanReview,
+        definition: WorkflowDefinition,
     ) -> None:
         """Notify operators without making Slack availability block a workflow."""
+        step = definition.step(command.step_id)
+        if not isinstance(step, HumanReviewStep) or step.notification is None:
+            return
         pull_request_url = next(
             (
                 output.value
@@ -314,9 +318,13 @@ class WorkflowExecutor:
         )
         if pull_request_url:
             message += f"\n<{pull_request_url}|Open pull request>"
+        message += (
+            f"\n<{step.notification.public_url}/runs/{command.run_id}"
+            "|Open human review task>"
+        )
         try:
             await self._capabilities.communications.post(
-                _HUMAN_REVIEW_CHANNEL,
+                step.notification.channel,
                 message,
                 command.run_id,
             )

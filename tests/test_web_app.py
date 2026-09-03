@@ -1504,6 +1504,10 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     assert "The handling is correct." in notification
     assert "worker.py cancels the task" in notification
     assert "<https://github.com/acme/api/pull/42|Open pull request>" in notification
+    assert (
+        f"<https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}"
+        "|Open human review task>"
+    ) in notification
     assert notified_run_id == RunId(body["runId"])
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]

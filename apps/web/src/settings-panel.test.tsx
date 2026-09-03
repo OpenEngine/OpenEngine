@@ -40,7 +40,7 @@ describe("SettingsPanel Slack connection", () => {
 
   it("shows an error when polling Slack status fails", async () => {
     vi.mocked(api.getSlackStatus)
-      .mockResolvedValueOnce({ configured: true, connected: false, ready: false, channelConfigured: true, publicUrlConfigured: true })
+      .mockResolvedValueOnce({ configured: true, connected: false })
       .mockRejectedValueOnce(new Error("Slack status unavailable"));
 
     render(<SettingsPanel onClose={vi.fn()} />);
@@ -52,7 +52,7 @@ describe("SettingsPanel Slack connection", () => {
   });
 
   it("shows an error when Slack token revocation fails", async () => {
-    vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: true, connected: true, ready: true, channelConfigured: true, publicUrlConfigured: true });
+    vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: true, connected: true });
     vi.mocked(api.disconnectSlack).mockRejectedValue(new Error("Slack revocation failed"));
 
     render(<SettingsPanel onClose={vi.fn()} />);
@@ -60,14 +60,14 @@ describe("SettingsPanel Slack connection", () => {
     await user.click(await screen.findByRole("button", { name: "Disconnect" }));
 
     await waitFor(() => expect(screen.getByText("Slack revocation failed")).toBeVisible());
-    expect(screen.getByText("Connected and ready")).toBeVisible();
+    expect(screen.getByText("Connected")).toBeVisible();
     expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
   });
 
   it("refreshes connection status when saving new credentials fails", async () => {
     vi.mocked(api.getSlackStatus)
-      .mockResolvedValueOnce({ configured: true, connected: true, ready: true, channelConfigured: true, publicUrlConfigured: true })
-      .mockResolvedValueOnce({ configured: true, connected: false, ready: false, channelConfigured: true, publicUrlConfigured: true });
+      .mockResolvedValueOnce({ configured: true, connected: true })
+      .mockResolvedValueOnce({ configured: true, connected: false });
     vi.mocked(api.setSlackCredentials).mockRejectedValue(new Error("Could not save credentials"));
 
     render(<SettingsPanel onClose={vi.fn()} />);
@@ -80,21 +80,5 @@ describe("SettingsPanel Slack connection", () => {
     await waitFor(() => expect(screen.getByText("Could not save credentials")).toBeVisible());
     expect(api.getSlackStatus).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("Connected")).not.toBeInTheDocument();
-  });
-
-  it("shows missing notification configuration for a connected workspace", async () => {
-    vi.mocked(api.getSlackStatus).mockResolvedValue({
-      configured: true,
-      connected: true,
-      ready: false,
-      channelConfigured: false,
-      publicUrlConfigured: false,
-    });
-
-    render(<SettingsPanel onClose={vi.fn()} />);
-
-    expect(await screen.findByText("Connected; notifications not ready")).toBeVisible();
-    expect(screen.getByText("SLACK_CHANNEL_ID")).toBeVisible();
-    expect(screen.getByText("ENGINE_PUBLIC_URL")).toBeVisible();
   });
 });

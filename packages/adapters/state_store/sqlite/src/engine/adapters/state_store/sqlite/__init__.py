@@ -55,6 +55,7 @@ from engine.domain.planning import Milestone, Project, Workstream
 from engine.domain.state import RunPhase, RunState
 from engine.domain.workflow import (
     AgentStep,
+    HumanReviewNotification,
     HumanReviewStep,
     OutcomeTransition,
     StepOutput,
@@ -1152,6 +1153,14 @@ def _workflow_to_dict(definition: WorkflowDefinition) -> dict[str, object]:
                     "summary": _template_to_dict(step.summary),
                     "approved": _transition_to_dict(step.approved),
                     "rejected": _transition_to_dict(step.rejected),
+                    "notification": (
+                        {
+                            "channel": step.notification.channel,
+                            "public_url": step.notification.public_url,
+                        }
+                        if step.notification is not None
+                        else None
+                    ),
                 }
             )
     return {
@@ -1199,6 +1208,7 @@ def _workflow_from_dict(value: dict[str, object]) -> WorkflowDefinition:
                 )
             )
         else:
+            notification = raw.get("notification")
             steps.append(
                 HumanReviewStep(
                     step_id=StepId(str(raw["step_id"])),
@@ -1207,6 +1217,14 @@ def _workflow_from_dict(value: dict[str, object]) -> WorkflowDefinition:
                     summary=_template_from_dict(raw["summary"]),
                     approved=_transition_from_dict(raw["approved"]),
                     rejected=_transition_from_dict(raw["rejected"]),
+                    notification=(
+                        HumanReviewNotification(
+                            channel=str(notification["channel"]),
+                            public_url=str(notification["public_url"]),
+                        )
+                        if isinstance(notification, dict)
+                        else None
+                    ),
                 )
             )
     workspace = value.get("workspace", {})

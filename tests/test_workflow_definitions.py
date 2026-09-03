@@ -12,6 +12,7 @@ from engine.domain import (
     AgentId,
     AgentRunId,
     AgentStep,
+    HumanReviewStep,
     HumanReviewCompleted,
     RequestHumanReview,
     RunId,
@@ -367,7 +368,7 @@ def test_checked_in_definition_is_the_implementation_review_source_of_truth() ->
     root = Path(__file__).parents[1]
     loaded = load_workflow_catalog(root / "workflows")
     definition = loaded.require(WorkflowId("implementation-review-v1"))
-    implementation, review, _human = definition.steps
+    implementation, review, human = definition.steps
 
     assert definition.name == "Implementation review"
     assert definition.version == "v1"
@@ -394,6 +395,10 @@ def test_checked_in_definition_is_the_implementation_review_source_of_truth() ->
     assert review.required_outputs == ("findings",)
     assert review.editable is False
     assert review.workspace_access is WorkspaceAccess.READ
+    assert isinstance(human, HumanReviewStep)
+    assert human.notification is not None
+    assert human.notification.channel == "OpenEngine"
+    assert human.notification.public_url == "https://sheas-mac-mini.taileb7fdb.ts.net"
 
 
 def test_sqlite_round_trips_a_workflow_definition_snapshot() -> None:

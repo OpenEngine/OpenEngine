@@ -12,23 +12,26 @@ from engine.apps.web.slack_auth import (
     SlackCredentials,
     authorization_url,
 )
-from engine.domain import RunId
-
-
 def test_slack_communications_posts_to_requested_channel() -> None:
     store = MagicMock(spec=SlackCredentialStore)
     store.token.return_value = "xoxb-token"
     response = MagicMock(is_error=False)
     response.json.return_value = {"ok": True, "ts": "123.456"}
+    channels = MagicMock(is_error=False)
+    channels.json.return_value = {
+        "ok": True,
+        "channels": [{"id": "C123", "name": "OpenEngine"}],
+    }
 
     with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
         client_type.return_value.__aenter__.return_value.post = AsyncMock(
             return_value=response
         )
+        client_type.return_value.__aenter__.return_value.get = AsyncMock(
+            return_value=channels
+        )
         message_id = __import__("asyncio").run(
-            SlackCommunications(
-                store, "https://sheas-mac-mini.taileb7fdb.ts.net/", "C123"
-            ).post("OpenEngine", "Review run-42", RunId("run-42"))
+            SlackCommunications(store).post("OpenEngine", "Review run-42")
         )
 
     assert message_id == "123.456"
@@ -37,10 +40,10 @@ def test_slack_communications_posts_to_requested_channel() -> None:
         headers={"Authorization": "Bearer xoxb-token"},
         json={
             "channel": "C123",
-            "text": "Review run-42\n"
-            "<https://sheas-mac-mini.taileb7fdb.ts.net/runs/run-42|Open human review task>",
+            "text": "Review run-42",
         },
     )
+    client_type.return_value.__aenter__.return_value.get.assert_awaited_once()
 
 
 def test_slack_communications_reports_slack_delivery_errors() -> None:
@@ -55,16 +58,14 @@ def test_slack_communications_reports_slack_delivery_errors() -> None:
         )
         with pytest.raises(SlackAuthError, match="channel_not_found"):
             __import__("asyncio").run(
-                SlackCommunications(store, "https://engine.example", "C123").post(
-                    "OpenEngine", "Review run-42"
-                )
+                SlackCommunications(store).post("C123", "Review run-42")
             )
 
 
 def test_authorization_url_requests_notification_scope_and_state() -> None:
     url = authorization_url("123", "http://localhost/api/slack/callback", "nonce")
     assert url.startswith("https://slack.com/oauth/v2/authorize?")
-    assert "scope=chat%3Awrite%2Cchat%3Awrite.public" in url
+    assert "scope=chat%3Awrite%2Cchat%3Awrite.public%2Cchannels%3Aread" in url
     assert "state=nonce" in url
 
 
@@ -114,8 +115,6 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
         review_runners=runners,
         workflow_catalog=MagicMock(),
         slack_credential_store=slack_store,
-        slack_channel_id="C123",
-        public_url="https://engine.example",
     )
 
     with (
@@ -128,57 +127,11 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
         callback = client.get("/api/slack/callback?code=code&state=nonce")
         after = client.get("/api/slack/status")
 
-    assert before.json() == {
-        "configured": True,
-        "connected": False,
-        "ready": False,
-        "channelConfigured": True,
-        "publicUrlConfigured": True,
-    }
+    assert before.json() == {"configured": True, "connected": False}
     assert "client_id=client" in connect.json()["authorizationUrl"]
     assert callback.status_code == 200
     slack_store.set_token.assert_called_once_with("xoxb-token")
-    assert after.json() == {
-        "configured": True,
-        "connected": True,
-        "ready": True,
-        "channelConfigured": True,
-        "publicUrlConfigured": True,
-    }
-
-
-def test_slack_status_is_not_ready_without_notification_destination(tmp_path) -> None:
-    from engine.adapters.state_store.sqlite import SQLiteStateStore
-    from engine.apps.web.api import create_app
-    from engine.runtime import AgentSession, Capabilities
-
-    stub = object()
-    capabilities = Capabilities(
-        stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "state.sqlite3"))
-    )
-    runners = {"default": stub}
-    store = MagicMock(spec=SlackCredentialStore)
-    store.credentials.return_value = SlackCredentials("client", "secret")
-    store.token.return_value = "xoxb-token"
-    app = create_app(
-        AgentSession(capabilities, profiles={}, runners=runners),
-        runners,
-        workflow_runners=runners,
-        review_runners=runners,
-        workflow_catalog=MagicMock(),
-        slack_credential_store=store,
-    )
-
-    with TestClient(app) as client:
-        status = client.get("/api/slack/status")
-
-    assert status.json() == {
-        "configured": True,
-        "connected": True,
-        "ready": False,
-        "channelConfigured": False,
-        "publicUrlConfigured": False,
-    }
+    assert after.json() == {"configured": True, "connected": True}
 
 
 def test_slack_callback_rejects_wrong_state(tmp_path) -> None:

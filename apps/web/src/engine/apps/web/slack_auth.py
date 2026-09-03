@@ -16,6 +16,7 @@ _TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 _REVOKE_URL = "https://slack.com/api/auth.revoke"
 _AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
 _POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
+_LIST_CONVERSATIONS_URL = "https://slack.com/api/conversations.list"
 
 
 class SlackAuthError(RuntimeError):
@@ -90,27 +91,19 @@ class SlackCredentialStore:
 class SlackCommunications:
     """Deliver Engine notifications through the connected Slack workspace."""
 
-    def __init__(
-        self,
-        credential_store: SlackCredentialStore,
-        web_base_url: str,
-        channel_id: str,
-    ) -> None:
+    def __init__(self, credential_store: SlackCredentialStore) -> None:
         self._credential_store = credential_store
-        self._web_base_url = web_base_url.rstrip("/")
-        self._channel_id = channel_id
 
     async def post(self, channel: str, message: str, run_id=None) -> str:
         token = self._credential_store.token()
-        if not token or not self._channel_id:
+        if not token:
             return ""
-        if run_id is not None:
-            message += f"\n<{self._web_base_url}/runs/{run_id}|Open human review task>"
         async with httpx.AsyncClient() as client:
+            channel_id = await self._resolve_channel(client, token, channel)
             response = await client.post(
                 _POST_MESSAGE_URL,
                 headers={"Authorization": f"Bearer {token}"},
-                json={"channel": self._channel_id, "text": message},
+                json={"channel": channel_id, "text": message},
             )
         if response.is_error:
             raise SlackAuthError(
@@ -123,6 +116,31 @@ class SlackCommunications:
             )
         return str(body.get("ts", ""))
 
+    async def _resolve_channel(self, client, token: str, channel: str) -> str:
+        if channel.startswith(("C", "G", "D")):
+            return channel
+        response = await client.get(
+            _LIST_CONVERSATIONS_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            params={"types": "public_channel", "limit": 200},
+        )
+        body = response.json()
+        if response.is_error or not body.get("ok"):
+            raise SlackAuthError(
+                f"Slack channel lookup failed: {body.get('error', response.status_code)}"
+            )
+        match = next(
+            (
+                item
+                for item in body.get("channels", [])
+                if item.get("name") == channel
+            ),
+            None,
+        )
+        if match is None:
+            raise SlackAuthError(f"Slack channel not found: {channel}")
+        return str(match["id"])
+
     async def reply(self, message_id: str, message: str) -> str:
         raise NotImplementedError("Slack notification threads are not supported")
 
@@ -131,7 +149,7 @@ def authorization_url(client_id: str, redirect_uri: str, state: str) -> str:
     return _AUTHORIZE_URL + "?" + urlencode(
         {
             "client_id": client_id,
-            "scope": "chat:write,chat:write.public",
+            "scope": "chat:write,chat:write.public,channels:read",
             "redirect_uri": redirect_uri,
             "state": state,
         }

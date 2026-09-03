@@ -985,8 +985,6 @@ def create_app(
     github_client_id_source: str = "configuration",
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
-    slack_channel_id: str = "",
-    public_url: str = "",
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -2326,15 +2324,8 @@ def create_app(
 
     async def slack_status(_request: Request) -> JSONResponse:
         credentials = _slack_store.credentials()
-        connected = bool(_slack_store.token())
         return JSONResponse(
-            {
-                "configured": credentials is not None,
-                "connected": connected,
-                "ready": connected and bool(slack_channel_id) and bool(public_url),
-                "channelConfigured": bool(slack_channel_id),
-                "publicUrlConfigured": bool(public_url),
-            }
+            {"configured": credentials is not None, "connected": bool(_slack_store.token())}
         )
 
     async def slack_set_credentials(request: Request) -> Response:

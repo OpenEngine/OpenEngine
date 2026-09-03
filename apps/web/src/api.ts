@@ -446,13 +446,7 @@ export function disconnectGitHub(): Promise<void> {
   return api<void>("/api/github/disconnect", { method: "POST" });
 }
 
-export type SlackStatus = {
-  configured: boolean;
-  connected: boolean;
-  ready: boolean;
-  channelConfigured: boolean;
-  publicUrlConfigured: boolean;
-};
+export type SlackStatus = { configured: boolean; connected: boolean };
 
 export function getSlackStatus(): Promise<SlackStatus> {
   return api<SlackStatus>("/api/slack/status");
