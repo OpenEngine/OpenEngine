@@ -95,6 +95,12 @@ class AgentStep:
 
 
 @dataclass(frozen=True, slots=True)
+class HumanReviewNotification:
+    channel: str
+    public_url: str
+
+
+@dataclass(frozen=True, slots=True)
 class HumanReviewStep:
     step_id: StepId
     name: str
@@ -102,6 +108,7 @@ class HumanReviewStep:
     summary: WorkflowTemplate
     approved: Transition
     rejected: Transition
+    notification: HumanReviewNotification | None = None
 
 
 WorkflowStep = AgentStep | HumanReviewStep
@@ -136,6 +143,7 @@ class WorkflowDefinition:
 __all__ = [
     "AgentStep",
     "HumanReviewStep",
+    "HumanReviewNotification",
     "OutcomeTransition",
     "StepOutput",
     "StepSpec",

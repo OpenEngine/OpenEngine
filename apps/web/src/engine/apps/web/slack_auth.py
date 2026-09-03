@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -15,6 +16,8 @@ _ACCESS_TOKEN = "slack-access-token"
 _TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 _REVOKE_URL = "https://slack.com/api/auth.revoke"
 _AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
+_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
+_LIST_CONVERSATIONS_URL = "https://slack.com/api/conversations.list"
 
 
 class SlackAuthError(RuntimeError):
@@ -86,11 +89,78 @@ class SlackCredentialStore:
                 pass
 
 
+class SlackCommunications:
+    """Deliver Engine notifications through the connected Slack workspace."""
+
+    def __init__(self, credential_store: SlackCredentialStore) -> None:
+        self._credential_store = credential_store
+
+    async def post(self, channel: str, message: str, run_id=None) -> str:
+        token = self._credential_store.token()
+        if not token:
+            return ""
+        async with httpx.AsyncClient() as client:
+            channel_id = await self._resolve_channel(client, token, channel)
+            response = await client.post(
+                _POST_MESSAGE_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"channel": channel_id, "text": message},
+            )
+        if response.is_error:
+            raise SlackAuthError(
+                f"Slack returned {response.status_code} while posting a notification"
+            )
+        body = response.json()
+        if not body.get("ok"):
+            raise SlackAuthError(
+                f"Slack notification failed: {body.get('error', 'message was not sent')}"
+            )
+        return str(body.get("ts", ""))
+
+    async def _resolve_channel(
+        self, client: httpx.AsyncClient, token: str, channel: str
+    ) -> str:
+        if re.fullmatch(r"[CGD][A-Z0-9]{8,}", channel):
+            return channel
+        cursor = ""
+        while True:
+            params = {"types": "public_channel", "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            response = await client.get(
+                _LIST_CONVERSATIONS_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+            )
+            body = response.json()
+            if response.is_error or not body.get("ok"):
+                raise SlackAuthError(
+                    "Slack channel lookup failed: "
+                    f"{body.get('error', response.status_code)}"
+                )
+            match = next(
+                (
+                    item
+                    for item in body.get("channels", [])
+                    if str(item.get("name", "")).casefold() == channel.casefold()
+                ),
+                None,
+            )
+            if match is not None:
+                return str(match["id"])
+            cursor = str(body.get("response_metadata", {}).get("next_cursor", ""))
+            if not cursor:
+                raise SlackAuthError(f"Slack channel not found: {channel}")
+
+    async def reply(self, message_id: str, message: str) -> str:
+        raise NotImplementedError("Slack notification threads are not supported")
+
+
 def authorization_url(client_id: str, redirect_uri: str, state: str) -> str:
     return _AUTHORIZE_URL + "?" + urlencode(
         {
             "client_id": client_id,
-            "scope": "chat:write",
+            "scope": "chat:write,chat:write.public,channels:read",
             "redirect_uri": redirect_uri,
             "state": state,
         }
@@ -124,6 +194,7 @@ async def revoke_token(token: str) -> None:
 
 __all__ = [
     "SlackAuthError",
+    "SlackCommunications",
     "SlackCredentialStore",
     "authorization_url",
     "exchange_code",

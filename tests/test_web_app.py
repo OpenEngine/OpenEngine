@@ -6,6 +6,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import openengine as oe
@@ -1176,6 +1177,7 @@ def _workflow_app(
     store: InMemoryStateStore,
     runner: ConcurrentRunner,
     workspaces: object | None = None,
+    communications: object | None = None,
     workflow_runners: dict[str, ConcurrentRunner] | None = None,
     reviewers: dict[str, ConcurrentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
@@ -1197,7 +1199,7 @@ def _workflow_app(
             workflow_runtime=unused,
             source_control=unused,
             agent_runner=runner,
-            communications=unused,
+            communications=communications if communications is not None else unused,
             workspace_provider=workspaces or ConversationWorkspaces(),
             state_store=store,
         ),
@@ -1395,6 +1397,8 @@ def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
 
 def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     store = InMemoryStateStore()
+    communications = MagicMock()
+    communications.post = AsyncMock(return_value="123.456")
     implementer = TerminalToolRunner(
         "complete_step",
         {
@@ -1407,7 +1411,12 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
         summary="The handling is correct.",
         findings="worker.py cancels the task, and the new test covers it.",
     )
-    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+    app = _workflow_app(
+        store,
+        implementer,
+        communications=communications,
+        reviewers={"test": reviewer},
+    )
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1486,6 +1495,20 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     assert body["steps"][1]["conversationUrl"]
     assert body["steps"][2]["status"] == "action_required"
     assert "worker.py cancels the task" in body["pendingHumanReview"]["summary"]
+    communications.post.assert_awaited_once()
+    channel, notification, notified_run_id = communications.post.await_args.args
+    assert channel == "OpenEngine"
+    assert notification.startswith(
+        "Work order step complete and ready for human review: Review implementation"
+    )
+    assert "The handling is correct." in notification
+    assert "worker.py cancels the task" in notification
+    assert "<https://github.com/acme/api/pull/42|Open pull request>" in notification
+    assert (
+        f"<https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}"
+        "|Open human review task>"
+    ) in notification
+    assert notified_run_id == RunId(body["runId"])
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]
     ]

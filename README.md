@@ -123,6 +123,10 @@ ask = ["git push **"]
 deny = ["sudo **"]
 ```
 
+Slack human-review destinations are configured alongside the review step in the
+repository workflow DSL. See `workflows/implementation_review.py` for the
+channel name and externally reachable Engine URL used in review notifications.
+
 Set `attribution = false` to keep both Codex and Claude Code from adding agent
 attribution to commits and pull requests. Attribution is enabled by default.
 
