@@ -22,6 +22,7 @@ vi.mock("./api", () => ({
 
 describe("SettingsPanel Slack connection", () => {
   beforeEach(() => {
+    vi.resetAllMocks();
     Object.defineProperty(window, "localStorage", {
       configurable: true,
       value: { clear: vi.fn() },
@@ -61,5 +62,23 @@ describe("SettingsPanel Slack connection", () => {
     await waitFor(() => expect(screen.getByText("Slack revocation failed")).toBeVisible());
     expect(screen.getByText("Connected")).toBeVisible();
     expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
+  });
+
+  it("refreshes connection status when saving new credentials fails", async () => {
+    vi.mocked(api.getSlackStatus)
+      .mockResolvedValueOnce({ configured: true, connected: true })
+      .mockResolvedValueOnce({ configured: true, connected: false });
+    vi.mocked(api.setSlackCredentials).mockRejectedValue(new Error("Could not save credentials"));
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Change credentials" }));
+    await user.type(screen.getByLabelText("Slack OAuth Client ID"), "new-client");
+    await user.type(screen.getByLabelText("Slack OAuth Client Secret"), "new-secret");
+    await user.click(screen.getByRole("button", { name: "Save credentials" }));
+
+    await waitFor(() => expect(screen.getByText("Could not save credentials")).toBeVisible());
+    expect(api.getSlackStatus).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Connected")).not.toBeInTheDocument();
   });
 });

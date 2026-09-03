@@ -1950,6 +1950,7 @@ def create_app(
         )
 
     async def slack_set_credentials(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
         if not _is_local_request(request):
             return _error("forbidden", 403)
         body = await request.json()
@@ -1968,6 +1969,8 @@ def create_app(
             _slack_store.set_credentials(client_id, client_secret)
         except SlackAuthError as error:
             return _error(str(error), 500)
+        _slack_state = None
+        _slack_redirect_uri = None
         return Response(status_code=204)
 
     async def slack_connect(request: Request) -> JSONResponse:
@@ -2006,6 +2009,7 @@ def create_app(
         )
 
     async def slack_disconnect(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
         if not _is_local_request(request):
             return _error("forbidden", 403)
         token = _slack_store.token()
@@ -2015,6 +2019,8 @@ def create_app(
             except SlackAuthError as error:
                 return _error(str(error), 502)
         _slack_store.disconnect()
+        _slack_state = None
+        _slack_redirect_uri = None
         return Response(status_code=204)
 
     routes = [

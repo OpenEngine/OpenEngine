@@ -203,3 +203,35 @@ def test_changing_credentials_keeps_existing_state_when_revocation_fails(tmp_pat
     assert response.status_code == 502
     store.disconnect.assert_not_called()
     store.set_credentials.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["disconnect", "credentials"])
+def test_successful_slack_mutation_invalidates_pending_oauth_flow(tmp_path, operation: str) -> None:
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.apps.web.api import create_app
+    from engine.runtime import AgentSession, Capabilities
+
+    stub = object()
+    capabilities = Capabilities(stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "s.sqlite3")))
+    runners = {"default": stub}
+    store = MagicMock(spec=SlackCredentialStore)
+    store.credentials.return_value = SlackCredentials("client", "secret")
+    store.token.return_value = None
+    app = create_app(AgentSession(capabilities, profiles={}, runners=runners), runners,
+                     workflow_runners=runners, review_runners=runners,
+                     workflow_catalog=MagicMock(), slack_credential_store=store)
+
+    with patch("engine.apps.web.api.uuid4", return_value=MagicMock(hex="pending")), TestClient(app) as client:
+        assert client.post("/api/slack/connect").status_code == 200
+        if operation == "disconnect":
+            response = client.post("/api/slack/disconnect")
+        else:
+            response = client.post(
+                "/api/slack/credentials",
+                json={"clientId": "new-client", "clientSecret": "new-secret"},
+            )
+        callback = client.get("/api/slack/callback?code=code&state=pending")
+
+    assert response.status_code == 204
+    assert callback.status_code == 400
+    store.set_token.assert_not_called()

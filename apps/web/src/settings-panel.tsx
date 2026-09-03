@@ -257,11 +257,13 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         clientSecret: "",
       }));
     } catch (err) {
-      setSlack((value) => ({
-        ...value,
-        loading: false,
-        error: err instanceof Error ? err.message : "Could not save Slack credentials.",
-      }));
+      const message = err instanceof Error ? err.message : "Could not save Slack credentials.";
+      try {
+        const status = await getSlackStatus();
+        setSlack((value) => ({ ...value, ...status, loading: false, error: message }));
+      } catch {
+        setSlack((value) => ({ ...value, loading: false, error: message }));
+      }
     }
   }, [slack.clientId, slack.clientSecret]);
 
