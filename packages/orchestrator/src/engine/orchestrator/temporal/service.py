@@ -171,6 +171,13 @@ class TemporalService:
                 if self._stopping:
                     return
                 logger.info("temporal.server.restarting")
-                await self._shutdown_runtime()
-                await self._boot()
+                try:
+                    await self._shutdown_runtime()
+                    await self._boot()
+                except Exception:
+                    logger.exception(
+                        "temporal.server.restart_failed",
+                        retry_in_seconds=self.health_check_interval,
+                    )
+                    continue
                 logger.info("temporal.server.restarted")

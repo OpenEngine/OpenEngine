@@ -29,6 +29,17 @@ def test_sqlite_temporal_boots_is_accessible_and_recovers(tmp_path: Path) -> Non
             assert await service.is_healthy()
             assert database.exists()
 
+            original_boot = service._boot
+            reboot_attempts = 0
+
+            async def fail_first_reboot() -> None:
+                nonlocal reboot_attempts
+                reboot_attempts += 1
+                if reboot_attempts == 1:
+                    raise RuntimeError("transient restart failure")
+                await original_boot()
+
+            service._boot = fail_first_reboot
             original_environment = service._environment
             assert original_environment is not None
             await original_environment.shutdown()
@@ -41,6 +52,7 @@ def test_sqlite_temporal_boots_is_accessible_and_recovers(tmp_path: Path) -> Non
                     await asyncio.sleep(0.05)
 
             assert await service.is_healthy()
+            assert reboot_attempts == 2
         finally:
             await service.stop()
 
