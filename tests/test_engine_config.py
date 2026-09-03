@@ -23,6 +23,9 @@ def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     assert loaded.path is None
     assert loaded.config.attribution is True
     assert loaded.config.default_branch == "main"
+    assert loaded.config.orchestrator.host == "127.0.0.1:7233"
+    assert loaded.config.orchestrator.database == ".engine/temporal.sqlite3"
+    assert loaded.config.orchestrator.health_check_interval == 5.0
     assert loaded.config.claude.output_style is None
     assert loaded.config.approvals.allow == (ApprovalCapability.READ,)
     assert loaded.config.approvals.auto_approve is False
@@ -122,6 +125,11 @@ def test_selection_is_explicit_then_environment_then_working_directory(
         ({"default_branch": 1}, "default_branch must be a non-empty string"),
         ({"github_client_id": 1}, "github_client_id must be a string"),
         ({"github_token": " "}, "github_token must not be blank"),
+        ({"orchestrator": {"host": ""}}, "orchestrator.host must not be blank"),
+        (
+            {"orchestrator": {"health_check_interval": 0}},
+            "orchestrator.health_check_interval must be a positive number",
+        ),
         ({"output_style": "concise"}, "unknown key in configuration: output_style"),
         ({"claude": {"style": "concise"}}, "unknown key in claude: style"),
         ({"claude": {"output_style": True}}, "claude.output_style must be a string"),
