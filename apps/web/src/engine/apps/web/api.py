@@ -1841,6 +1841,20 @@ def create_app(
             }
         )
 
+    async def source_control_provider_status(_request: Request) -> JSONResponse:
+        """Return the chosen provider without probing an unrelated CLI.
+
+        A saved OAuth choice is a local settings-file read.  Do not make the
+        Settings panel wait for ``gh auth status`` merely to render that choice.
+        First-run auto-selection still performs its one required CLI probe.
+        """
+        provider, auto_selected = source_control_settings.selected_or_detected_provider(
+            _source_control_preferences
+        )
+        return JSONResponse(
+            {"provider": provider, "autoSelected": auto_selected}
+        )
+
     async def set_source_control_provider(request: Request) -> Response:
         if not _is_local_request(request):
             return _error("forbidden", 403)
@@ -1950,6 +1964,7 @@ def create_app(
         Route("/api/config", config),
         Route("/api/github/status", github_status),
         Route("/api/source-control/status", source_control_status),
+        Route("/api/source-control/provider", source_control_provider_status),
         Route(
             "/api/source-control/provider",
             set_source_control_provider,

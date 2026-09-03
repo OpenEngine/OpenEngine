@@ -560,6 +560,22 @@ class TestPollEndpoint:
 
 
 class TestSourceControlProviderEndpoint:
+    def test_saved_oauth_choice_does_not_probe_gh_cli(self, tmp_path, monkeypatch) -> None:
+        from starlette.testclient import TestClient
+
+        from engine.apps.web.source_control import SourceControlPreferences
+
+        SourceControlPreferences(tmp_path / "settings.json").set("github-oauth")
+        monkeypatch.setattr(
+            "engine.apps.web.source_control.gh_cli_status",
+            lambda: pytest.fail("saved OAuth preference must not probe GH CLI"),
+        )
+        app = _make_github_app(tmp_path)
+        with TestClient(app) as client:
+            response = client.get("/api/source-control/provider")
+
+        assert response.json() == {"provider": "github-oauth", "autoSelected": False}
+
     def test_selects_provider_and_rejects_gitlab(self, tmp_path, monkeypatch) -> None:
         from starlette.testclient import TestClient
 

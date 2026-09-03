@@ -379,6 +379,11 @@ export type SourceControlStatus = {
   };
 };
 
+export type SourceControlProviderStatus = {
+  provider: "gh-cli" | "github-oauth";
+  autoSelected: boolean;
+};
+
 export type GitHubClientIdInfo =
   | { source: "environment" | "configuration"; hint: string }
   | { source: "keychain"; hint: string }
@@ -405,6 +410,10 @@ export function getGitHubStatus(): Promise<GitHubStatus> {
 
 export function getSourceControlStatus(): Promise<SourceControlStatus> {
   return api<SourceControlStatus>("/api/source-control/status");
+}
+
+export function getSourceControlProvider(): Promise<SourceControlProviderStatus> {
+  return api<SourceControlProviderStatus>("/api/source-control/provider");
 }
 
 export function setSourceControlProvider(
