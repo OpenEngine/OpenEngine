@@ -250,6 +250,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       setSlack((value) => ({
         ...value,
         configured: true,
+        connected: false,
         loading: false,
         editing: false,
         clientId: "",
@@ -297,8 +298,17 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, []);
 
   const removeSlackConnection = useCallback(async () => {
-    await disconnectSlack();
-    setSlack((value) => ({ ...value, connected: false }));
+    setSlack((value) => ({ ...value, loading: true, error: undefined }));
+    try {
+      await disconnectSlack();
+      setSlack((value) => ({ ...value, connected: false, loading: false }));
+    } catch (err) {
+      setSlack((value) => ({
+        ...value,
+        loading: false,
+        error: err instanceof Error ? err.message : "Could not disconnect Slack.",
+      }));
+    }
   }, []);
 
   return (

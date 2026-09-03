@@ -148,3 +148,58 @@ def test_slack_disconnect_preserves_token_when_revocation_fails(tmp_path) -> Non
 
     assert response.status_code == 502
     store.disconnect.assert_not_called()
+
+
+def test_changing_credentials_revokes_existing_token_first(tmp_path) -> None:
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.apps.web.api import create_app
+    from engine.runtime import AgentSession, Capabilities
+
+    stub = object()
+    capabilities = Capabilities(stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "s.sqlite3")))
+    runners = {"default": stub}
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-old-token"
+    app = create_app(AgentSession(capabilities, profiles={}, runners=runners), runners,
+                     workflow_runners=runners, review_runners=runners,
+                     workflow_catalog=MagicMock(), slack_credential_store=store)
+    events: list[str] = []
+    revoke = AsyncMock(side_effect=lambda _token: events.append("revoke"))
+    store.disconnect.side_effect = lambda: events.append("disconnect")
+    store.set_credentials.side_effect = lambda *_args: events.append("save")
+
+    with patch("engine.apps.web.api.revoke_slack_token", new=revoke), TestClient(app) as client:
+        response = client.post(
+            "/api/slack/credentials",
+            json={"clientId": "new-client", "clientSecret": "new-secret"},
+        )
+
+    assert response.status_code == 204
+    assert events == ["revoke", "disconnect", "save"]
+    revoke.assert_awaited_once_with("xoxb-old-token")
+
+
+def test_changing_credentials_keeps_existing_state_when_revocation_fails(tmp_path) -> None:
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.apps.web.api import create_app
+    from engine.runtime import AgentSession, Capabilities
+
+    stub = object()
+    capabilities = Capabilities(stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "s.sqlite3")))
+    runners = {"default": stub}
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-old-token"
+    app = create_app(AgentSession(capabilities, profiles={}, runners=runners), runners,
+                     workflow_runners=runners, review_runners=runners,
+                     workflow_catalog=MagicMock(), slack_credential_store=store)
+    revoke = AsyncMock(side_effect=SlackAuthError("Slack unavailable"))
+
+    with patch("engine.apps.web.api.revoke_slack_token", new=revoke), TestClient(app) as client:
+        response = client.post(
+            "/api/slack/credentials",
+            json={"clientId": "new-client", "clientSecret": "new-secret"},
+        )
+
+    assert response.status_code == 502
+    store.disconnect.assert_not_called()
+    store.set_credentials.assert_not_called()

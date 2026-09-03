@@ -1957,6 +1957,13 @@ def create_app(
         client_secret = (body.get("clientSecret") or "").strip()
         if not client_id or not client_secret:
             return _error("clientId and clientSecret are required", 400)
+        token = _slack_store.token()
+        if token:
+            try:
+                await revoke_slack_token(token)
+            except SlackAuthError as error:
+                return _error(str(error), 502)
+            _slack_store.disconnect()
         try:
             _slack_store.set_credentials(client_id, client_secret)
         except SlackAuthError as error:

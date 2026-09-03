@@ -49,4 +49,17 @@ describe("SettingsPanel Slack connection", () => {
     await waitFor(() => expect(screen.getByText("Slack status unavailable")).toBeVisible());
     expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
   });
+
+  it("shows an error when Slack token revocation fails", async () => {
+    vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: true, connected: true });
+    vi.mocked(api.disconnectSlack).mockRejectedValue(new Error("Slack revocation failed"));
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Disconnect" }));
+
+    await waitFor(() => expect(screen.getByText("Slack revocation failed")).toBeVisible());
+    expect(screen.getByText("Connected")).toBeVisible();
+    expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
+  });
 });
