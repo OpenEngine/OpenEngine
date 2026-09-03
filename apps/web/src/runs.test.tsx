@@ -23,8 +23,21 @@ const config: EngineConfig = {
   workflowRunners: ["codex"],
   defaultWorkflowRunner: "codex",
   workflows: [
-    { id: "work-v1", name: "Work", version: "v1" },
-    { id: "release-v2", name: "Release", version: "v2" },
+    { id: "work-v1", name: "Work", version: "v1", kind: "steps" },
+    { id: "release-v2", name: "Release", version: "v2", kind: "steps" },
+  ],
+};
+/** The same deployment, with a graph workflow beside the step ones. */
+const withBeta: EngineConfig = {
+  ...config,
+  workflows: [
+    ...config.workflows,
+    {
+      id: "implementation-review-codex",
+      name: "[BETA] Implementation review (codex)",
+      version: "",
+      kind: "graph",
+    },
   ],
 };
 const project: ApiProject = {
@@ -155,6 +168,50 @@ describe("NewWorkflowPage", () => {
     expect(within(selector).getByRole("option", { name: "Release · v2" })).toHaveValue(
       "release-v2",
     );
+  });
+
+  it("offers a beta workflow by its name alone, with no version to show", async () => {
+    // A [BETA] entry is a graph workflow. It has no version, and "name · "
+    // with nothing after it reads like something failed to load.
+    render(<NewWorkflowPage config={withBeta} />);
+
+    const selector = screen.getByRole("combobox", { name: "Workflow definition" });
+    expect(
+      within(selector).getByRole("option", { name: "[BETA] Implementation review (codex)" }),
+    ).toHaveValue("implementation-review-codex");
+  });
+
+  it("does not ask which runner to use for a workflow that names its own agent", async () => {
+    // The graph decides which agent runs it -- there is one entry per agent --
+    // so the server reads no runner for one. A field that appears to choose
+    // something and is then ignored is worse than no field.
+    const user = userEvent.setup();
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<NewWorkflowPage config={withBeta} />);
+    expect(screen.getByRole("combobox", { name: "Implementation runner" })).toBeVisible();
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Workflow definition" }),
+      "implementation-review-codex",
+    );
+
+    expect(
+      screen.queryByRole("combobox", { name: "Implementation runner" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/runs the agent named in its own definition/),
+    ).toBeVisible();
+
+    // And nothing is sent in its place: the WorkOrder carries the graph, the
+    // prompt and the repository, which is all a graph is given.
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Create WorkOrder" }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
+    const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).not.toHaveProperty("runner");
   });
 
   it("restores a prompt after unmounting and remounting", async () => {
@@ -344,6 +401,25 @@ describe("RunsPage", () => {
 });
 
 describe("RunDetailPage", () => {
+  it("says where to look for a beta WorkOrder that has no stages here", async () => {
+    // A graph WorkOrder has no steps to draw, because a graph is not made of
+    // them. Without a word of explanation the page reads as one that never
+    // started.
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      workflowName: "Implementation review (codex)",
+      workflowVersion: "",
+      currentStepId: null,
+      steps: [],
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(graphRun)));
+
+    render(<RunDetailPage runId="run-1" />);
+
+    expect(await screen.findByText("Beta workflow")).toBeVisible();
+    expect(screen.getByText("Implementation review (codex)")).toBeVisible();
+  });
+
   it("renders steps from an arbitrary workflow definition", async () => {
     const generic = run({
       workflowId: "release-v2",

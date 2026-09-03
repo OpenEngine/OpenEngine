@@ -8,9 +8,12 @@ requires-python = ">=3.11"
 # dependencies live in this directory's package.json.
 dependencies = [
     "engine-runtime",
-    # Startup reads every file in the workflow directory, and a workflow file
-    # is allowed to import this. So it has to be installed even though nothing
-    # here starts a graph yet. (The worker and control server list it too.)
+    # The engine that runs the `[BETA]` graph workflows, and the contract it
+    # implements. Startup reads every file in the workflow directory and a
+    # workflow file imports the binding, so it would have to be installed even
+    # if this app started none of them. (The worker and control server list it
+    # for that reason alone.)
+    "engine-graph-runtime",
     "engine-graph-runtime-langgraph",
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second. SQLite gives chat durable conversations
@@ -46,6 +49,7 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-runtime = { workspace = true }
+engine-graph-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }
 engine-adapter-agent-runner-claude-code = { workspace = true }

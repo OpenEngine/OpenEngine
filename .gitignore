@@ -12,6 +12,9 @@ build/
 node_modules/
 *.tsbuildinfo
 /conversations.sqlite3
+# Where a graph workflow remembers how far it got, written next to wherever
+# the server was started. Local state, like the conversation store above it.
+/graph-state/
 .claude/settings.local.json
 .codex/
 test-results/

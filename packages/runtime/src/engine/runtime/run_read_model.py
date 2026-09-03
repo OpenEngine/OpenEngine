@@ -95,6 +95,13 @@ class RunReader:
             if catalog is not None
             else WorkflowCatalog.from_definitions(())
         )
+        # A run of a graph workflow has no step definition to take a name from,
+        # because a graph is not made of steps. Without this its rows would be
+        # labelled with its id, which is the sort of thing that makes a list
+        # look broken.
+        self._graph_names = {
+            str(graph.graph_id): graph.name for graph in self._catalog.graphs
+        }
 
     async def list(self) -> tuple[WorkflowRunView, ...]:
         states = tuple(await self._store.list_runs())
@@ -171,7 +178,11 @@ class RunReader:
             name=state.name or state.prompt or str(state.run_id),
             workflow_id=str(state.workflow_id),
             workflow_name=(
-                definition.name if definition is not None else str(state.workflow_id)
+                definition.name
+                if definition is not None
+                else self._graph_names.get(
+                    str(state.workflow_id), str(state.workflow_id)
+                )
             ),
             workflow_version=definition.version if definition is not None else "",
             task_id=str(state.task_id),

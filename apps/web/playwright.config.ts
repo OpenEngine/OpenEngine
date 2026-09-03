@@ -4,7 +4,12 @@ import { defineConfig, devices } from "@playwright/test";
  *
  *  Each test composes its own application over a scripted CLI (`e2e/harness.ts`),
  *  so there is no shared server here and no `webServer` block -- only the client
- *  build every one of those servers needs to serve. */
+ *  build every one of those servers needs to serve.
+ *
+ *  Tests tagged `@beta` are the `[BETA]` graph WorkOrder's, and are expected to
+ *  fail while the interface catches up with the graph engine. They are run by
+ *  their own job, which is allowed to be red -- `npm run test:e2e` leaves them
+ *  out, and `npm run test:e2e:beta` runs only them. */
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/build-client.ts",

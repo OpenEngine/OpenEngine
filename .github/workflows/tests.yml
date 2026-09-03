@@ -163,6 +163,69 @@ jobs:
           # Diagnostics, not archives.
           retention-days: 14
 
+  beta-browser:
+    # The same browser tier, pointed at a `[BETA]` graph WorkOrder: the specs
+    # in `e2e/graph-workflow.spec.ts`, which are `workflow-run.spec.ts` split
+    # into the states a run passes through.
+    #
+    # Allowed to fail, and expected to. A graph WorkOrder is started by the
+    # interface and then shown by nothing: no stages, no conversations, no way
+    # to answer the question it stops on. Each red test names one of those, so
+    # this job is the list of what is left to build rather than a gate on
+    # merging -- which is why it is `continue-on-error` and not `required`.
+    #
+    # It goes green one test at a time. When the last one does, fold these
+    # specs into `browser end to end` and delete this job.
+    name: browser end to end (BETA graph WorkOrders, may fail)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --locked --all-packages
+
+      - name: Install web client
+        run: npm --prefix apps/web ci
+
+      - name: Install the browser
+        run: npm --prefix apps/web exec -- playwright install --with-deps chromium
+
+      - name: Drive a BETA graph WorkOrder
+        run: npm --prefix apps/web run test:e2e:beta
+
+      # The point of the job: the report says which states a graph WorkOrder
+      # reaches and which it does not, with a screenshot of each one it does.
+      - name: Upload the report (a static site -- unzip, then `npx playwright show-report <dir>`)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-beta
+          path: apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload the traces of what failed
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces-beta
+          path: apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
   boundaries:
     # Separated from the test matrix on purpose: this job answers "did someone
     # break the architecture?", which is a different question from "did someone
