@@ -55,6 +55,7 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.ports",
         "engine.runtime",
         "engine.graph_runtime",
+        "engine.orchestrator",
     ),
     ADAPTER: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
     APP: ("engine.domain", "engine.core", "engine.ports", "engine.runtime", "engine.adapters"),
@@ -102,6 +103,8 @@ def _layer_for(root: Path) -> str:
         case ("packages", "graph_runtime"):
             return RUNTIME
         case ("packages", "graph_runtime_langgraph"):
+            return RUNTIME
+        case ("packages", "orchestrator"):
             return RUNTIME
         case ("packages", "ports"):
             return PORTS

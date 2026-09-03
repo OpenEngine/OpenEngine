@@ -23,6 +23,7 @@ members = [
     "engine-graph-runtime",
     "engine-graph-runtime-langgraph",
     "engine-migrations",
+    "engine-orchestrator",
     "engine-ports",
     "engine-runtime",
     "engine-scoper",
@@ -605,6 +606,11 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
+
+[[package]]
+name = "engine-orchestrator"
+version = "0.0.0"
+source = { editable = "packages/orchestrator" }
 
 [[package]]
 name = "engine-ports"
