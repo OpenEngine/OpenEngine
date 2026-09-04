@@ -6,10 +6,8 @@ Changes -> Pool of Reviewers -> Reranking -> Impact Radius Analysis -> System Di
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
-This is currently a source installation; the agreed path to Homebrew and a
-verified shell installer is tracked in the
-[portable distribution plan](docs/portability.md).
 
+OpenEngine uses your locally installed codex and claude CLI. This means that it can utilize your subscription limits instead of being provided an API key. Make sure your claude or codex CLI are installed and authenticated. 
 
 First, clone the repo:
 ```bash
