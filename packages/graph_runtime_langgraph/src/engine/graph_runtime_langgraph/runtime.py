@@ -80,7 +80,8 @@ from engine.graph_runtime_langgraph.store import (
 #: Where a failure that a client only sees as a sentence is written down whole.
 #: A run's `error` is one string, published once and stored once, with no type
 #: and no traceback; this is where the operator reading the process log finds
-#: what actually raised.
+#: what actually raised. Written by `_fail`, which is what decides whether this
+#: failure is the one being reported.
 log = logging.getLogger(__name__)
 
 #: LangGraph's reasons a checkpoint exists, in the contract's vocabulary.
@@ -468,15 +469,7 @@ class LangGraphRuntime:
         except Exception as failure:
             await self._release_all(live)
             blamed = await self._blamed(definition, live.run_id) or failed_at
-            log.exception(
-                "graph run failed",
-                extra={
-                    "run_id": str(live.run_id),
-                    "graph_id": str(live.graph_id),
-                    "node_id": str(blamed) if blamed is not None else None,
-                },
-            )
-            await self._fail(live, str(failure), blamed)
+            await self._fail(live, str(failure), blamed, failure)
 
     async def _blamed(
         self, definition: LangGraphDefinition, run_id: RunId
@@ -557,18 +550,41 @@ class LangGraphRuntime:
             },
         )
 
-    async def _fail(self, live: _Live, error: str, node_id: NodeId | None) -> None:
-        """Stop the run, once.
+    async def _fail(
+        self,
+        live: _Live,
+        error: str,
+        node_id: NodeId | None,
+        failure: BaseException,
+    ) -> None:
+        """Stop the run, once, and write down what stopped it.
 
         A refusal and the node noticing it are two things that can both arrive:
         the decision ends the run, and the agent it released may raise on its
         way out before the cancellation reaches it. The first answer is the one
         a client was already told, so a second would contradict it. A fork
         clears the error, which is what lets a re-attempt fail on its own.
+
+        The log line is written here rather than where the exception was caught
+        because it is subject to the same "once": the exception a refused run
+        raises on its way out is the expected end of a run that ended for a
+        reason a person chose, and logging it as a failure would put a
+        traceback in the log every time somebody said no.
         """
         record = await self._store.run(live.run_id)
         if record is not None and record.error:
             return
+        # Identifiers in the message, not in `extra`: no process here installs a
+        # handler that renders extra fields, so a run id put there is a run id
+        # nobody can read.
+        log.error(
+            "graph run %s (graph %s, node %s) failed: %s",
+            live.run_id,
+            live.graph_id,
+            node_id if node_id is not None else "unknown",
+            error,
+            exc_info=failure,
+        )
         if record is not None:
             await self._store.remember_run(replace(record, error=error))
         await self.publish(

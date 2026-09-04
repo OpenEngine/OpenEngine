@@ -177,6 +177,12 @@ def main() -> int:
             respond(message_id, capabilities(options))
         elif method == "session/new":
             if "--die-on-new-session" in options:
+                if "--noisy" in options:
+                    # More than the client will keep, so that which end it keeps
+                    # is a choice this agent can make it demonstrate. Nineteen
+                    # lines leaves room for the fatal one in a 20-line buffer.
+                    for index in range(19):
+                        print(f"codex-acp: {index} " + "noise " * 40, file=sys.stderr)
                 print("codex-acp: everything is on fire", file=sys.stderr, flush=True)
                 return 3
             if "--nameless-session" in options:

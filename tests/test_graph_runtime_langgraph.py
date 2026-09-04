@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
-from engine.graph_runtime import EventLog, GraphId, NodeId
+from engine.graph_runtime import EventKind, EventLog, GraphId, NodeId
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime_langgraph import (
     ApprovalRecord,
@@ -221,6 +222,26 @@ def test_an_execution_id_is_the_langgraph_task_id() -> None:
 # --- what a failure leaves behind --------------------------------------------
 
 
+RUNTIME_LOGGER = "engine.graph_runtime_langgraph.runtime"
+
+
+async def _one_node(node: Any) -> tuple[LangGraphRuntime, EventLog]:
+    builder: StateGraph = StateGraph(State)
+    builder.add_node(str(FAST), node)
+    builder.add_edge(START, str(FAST))
+    builder.add_edge(str(FAST), END)
+    runtime = LangGraphRuntime(
+        LangGraphDefinition(
+            graph_id=GRAPH,
+            name="One node",
+            graph=builder.compile(checkpointer=InMemorySaver()),
+        )
+    )
+    log = EventLog()
+    runtime.observe(log.append)
+    return runtime, log
+
+
 def test_a_run_that_fails_writes_the_whole_failure_to_the_process_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -237,37 +258,67 @@ def test_a_run_that_fails_writes_the_whole_failure_to_the_process_log(
         raise RuntimeError("the agent refused session/prompt")
 
     async def scenario() -> RunId:
-        builder: StateGraph = StateGraph(State)
-        builder.add_node(str(FAST), explode)
-        builder.add_edge(START, str(FAST))
-        builder.add_edge(str(FAST), END)
-        runtime = LangGraphRuntime(
-            LangGraphDefinition(
-                graph_id=GRAPH,
-                name="One node",
-                graph=builder.compile(checkpointer=InMemorySaver()),
-            )
-        )
-        log = EventLog()
-        runtime.observe(log.append)
+        runtime, log = await _one_node(explode)
         run = await runtime.start(GRAPH, {})
         await _drain(runtime, log, run.run_id)
         await runtime.aclose()
         return run.run_id
 
-    logger = "engine.graph_runtime_langgraph.runtime"
-    with caplog.at_level(logging.ERROR, logger=logger):
+    with caplog.at_level(logging.ERROR, logger=RUNTIME_LOGGER):
         run_id = asyncio.run(scenario())
 
-    logged = next(
-        record for record in caplog.records if record.message == "graph run failed"
-    )
-    assert logged.exc_info is not None
-    assert "RuntimeError: the agent refused session/prompt" in caplog.text
-    # And placed, so one line of a busy log says which run and which node.
-    assert logged.run_id == str(run_id)
-    assert logged.graph_id == str(GRAPH)
-    assert logged.node_id == str(FAST)
+    written = caplog.text
+    assert "RuntimeError: the agent refused session/prompt" in written
+    # In the message rather than in `extra`, because nothing that hosts this
+    # runtime installs a handler that renders extra fields: a run id put there
+    # is a run id nobody can read.
+    assert f"graph run {run_id} (graph {GRAPH}, node {FAST}) failed" in written
+
+
+def test_a_run_that_already_has_a_reason_does_not_log_a_second_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The sequence a refusal produces, which is not an error at all.
+
+    Saying no ends the run and writes the reason down, and the agent that
+    refusal releases then raises on its way out. `_fail` drops that second
+    answer so a client is not told two things; the log has to drop it for the
+    same reason, or every refused run leaves a traceback saying a graph failed.
+    """
+
+    async def refused_then_raises(_state: dict[str, Any]) -> dict[str, Any]:
+        # What `_refuse` does, in the order it does it: write the reason down,
+        # tell the client, and let go of the agent that was waiting.
+        execution = current_execution()
+        runtime = execution.runtime
+        record = await runtime.store.run(execution.run_id)
+        assert record is not None
+        await runtime.store.remember_run(
+            replace(record, error="running the tests was not allowed")
+        )
+        await runtime.publish(
+            execution.run_id,
+            EventKind.RUN_FAILED,
+            {"error": "running the tests was not allowed"},
+            execution.node_id,
+        )
+        raise RuntimeError("the session was closed under the agent")
+
+    async def scenario() -> str:
+        runtime, log = await _one_node(refused_then_raises)
+        run = await runtime.start(GRAPH, {})
+        await _drain(runtime, log, run.run_id)
+        failed = [
+            event for event in log.since(run.run_id) if event.kind.value == "run.failed"
+        ]
+        await runtime.aclose()
+        return str(failed[-1].payload["error"])
+
+    with caplog.at_level(logging.ERROR, logger=RUNTIME_LOGGER):
+        reported = asyncio.run(scenario())
+
+    assert reported == "running the tests was not allowed"
+    assert caplog.records == []
 
 
 # --- the durable half --------------------------------------------------------
