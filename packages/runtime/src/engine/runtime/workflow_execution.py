@@ -383,6 +383,13 @@ class WorkflowExecutor:
         except asyncio.CancelledError:
             raise
         except Exception:
+            # An unnamed run is the right fallback -- naming is not the work --
+            # but it is not a silent one. The naming turn is neither an agent
+            # run nor a conversation, so nothing else records it: without this
+            # line an unauthenticated `gh`, an issue that does not exist and a
+            # provider that could not attach the server are indistinguishable
+            # from a run whose prompt simply made a good enough name.
+            logger.exception("could not name run %s", state.run_id)
             return state
         name = _clean_workflow_name(turn.message.content)
         if not name:

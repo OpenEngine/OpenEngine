@@ -64,14 +64,17 @@ from provider_fakes import (
 
 _IDENTITY = ("-c", "user.name=Engine Tests", "-c", "user.email=engine@example.test")
 
+#: This checkout's workflows, passed to every app these tests build. Named
+#: rather than left to `create_app`'s fallback, which reads `$ENGINE_CONFIG`
+#: before `./engine.toml`: with that variable pointing at another checkout --
+#: which a worktree setup does readily -- the app would run *those* definitions
+#: while the assertions below describe these ones.
+CATALOG = load_workflow_catalog(Path(__file__).parents[1] / "workflows")
+
 #: Read off the checked-in definition rather than restated here: what these
 #: tests are about is that naming asks the task and this prompt together, not
 #: how the prompt is worded -- `test_workflow_definitions` owns the wording.
-NAMING_PROMPT = (
-    load_workflow_catalog(Path(__file__).parents[1] / "workflows")
-    .require(WorkflowId("implementation-review-v1"))
-    .naming_prompt
-)
+NAMING_PROMPT = CATALOG.require(WorkflowId("implementation-review-v1")).naming_prompt
 
 
 def _git(repository: Path, *arguments: str) -> None:
@@ -257,6 +260,7 @@ def test_implementation_review_workflow_completes_end_to_end(
         workflow_runners={"test": implementer},
         review_runners={"test": reviewer},
         default_branch=default_branch,
+        workflow_catalog=CATALOG,
     )
 
     async def scenario():
@@ -496,6 +500,7 @@ def test_a_run_is_named_after_the_issue_its_task_points_at(
         {"test": reviewer},
         workflow_runners={"test": implementer},
         review_runners={"test": reviewer},
+        workflow_catalog=CATALOG,
     )
 
     async def scenario():
@@ -524,6 +529,9 @@ def test_a_run_is_named_after_the_issue_its_task_points_at(
     assert state.name == ISSUE_NAME
     assert source_control.viewed == [(state.workspace_id, 270)]
     assert implementer.refused["ok"] is False
+    # The refusal above is the broker's; this is what the provider is told to
+    # spawn, and it is the half of the answer the model actually sees.
+    assert "--repository-tools-only" in implementer.naming_servers[0].args
     # Granted, served, and said so: a tool the agent is not told it holds is one
     # it reports it would have used.
     assert "view_work_item" in implementer.profile.instructions
@@ -647,6 +655,7 @@ def _compose(
         runners,
         workflow_runners=build_workflow_runners(settings),
         review_runners=build_read_only_runners(settings),
+        workflow_catalog=CATALOG,
     )
     return app, capabilities
 

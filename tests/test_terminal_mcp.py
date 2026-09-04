@@ -1,6 +1,7 @@
 """Run-bound MCP terminal tools and their single-result invariants."""
 
 import asyncio
+import json
 
 from engine.domain import (
     AgentId,
@@ -270,6 +271,50 @@ def test_reviewer_mcp_surface_includes_repo_comment_tool() -> None:
         "file": ["line"],
         "line": ["file"],
     }
+
+
+def test_a_session_with_no_step_lists_only_the_repository_tools() -> None:
+    """The listing a naming session shows, read from the real subprocess.
+
+    Asserted through `config` and the server's own argument parser rather than
+    against `_tools` directly, because what decides whether the naming agent is
+    shown a tool it cannot use is the whole path: the flag `config` appends,
+    the name `main` parses it under, and the sense it is passed on in. Each of
+    those could break on its own and leave a listing assertion green.
+    """
+
+    async def scenario() -> list[str]:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=None,
+            registry=TerminalResultRegistry(),
+        )
+        async with broker:
+            broker.enable_repository_tools(
+                object(),  # type: ignore[arg-type]
+                ("view_work_item",),
+            )
+            config = broker.config
+            assert "--repository-tools-only" in config.args
+            server = await asyncio.create_subprocess_exec(
+                config.command,
+                *config.args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+            )
+            assert server.stdin is not None and server.stdout is not None
+            try:
+                request = {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"}
+                server.stdin.write(json.dumps(request).encode() + b"\n")
+                await server.stdin.drain()
+                answer = json.loads(await server.stdout.readline())
+            finally:
+                server.stdin.close()
+                await server.wait()
+        return [tool["name"] for tool in answer["result"]["tools"]]
+
+    assert asyncio.run(scenario()) == ["view_work_item"]
 
 
 def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
