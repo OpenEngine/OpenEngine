@@ -76,10 +76,11 @@ class ClaudeConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class SlackConfig:
-    """Slack destination used for human-review notifications."""
+class CommunicationsConfig:
+    """Selects the adapter that fulfills the communications capability."""
 
-    channel_id: str = ""
+    provider: str = "slack"
+    channel: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +91,7 @@ class EngineConfig:
     github_client_id: str = ""
     github_token: str = ""
     public_url: str = ""
-    slack: SlackConfig = SlackConfig()
+    communications: CommunicationsConfig = CommunicationsConfig()
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
     orchestrator: OrchestratorConfig = OrchestratorConfig()
@@ -172,12 +173,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "attribution",
             "approvals",
             "claude",
+            "communications",
             "default_branch",
             "github_client_id",
             "github_token",
             "orchestrator",
             "public_url",
-            "slack",
             "workflows",
         },
         "configuration",
@@ -198,10 +199,18 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     )
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
-    slack = _table(document.get("slack", {}), "slack")
-    _reject_unknown(slack, {"channel_id"}, "slack")
-    slack_channel_id = _optional_nonblank_string(
-        slack.get("channel_id", ""), "slack.channel_id"
+    communications = _table(document.get("communications", {}), "communications")
+    _reject_unknown(communications, {"channel", "provider"}, "communications")
+    communications_provider = _nonblank_string(
+        communications.get("provider", "slack"), "communications.provider"
+    )
+    if communications_provider not in {"buzz", "slack"}:
+        raise EngineConfigError(
+            "communications.provider is unknown: "
+            f"{communications_provider!r}; expected one of: buzz, slack"
+        )
+    communications_channel = _optional_nonblank_string(
+        communications.get("channel", ""), "communications.channel"
     )
 
     claude = _table(document.get("claude", {}), "claude")
@@ -264,7 +273,10 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         github_client_id=github_client_id,
         github_token=github_token,
         public_url=public_url.rstrip("/"),
-        slack=SlackConfig(channel_id=slack_channel_id),
+        communications=CommunicationsConfig(
+            provider=communications_provider,
+            channel=communications_channel,
+        ),
         claude=ClaudeConfig(output_style=output_style),
         approvals=ApprovalConfig(
             auto_approve=auto_approve,

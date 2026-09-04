@@ -17,6 +17,7 @@ from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
     CodexAgentRunner,
 )
+from engine.adapters.communications.slack import SlackCommunications
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.__main__ import build_app
@@ -24,6 +25,7 @@ from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_communications,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -72,6 +74,8 @@ from engine.ports import (
     ApprovalRequest,
     InteractiveAgentRunner,
     McpServerConfig,
+    Message as CommunicationMessage,
+    MessageLink,
     UserInputAnswer,
     UserInputOption,
     UserInputQuestion,
@@ -89,6 +93,7 @@ from engine.runtime import (
     ApprovalConfig,
     Capabilities,
     ClaudeConfig,
+    CommunicationsConfig,
     EngineConfig,
     ResponseStyle,
     WorkflowCatalog,
@@ -135,6 +140,21 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_web_selects_the_configured_communications_provider() -> None:
+    slack = build_communications(Settings())
+
+    assert isinstance(slack, SlackCommunications)
+
+    with pytest.raises(RuntimeError, match="provider 'buzz' is not available yet"):
+        build_communications(
+            Settings(
+                engine_config=EngineConfig(
+                    communications=CommunicationsConfig(provider="buzz")
+                )
+            )
+        )
 
 
 def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeypatch) -> None:
@@ -1185,7 +1205,7 @@ def _workflow_app(
     workflow_catalog: WorkflowCatalog | None = None,
     workspace_repository: str | None = None,
     graph_runtime=None,
-    slack_channel_id: str = "",
+    communications_channel: str = "",
     public_url: str = "",
 ):
     """Wire the app the way the composition root does.
@@ -1218,7 +1238,7 @@ def _workflow_app(
         review_runners=chat_runners,
         workflow_catalog=workflow_catalog,
         graph_runtime=graph_runtime,
-        slack_channel_id=slack_channel_id,
+        communications_channel=communications_channel,
         public_url=public_url,
     )
 
@@ -1469,7 +1489,7 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
         implementer,
         communications=communications,
         reviewers={"test": reviewer},
-        slack_channel_id="OpenEngine",
+        communications_channel="OpenEngine",
         public_url="https://sheas-mac-mini.taileb7fdb.ts.net",
     )
 
@@ -1553,17 +1573,20 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     communications.post.assert_awaited_once()
     channel, notification, notified_run_id = communications.post.await_args.args
     assert channel == "OpenEngine"
-    assert notification.startswith(
+    assert isinstance(notification, CommunicationMessage)
+    assert notification.text.startswith(
         "Ready for human review: Review implementation for task-"
     )
-    assert "\nOutcome: success\n" in notification
-    assert "The handling is correct." not in notification
-    assert "worker.py cancels the task" not in notification
-    assert "<https://github.com/acme/api/pull/42|Open pull request>" in notification
-    assert (
-        f"<https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}"
-        "|Open human review task>"
-    ) in notification
+    assert "\nOutcome: success" in notification.text
+    assert "The handling is correct." not in notification.text
+    assert "worker.py cancels the task" not in notification.text
+    assert notification.links == (
+        MessageLink("Open pull request", "https://github.com/acme/api/pull/42"),
+        MessageLink(
+            "Open human review task",
+            f"https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}",
+        ),
+    )
     assert notified_run_id == RunId(body["runId"])
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]

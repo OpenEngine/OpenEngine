@@ -32,6 +32,7 @@ from engine.adapters.agent_runner.claude_code import (
     allowed_tools_for,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
+from engine.adapters.communications.slack import SlackCommunications, SlackCredentialStore
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
@@ -49,14 +50,13 @@ from engine.apps.web.github_auth import (
     GitHubRefreshTokenInvalidError,
     refresh_access_token,
 )
-from engine.apps.web.slack_auth import SlackCommunications, SlackCredentialStore
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
 )
-from engine.ports import AgentRunner
+from engine.ports import AgentRunner, Communications
 from engine.runtime import (
     PLANNING_TOOL_NAMES,
     AgentSession,
@@ -117,8 +117,6 @@ class Settings:
     github_token: str = ""
     github_client_id: str = ""
     source_control_preferences: SourceControlPreferences | None = None
-    buzz_base_url: str = ""
-    buzz_api_token: str = ""
     workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"
     graph_state_directory: str = "graph-state"
@@ -229,12 +227,24 @@ def build_capabilities(
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
-        communications=SlackCommunications(
-            slack_credential_store or SlackCredentialStore()
-        ),
+        communications=build_communications(settings, slack_credential_store),
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
     )
+
+
+def build_communications(
+    settings: Settings,
+    slack_credential_store: SlackCredentialStore | None = None,
+) -> Communications:
+    """Build the configured communications provider."""
+    provider = settings.engine_config.communications.provider
+    if provider == "buzz":
+        raise RuntimeError(
+            "communications provider 'buzz' is not available yet; "
+            "configure communications.provider = 'slack'"
+        )
+    return SlackCommunications(slack_credential_store or SlackCredentialStore())
 
 
 def build_graph_runtime(

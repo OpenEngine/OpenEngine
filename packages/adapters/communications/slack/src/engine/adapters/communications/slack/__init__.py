@@ -1,4 +1,4 @@
-"""Slack OAuth V2 flow and secure credential storage."""
+"""Communications capability, backed by Slack."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 import httpx
 import keyring
+from engine.ports import Message
 
 _SERVICE = "openengine"
 _CLIENT_ID = "slack-client-id"
@@ -95,7 +96,7 @@ class SlackCommunications:
     def __init__(self, credential_store: SlackCredentialStore) -> None:
         self._credential_store = credential_store
 
-    async def post(self, channel: str, message: str, run_id=None) -> str:
+    async def post(self, channel: str, message: str | Message, run_id=None) -> str:
         token = self._credential_store.token()
         if not token:
             return ""
@@ -104,7 +105,7 @@ class SlackCommunications:
             response = await client.post(
                 _POST_MESSAGE_URL,
                 headers={"Authorization": f"Bearer {token}"},
-                json={"channel": channel_id, "text": message},
+                json={"channel": channel_id, "text": self._render(message)},
             )
         if response.is_error:
             raise SlackAuthError(
@@ -116,6 +117,13 @@ class SlackCommunications:
                 f"Slack notification failed: {body.get('error', 'message was not sent')}"
             )
         return str(body.get("ts", ""))
+
+    @staticmethod
+    def _render(message: str | Message) -> str:
+        if isinstance(message, str):
+            return message
+        links = "\n".join(f"<{link.url}|{link.label}>" for link in message.links)
+        return f"{message.text}\n{links}" if links else message.text
 
     async def _resolve_channel(
         self, client: httpx.AsyncClient, token: str, channel: str
@@ -195,6 +203,7 @@ async def revoke_token(token: str) -> None:
 __all__ = [
     "SlackAuthError",
     "SlackCommunications",
+    "SlackCredentials",
     "SlackCredentialStore",
     "authorization_url",
     "exchange_code",

@@ -2,8 +2,9 @@ attribution = false
 default_branch = "main"
 public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 
-[slack]
-channel_id = "OpenEngine"
+[communications]
+provider = "slack"
+channel = "OpenEngine"
 
 [orchestrator]
 host = "127.0.0.1:7233"

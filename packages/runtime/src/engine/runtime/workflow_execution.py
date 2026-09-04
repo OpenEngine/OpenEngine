@@ -37,7 +37,13 @@ from engine.domain import (
     WorkspaceAccess,
     WorkspaceProvisioned,
 )
-from engine.ports import AgentRunner, ApprovalHandler, InteractiveMcpAgentRunner
+from engine.ports import (
+    AgentRunner,
+    ApprovalHandler,
+    InteractiveMcpAgentRunner,
+    Message as CommunicationMessage,
+    MessageLink,
+)
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
 from engine.runtime.step_results import requests_clarification_or_escalation
@@ -68,7 +74,7 @@ class WorkflowExecutor:
         approval_handler: Callable[[StartAgentRun, str], ApprovalHandler] | None = None,
         catalog: WorkflowCatalog | None = None,
         default_branch: str = "main",
-        slack_channel_id: str = "",
+        communications_channel: str = "",
         public_url: str = "",
     ) -> None:
         self._capabilities = capabilities
@@ -82,7 +88,7 @@ class WorkflowExecutor:
             else WorkflowCatalog.from_definitions(())
         )
         self._default_branch = default_branch
-        self._slack_channel_id = slack_channel_id
+        self._communications_channel = communications_channel
         self._public_url = public_url.rstrip("/")
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
@@ -307,7 +313,7 @@ class WorkflowExecutor:
         step = definition.step(command.step_id)
         if not isinstance(step, HumanReviewStep) or step.notification is None:
             return
-        if not self._slack_channel_id or not self._public_url:
+        if not self._communications_channel or not self._public_url:
             return
         pull_request_url = next(
             (
@@ -319,16 +325,20 @@ class WorkflowExecutor:
             None,
         )
         outcome = state.step_results[-1].outcome if state.step_results else "unknown"
-        message = f"Ready for human review: {command.title}\nOutcome: {outcome}"
+        message_text = f"Ready for human review: {command.title}\nOutcome: {outcome}"
+        links = []
         if pull_request_url:
-            message += f"\n<{pull_request_url}|Open pull request>"
-        message += (
-            f"\n<{self._public_url}/runs/{command.run_id}"
-            "|Open human review task>"
+            links.append(MessageLink("Open pull request", pull_request_url))
+        links.append(
+            MessageLink(
+                "Open human review task",
+                f"{self._public_url}/runs/{command.run_id}",
+            )
         )
+        message = CommunicationMessage(message_text, tuple(links))
         try:
             await self._capabilities.communications.post(
-                self._slack_channel_id,
+                self._communications_channel,
                 message,
                 command.run_id,
             )

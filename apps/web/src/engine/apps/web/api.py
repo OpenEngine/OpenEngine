@@ -48,7 +48,7 @@ from engine.apps.web.github_auth import (
 from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
-from engine.apps.web.slack_auth import (
+from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCredentialStore,
     authorization_url as slack_authorization_url,
@@ -988,7 +988,7 @@ def create_app(
     github_client_id_source: str = "configuration",
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
-    slack_channel_id: str = "",
+    communications_channel: str = "",
     public_url: str = "",
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
@@ -1081,7 +1081,7 @@ def create_app(
         approval_handler=workflow_approval_handler,
         catalog=catalog,
         default_branch=default_branch,
-        slack_channel_id=slack_channel_id,
+        communications_channel=communications_channel,
         public_url=public_url,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}

@@ -28,7 +28,7 @@ from engine.apps.web.composition import (
     build_workflow_runners,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
-from engine.apps.web.slack_auth import SlackCredentialStore
+from engine.adapters.communications.slack import SlackCredentialStore
 from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
     EngineConfigError,
@@ -158,7 +158,7 @@ def compose_app(
         github_client_id_source=_github_client_id_source(),
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
-        slack_channel_id=loaded.config.slack.channel_id,
+        communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
     )
 
