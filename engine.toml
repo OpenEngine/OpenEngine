@@ -14,7 +14,7 @@ health_check_interval = 5.0
 output_style = "concise"
 
 [approvals]
-auto_approve = false
+auto_approve = true
 allow = ["read", "edit"]
 
 [approvals.bash]
