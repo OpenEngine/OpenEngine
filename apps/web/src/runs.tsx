@@ -586,12 +586,31 @@ export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId
   const [events, setEvents] = useState<ApiGraphEvent[]>();
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ events: ApiGraphEvent[] }>(
-      `/api/runs/${encodeURIComponent(runId)}/graph-events`,
-    )
-      .then((value) => setEvents(value.events.filter((event) => event.nodeId === nodeId)))
-      .catch((reason: Error) => setError(reason.message));
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      api<{ events: ApiGraphEvent[] }>(
+        `/api/runs/${encodeURIComponent(runId)}/graph-events`,
+      )
+        .then((value) => {
+          if (cancelled) return;
+          setEvents(value.events.filter((event) => event.nodeId === nodeId));
+          setError("");
+        })
+        .catch((reason: Error) => {
+          if (!cancelled) setError(reason.message);
+        })
+        .finally(() => {
+          if (!cancelled) timer = window.setTimeout(load, 1000);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [runId, nodeId]);
+  const transcript = events?.filter((event) => event.type === "transcript");
   return (
     <main className="panel-scroll">
       <header className="hero hero-narrow">
@@ -601,9 +620,11 @@ export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId
       </header>
       {error ? <p className="notice notice-block">{error}</p> : !events ? (
         <p className="state-inline">Loading conversation…</p>
+      ) : transcript?.length === 0 ? (
+        <p className="state-inline">Waiting for agent activity…</p>
       ) : (
         <section className="timeline" aria-label="Conversation transcript">
-          {events.filter((event) => event.type === "transcript").map((event) => (
+          {transcript?.map((event) => (
             <article className="callout" key={event.sequence}>
               <p>{String(event.payload.text ?? "")}</p>
             </article>
@@ -751,7 +772,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
         agentInstanceId: null,
         agentRunId: null,
         conversationId: null,
-        conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && event.type === "transcript")
+        conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
+          event.type === "conversation.started" || event.type === "transcript"
+        ))
           ? `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(node.nodeId)}` : null,
         waiting: waiting.has(node.nodeId),
         summary: typeof graph.values[node.nodeId] === "string" ? String(graph.values[node.nodeId]) : "",

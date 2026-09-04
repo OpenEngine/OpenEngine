@@ -338,6 +338,14 @@ class ACPNode:
                 await runtime.store.remember_session(
                     execution.run_id, key, self._binding(execution, session, key)
                 )
+            await execution.emit(
+                EventKind.CONVERSATION_STARTED,
+                {
+                    "agent": self.agent,
+                    "sessionId": session.session_id,
+                    "resumed": resuming is not None,
+                },
+            )
             said = await self._speak(
                 execution,
                 session,
