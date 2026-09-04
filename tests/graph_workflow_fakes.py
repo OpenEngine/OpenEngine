@@ -3,8 +3,8 @@
 The browser tier composes the real application, and the only thing it replaces
 is the model. For a step workflow that is a fake CLI. For a graph workflow it
 cannot be: `ACPNode` does not run `codex` or `claude`, it talks ACP to an
-adapter that wraps one -- in production `npx @zed-industries/codex-acp`, which
-reaches a real model over the network.
+adapter that wraps one -- in production `npx @agentclientprotocol/codex-acp`,
+which reaches a real model over the network.
 
 So the graphs are rebuilt through the workflow file's own `graph_for`, which
 takes the two things a test has business replacing: which agents answer, and
