@@ -46,8 +46,9 @@ REPO_ROOT = WEB_ROOT.parents[1]
 #: application object, because a fresh child process has to build its own.
 APPLICATION = "engine.apps.web.__main__:build_app"
 
-#: Where `vite.config.ts` proxies `/api`. Told rather than assumed, because the
-#: API takes a free port when its usual one is held by something else.
+#: Where `vite.config.ts` sends the prefixes it proxies -- `/api`, and `/graph`
+#: for the graph engine's own control surface. Told rather than assumed, because
+#: the API takes a free port when its usual one is held by something else.
 API_URL_ENVIRONMENT_VARIABLE = "ENGINE_API_URL"
 
 #: What a restart is for: Python, and the TOML read once at startup. Workflow

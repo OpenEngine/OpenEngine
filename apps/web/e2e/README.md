@@ -140,6 +140,15 @@ unzip it, and point `show-report` at the directory.
   shows the same finished run: `succeeded`, `approved`, every stage behind it.
 * `graph-workflow.spec.ts` -- the same journey as `workflow-run.spec.ts`, for a
   `[BETA]` graph WorkOrder, and **expected to fail in places**. See below.
+* `dev-server.spec.ts` -- the interface as `engine-dev` serves it, with Vite in
+  front of the API instead of the API serving `dist/`. Every other spec here
+  opens one origin that answers for everything, so none of them can reach a
+  client request the dev proxy does not forward -- and Vite answers an
+  unforwarded path with `index.html` and a 200, which arrives as a JSON parse
+  error rather than as a 404. Creating a `[BETA]` WorkOrder is what found it:
+  its page reads the graph engine under `/graph`, and only `/api` was proxied.
+  The forwarded prefixes live in `src/api-proxy.ts` so a component test can read
+  them too; this is the one that proves they reach the server.
 * `persisted-navigation.spec.ts` -- cold starts over both a SQLite file populated
   through the current production state-store adapter and the frozen
   `fixtures/v0.0.0.sqlite3` artifact. The run list, run detail, implementation
