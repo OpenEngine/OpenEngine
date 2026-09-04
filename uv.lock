@@ -11,6 +11,7 @@ members = [
     "engine-adapter-agent-runner-claude-code",
     "engine-adapter-agent-runner-codex",
     "engine-adapter-communications-buzz",
+    "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
     "engine-adapter-state-store-memory",
     "engine-adapter-state-store-postgres",
@@ -416,6 +417,23 @@ dependencies = [
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
 
 [[package]]
+name = "engine-adapter-communications-slack"
+version = "0.0.0"
+source = { editable = "packages/adapters/communications/slack" }
+dependencies = [
+    { name = "engine-runtime" },
+    { name = "httpx" },
+    { name = "keyring" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "engine-runtime", editable = "packages/runtime" },
+    { name = "httpx", specifier = ">=0.28" },
+    { name = "keyring", specifier = ">=25" },
+]
+
+[[package]]
 name = "engine-adapter-source-control-github"
 version = "0.0.0"
 source = { editable = "packages/adapters/source_control/github" }
@@ -679,6 +697,7 @@ dependencies = [
     { name = "engine-adapter-agent-runner-claude-code" },
     { name = "engine-adapter-agent-runner-codex" },
     { name = "engine-adapter-communications-buzz" },
+    { name = "engine-adapter-communications-slack" },
     { name = "engine-adapter-source-control-github" },
     { name = "engine-adapter-state-store-sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal" },
@@ -697,6 +716,7 @@ requires-dist = [
     { name = "engine-adapter-agent-runner-claude-code", editable = "packages/adapters/agent_runner/claude_code" },
     { name = "engine-adapter-agent-runner-codex", editable = "packages/adapters/agent_runner/codex" },
     { name = "engine-adapter-communications-buzz", editable = "packages/adapters/communications/buzz" },
+    { name = "engine-adapter-communications-slack", editable = "packages/adapters/communications/slack" },
     { name = "engine-adapter-source-control-github", editable = "packages/adapters/source_control/github" },
     { name = "engine-adapter-state-store-sqlite", editable = "packages/adapters/state_store/sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },

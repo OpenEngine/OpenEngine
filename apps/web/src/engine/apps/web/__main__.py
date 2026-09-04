@@ -28,7 +28,7 @@ from engine.apps.web.composition import (
     build_workflow_runners,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
-from engine.apps.web.slack_auth import SlackCredentialStore
+from engine.adapters.communications.slack import SlackCredentialStore
 from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
     EngineConfigError,

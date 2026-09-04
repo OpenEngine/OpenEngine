@@ -23,6 +23,7 @@ dependencies = [
     "engine-adapter-agent-runner-codex",
     "engine-adapter-agent-runner-claude-code",
     "engine-adapter-communications-buzz",
+    "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
     "engine-adapter-state-store-sqlite",
     "engine-adapter-workflow-runtime-temporal",
@@ -54,6 +55,7 @@ engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }
 engine-adapter-agent-runner-claude-code = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
+engine-adapter-communications-slack = { workspace = true }
 engine-adapter-source-control-github = { workspace = true }
 engine-adapter-state-store-sqlite = { workspace = true }
 engine-adapter-workflow-runtime-temporal = { workspace = true }

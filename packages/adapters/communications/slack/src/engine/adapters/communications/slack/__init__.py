@@ -1,4 +1,4 @@
-"""Slack OAuth V2 flow and secure credential storage."""
+"""Communications capability, backed by Slack."""
 
 from __future__ import annotations
 
@@ -195,6 +195,7 @@ async def revoke_token(token: str) -> None:
 __all__ = [
     "SlackAuthError",
     "SlackCommunications",
+    "SlackCredentials",
     "SlackCredentialStore",
     "authorization_url",
     "exchange_code",

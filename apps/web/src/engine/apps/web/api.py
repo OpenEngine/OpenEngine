@@ -48,7 +48,7 @@ from engine.apps.web.github_auth import (
 from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
-from engine.apps.web.slack_auth import (
+from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCredentialStore,
     authorization_url as slack_authorization_url,

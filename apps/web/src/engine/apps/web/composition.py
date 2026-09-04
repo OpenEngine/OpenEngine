@@ -32,6 +32,7 @@ from engine.adapters.agent_runner.claude_code import (
     allowed_tools_for,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
+from engine.adapters.communications.slack import SlackCommunications, SlackCredentialStore
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
@@ -49,7 +50,6 @@ from engine.apps.web.github_auth import (
     GitHubRefreshTokenInvalidError,
     refresh_access_token,
 )
-from engine.apps.web.slack_auth import SlackCommunications, SlackCredentialStore
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.apps.web.source_control import (

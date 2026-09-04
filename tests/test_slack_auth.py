@@ -5,7 +5,7 @@ import pytest
 
 from starlette.testclient import TestClient
 
-from engine.apps.web.slack_auth import (
+from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCommunications,
     SlackCredentialStore,
@@ -32,7 +32,7 @@ def test_slack_communications_posts_to_requested_channel() -> None:
         "response_metadata": {"next_cursor": ""},
     }
 
-    with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
         client_type.return_value.__aenter__.return_value.post = AsyncMock(
             return_value=response
         )
@@ -82,7 +82,7 @@ def test_slack_communications_resolves_name_that_starts_like_an_id() -> None:
     response = MagicMock(is_error=False)
     response.json.return_value = {"ok": True, "ts": "123.456"}
 
-    with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
         client = client_type.return_value.__aenter__.return_value
         client.get = AsyncMock(return_value=channels)
         client.post = AsyncMock(return_value=response)
@@ -104,7 +104,7 @@ def test_slack_communications_reports_slack_delivery_errors() -> None:
     response = MagicMock(is_error=False)
     response.json.return_value = {"ok": False, "error": "channel_not_found"}
 
-    with patch("engine.apps.web.slack_auth.httpx.AsyncClient") as client_type:
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
         client_type.return_value.__aenter__.return_value.post = AsyncMock(
             return_value=response
         )
@@ -130,10 +130,10 @@ def test_credentials_are_restored_when_secret_write_fails() -> None:
         values[username] = value
 
     with (
-        patch("engine.apps.web.slack_auth.keyring.get_keyring", return_value=MagicMock(priority=1)),
-        patch("engine.apps.web.slack_auth.keyring.get_password", side_effect=lambda _s, u: values.get(u)),
-        patch("engine.apps.web.slack_auth.keyring.set_password", side_effect=set_password),
-        patch("engine.apps.web.slack_auth.keyring.delete_password"),
+        patch("engine.adapters.communications.slack.keyring.get_keyring", return_value=MagicMock(priority=1)),
+        patch("engine.adapters.communications.slack.keyring.get_password", side_effect=lambda _s, u: values.get(u)),
+        patch("engine.adapters.communications.slack.keyring.set_password", side_effect=set_password),
+        patch("engine.adapters.communications.slack.keyring.delete_password"),
     ):
         with pytest.raises(SlackAuthError):
             SlackCredentialStore().set_credentials("new-id", "new-secret")
