@@ -1353,6 +1353,53 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
+def test_deleting_a_run_forgets_it_along_with_its_history() -> None:
+    """The rail's × on a WorkOrder is not the project row's archive.
+
+    Nothing lists or restores what it removes, so the row and the events behind
+    it go together: a run kept without its history would still answer its own
+    page, with a WorkOrder that cannot say how it got anywhere.
+    """
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.SUCCEEDED, HUMAN_REVIEW_STEP)
+    asyncio.run(store.save(state))
+    asyncio.run(
+        store.append_events(
+            state.run_id,
+            (
+                RunRequested(
+                    run_id=state.run_id,
+                    task_id=state.task_id,
+                    prompt=state.prompt,
+                    repository=state.repository,
+                    workflow_id=state.workflow_id,
+                ),
+            ),
+        )
+    )
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            deleted = await client.delete(f"/api/runs/{state.run_id}")
+            listed = await client.get("/api/runs")
+            detail = await client.get(f"/api/runs/{state.run_id}")
+            again = await client.delete(f"/api/runs/{state.run_id}")
+            return deleted, listed, detail, again
+
+    deleted, listed, detail, again = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert listed.json()["runs"] == []
+    assert detail.status_code == 404
+    # A second × on a row the poll has not cleared yet says the same thing the
+    # page does, rather than pretending to delete it twice.
+    assert again.status_code == 404
+    assert asyncio.run(store.load(state.run_id)) is None
+    assert asyncio.run(store.history(state.run_id)) == ()
+
+
 def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
     """Every screen polls `/api/runs` once a second to keep its rail current.
 

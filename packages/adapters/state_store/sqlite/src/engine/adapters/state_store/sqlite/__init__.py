@@ -152,6 +152,16 @@ class SQLiteStateStore:
                 )
         return tuple(runs)
 
+    async def delete_run(self, run_id: RunId) -> bool:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM run_events WHERE run_id = ?", (run_id,)
+            )
+            cursor = self._connection.execute(
+                "DELETE FROM run_states WHERE run_id = ?", (run_id,)
+            )
+        return cursor.rowcount > 0
+
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         with self._lock, self._connection:
             self._connection.executemany(

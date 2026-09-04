@@ -354,7 +354,7 @@ function App() {
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
-  const { runs, error: runsError, loaded: runsLoaded } = useRuns();
+  const { runs, error: runsError, loaded: runsLoaded, remove: deleteRun } = useRuns();
   const { projects, archive: archiveProject } = useProjects();
 
   // Settled for this mount: the route is read once, and every move between
@@ -400,6 +400,7 @@ function App() {
       activeMilestonesPage={route.kind === "project"}
       activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
       onArchiveProject={archiveProject}
+      onDeleteRun={deleteRun}
     />
   );
   return (

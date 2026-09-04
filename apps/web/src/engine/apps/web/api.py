@@ -1780,6 +1780,28 @@ def create_app(
             assert run is not None
         return JSONResponse(_run_json(run))
 
+    async def delete_run(request: Request) -> Response:
+        """Throw a WorkOrder away, whatever it was in the middle of.
+
+        A run still being worked on is stopped first: the agent turn is
+        cancelled and the task driving the run is awaited out, so nothing is
+        left holding a run id that is about to stop existing -- a save landing
+        after the delete would put the row back, and the WorkOrder the reader
+        just threw away would reappear on the next poll.
+        """
+        run_id = RunId(request.path_params["run_id"])
+        state = await session.state_store.load(run_id)
+        if state is None:
+            return _error("run not found", 404)
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task = workflow_tasks.pop(run_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await session.state_store.delete_run(run_id)
+        return Response(status_code=204)
+
     async def graph_run_events(request: Request) -> JSONResponse:
         """Replay the graph transcript for the WorkOrder UI.
 
@@ -2502,6 +2524,7 @@ def create_app(
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
+        Route("/api/runs/{run_id}", delete_run, methods=["DELETE"]),
         Route("/api/runs/{run_id}/graph-events", graph_run_events),
         Route(
             "/api/runs/{run_id}/human-review",
