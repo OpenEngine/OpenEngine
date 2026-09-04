@@ -74,7 +74,7 @@ class WorkflowExecutor:
         approval_handler: Callable[[StartAgentRun, str], ApprovalHandler] | None = None,
         catalog: WorkflowCatalog | None = None,
         default_branch: str = "main",
-        slack_channel_id: str = "",
+        communications_channel: str = "",
         public_url: str = "",
     ) -> None:
         self._capabilities = capabilities
@@ -88,7 +88,7 @@ class WorkflowExecutor:
             else WorkflowCatalog.from_definitions(())
         )
         self._default_branch = default_branch
-        self._slack_channel_id = slack_channel_id
+        self._communications_channel = communications_channel
         self._public_url = public_url.rstrip("/")
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
@@ -313,7 +313,7 @@ class WorkflowExecutor:
         step = definition.step(command.step_id)
         if not isinstance(step, HumanReviewStep) or step.notification is None:
             return
-        if not self._slack_channel_id or not self._public_url:
+        if not self._communications_channel or not self._public_url:
             return
         pull_request_url = next(
             (
@@ -338,7 +338,7 @@ class WorkflowExecutor:
         message = CommunicationMessage(message_text, tuple(links))
         try:
             await self._capabilities.communications.post(
-                self._slack_channel_id,
+                self._communications_channel,
                 message,
                 command.run_id,
             )

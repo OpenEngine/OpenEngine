@@ -1203,7 +1203,7 @@ def _workflow_app(
     workflow_catalog: WorkflowCatalog | None = None,
     workspace_repository: str | None = None,
     graph_runtime=None,
-    slack_channel_id: str = "",
+    communications_channel: str = "",
     public_url: str = "",
 ):
     """Wire the app the way the composition root does.
@@ -1236,7 +1236,7 @@ def _workflow_app(
         review_runners=chat_runners,
         workflow_catalog=workflow_catalog,
         graph_runtime=graph_runtime,
-        slack_channel_id=slack_channel_id,
+        communications_channel=communications_channel,
         public_url=public_url,
     )
 
@@ -1440,7 +1440,7 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
         implementer,
         communications=communications,
         reviewers={"test": reviewer},
-        slack_channel_id="OpenEngine",
+        communications_channel="OpenEngine",
         public_url="https://sheas-mac-mini.taileb7fdb.ts.net",
     )
 

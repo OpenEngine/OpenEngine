@@ -158,7 +158,7 @@ def compose_app(
         github_client_id_source=_github_client_id_source(),
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
-        slack_channel_id=loaded.config.communications.channel,
+        communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
     )
 
