@@ -31,12 +31,17 @@ working on OpenEngine itself, run the development server instead:
 uv run engine-dev
 ```
 
-It starts the Vite dev server and a reloading API as one process: a component
-edit is hot-swapped into the open page, and a change to Python, `engine.toml`
-or a workflow restarts the API. Open the address Vite prints. `--no-web` runs
-the API alone, and `--build` serves the built client from the API the way
-`engine-web` does. A restart ends any agent run in flight; the
-[development server plan](docs/dev-server.md) has the rest of the detail.
+## Engine.toml
+The main configuration file for OpenEngine. It's defined [here](./engine.toml).
+While we use sensible defaults, if you need to configure engine, point it at a new 
+`engine.toml` file.
+```
+uv run \
+  --project /path/to/your/project \
+  --all-packages \
+  engine-web
+  --config /path/to/engine.toml
+```
 
 SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
 history is currently a placeholder; the SQLite state store upgrades its
