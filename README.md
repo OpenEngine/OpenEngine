@@ -20,7 +20,10 @@ uv run pytest      # run the suite, including the boundary checks
 All three entrypoints run today and report their wiring:
 
 ```bash
-uv run engine-web
+uv run \
+  --project /path/to/your/project \
+  --all-packages \
+  engine-web
 ```
 
 `engine-web` serves the client built into `apps/web/dist` and reads its
