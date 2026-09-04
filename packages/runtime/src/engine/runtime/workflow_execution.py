@@ -12,6 +12,7 @@ from engine.core.workflow_interpreter import (
     current_agent_command,
 )
 from engine.domain import (
+    AgentProfile,
     AgentRunId,
     AgentStep,
     AgentStepPaused,
@@ -39,14 +40,18 @@ from engine.domain import (
 )
 from engine.ports import (
     AgentRunner,
+    AgentTurn,
     ApprovalHandler,
     InteractiveMcpAgentRunner,
+    McpAgentRunner,
     Message as CommunicationMessage,
     MessageLink,
 )
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
+from engine.runtime.profiles import with_granted_tools
 from engine.runtime.step_results import requests_clarification_or_escalation
+from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
 from engine.runtime.workflows import WorkflowCatalog
 
 
@@ -372,11 +377,8 @@ class WorkflowExecutor:
         if definition.naming_profile is None or not definition.naming_prompt:
             return state
         try:
-            turn = await self._runners[runner_name].run_turn(
-                AgentRunId(f"{state.run_id}:name:run"),
-                definition.naming_profile,
-                (Message.user(state.prompt), Message.user(definition.naming_prompt)),
-                workspace_id=state.workspace_id,
+            turn = await self._naming_turn(
+                state, definition.naming_profile, definition.naming_prompt, runner_name
             )
         except asyncio.CancelledError:
             raise
@@ -391,6 +393,56 @@ class WorkflowExecutor:
         if commands:
             raise WorkflowExecutionError("naming a workflow emitted commands")
         return named
+
+    async def _naming_turn(
+        self,
+        state: RunState,
+        profile: AgentProfile,
+        prompt: str,
+        runner_name: str,
+    ) -> AgentTurn:
+        """Name a run, with the repository tools its naming profile is granted.
+
+        Naming happens once the workspace exists, so a granted profile can read
+        what the request points at rather than paraphrase the request: "Resolve
+        issue 270" is worth a name only after somebody has read issue 270.
+
+        The server bound here serves those tools and nothing else -- this turn
+        is not a step, so there is no step for `complete_step` to complete. A
+        profile that is granted nothing servable runs as it always has, with no
+        server at all.
+        """
+
+        runner = self._runners[runner_name]
+        agent_run_id = AgentRunId(f"{state.run_id}:name:run")
+        messages = (Message.user(state.prompt), Message.user(prompt))
+        served = (
+            self._dispatcher.repository_tools(profile)
+            if isinstance(runner, McpAgentRunner)
+            else ()
+        )
+        if not served:
+            return await runner.run_turn(
+                agent_run_id, profile, messages, workspace_id=state.workspace_id
+            )
+        async with TerminalMcpBroker(
+            run_id=state.run_id,
+            agent_run_id=agent_run_id,
+            step=None,
+            # Its own registry: the guard is against a second terminal result
+            # for one agent run, and this session serves no way to submit one.
+            registry=TerminalResultRegistry(),
+        ) as broker:
+            broker.enable_repository_tools(
+                self._capabilities.source_control, served, state.workspace_id
+            )
+            return await runner.run_turn_with_mcp(
+                agent_run_id,
+                with_granted_tools(profile, served),
+                messages,
+                broker.config,
+                workspace_id=state.workspace_id,
+            )
 
     async def _run_step(
         self,
@@ -543,7 +595,10 @@ def resolve_default_branch(
 
 def _clean_workflow_name(value: str) -> str:
     first_line = value.strip().splitlines()[0] if value.strip() else ""
-    return first_line.strip(" \t\"'`).:;!?")[:80]
+    # Long enough for a name that leads with an issue number and then says what
+    # the issue is; the guard is against an agent answering with a paragraph,
+    # not against a name a person would recognise.
+    return first_line.strip(" \t\"'`).:;!?")[:120]
 
 
 __all__ = ["WorkflowExecutionError", "WorkflowExecutor", "resolve_default_branch"]

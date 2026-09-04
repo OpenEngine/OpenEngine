@@ -147,7 +147,7 @@ class Dispatcher:
         # enumeration from reading as a complete one.
         served: tuple[str, ...] = ()
         if isinstance(selected_runner, McpAgentRunner):
-            served = terminal_tool_names(self._repository_tools(command.profile))
+            served = terminal_tool_names(self.repository_tools(command.profile))
         command = replace(
             command, profile=with_granted_tools(command.profile, served)
         )
@@ -307,8 +307,8 @@ class Dispatcher:
         )
         return turn
 
-    def _repository_tools(self, profile: AgentProfile) -> tuple[str, ...]:
-        """Which repository tools a step's broker will offer.
+    def repository_tools(self, profile: AgentProfile) -> tuple[str, ...]:
+        """Which repository tools a profile's broker will offer.
 
         The intersection of two things, because a grant alone is not enough:
         the profile has to ask for the tool, and the composed source control
@@ -316,10 +316,12 @@ class Dispatcher:
         that cannot honour it is left off the listing rather than served as
         something that fails when called.
 
-        Asked twice -- once to enable them, once to say so in the system
-        prompt -- which is the reason it is a method rather than a condition
-        written out at each site: the announcement and the listing have to
-        agree, and two copies of this are two things to keep in step.
+        Asked twice per step -- once to enable them, once to say so in the
+        system prompt -- which is the reason it is a method rather than a
+        condition written out at each site: the announcement and the listing
+        have to agree, and two copies of this are two things to keep in step.
+        Public because the naming turn asks the same question of the naming
+        profile, and answering it a second way there is the same hazard.
         """
         source_control = self._capabilities.source_control
         return tuple(
@@ -348,7 +350,7 @@ class Dispatcher:
             registry=self._terminal_results,
             deliver=deliver,
         )
-        repository_tools = self._repository_tools(command.profile)
+        repository_tools = self.repository_tools(command.profile)
         if repository_tools:
             # Older transport fakes may model only terminal delivery. The real
             # broker exposes this hook; keeping it optional preserves those
