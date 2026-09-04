@@ -226,6 +226,14 @@ def test_an_acp_node_runs_a_turn_and_publishes_what_happened(tmp_path: Path) -> 
 
     assert transcript(events) == [("assistant", DONE)]
     assert values == {str(IMPLEMENTATION): DONE, str(REVIEW): "Looks right."}
+    started = [event for event in events if event.kind.value == "conversation.started"]
+    assert len(started) == 1
+    assert started[0].node_id == IMPLEMENTATION
+    assert started[0].payload == {
+        "agent": AGENT,
+        "sessionId": next(iter(sessions(tmp_path))),
+        "resumed": False,
+    }
     # One conversation, started once. The node did not open a second.
     assert len(sent(tmp_path, "session/new")) == 1
     assert prompts(tmp_path) == [PROMPT]

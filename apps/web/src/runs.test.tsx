@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiMilestone, ApiProject, ApiWorkflowRun, EngineConfig } from "./api";
 import {
   conversationCount,
+  GraphConversationPage,
   NewWorkflowPage,
   phaseAccent,
   phaseLabel,
@@ -436,6 +437,84 @@ describe("RunDetailPage", () => {
 
     expect(await screen.findByText("Beta workflow")).toBeVisible();
     expect(screen.getByText("Implementation review (codex)")).toBeVisible();
+  });
+
+  it("opens a beta conversation before its first transcript arrives", async () => {
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      workflowName: "Implementation review (codex)",
+      workflowVersion: "",
+      currentStepId: null,
+      steps: [],
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1")
+        return json({
+          runId: "run-1",
+          graphId: graphRun.workflowId,
+          status: "running",
+          activeExecutions: [{ executionId: "execution-1", nodeId: "implementation" }],
+          nextNodes: ["implementation"],
+          values: {},
+          pendingApprovals: [],
+          error: "",
+        });
+      if (path === `/graph/api/graphs/${graphRun.workflowId}`)
+        return json({
+          graphId: graphRun.workflowId,
+          nodes: [{ nodeId: "implementation", name: "Implementation", kind: "agent" }],
+        });
+      if (path === "/api/runs/run-1/graph-events")
+        return json({
+          events: [{
+            sequence: 4,
+            type: "conversation.started",
+            nodeId: "implementation",
+            payload: { agent: "codex", sessionId: "session-1", resumed: false },
+          }],
+        });
+      return json({ error: "not found" }, { status: 404 });
+    }));
+
+    render(<RunDetailPage runId="run-1" />);
+
+    const link = await screen.findByRole("link", { name: /Open conversation/ });
+    expect(link).toHaveAttribute(
+      "href",
+      "/runs/run-1/conversations/graph--implementation",
+    );
+    expect(screen.queryByText("Conversation not started")).not.toBeInTheDocument();
+  });
+
+  it("keeps an opened beta conversation current", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      reads += 1;
+      return json({
+        events: reads === 1 ? [{
+          sequence: 4,
+          type: "conversation.started",
+          nodeId: "implementation",
+          payload: {},
+        }] : [{
+          sequence: 5,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "Reading the code." },
+        }],
+      });
+    }));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+    expect(screen.getByText("Waiting for agent activity…")).toBeVisible();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+    expect(screen.getByText("Reading the code.")).toBeVisible();
   });
 
   it("renders steps from an arbitrary workflow definition", async () => {

@@ -65,6 +65,21 @@ POST /graph/api/runs/{run}/approvals/{approval}     answer a question it stopped
                                                     on: {"decision": "accept"}
 ```
 
+To follow one from a terminal, copy its run id from the WorkOrder page and tail
+that event feed (the development server uses port 8000 by default):
+
+```bash
+curl -N http://localhost:8000/graph/api/runs/RUN_ID/events
+```
+
+The useful boundary events are `node.started` (LangGraph scheduled the step),
+`conversation.started` (the ACP adapter connected and established the agent
+session), `transcript` and `tool.call` (the agent is producing work), and
+`approval.requested` (it is waiting for a decision). If a run fails, the
+terminal running `engine-web` or the `[api]` side of `engine-dev` carries the
+full Python traceback. Recent ACP adapter stderr is included there when the
+adapter refuses a request or exits; it is otherwise kept out of the transcript.
+
 A run stops and waits the first time an agent asks permission, and again at the
 end when it wants a person's verdict. Until the pages catch up, those are
 answered with the last call above. `GET /graph/api/runs/{run}` lists what is

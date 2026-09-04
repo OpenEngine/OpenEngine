@@ -52,6 +52,8 @@ class EventKind(Enum):
     """
     NODE_STARTED = "node.started"
     NODE_FINISHED = "node.finished"
+    CONVERSATION_STARTED = "conversation.started"
+    """An agent session is established and ready for its first prompt."""
     TRANSCRIPT = "transcript"
     """One message in a node's conversation: `role` and `text`."""
     TOOL_CALL = "tool.call"
