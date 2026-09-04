@@ -213,6 +213,16 @@ class TestPollDeviceFlow:
         result = asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
         assert result == DeviceFlowComplete("access", "refresh", 28800, 15897600)
 
+    def test_ignores_boolean_expiry_fields(self, monkeypatch):
+        monkeypatch.setattr(
+            "engine.apps.web.github_auth.httpx.AsyncClient",
+            lambda: _client_returning(
+                _mock_response(200, {"access_token": "access", "expires_in": False})
+            ),
+        )
+        result = asyncio.run(poll_device_flow("cid", "dev-1", current_interval=5))
+        assert result == DeviceFlowComplete("access")
+
 
 class TestRefreshAccessToken:
     def test_returns_rotated_token_pair(self, monkeypatch):
@@ -234,13 +244,13 @@ class TestRefreshAccessToken:
             result = asyncio.run(refresh_access_token("cid", "old-refresh"))
         assert result == StoredCredentials("new-access", "new-refresh", 160.0, 220.0)
 
-    def test_rejects_missing_rotated_refresh_token(self, monkeypatch):
+    def test_preserves_refresh_token_when_provider_does_not_rotate_it(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
             lambda: _client_returning(_mock_response(200, {"access_token": "access"})),
         )
-        with pytest.raises(GitHubAuthError, match="no refresh_token"):
-            asyncio.run(refresh_access_token("cid", "old-refresh"))
+        result = asyncio.run(refresh_access_token("cid", "old-refresh"))
+        assert result == StoredCredentials("access", "old-refresh")
 
     def test_raises_a_typed_error_for_invalid_refresh_token(self, monkeypatch):
         monkeypatch.setattr(
@@ -386,6 +396,31 @@ def test_device_flow_expiries_become_absolute_timestamps():
     assert result == StoredCredentials("access", "refresh", 160.0, 220.0)
 
 
+def test_expiring_device_flow_credentials_round_trip_through_keychain(monkeypatch):
+    saved: dict[str, str] = {}
+    monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
+    monkeypatch.setattr(
+        keyring, "set_password", lambda _service, _user, value: saved.setdefault("value", value)
+    )
+    monkeypatch.setattr(keyring, "get_password", lambda *_: saved.get("value"))
+    with patch("engine.apps.web.github_auth.time.time", return_value=100.0):
+        credentials = credentials_from_device_flow(
+            DeviceFlowComplete("access", "refresh", 60, 120)
+        )
+    store = GitHubCredentialStore()
+    store.set_credentials(credentials)
+    assert store.get_credentials() == credentials
+
+
+def test_credential_store_ignores_boolean_expiry_values(monkeypatch):
+    monkeypatch.setattr(
+        keyring,
+        "get_password",
+        lambda *_: '{"access_token":"access","expires_at":true,"refresh_token_expires_at":false}',
+    )
+    assert GitHubCredentialStore().get_credentials() == StoredCredentials("access")
+
+
 # ---------------------------------------------------------------------------
 # CSRF guard (_is_local_request) via the API endpoints
 # ---------------------------------------------------------------------------
@@ -518,10 +553,10 @@ class TestPollEndpoint:
                 new=AsyncMock(return_value=DeviceFlowComplete(access_token="tok")),
             ),
             patch(
-                "engine.apps.web.github_auth.keyring.get_keyring",
+                "engine.apps.web.oauth_credentials.keyring.get_keyring",
                 return_value=_high_priority_backend(),
             ),
-            patch("engine.apps.web.github_auth.keyring.set_password"),
+            patch("engine.apps.web.oauth_credentials.keyring.set_password"),
         ):
             with TestClient(app) as client:
                 client.post("/api/github/connect")

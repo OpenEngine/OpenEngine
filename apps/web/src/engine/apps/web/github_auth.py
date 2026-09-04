@@ -19,13 +19,18 @@ Callers:
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import time
 
 import httpx
 import keyring
-import keyring.backend
-import keyring.backends.fail
+from engine.apps.web.oauth_credentials import (
+    OAuthCredentialError,
+    OAuthCredentialStore,
+    StoredCredentials,
+    _optional_string,
+    expiry_at,
+    optional_int,
+)
 
 #: The keyring service name and username used for every installation.  One
 #: machine, one token -- this is a single-user local tool.
@@ -78,16 +83,6 @@ class DeviceFlowComplete:
     refresh_token_expires_in: int | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class StoredCredentials:
-    """An OAuth token set stored atomically in the OS keychain."""
-
-    access_token: str
-    refresh_token: str | None = None
-    expires_at: float | None = None
-    refresh_token_expires_at: float | None = None
-
-
 DeviceFlowPollResult = DeviceFlowPending | DeviceFlowComplete
 
 
@@ -99,7 +94,7 @@ class GitHubRefreshTokenInvalidError(GitHubAuthError):
     """GitHub confirmed that the refresh token cannot be used again."""
 
 
-class GitHubCredentialStore:
+class GitHubCredentialStore(OAuthCredentialStore):
     """Thin wrapper around `keyring` for the GitHub access token.
 
     Stateless -- every call reads from or writes to the OS keychain directly.
@@ -110,83 +105,14 @@ class GitHubCredentialStore:
     vanish on restart, so failing loudly is the right behaviour.
     """
 
+    def __init__(self) -> None:
+        super().__init__(_KEYRING_SERVICE, _KEYRING_USERNAME)
+
     def _check_backend(self) -> None:
         try:
-            backend = keyring.get_keyring()
-            priority = backend.priority
-        except (keyring.errors.NoKeyringError, NotImplementedError):
-            raise GitHubAuthError(
-                "no secure keyring backend available on this system; "
-                "the value cannot be stored safely"
-            )
-        if priority < 1:
-            raise GitHubAuthError(
-                "no secure keyring backend available on this system; "
-                "the value cannot be stored safely"
-            )
-
-    def get(self) -> str | None:
-        """Return the stored token, or None when nothing is saved."""
-        credentials = self.get_credentials()
-        return credentials.access_token if credentials is not None else None
-
-    def get_credentials(self) -> StoredCredentials | None:
-        """Return the stored OAuth token set.
-
-        Earlier versions wrote the access token as a bare keychain value.  Keep
-        those connections working until their owner reconnects and receives a
-        refresh token.
-        """
-        try:
-            value = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
-        except keyring.errors.NoKeyringError:
-            return None
-        if not value:
-            return None
-        try:
-            data = json.loads(value)
-        except json.JSONDecodeError:
-            return StoredCredentials(access_token=value)
-        if not isinstance(data, dict) or not isinstance(data.get("access_token"), str):
-            return StoredCredentials(access_token=value)
-        return StoredCredentials(
-            access_token=data["access_token"],
-            refresh_token=_optional_string(data.get("refresh_token")),
-            expires_at=_optional_number(data.get("expires_at")),
-            refresh_token_expires_at=_optional_number(
-                data.get("refresh_token_expires_at")
-            ),
-        )
-
-    def set(self, token: str) -> None:
-        self.set_credentials(StoredCredentials(access_token=token))
-
-    def set_credentials(self, credentials: StoredCredentials) -> None:
-        """Store the complete token set in one keychain write.
-
-        GitHub rotates access and refresh tokens together, so separate writes
-        could leave a process with a mismatched pair after an interruption.
-        """
-        self._check_backend()
-        keyring.set_password(
-            _KEYRING_SERVICE,
-            _KEYRING_USERNAME,
-            json.dumps(
-                {
-                    "access_token": credentials.access_token,
-                    "refresh_token": credentials.refresh_token,
-                    "expires_at": credentials.expires_at,
-                    "refresh_token_expires_at": credentials.refresh_token_expires_at,
-                },
-                separators=(",", ":"),
-            ),
-        )
-
-    def delete(self) -> None:
-        try:
-            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
-        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
-            pass
+            super()._check_backend()
+        except OAuthCredentialError as error:
+            raise GitHubAuthError(str(error)) from error
 
     def get_client_id(self) -> str | None:
         """Return the stored OAuth client ID, or None when nothing is saved."""
@@ -275,8 +201,8 @@ async def poll_device_flow(
     return DeviceFlowComplete(
         access_token=token,
         refresh_token=_optional_string(body.get("refresh_token")),
-        expires_in=_optional_int(body.get("expires_in")),
-        refresh_token_expires_in=_optional_int(body.get("refresh_token_expires_in")),
+        expires_in=optional_int(body.get("expires_in")),
+        refresh_token_expires_in=optional_int(body.get("refresh_token_expires_in")),
     )
 
 
@@ -310,17 +236,16 @@ async def refresh_access_token(client_id: str, refresh_token: str) -> StoredCred
     if body.get("error"):
         raise GitHubAuthError(f"GitHub token refresh error: {body['error']}")
     token = body.get("access_token")
-    next_refresh_token = body.get("refresh_token")
     if not isinstance(token, str) or not token:
         raise GitHubAuthError("GitHub returned no access_token while refreshing")
-    if not isinstance(next_refresh_token, str) or not next_refresh_token:
-        raise GitHubAuthError("GitHub returned no refresh_token while refreshing")
     now = time.time()
     return StoredCredentials(
         access_token=token,
-        refresh_token=next_refresh_token,
-        expires_at=_expiry_at(now, body.get("expires_in")),
-        refresh_token_expires_at=_expiry_at(
+        # OAuth providers are allowed to retain a refresh token. Preserve the
+        # working token when a successful response does not rotate it.
+        refresh_token=_optional_string(body.get("refresh_token")) or refresh_token,
+        expires_at=expiry_at(now, body.get("expires_in")),
+        refresh_token_expires_at=expiry_at(
             now, body.get("refresh_token_expires_in")
         ),
     )
@@ -332,26 +257,11 @@ def credentials_from_device_flow(result: DeviceFlowComplete) -> StoredCredential
     return StoredCredentials(
         access_token=result.access_token,
         refresh_token=result.refresh_token,
-        expires_at=_expiry_at(now, result.expires_in),
-        refresh_token_expires_at=_expiry_at(now, result.refresh_token_expires_in),
+        expires_at=expiry_at(now, result.expires_in),
+        refresh_token_expires_at=expiry_at(now, result.refresh_token_expires_in),
     )
 
 
-def _optional_string(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
-
-
-def _optional_int(value: object) -> int | None:
-    return value if isinstance(value, int) and value >= 0 else None
-
-
-def _optional_number(value: object) -> float | None:
-    return float(value) if isinstance(value, (int, float)) else None
-
-
-def _expiry_at(now: float, seconds: object) -> float | None:
-    duration = _optional_int(seconds)
-    return now + duration if duration is not None else None
 
 
 __all__ = [
