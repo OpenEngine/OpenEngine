@@ -14,6 +14,7 @@ what a test here checks directly rather than by inference.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -215,6 +216,58 @@ def test_an_execution_id_is_the_langgraph_task_id() -> None:
     # And it is the same id the run reported as in flight, so a client that read
     # it off a snapshot can address the node that produced it.
     assert started == [values["execution"]]
+
+
+# --- what a failure leaves behind --------------------------------------------
+
+
+def test_a_run_that_fails_writes_the_whole_failure_to_the_process_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`run.failed` is one sentence; the rest has to be somewhere.
+
+    A client is told `str(failure)` and nothing else -- no type, no traceback,
+    no chain of causes -- and that string is all the run record keeps too. For
+    an agent that answered "internal error" that leaves everyone who has to fix
+    it reading a message written by the thing that could not explain itself, so
+    the exception is logged where an operator can see what actually raised.
+    """
+
+    async def explode(_state: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("the agent refused session/prompt")
+
+    async def scenario() -> RunId:
+        builder: StateGraph = StateGraph(State)
+        builder.add_node(str(FAST), explode)
+        builder.add_edge(START, str(FAST))
+        builder.add_edge(str(FAST), END)
+        runtime = LangGraphRuntime(
+            LangGraphDefinition(
+                graph_id=GRAPH,
+                name="One node",
+                graph=builder.compile(checkpointer=InMemorySaver()),
+            )
+        )
+        log = EventLog()
+        runtime.observe(log.append)
+        run = await runtime.start(GRAPH, {})
+        await _drain(runtime, log, run.run_id)
+        await runtime.aclose()
+        return run.run_id
+
+    logger = "engine.graph_runtime_langgraph.runtime"
+    with caplog.at_level(logging.ERROR, logger=logger):
+        run_id = asyncio.run(scenario())
+
+    logged = next(
+        record for record in caplog.records if record.message == "graph run failed"
+    )
+    assert logged.exc_info is not None
+    assert "RuntimeError: the agent refused session/prompt" in caplog.text
+    # And placed, so one line of a busy log says which run and which node.
+    assert logged.run_id == str(run_id)
+    assert logged.graph_id == str(GRAPH)
+    assert logged.node_id == str(FAST)
 
 
 # --- the durable half --------------------------------------------------------

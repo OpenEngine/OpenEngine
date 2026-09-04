@@ -282,6 +282,44 @@ async def test_a_refused_prompt_names_the_session_that_was_refused() -> None:
 
 
 @asyncio_test
+async def test_a_refusal_keeps_the_parts_of_it_that_explain_it() -> None:
+    """`message` is the one field a refusal is allowed to be useless in.
+
+    `-32603 "Internal error"` is what an adapter answers when something under it
+    failed, and the sentence naming the cause is in `data` or on stderr -- so an
+    error built from `message` alone renders every such failure identically.
+    """
+    async with connected("--refuse-prompt") as client:
+        session = await client.new_session()
+
+        with pytest.raises(ACPSessionError) as caught:
+            async for _ in session.prompt("hello"):
+                pass
+
+    rendered = str(caught.value)
+    assert "code -32000" in rendered
+    assert "quota exhausted" in rendered
+    # Still alive, so this is the tail of a running process rather than the last
+    # words of a dead one -- the case `_closed_error` never sees.
+    assert "upstream said 429" in rendered
+
+
+@asyncio_test
+async def test_a_refusal_carrying_a_response_body_is_capped() -> None:
+    """This text is stored on a run record and logged; a body is not a cause."""
+    async with connected("--refuse-prompt") as client:
+        session = await client.new_session()
+
+        with pytest.raises(ACPSessionError) as caught:
+            async for _ in session.prompt("hello"):
+                pass
+
+    assert "xxxx" in str(caught.value)
+    assert "more characters)" in str(caught.value)
+    assert len(str(caught.value)) < 4000
+
+
+@asyncio_test
 async def test_a_permission_request_is_streamed_and_answered() -> None:
     """Answered rather than ignored: an unanswered request hangs the turn."""
     async with connected("--permission") as client:

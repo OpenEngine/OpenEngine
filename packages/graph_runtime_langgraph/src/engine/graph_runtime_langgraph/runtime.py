@@ -42,6 +42,7 @@ approval handoff -- see `engine.graph_runtime_langgraph.acp`.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
@@ -75,6 +76,12 @@ from engine.graph_runtime_langgraph.store import (
     InMemoryGraphRuntimeStore,
     RunRecord,
 )
+
+#: Where a failure that a client only sees as a sentence is written down whole.
+#: A run's `error` is one string, published once and stored once, with no type
+#: and no traceback; this is where the operator reading the process log finds
+#: what actually raised.
+log = logging.getLogger(__name__)
 
 #: LangGraph's reasons a checkpoint exists, in the contract's vocabulary.
 #: `update` is here because a run is seeded with one -- that seeded position is
@@ -461,6 +468,14 @@ class LangGraphRuntime:
         except Exception as failure:
             await self._release_all(live)
             blamed = await self._blamed(definition, live.run_id) or failed_at
+            log.exception(
+                "graph run failed",
+                extra={
+                    "run_id": str(live.run_id),
+                    "graph_id": str(live.graph_id),
+                    "node_id": str(blamed) if blamed is not None else None,
+                },
+            )
             await self._fail(live, str(failure), blamed)
 
     async def _blamed(
