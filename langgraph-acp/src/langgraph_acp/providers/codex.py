@@ -1,6 +1,6 @@
 """Codex, reached over ACP.
 
-The Codex CLI does not speak ACP itself; `@zed-industries/codex-acp` is the
+The Codex CLI does not speak ACP itself; `@agentclientprotocol/codex-acp` is the
 adapter that wraps it, and running it through `npx` is what makes
 `ACPNode(agent="codex")` work on a machine where only Codex is installed.
 
@@ -26,7 +26,7 @@ from langgraph_acp.permissions import ACPPermissionHandler
 #: The ACP adapter for Codex, run without a global install. Pinned to no version
 #: on purpose: the adapter tracks the Codex CLI, and an old pin here would fail
 #: against a current Codex rather than protect anyone from it.
-CODEX_ACP_COMMAND = ("npx", "--yes", "@zed-industries/codex-acp")
+CODEX_ACP_COMMAND = ("npx", "--yes", "@agentclientprotocol/codex-acp")
 
 
 @dataclass(frozen=True, slots=True)
