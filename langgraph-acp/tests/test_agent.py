@@ -13,6 +13,7 @@ from langgraph_acp import (
     ACPAgentProvider,
     ACPAgentRegistry,
     CLAUDE_ACP_COMMAND,
+    CODEX_ACP_COMMAND,
     ClaudeACPProvider,
     CodexACPProvider,
     StdioACPProvider,
@@ -83,11 +84,12 @@ def test_the_same_agent_can_be_registered_twice_under_different_settings() -> No
 
 def test_codex_is_reached_through_its_acp_adapter() -> None:
     """Codex itself does not speak ACP; this is the wrapper that does."""
-    assert CodexACPProvider().command == (
+    assert CODEX_ACP_COMMAND == (
         "npx",
         "--yes",
         "@agentclientprotocol/codex-acp",
     )
+    assert CodexACPProvider().command == CODEX_ACP_COMMAND
     assert isinstance(CodexACPProvider(), ACPAgentProvider)
 
 

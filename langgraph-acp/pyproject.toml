@@ -23,7 +23,16 @@ dev = ["langgraph>=1.0", "mypy>=1.15", "pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Live adapter runs are deselected by default and opted into with
+# `-m compatibility`, which is what the scheduled compatibility workflow does.
+# They install the adapter from npm and talk to a real agent, so a default run
+# that included them would mean "did we break something, or is the registry
+# slow today?". The same convention, and the same reasoning, as the root
+# `pyproject.toml`.
+addopts = "-q -m 'not compatibility'"
+markers = [
+    "compatibility: launches the real ACP adapter; scheduled rather than per-PR",
+]
 
 [tool.mypy]
 # `py.typed` promises a downstream type checker that these annotations are

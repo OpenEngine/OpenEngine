@@ -175,3 +175,48 @@ jobs:
           if-no-files-found: warn
           # Diagnostics, not archives: long enough to read after a Monday run.
           retention-days: 14
+
+  acp-adapter:
+    name: codex over ACP
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The jobs above reach Codex by running the `codex` binary. `langgraph-acp`
+    # reaches it over ACP, through an adapter that is a different package on a
+    # different release cadence -- so nothing above would notice the handshake,
+    # the session update shapes, or the capability names moving under it.
+    #
+    # Unpinned on purpose, matching `CODEX_ACP_COMMAND`: what this job is for is
+    # finding out that the current adapter broke, which a pin would hide.
+    defaults:
+      run:
+        working-directory: langgraph-acp
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Record which adapter release this is
+        # `npx --yes` resolves at run time, so the version that failed has to be
+        # in the log of the failure rather than inferred from the date.
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(npm view @agentclientprotocol/codex-acp version)
+          echo "::notice::@agentclientprotocol/codex-acp resolves to $version"
+          echo "### codex-acp $version" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Handshake and one turn over ACP
+        env:
+          # Absent, the turn skips and the handshake still runs: initialize is
+          # answered before anyone is asked to authenticate, so protocol drift
+          # is catchable without a credential.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: uv run --locked pytest -m compatibility -v
