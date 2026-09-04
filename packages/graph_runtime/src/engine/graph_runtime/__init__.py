@@ -42,6 +42,7 @@ questions a session answers and the ones a graph interrupt answers.
 from engine.graph_runtime.api import create_app
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.control import (
+    CANCELLED,
     AmbiguousExecutionError,
     ApprovalNotPendingError,
     GraphCompilationError,
@@ -76,6 +77,7 @@ from engine.graph_runtime.topology import (
 )
 
 __all__ = [
+    "CANCELLED",
     "ActiveExecution",
     "AmbiguousExecutionError",
     "ApprovalNotPendingError",

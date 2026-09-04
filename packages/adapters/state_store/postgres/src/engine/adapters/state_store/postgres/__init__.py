@@ -50,6 +50,9 @@ class PostgresStateStore:
     ) -> Sequence[RunState]:
         raise NotImplementedError("Postgres reads land with the state-store ticket")
 
+    async def delete_run(self, run_id: RunId) -> bool:
+        raise NotImplementedError("Postgres writes land with the state-store ticket")
+
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         raise NotImplementedError("Event append lands with the state-store ticket")
 

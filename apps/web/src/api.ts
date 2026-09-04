@@ -271,6 +271,16 @@ export function completeHumanReview(
   );
 }
 
+/** Throw a WorkOrder away for good.
+ *
+ *  Unlike archiving a project there is nothing to restore afterwards: the run,
+ *  its steps and its history go with it, which is why the rail asks first. */
+export function deleteRun(runId: string): Promise<void> {
+  return api<void>(`/api/runs/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
+  });
+}
+
 /** Choose the runner that answers this conversation from now on.
  *
  * Active workflow conversations restart their current turn on the new runner.

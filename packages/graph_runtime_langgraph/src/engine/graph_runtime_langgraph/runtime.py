@@ -54,6 +54,7 @@ from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.control import (
+    CANCELLED,
     ApprovalNotPendingError,
     PendingApproval,
     RunNotSteerableError,
@@ -286,6 +287,40 @@ class LangGraphRuntime:
         if decision is ApprovalDecision.CANCEL:
             await self._refuse(record)
         return await self._snapshot(run_id)
+
+    async def cancel(self, run_id: RunId) -> RunSnapshot:
+        record = await self._require(run_id)
+        live = self._live.setdefault(run_id, _Live(run_id, record.graph_id))
+        # The same lock a fork holds, for the same reason: stopping is
+        # asynchronous, and a resume arriving inside it would start a driver for
+        # a run that is being ended.
+        async with live.control:
+            # Read before anything is stopped, because stopping changes the
+            # answer: releasing the executions settles the approvals a waiting
+            # run is waiting on, and a run read afterwards would look like one
+            # that was simply working.
+            ending = (await self._snapshot(run_id)).status
+            stopping = ending not in (RunStatus.COMPLETED, RunStatus.FAILED)
+            if stopping:
+                # Written down before anything is let go, in the order and for
+                # the reason `_refuse` uses: the executions the stop releases
+                # may raise on their way out, and the first reason recorded is
+                # the one a client was already told.
+                await self._store.remember_run(replace(record, error=CANCELLED))
+            await self._stop(live)
+            # Settled rather than deleted, and without an `approval.resolved`
+            # for any of them: nobody decided these, and the execution that
+            # asked is gone, so nobody can.
+            await self._store.abandon_run_approvals(run_id)
+            if stopping:
+                # Published here rather than through `_fail`, which logs the
+                # ending with a traceback for an operator to read. A run stopped
+                # because a person threw its WorkOrder away is not a fault, and
+                # there is no exception behind it to print.
+                await self.publish(
+                    live.run_id, EventKind.RUN_FAILED, {"error": CANCELLED}
+                )
+            return await self._snapshot(run_id)
 
     async def aclose(self) -> None:
         for live in tuple(self._live.values()):

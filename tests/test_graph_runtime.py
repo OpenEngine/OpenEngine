@@ -38,10 +38,14 @@ import pytest
 
 from engine.domain import RunId
 from engine.graph_runtime import (
+    CANCELLED,
     ControllableExecution,
     GraphId,
     GraphRuntime,
     NodeId,
+    RunSnapshot,
+    RunStatus,
+    UnknownRunError,
     create_app,
 )
 from graph_runtime_backends import BACKENDS, Backend
@@ -1105,6 +1109,146 @@ def test_a_node_that_raises_fails_the_run_where_it_raised(build: Backend) -> Non
     ]
     # The refusal to steer now agrees with the status.
     assert steered.status_code == 409
+
+
+# --- cancellation ----------------------------------------------------------
+#
+# Not a route: cancelling is what a caller holding the runtime does when the
+# reason for the run is gone -- the WorkOrder it belonged to was deleted -- so
+# the primitive is called directly here, the way `running()` is.
+
+
+def test_cancelling_a_run_stops_it_and_says_it_is_over(build: Backend) -> None:
+    """Nothing left driving the run, and the run says so.
+
+    Both halves matter. Stopping without recording an ending would leave the
+    engine reporting `running` for a run with no driver -- the exact answer the
+    failure path exists to prevent -- and recording an ending without stopping
+    would leave a node working on a run everyone has been told is finished.
+    """
+    runtime = build(_pipeline(Say("Reading."), AwaitSteering()))
+
+    async def scenario() -> tuple[dict, list[str], RunSnapshot]:
+        async with _server(runtime) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "transcript")
+            cancelled = await runtime.cancel(RunId(run_id))
+            state = await surface.client.get(f"/api/runs/{run_id}")
+            return state.json(), [str(one) for one in runtime.running()], cancelled
+
+    state, still_running, cancelled = asyncio.run(scenario())
+
+    assert still_running == []
+    assert cancelled.status is RunStatus.FAILED
+    assert cancelled.error == CANCELLED
+    assert state["status"] == "failed"
+    assert state["error"] == CANCELLED
+    assert state["activeExecutions"] == []
+
+
+def test_cancelling_a_run_parked_on_a_question_settles_it_undecided(
+    build: Backend,
+) -> None:
+    """The state a WorkOrder mostly sits in, so it is the one worth stopping.
+
+    A run waiting on permission has no task making progress, and stopping the
+    executor is not enough on its own: the questions it raised outlive it in
+    whatever the runtime writes them down in. Left pending they would report a
+    run that is over as still waiting on a person, and answering one would go
+    to an execution that no longer exists.
+
+    Three tasks of one node, each mid-question, because a superstep is plural
+    and a cancel has to take all of them. Settled rather than deleted and
+    without an `approval.resolved` for any of them: nobody decided these, so a
+    client still showing one is told it is no longer pending rather than that
+    it was answered or never existed.
+    """
+    runtime = build(
+        _repeated(Ask("delete the branch", command="git branch -D main"), Say("Done."))
+    )
+
+    async def scenario() -> dict[str, object]:
+        async with _server(runtime) as surface:
+            run = await _start(surface, REPEATED)
+            run_id = str(run["runId"])
+            async with surface.subscribe(run_id) as feed:
+                await feed.until("approval.requested", 3)
+                waiting = await surface.client.get(f"/api/runs/{run_id}")
+                requests = waiting.json()["pendingApprovals"]
+                cancelled = await runtime.cancel(RunId(run_id))
+                events = await feed.until("run.failed")
+            return {
+                "waiting": waiting.json(),
+                "requests": requests,
+                "cancelled": cancelled,
+                "state": (await surface.client.get(f"/api/runs/{run_id}")).json(),
+                # Aimed at a question that was open when the run was stopped.
+                "decided": await surface.client.post(
+                    f"/api/runs/{run_id}/approvals/{requests[0]['approvalId']}",
+                    json={"decision": "accept"},
+                ),
+                "events": events,
+                "running": [str(one) for one in runtime.running()],
+            }
+
+    outcome = asyncio.run(scenario())
+
+    # The run really was parked on the questions, rather than racing past them.
+    assert outcome["waiting"]["status"] == "awaiting_approval"
+    assert len(outcome["requests"]) == 3
+    assert outcome["cancelled"].status is RunStatus.FAILED
+    assert outcome["cancelled"].error == CANCELLED
+    assert outcome["cancelled"].pending_approvals == ()
+    assert outcome["running"] == []
+    state = outcome["state"]
+    assert state["status"] == "failed"
+    assert state["error"] == CANCELLED
+    assert state["pendingApprovals"] == []
+    assert state["activeExecutions"] == []
+    # Nobody answered them, and nobody can now: 409 rather than the 404 a
+    # forgotten request would give.
+    assert outcome["decided"].status_code == 409
+    assert _of_kind(outcome["events"], "approval.resolved") == []
+    assert len(_of_kind(outcome["events"], "run.failed")) == 1
+
+
+def test_cancelling_a_finished_run_leaves_what_it_said_about_itself(
+    build: Backend,
+) -> None:
+    """A run that already ended is not re-ended.
+
+    The row a person deletes may be one that finished last week, and reporting
+    it as cancelled would rewrite what happened. Cancelling twice is the same
+    case, and has to be as harmless.
+    """
+    runtime = build(_pipeline(Say("Wrote it.")))
+
+    async def scenario() -> dict:
+        async with _server(runtime) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "run.finished")
+            await runtime.cancel(RunId(run_id))
+            await runtime.cancel(RunId(run_id))
+            return (await surface.client.get(f"/api/runs/{run_id}")).json()
+
+    state = asyncio.run(scenario())
+
+    assert state["status"] == "completed"
+    assert state["error"] == ""
+
+
+def test_cancelling_a_run_nobody_started_is_refused(build: Backend) -> None:
+    """`UnknownRunError`, so a caller can tell it from a run it did stop."""
+    runtime = build(_pipeline(Say("Wrote it.")))
+
+    async def scenario() -> None:
+        async with _server(runtime):
+            with pytest.raises(UnknownRunError):
+                await runtime.cancel(RunId("run-nobody-started"))
+
+    asyncio.run(scenario())
 
 
 # --- shutdown --------------------------------------------------------------

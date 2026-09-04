@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   api,
   completeHumanReview,
+  deleteRun,
   milestoneDetailsUrl,
   type ApiMilestone,
   type ApiGraphEvent,
@@ -98,7 +99,16 @@ export function useRuns() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, []);
-  return { runs, error, loaded };
+  // Deleting is not archiving: there is no list the run moves into and nothing
+  // to restore it from, so the click is asked about before it is made. The row
+  // then leaves on the click rather than a second later, when the poll next
+  // reads the list -- and that same poll puts it back if the delete failed.
+  const remove = (run: ApiWorkflowRunListing) => {
+    if (!window.confirm(`Delete ${run.name}? This cannot be undone.`)) return;
+    setRuns((current) => current.filter((item) => item.runId !== run.runId));
+    void deleteRun(run.runId).catch(() => {});
+  };
+  return { runs, error, loaded, remove };
 }
 
 export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error: string }) {

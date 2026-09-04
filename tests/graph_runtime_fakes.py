@@ -41,6 +41,7 @@ from itertools import count
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
 from engine.graph_runtime import (
+    CANCELLED,
     ActiveExecution,
     ApprovalNotPendingError,
     Checkpoint,
@@ -526,6 +527,18 @@ class ScriptedGraphRuntime:
         await execution.decide(approval_id, decision)
         await asyncio.gather(*run.executors, return_exceptions=True)
         return self._snapshot(run)
+
+    async def cancel(self, run_id: RunId) -> RunSnapshot:
+        run = self._require(run_id)
+        async with run.control:
+            # `run.status` rather than the derived one: a run parked on a
+            # question is a run that is still going, and stopping it is exactly
+            # what this is for.
+            ending = run.status
+            await self._stop(run)
+            if ending is RunStatus.RUNNING:
+                await self._fail(run, CANCELLED, None)
+            return self._snapshot(run)
 
     async def aclose(self) -> None:
         """Stop every run, as the server's shutdown does."""

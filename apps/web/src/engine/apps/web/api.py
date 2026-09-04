@@ -94,6 +94,7 @@ from engine.graph_runtime import (
     GraphCompilationError,
     GraphId,
     GraphRuntime,
+    GraphRuntimeError,
     GraphWorkflow,
     RunStatus,
     RuntimeEvent,
@@ -1780,6 +1781,73 @@ def create_app(
             assert run is not None
         return JSONResponse(_run_json(run))
 
+    async def delete_run(request: Request) -> Response:
+        """Throw a WorkOrder away, whatever it was in the middle of.
+
+        A run still being worked on is stopped first, and which engine is asked
+        to stop it depends on which one is running it. A step WorkOrder is this
+        app's: the agent turn is cancelled and the task driving the run is
+        awaited out, so nothing is left holding a run id that is about to stop
+        existing -- a save landing after the delete would put the row back, and
+        the WorkOrder the reader just threw away would reappear on the next
+        poll.
+
+        A `[BETA]` one is the graph engine's, and none of that reaches it: its
+        driver is a task in the engine, not in `workflow_tasks`, and the agent
+        it has open is not an agent run this app started. Deleting the row
+        without telling the engine would take the WorkOrder off the rail and
+        leave the run working -- agents still going in the repository, with
+        nothing left on screen to stop them by. So the engine is asked to
+        cancel the run, and only then is the row forgotten.
+        """
+        run_id = RunId(request.path_params["run_id"])
+        state = await session.state_store.load(run_id)
+        if state is None:
+            return _error("run not found", 404)
+        if str(state.workflow_id) in graph_workflows:
+            await cancel_graph_run(run_id)
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task = workflow_tasks.pop(run_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await session.state_store.delete_run(run_id)
+        return Response(status_code=204)
+
+    async def cancel_graph_run(run_id: RunId) -> None:
+        """Stop a `[BETA]` WorkOrder in the engine, if there is one to stop.
+
+        Two ways there is nothing to do, and neither is a reason to refuse the
+        delete. The engine may not be running at all -- it failed to open, or
+        this process never had one -- in which case nothing here is driving the
+        run either, because a driver is a task in a process. And the engine may
+        not know the run: a row whose graph state was deleted from under it,
+        which `restore_graph_runs` fails on startup for the same reason.
+
+        Either way the row is the reader's to throw away, so the reason is
+        logged and the delete goes on. Refusing would leave a WorkOrder nobody
+        can remove and nothing is working on.
+        """
+        runtime = surface.runtime
+        if runtime is None:
+            log.warning(
+                "the graph engine is not running, so %s WorkOrder %s was "
+                "deleted without being cancelled",
+                BETA,
+                run_id,
+            )
+            return
+        try:
+            await runtime.cancel(run_id)
+        except GraphRuntimeError:
+            log.warning(
+                "the graph engine has no record of %s WorkOrder %s, so there "
+                "was nothing to cancel",
+                BETA,
+                run_id,
+            )
+
     async def graph_run_events(request: Request) -> JSONResponse:
         """Replay the graph transcript for the WorkOrder UI.
 
@@ -2502,6 +2570,7 @@ def create_app(
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
+        Route("/api/runs/{run_id}", delete_run, methods=["DELETE"]),
         Route("/api/runs/{run_id}/graph-events", graph_run_events),
         Route(
             "/api/runs/{run_id}/human-review",

@@ -142,6 +142,7 @@ export function Sidebar({
   activeMilestonesPage = true,
   activeView,
   onArchiveProject,
+  onDeleteRun,
 }: {
   projects?: ApiProject[];
   runs: ApiWorkflowRunListing[];
@@ -160,6 +161,10 @@ export function Sidebar({
   /** Omitted where nothing owns the projects list, which leaves the rows
    *  readable and drops a button that could not have worked. */
   onArchiveProject?: (project: ApiProject, archived: boolean) => void;
+  /** Omitted for the same reason `onArchiveProject` is: a rail nobody owns the
+   *  runs list for is left readable rather than given a button that cannot
+   *  remove anything from it. */
+  onDeleteRun?: (run: ApiWorkflowRunListing) => void;
 }) {
   // Where the page belongs is not always known at the first paint: a
   // conversation is only recognized as a project's once the projects load. The
@@ -255,6 +260,21 @@ export function Sidebar({
                       {runStatusLabel(run)} · {run.workflowVersion || run.workflowId}
                     </span>
                   </a>
+                  {/* The project row's × put next to a WorkOrder, where it
+                      throws the run away rather than putting it aside: a run
+                      has no archived list to sit in, so the click is asked
+                      about before it is made. */}
+                  {onDeleteRun && (
+                    <button
+                      aria-label={`Delete ${run.name}`}
+                      className="rail-item-action"
+                      onClick={() => onDeleteRun(run)}
+                      title="Delete WorkOrder"
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
                 {conversationCount(run) > 0 && (
                   <div className="rail-sub" aria-label={`Conversations for ${run.name}`}>

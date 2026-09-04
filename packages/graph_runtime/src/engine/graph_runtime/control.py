@@ -143,6 +143,13 @@ class RunSnapshot:
     error: str = ""
 
 
+#: Why a cancelled run stopped, as its `error` and as the payload of the
+#: `run.failed` it publishes. Stated here rather than per binding so that a
+#: caller -- and the suite both bindings run -- can recognise the one ending
+#: nothing inside the graph asked for.
+CANCELLED = "the run was cancelled"
+
+
 class GraphCompilationError(Exception):
     """A graph this deployment was given cannot be built, and this says which.
 
@@ -335,6 +342,34 @@ class GraphRuntime(Protocol):
         """
         ...
 
+    async def cancel(self, run_id: RunId) -> RunSnapshot:
+        """Stop this one run for good, whatever it was in the middle of.
+
+        The primitive a caller needs when the *reason* for the run is gone --
+        the WorkOrder it belonged to was thrown away -- rather than when the
+        graph decided something. Nothing here is resumable on purpose: a fork
+        is how a run is picked back up, and this is how one stops.
+
+        What it promises is that nothing is left driving the run. The executor
+        is cancelled and awaited out, everything in flight is released, and the
+        questions those executions raised are settled without being decided --
+        an execution that has been stopped can never be told the answer, and a
+        request left pending would report a run that is over as still waiting
+        on a person.
+
+        The run is then `FAILED` with `CANCELLED` as its error, and publishes
+        `run.failed` to say so. Not a status of its own: what a subscriber has
+        to be told is that this run is over, and a fifth state would be a fifth
+        thing every client had to learn in order to hear it.
+
+        Idempotent, and never overwrites an ending the run reached on its own:
+        cancelling a run that has already finished or failed stops whatever is
+        somehow still alive and leaves what it said about itself alone.
+
+        Raises `UnknownRunError` for a run that does not exist.
+        """
+        ...
+
     async def aclose(self) -> None:
         """Stop every run this runtime is driving.
 
@@ -347,6 +382,7 @@ class GraphRuntime(Protocol):
 
 
 __all__ = [
+    "CANCELLED",
     "AmbiguousExecutionError",
     "ApprovalNotPendingError",
     "GraphRuntime",

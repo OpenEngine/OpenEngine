@@ -349,6 +349,45 @@ describe("useRuns", () => {
     expect(result.current.loaded).toBe(true);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+
+  /** Nothing puts a deleted run back, so the click is asked about first and
+   *  the row leaves on the answer rather than a poll later. */
+  it("deletes a run once the reader confirms, and drops its row at once", async () => {
+    const fetch = stubPageApi([run()]);
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+
+    const { result } = renderHook(() => useRuns());
+    await waitFor(() => expect(result.current.runs).toHaveLength(1));
+
+    await act(async () => result.current.remove(result.current.runs[0]));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Delete First run? This cannot be undone.",
+    );
+    expect(result.current.runs).toEqual([]);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/runs/run-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("keeps the run when the reader says no", async () => {
+    const fetch = stubPageApi([run()]);
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(false));
+
+    const { result } = renderHook(() => useRuns());
+    await waitFor(() => expect(result.current.runs).toHaveLength(1));
+
+    await act(async () => result.current.remove(result.current.runs[0]));
+
+    expect(result.current.runs).toHaveLength(1);
+    expect(fetch).not.toHaveBeenCalledWith(
+      "/api/runs/run-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
 });
 
 describe("RunsPage", () => {
