@@ -1,0 +1,23 @@
+[project]
+name = "engine-orchestrator"
+version = "0.0.0"
+description = "Owns Engine's first-class workflows and their Temporal lifecycle."
+requires-python = ">=3.11"
+dependencies = [
+    "engine-runtime",
+    "structlog>=25.0",
+    "temporalio>=1.17",
+]
+
+[project.scripts]
+engine-orchestrator = "engine.orchestrator.orchestrator:main"
+
+[tool.uv.sources]
+engine-runtime = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]

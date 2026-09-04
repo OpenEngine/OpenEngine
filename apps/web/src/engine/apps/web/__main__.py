@@ -21,12 +21,14 @@ from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_graph_runtime,
     build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.slack_auth import SlackCredentialStore
 from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
     EngineConfigError,
@@ -125,11 +127,22 @@ def compose_app(
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
     credential_store = GitHubCredentialStore()
-    capabilities = build_capabilities(settings, credential_store=credential_store)
+    slack_credential_store = SlackCredentialStore()
+    capabilities = build_capabilities(
+        settings,
+        credential_store=credential_store,
+        slack_credential_store=slack_credential_store,
+    )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
+    # The second engine, for the `[BETA]` workflows in the same directory. It
+    # is `None` when that directory holds no graphs, and then the interface
+    # offers none of them.
+    graph_runtime = build_graph_runtime(
+        settings, workflow_catalog.graphs if workflow_catalog is not None else ()
+    )
     return create_app(
         session,
         runners,
@@ -137,12 +150,14 @@ def compose_app(
         workflow_runners=workflow_runners,
         review_runners=read_only_runners,
         workflow_catalog=workflow_catalog,
+        graph_runtime=graph_runtime,
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
         credential_store=credential_store,
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
         source_control_preferences=settings.source_control_preferences,
+        slack_credential_store=slack_credential_store,
     )
 
 

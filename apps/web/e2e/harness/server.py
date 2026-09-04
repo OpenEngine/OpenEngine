@@ -8,6 +8,7 @@ approval policy plumbing -- and changes only what a test must own:
     where it works        a fixture repository, so worktrees are disposable
     what it remembers     a SQLite file under the test's own directory
     which CLI it runs     `tests/provider_fakes.py`, scripted per test
+    which agent ACP finds the same fakes, for the `[BETA]` graph workflows
     GitHub API calls      stubbed so tests run without a real token or network
 
 Everything else is production wiring, including the parts that are easy to get
@@ -29,7 +30,8 @@ from pathlib import Path
 #: apps/web/e2e/harness/server.py -> the repository root.
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
-# The fake CLIs are shared with the pytest tier, where they live.
+# The fakes are shared with the pytest tier, where they live: the provider CLIs,
+# and the graph workflows rebuilt around a scripted ACP agent.
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import uvicorn  # noqa: E402
@@ -39,6 +41,7 @@ from engine.apps.web.api import create_app  # noqa: E402
 from engine.apps.web.composition import (  # noqa: E402
     Settings,
     build_capabilities,
+    build_graph_runtime,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -51,6 +54,7 @@ from engine.runtime import (  # noqa: E402
     load_engine_config,
 )
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
+from graph_workflow_fakes import scripted_catalog  # noqa: E402
 from provider_fakes import fake_claude, fake_codex  # noqa: E402
 
 
@@ -102,12 +106,14 @@ def main(argv: list[str] | None = None) -> int:
         claude_working_directory=args.repository,
         workspace_root=str(state / "workspaces"),
         sqlite_path=str(state / "conversations.sqlite3"),
+        graph_state_directory=str(state / "graph-state"),
         engine_config=loaded.config,
         config_path=loaded.path,
     )
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
+    catalog = scripted_catalog(settings.workspace_root, binaries)
     app = create_app(
         build_session(
             capabilities, runners, args.repository, read_only_runners=read_only_runners
@@ -116,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         STATIC_DIRECTORY,
         workflow_runners=build_workflow_runners(settings),
         review_runners=read_only_runners,
+        workflow_catalog=catalog,
+        graph_runtime=build_graph_runtime(settings, catalog.graphs),
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
     )

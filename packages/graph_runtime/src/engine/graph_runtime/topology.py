@@ -15,7 +15,7 @@ of one node, and the runtime executes them together as one superstep; see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import NewType
+from typing import NewType, Protocol, runtime_checkable
 
 GraphId = NewType("GraphId", str)
 """A graph definition: "implementation-review", "triage"."""
@@ -80,4 +80,32 @@ class GraphTopology:
         return next((node for node in self.nodes if node.node_id == node_id), None)
 
 
-__all__ = ["GraphEdge", "GraphId", "GraphNode", "GraphTopology", "NodeId"]
+@runtime_checkable
+class GraphWorkflow(Protocol):
+    """A graph a deployment offers, before anything has compiled it.
+
+    Two attributes, so that whatever loads a repository's workflow files can
+    tell "this one is a graph" from "this one is steps" without importing a
+    graph engine. Everything else about a graph belongs to the binding that
+    runs it.
+
+    Structural rather than a base class: a workflow file already imports the
+    binding it was written against, and should not have to import this package
+    as well just to be recognised.
+    """
+
+    @property
+    def graph_id(self) -> GraphId: ...
+
+    @property
+    def name(self) -> str: ...
+
+
+__all__ = [
+    "GraphEdge",
+    "GraphId",
+    "GraphNode",
+    "GraphTopology",
+    "GraphWorkflow",
+    "NodeId",
+]

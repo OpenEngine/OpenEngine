@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import (
@@ -28,7 +29,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -46,6 +47,13 @@ from engine.apps.web.github_auth import (
 )
 from engine.apps.web.source_control import (
     SourceControlPreferences,
+)
+from engine.apps.web.slack_auth import (
+    SlackAuthError,
+    SlackCredentialStore,
+    authorization_url as slack_authorization_url,
+    exchange_code as exchange_slack_code,
+    revoke_token as revoke_slack_token,
 )
 from engine.domain import (
     AgentId,
@@ -80,6 +88,17 @@ from engine.domain import (
     project_id_for_instance,
     workstreams_by_milestone,
 )
+from engine.graph_runtime import (
+    EventKind,
+    EventLog,
+    GraphCompilationError,
+    GraphId,
+    GraphRuntime,
+    GraphWorkflow,
+    RunStatus,
+    RuntimeEvent,
+)
+from engine.graph_runtime import create_app as create_graph_app
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
@@ -110,7 +129,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
-from starlette.types import Scope
+from starlette.types import Receive, Scope, Send
 
 
 @dataclass(slots=True)
@@ -892,6 +911,66 @@ class ThreadService:
         return state.name or state.prompt or str(state.run_id)
 
 
+#: What the dropdown puts in front of a graph workflow's name.
+#:
+#: Plain English: these workflows are new and not finished yet. The label is
+#: there so nobody picks one expecting it to behave like the ones that have
+#: been running for months. It is a prefix on the *name* rather than a separate
+#: field so that every list, however it is drawn, carries the warning.
+BETA = "[BETA]"
+
+#: Where the graph runtime's sub-application is served from, so its addresses
+#: are `/graph/api/runs/...` and cannot collide with this app's own `/api`.
+GRAPH_PREFIX = "/graph"
+
+#: The two things the graph engine says that change what a WorkOrder row should
+#: read: it finished, or it stopped. Everything else it says is about positions
+#: inside the graph, which this app's row has no way to show.
+GRAPH_ENDINGS: Mapping[EventKind, RunPhase] = {
+    EventKind.RUN_FINISHED: RunPhase.SUCCEEDED,
+    EventKind.RUN_FAILED: RunPhase.FAILED,
+}
+
+#: The same three answers, as the graph engine reports them when asked rather
+#: than when it announces them. A run waiting on a person is still working as
+#: far as a WorkOrder row is concerned: what it is waiting for is a question
+#: only the graph engine's own API can show today.
+GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
+    RunStatus.RUNNING: RunPhase.RUNNING_AGENT,
+    RunStatus.AWAITING_APPROVAL: RunPhase.RUNNING_AGENT,
+    RunStatus.COMPLETED: RunPhase.SUCCEEDED,
+    RunStatus.FAILED: RunPhase.FAILED,
+}
+
+
+#: Where this module says what went wrong with something nobody asked it about
+#: -- a graph engine that would not open, a stranded run it could not pick back
+#: up. Those go to the log rather than to a person, because the person who
+#: would read them is not in the room when a server starts.
+log = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _GraphSurface:
+    """The graph engine, once the server has started it.
+
+    Both fields are empty until the application starts, because opening the
+    engine means opening files and that is something a running server owns
+    rather than something building one does. A request that arrives before then
+    is told the graph engine is not running rather than being given half of it.
+
+    They stay empty when the engine could not be opened for a reason outside
+    the graphs themselves, which is what keeps that kind of failure to the
+    `[BETA]` feature: no engine, no `[BETA]` entries in the dropdown, and the
+    rest of the application carries on. A graph that does not *compile* never
+    gets this far -- it stops the server, because it is a definition somebody
+    has to fix.
+    """
+
+    runtime: GraphRuntime | None = None
+    app: Starlette | None = None
+
+
 def create_app(
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -900,12 +979,14 @@ def create_app(
     workflow_runners: Mapping[str, AgentRunner] | None = None,
     review_runners: Mapping[str, AgentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
+    graph_runtime: AbstractAsyncContextManager[GraphRuntime] | None = None,
     approval_policy: ApprovalConfig = ApprovalConfig(),
     default_branch: str = "main",
     credential_store: GitHubCredentialStore | None = None,
     github_client_id: str = "",
     github_client_id_source: str = "configuration",
     source_control_preferences: SourceControlPreferences | None = None,
+    slack_credential_store: SlackCredentialStore | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -919,6 +1000,36 @@ def create_app(
         )
     else:
         catalog = workflow_catalog
+    # The graph workflows this deployment could run, looked up by the id the
+    # dropdown sends back. A graph is the newer kind of workflow: the catalog
+    # keeps it apart from the step workflows because a different engine runs
+    # it, and this is the interface's half of that -- the one list a person
+    # picks from, with each entry remembering which engine it belongs to.
+    #
+    # "Could", not "does": whether they are actually offered is `offered_graphs`
+    # below, which additionally asks whether the engine is running.
+    graph_workflows: Mapping[str, GraphWorkflow] = (
+        {str(graph.graph_id): graph for graph in catalog.graphs}
+        if graph_runtime is not None
+        else {}
+    )
+    surface = _GraphSurface()
+    # Filled by the graph engine while a run is going, and read by the feed the
+    # graph's own sub-application serves. Built here rather than when the
+    # server starts so that the observer below can be written once.
+    graph_events = EventLog()
+
+    def offered_graphs() -> Mapping[str, GraphWorkflow]:
+        """The `[BETA]` entries a person may pick, right now.
+
+        Two things have to be true, and the second one is only knowable once
+        the server is up: this deployment has graph workflows, and the engine
+        that runs them opened. If it did not -- an unwritable state directory,
+        a graph that no longer compiles -- there are no `[BETA]` entries at
+        all, rather than entries that fail the moment somebody picks one.
+        """
+        return graph_workflows if surface.runtime is not None else {}
+
     approval_feed = ApprovalFeed(session.state_store)
     service = ThreadService(
         session,
@@ -1011,6 +1122,11 @@ def create_app(
                 state.phase is not RunPhase.RUNNING_AGENT
                 or state.agent_paused
                 or state.run_id in workflow_tasks
+                # A graph WorkOrder is not this executor's to restart: it has
+                # no steps to pick back up, and looking for a step list a graph
+                # does not have would fail a run that is perfectly healthy.
+                # `restore_graph_runs` is the one that picks these up.
+                or str(state.workflow_id) in graph_workflows
             ):
                 continue
             runner_name = await workflow_runner_for(state)
@@ -1023,16 +1139,159 @@ def create_app(
                 ),
             )
 
+    async def graph_event(event: RuntimeEvent) -> None:
+        """Everything the graph engine says, kept where two readers can see it.
+
+        The feed is one reader: a browser or a script watching a graph run gets
+        these back in order from the sub-application below.
+
+        The WorkOrder row is the other. A graph run keeps its real progress in
+        the graph engine's own files, and this app only holds a row for it, so
+        without this the row would say "an agent is working" long after the run
+        had finished or fallen over. Only the two endings are copied across;
+        the rest of what a graph says is about positions inside the graph, and
+        a row has nowhere to put them.
+        """
+        await graph_events.append(event)
+        phase = GRAPH_ENDINGS.get(event.kind)
+        if phase is None:
+            return
+        state = await session.state_store.load(event.run_id)
+        if state is None:
+            return
+        await session.state_store.save(
+            replace(
+                state,
+                phase=phase,
+                failure_reason=str(event.payload.get("error", ""))
+                or state.failure_reason,
+            )
+        )
+
+    async def restore_graph_runs(runtime: GraphRuntime) -> None:
+        """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
+
+        A run's progress lives in the graph engine's files, but the *driver* --
+        the thing actually working through the graph -- is a task in a process,
+        and a process that stops takes its drivers with it. Nothing rebuilds
+        them on its own, so without this a run that was mid-agent when the
+        server was restarted would sit at "working" forever, saying nothing and
+        doing nothing.
+
+        Three answers, one per thing the engine can say about a run:
+
+        * **working** -- there is no driver for it in this fresh process, so it
+          is sent back to the last position it saved and carried on from there.
+          Whatever the interrupted agent had done since that position is lost,
+          which is the honest cost of the process having died mid-sentence;
+        * **waiting on a person** -- left exactly as it is. Answering the
+          question is what starts it again, and that already works;
+        * **finished or failed** -- the row missed the ending because the
+          process was gone when it was announced, so it is copied over now.
+
+        A run the engine has never heard of is one whose state was deleted from
+        under it. It cannot be recovered and cannot be waited for, so the row is
+        failed with a reason rather than left claiming to be working.
+        """
+        for state in await session.state_store.list_runs():
+            if state.is_terminal or str(state.workflow_id) not in graph_workflows:
+                continue
+            try:
+                snapshot = await runtime.snapshot(state.run_id)
+                if snapshot is None:
+                    await session.state_store.save(
+                        replace(
+                            state,
+                            phase=RunPhase.FAILED,
+                            failure_reason=(
+                                "the graph engine has no record of this run"
+                            ),
+                        )
+                    )
+                    continue
+                if snapshot.status is RunStatus.RUNNING:
+                    # A restart is the only way to be here: a run that is
+                    # working has a driver, and this runs before any request
+                    # could have started one.
+                    if snapshot.checkpoint_id is None:
+                        continue
+                    await runtime.resume_from(state.run_id, snapshot.checkpoint_id)
+                    continue
+                phase = GRAPH_PHASES[snapshot.status]
+                if phase is not state.phase or snapshot.error != state.failure_reason:
+                    await session.state_store.save(
+                        replace(
+                            state,
+                            phase=phase,
+                            failure_reason=snapshot.error or state.failure_reason,
+                        )
+                    )
+            except Exception:
+                # One unrecoverable run must not stop the others from being
+                # recovered, and none of them may stop the server from serving.
+                log.exception("could not restore graph WorkOrder %s", state.run_id)
+
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        await restore_agent_steps()
-        try:
-            yield
-        finally:
-            tasks = tuple(workflow_tasks.values())
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        async with AsyncExitStack() as opened:
+            if graph_runtime is not None:
+                # Opening the graph engine is what makes a `[BETA]` WorkOrder
+                # startable: it compiles every graph in the workflow directory
+                # and opens the files they remember their progress in. The exit
+                # stack closes it again when the server stops, which is the
+                # only thing that closes those files.
+                #
+                # It can fail two ways, and they are not the same kind of news.
+                #
+                # A graph that does not compile is a broken definition: a file
+                # in this deployment's workflow directory says something that is
+                # not a graph. Nothing about it improves by carrying on, and a
+                # server that quietly dropped it would be running a deployment
+                # nobody configured. So the graph is named, the reason is logged
+                # in full, and startup fails -- loudly, at the moment somebody
+                # is looking, rather than the first time a person picks it.
+                #
+                # Anything else is the environment around the graphs rather than
+                # the graphs themselves: a state directory this process cannot
+                # write, a checkpoint file another process is holding. That is
+                # not a reason for chats, projects and the step WorkOrders to go
+                # down with it, so it is logged and contained -- no engine, and
+                # therefore no `[BETA]` entries offered anywhere.
+                try:
+                    surface.runtime = await opened.enter_async_context(graph_runtime)
+                except GraphCompilationError as broken:
+                    log.error(
+                        "%s workflow %r does not compile, so this server will "
+                        "not start: %s",
+                        BETA,
+                        str(broken.graph_id),
+                        broken.reason,
+                        exc_info=True,
+                    )
+                    raise
+                except Exception:
+                    log.exception(
+                        "the graph engine did not start; %s WorkOrders are not "
+                        "being offered in this process",
+                        BETA,
+                    )
+                else:
+                    # The graph engine's own control surface, so a run started
+                    # here can be watched and answered. Built first because it
+                    # installs a listener of its own, and this app wants that
+                    # listener *and* the WorkOrder row kept up to date -- so
+                    # ours is installed afterwards and does both.
+                    surface.app = create_graph_app(surface.runtime, graph_events)
+                    surface.runtime.observe(graph_event)
+                    await restore_graph_runs(surface.runtime)
+            await restore_agent_steps()
+            try:
+                yield
+            finally:
+                tasks = tuple(workflow_tasks.values())
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
@@ -1199,13 +1458,35 @@ def create_app(
                 "defaultRunner": session.default_runner,
                 "workflowRunners": list(workflow_executor.runners),
                 "defaultWorkflowRunner": workflow_executor.default_runner,
+                # One dropdown, two kinds of workflow. The step workflows come
+                # first and read as they always have; the graph ones follow,
+                # wearing `[BETA]` and no version, because a graph does not
+                # have one yet. Only the graphs this process can actually start
+                # are here -- see `offered_graphs` -- because an entry nobody
+                # could run would be a choice that fails after it was made.
+                #
+                # `kind` is what each entry belongs to, said rather than left to
+                # be guessed. The form reads it: a graph names its own agent, so
+                # the runner field is not shown for one, and a client that
+                # worked that out from the empty version would break the day a
+                # graph gets versioned.
                 "workflows": [
                     {
                         "id": str(definition.workflow_id),
                         "name": definition.name,
                         "version": definition.version,
+                        "kind": "steps",
                     }
                     for definition in catalog
+                ]
+                + [
+                    {
+                        "id": str(graph.graph_id),
+                        "name": f"{BETA} {graph.name}",
+                        "version": "",
+                        "kind": "graph",
+                    }
+                    for graph in offered_graphs().values()
                 ],
             }
         )
@@ -1321,6 +1602,73 @@ def create_app(
             }
         )
 
+    async def start_graph_run(
+        runtime: GraphRuntime,
+        graph: GraphWorkflow,
+        *,
+        prompt: str,
+        repository: str,
+        workstream_id: WorkstreamId | None,
+        milestone_id: MilestoneId | None,
+    ) -> JSONResponse:
+        """Hand a `[BETA]` WorkOrder to the graph engine and keep a row for it.
+
+        What actually starts the work is one call: the graph engine is given
+        the graph's id and the two things every one of these graphs asks for --
+        the task to do, and the repository to do it in. It provisions the
+        checkout, runs the agents and stops for a person by itself, and it
+        remembers all of that in its own files.
+
+        The row saved afterwards is this app's, and it is a record rather than
+        a driver: it is what puts the WorkOrder in the list, on the sidebar and
+        at a URL. It carries the graph engine's own run id, so the two halves
+        are talking about the same run and nothing has to translate between two
+        sets of ids.
+
+        No runner is passed on, because a graph already names the agent it runs
+        -- picking "Implementation review (claude)" *is* picking Claude, which
+        is why there is one entry per agent in the dropdown rather than a
+        separate choice, and why the form hides the runner field for one.
+
+        The engine is an argument rather than something read here, because
+        having one is what made this graph offerable in the first place: a
+        caller that got a graph out of `offered_graphs` has already established
+        that the engine is running, and passing it on says so.
+        """
+        snapshot = await runtime.start(
+            GraphId(str(graph.graph_id)),
+            {"task": prompt, "repository": repository},
+        )
+        state = RunState(
+            run_id=snapshot.run_id,
+            task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+            workflow_id=WorkflowId(str(graph.graph_id)),
+            workstream_id=workstream_id,
+            milestone_id=milestone_id,
+            # Working, as the engine has just reported it. `graph_event` above
+            # moves this when the run ends. It is never picked back up by the
+            # step executor -- see `restore_agent_steps`.
+            phase=GRAPH_PHASES[snapshot.status],
+            prompt=prompt,
+            repository=repository,
+        )
+        await session.state_store.save(state)
+        # A very short run can be over before the row above exists, and the
+        # ending it announced would then have had nothing to land on -- leaving
+        # a WorkOrder that claims to be working forever. So the engine is asked
+        # once more, now that there is a row for its answer.
+        latest = await runtime.snapshot(state.run_id)
+        if latest is not None and GRAPH_PHASES[latest.status] is not state.phase:
+            state = replace(
+                state,
+                phase=GRAPH_PHASES[latest.status],
+                failure_reason=latest.error,
+            )
+            await session.state_store.save(state)
+        run = await run_reader.get(state.run_id)
+        assert run is not None
+        return JSONResponse(_run_json(run), status_code=201)
+
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
         body = await _json_body(request)
@@ -1333,10 +1681,14 @@ def create_app(
         except ValueError as error:
             return _error(str(error), 400)
         definition = catalog.get(workflow_id)
-        if definition is None:
+        graph = offered_graphs().get(str(workflow_id))
+        if definition is None and graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
         runner_name = str(body.get("runner") or workflow_executor.default_runner)
-        if runner_name not in workflow_executor.runners:
+        # A graph names the agent it runs, so there is no runner to check and
+        # none is sent: the form does not offer the field for one. Validating
+        # it anyway would refuse a WorkOrder over a value nothing reads.
+        if graph is None and runner_name not in workflow_executor.runners:
             return _error(f"unknown workflow runner: {runner_name}", 400)
         workstream_id = (
             WorkstreamId(workstream_value) if workstream_value is not None else None
@@ -1364,6 +1716,19 @@ def create_app(
         # A selected workstream is the more specific relationship. The
         # milestone is retained only for a task created without one.
         direct_milestone_id = milestone_id if workstream_id is None else None
+
+        if graph is not None:
+            # `offered_graphs` only answers with a graph while the engine is
+            # running, so this cannot be `None` here.
+            assert surface.runtime is not None
+            return await start_graph_run(
+                surface.runtime,
+                graph,
+                prompt=prompt,
+                repository=repository,
+                workstream_id=workstream_id,
+                milestone_id=direct_milestone_id,
+            )
 
         run_id = RunId(f"run-{uuid4().hex[:12]}")
         task_id = TaskId(f"task-{uuid4().hex[:12]}")
@@ -1960,6 +2325,114 @@ def create_app(
         _credential_store.delete()
         return Response(status_code=204)
 
+    async def graph_surface(scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass anything under `/graph` to the graph engine's own server.
+
+        The graph engine ships a small API of its own -- what a run is doing,
+        what it has raised, and the two things a person can send back: a
+        message for whichever agent is working, and an answer to a question it
+        stopped on. That is how a `[BETA]` run gets approved today, and this
+        app's pages cannot do it yet.
+
+        A hop rather than a re-implementation, and behind a prefix of its own
+        because both servers call their runs `/api/runs`. It has to be a
+        forwarder rather than a plain mount because the engine on the far side
+        does not exist until the server starts.
+        """
+        if surface.app is None:
+            await JSONResponse(
+                {"error": "this process is not running graph workflows"},
+                status_code=503,
+            )(scope, receive, send)
+            return
+        await surface.app(scope, receive, send)
+
+    # --- Slack connection endpoints ------------------------------------------
+
+    _slack_store = slack_credential_store or SlackCredentialStore()
+    _slack_state: str | None = None
+    _slack_redirect_uri: str | None = None
+
+    async def slack_status(_request: Request) -> JSONResponse:
+        credentials = _slack_store.credentials()
+        return JSONResponse(
+            {"configured": credentials is not None, "connected": bool(_slack_store.token())}
+        )
+
+    async def slack_set_credentials(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        client_id = (body.get("clientId") or "").strip()
+        client_secret = (body.get("clientSecret") or "").strip()
+        if not client_id or not client_secret:
+            return _error("clientId and clientSecret are required", 400)
+        token = _slack_store.token()
+        if token:
+            try:
+                await revoke_slack_token(token)
+            except SlackAuthError as error:
+                return _error(str(error), 502)
+            _slack_store.disconnect()
+        try:
+            _slack_store.set_credentials(client_id, client_secret)
+        except SlackAuthError as error:
+            return _error(str(error), 500)
+        _slack_state = None
+        _slack_redirect_uri = None
+        return Response(status_code=204)
+
+    async def slack_connect(request: Request) -> JSONResponse:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        credentials = _slack_store.credentials()
+        if credentials is None:
+            return _error("Slack OAuth credentials are not configured", 503)
+        _slack_state = uuid4().hex
+        _slack_redirect_uri = str(request.url_for("slack_callback"))
+        return JSONResponse(
+            {"authorizationUrl": slack_authorization_url(credentials.client_id, _slack_redirect_uri, _slack_state)}
+        )
+
+    async def slack_callback(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _slack_state or request.query_params.get("state") != _slack_state:
+            return _error("invalid OAuth state", 400)
+        code = request.query_params.get("code")
+        credentials = _slack_store.credentials()
+        if not code or credentials is None or _slack_redirect_uri is None:
+            return _error(request.query_params.get("error", "authorization was not completed"), 400)
+        try:
+            token = await exchange_slack_code(credentials, code, _slack_redirect_uri)
+            _slack_store.set_token(token)
+        except SlackAuthError as error:
+            return _error(str(error), 502)
+        finally:
+            _slack_state = None
+            _slack_redirect_uri = None
+        return Response(
+            "<html><body><p>Slack connected. You can close this window.</p>"
+            "<script>window.close()</script></body></html>",
+            media_type="text/html",
+        )
+
+    async def slack_disconnect(request: Request) -> Response:
+        nonlocal _slack_state, _slack_redirect_uri
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        token = _slack_store.token()
+        if token:
+            try:
+                await revoke_slack_token(token)
+            except SlackAuthError as error:
+                return _error(str(error), 502)
+        _slack_store.disconnect()
+        _slack_state = None
+        _slack_redirect_uri = None
+        return Response(status_code=204)
+
     routes = [
         Route("/api/config", config),
         Route("/api/github/status", github_status),
@@ -1975,6 +2448,11 @@ def create_app(
         Route("/api/github/connect", github_connect, methods=["POST"]),
         Route("/api/github/connect/poll", github_connect_poll, methods=["POST"]),
         Route("/api/github/disconnect", github_disconnect, methods=["POST"]),
+        Route("/api/slack/status", slack_status),
+        Route("/api/slack/credentials", slack_set_credentials, methods=["POST"]),
+        Route("/api/slack/connect", slack_connect, methods=["POST"]),
+        Route("/api/slack/callback", slack_callback, name="slack_callback"),
+        Route("/api/slack/disconnect", slack_disconnect, methods=["POST"]),
         Route("/api/projects", list_projects),
         Route("/api/projects", create_project, methods=["POST"]),
         Route(
@@ -1998,6 +2476,9 @@ def create_app(
             complete_human_review,
             methods=["POST"],
         ),
+        # The `[BETA]` half of the runs above, served by the engine that runs
+        # them rather than by this file.
+        Mount(GRAPH_PREFIX, app=graph_surface),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}", get_thread),

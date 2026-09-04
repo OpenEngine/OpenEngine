@@ -138,6 +138,8 @@ unzip it, and point `show-report` at the directory.
   carries the declared `pr_url` -- advances through a review that leaves its
   finding on `gh` to "Action required". Approving there ends it, and a reload
   shows the same finished run: `succeeded`, `approved`, every stage behind it.
+* `graph-workflow.spec.ts` -- the same journey as `workflow-run.spec.ts`, for a
+  `[BETA]` graph WorkOrder, and **expected to fail in places**. See below.
 * `persisted-navigation.spec.ts` -- cold starts over both a SQLite file populated
   through the current production state-store adapter and the frozen
   `fixtures/v0.0.0.sqlite3` artifact. The run list, run detail, implementation
@@ -145,6 +147,45 @@ unzip it, and point `show-report` at the directory.
   their browser links. Each case then starts another chat and another workflow
   in the same database and confirms the older history remains listed. The frozen
   artifact makes opening the database exercise migrations added after v0.0.0.
+
+## The `[BETA]` graph WorkOrder, and what it cannot do yet
+
+`graph-workflow.spec.ts` is `workflow-run.spec.ts` walked again, on the other
+engine: the same task, the same four stages, but started from a `[BETA]` entry
+and run by LangGraph. It is split into one test per state a run passes through,
+because a graph WorkOrder does not reach all of them yet and one long test
+would report only the first gap.
+
+```
+npm --prefix apps/web run test:e2e:beta     # only these
+npm --prefix apps/web run test:e2e          # everything else
+```
+
+They are tagged `@beta` and run by their own CI job, which is allowed to fail.
+Each red test names one thing the interface cannot do for a graph run that it
+already does for a step run. As of this writing:
+
+| state | passes? |
+| --- | --- |
+| the graph is offered, and the form does not ask for a runner | yes |
+| the run provisions a checkout and both agents work in it | yes |
+| the WorkOrder page shows the run's stages | no |
+| the checkout is named on the WorkOrder page | no |
+| an agent's conversation is readable from the page | no |
+| the page says a person is being waited for, and can answer | no |
+
+The last one is the important one: the run *does* reach its human-review node
+and *does* raise an approval — the test polls the graph engine's own API to
+prove it — and there is simply nothing on the page to answer it with.
+
+The agents are scripted the same way as everywhere else here, but over a third
+protocol. `ACPNode` talks ACP to an adapter that wraps a CLI, not to the CLI, so
+`provider_fakes.fake_acp` is an ACP agent reading the same script. A graph node
+ends by finishing its turn rather than by calling `complete_step`, so a `tool`
+step is refused in an ACP scenario rather than ignored. `harness/server.py`
+rebuilds the repository's graphs through `graph_for(runner, ...)` to point them
+at that agent and at the test's own worktree root; the ids, names, stages and
+prompts are the shipped ones.
 
 ## What the rest needs
 Everything else -- workflow runs, review, reactivation, auto-approve, failure,

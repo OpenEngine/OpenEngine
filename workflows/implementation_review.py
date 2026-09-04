@@ -127,6 +127,10 @@ workflow = oe.workflow(
             ),
             approved=oe.succeed(),
             rejected=oe.fail(),
+            notification=oe.slack_notification(
+                channel="OpenEngine",
+                public_url="https://sheas-mac-mini.taileb7fdb.ts.net/",
+            ),
         ),
     ],
 )

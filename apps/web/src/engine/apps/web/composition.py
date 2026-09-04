@@ -20,7 +20,8 @@ restart without requiring an external database service.
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,7 +32,6 @@ from engine.adapters.agent_runner.claude_code import (
     allowed_tools_for,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
-from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
@@ -39,13 +39,19 @@ from engine.adapters.source_control.github.transports import (
 )
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
-from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_ROOT_DIRECTORY,
+    GitWorktreeWorkspaceProvider,
+)
 from engine.apps.web.github_auth import (
     GitHubAuthError,
     GitHubCredentialStore,
     GitHubRefreshTokenInvalidError,
     refresh_access_token,
 )
+from engine.apps.web.slack_auth import SlackCommunications, SlackCredentialStore
+from engine.graph_runtime import GraphRuntime, GraphWorkflow
+from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
@@ -113,8 +119,17 @@ class Settings:
     source_control_preferences: SourceControlPreferences | None = None
     buzz_base_url: str = ""
     buzz_api_token: str = ""
-    workspace_root: str = "/tmp/engine-workspaces"
+    workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"
+    graph_state_directory: str = "graph-state"
+    """Where a graph workflow's saved progress is kept.
+
+    Plain English: the new graph workflows remember where they got to by
+    writing two small database files. This is the folder those files go in, so
+    a run that was half finished when the process stopped is still there when
+    it starts again. A folder rather than a file because there are two of them,
+    and the graph engine names them itself.
+    """
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.
 
@@ -129,6 +144,7 @@ class Settings:
 def build_capabilities(
     settings: Settings,
     credential_store: GitHubCredentialStore | None = None,
+    slack_credential_store: SlackCredentialStore | None = None,
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
@@ -213,12 +229,37 @@ def build_capabilities(
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
-        communications=BuzzCommunications(
-            settings.buzz_base_url, settings.buzz_api_token
+        communications=SlackCommunications(
+            slack_credential_store or SlackCredentialStore()
         ),
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
     )
+
+
+def build_graph_runtime(
+    settings: Settings, graphs: Sequence[GraphWorkflow]
+) -> AbstractAsyncContextManager[GraphRuntime] | None:
+    """The engine that runs graph workflows, or nothing when there are none.
+
+    Two kinds of workflow live in the `workflows` directory. The older kind is
+    a list of steps, and the executor wired above runs those. The newer kind --
+    the ones the interface marks `[BETA]` -- is a graph, and LangGraph runs
+    those. This builds the second engine.
+
+    It hands back an *unopened* context manager rather than a running engine,
+    because starting one opens database files that somebody then has to close.
+    The web application opens it when the server starts and closes it when the
+    server stops, which is the only lifetime that gets that right.
+
+    `None` when this deployment's workflow directory holds no graphs: there is
+    nothing to run, so there is no reason to open the files. The interface then
+    offers no `[BETA]` entries, which is what keeps a person from picking one
+    that nothing here could start.
+    """
+    if not graphs:
+        return None
+    return sqlite_runtime(tuple(graphs), settings.graph_state_directory)
 
 
 def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:

@@ -44,6 +44,7 @@ from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.control import (
     AmbiguousExecutionError,
     ApprovalNotPendingError,
+    GraphCompilationError,
     GraphRuntime,
     GraphRuntimeError,
     NoSuchPositionError,
@@ -70,6 +71,7 @@ from engine.graph_runtime.topology import (
     GraphId,
     GraphNode,
     GraphTopology,
+    GraphWorkflow,
     NodeId,
 )
 
@@ -85,12 +87,14 @@ __all__ = [
     "EventObserver",
     "ExecutionId",
     "ExecutionRegistry",
+    "GraphCompilationError",
     "GraphEdge",
     "GraphId",
     "GraphNode",
     "GraphRuntime",
     "GraphRuntimeError",
     "GraphTopology",
+    "GraphWorkflow",
     "NoSuchPositionError",
     "NodeId",
     "PendingApproval",

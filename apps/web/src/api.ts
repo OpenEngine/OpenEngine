@@ -33,7 +33,12 @@ export type EngineConfig = {
   defaultRunner: string;
   workflowRunners: string[];
   defaultWorkflowRunner: string;
-  workflows: { id: string; name: string; version: string }[];
+  /** What a WorkOrder can be created from.
+   *
+   *  `kind` is which engine runs it. A `"graph"` is the newer, `[BETA]` kind:
+   *  it has no version yet, and it names its own agent, so the form neither
+   *  prints a version for one nor asks which runner to use. */
+  workflows: { id: string; name: string; version: string; kind: "steps" | "graph" }[];
 };
 
 /** Which agent the next conversation starts on, for a plan or an ordinary chat.
@@ -448,6 +453,27 @@ export function pollGitHubConnect(): Promise<GitHubPollResponse> {
 
 export function disconnectGitHub(): Promise<void> {
   return api<void>("/api/github/disconnect", { method: "POST" });
+}
+
+export type SlackStatus = { configured: boolean; connected: boolean };
+
+export function getSlackStatus(): Promise<SlackStatus> {
+  return api<SlackStatus>("/api/slack/status");
+}
+
+export function setSlackCredentials(clientId: string, clientSecret: string): Promise<void> {
+  return api<void>("/api/slack/credentials", {
+    method: "POST",
+    body: JSON.stringify({ clientId, clientSecret }),
+  });
+}
+
+export function connectSlack(): Promise<{ authorizationUrl: string }> {
+  return api<{ authorizationUrl: string }>("/api/slack/connect", { method: "POST" });
+}
+
+export function disconnectSlack(): Promise<void> {
+  return api<void>("/api/slack/disconnect", { method: "POST" });
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

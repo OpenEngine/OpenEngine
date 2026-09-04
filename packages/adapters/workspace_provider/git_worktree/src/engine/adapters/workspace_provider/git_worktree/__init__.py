@@ -15,6 +15,13 @@ from uuid import uuid4
 from engine.domain.ids import WorkspaceId
 from engine.ports.workspace_provider import Workspace, WorkspaceState
 
+#: Where checkouts go when nothing says otherwise.
+#:
+#: Outside the repository, so the development server's file watcher does not
+#: see them. Written down once here because several apps and the workflows that
+#: provision checkouts all need the same answer.
+DEFAULT_ROOT_DIRECTORY = "/tmp/engine-workspaces"
+
 #: Used only when the repository has no committer identity of its own, so that
 #: snapshotting an agent's work cannot fail on an unconfigured machine.
 FALLBACK_IDENTITY = ("engine", "engine@localhost")
@@ -294,4 +301,9 @@ async def _git(repository: str, *arguments: str) -> str:
     return stdout.decode(errors="replace").strip()
 
 
-__all__ = ["BranchInUseError", "GitWorktreeError", "GitWorktreeWorkspaceProvider"]
+__all__ = [
+    "DEFAULT_ROOT_DIRECTORY",
+    "BranchInUseError",
+    "GitWorktreeError",
+    "GitWorktreeWorkspaceProvider",
+]

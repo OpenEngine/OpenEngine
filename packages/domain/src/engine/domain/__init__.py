@@ -76,6 +76,7 @@ from engine.domain.scoping import (
 from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
 from engine.domain.workflow import (
     AgentStep,
+    HumanReviewNotification,
     HumanReviewStep,
     OutcomeTransition,
     StepOutput,
@@ -114,6 +115,7 @@ __all__ = [
     "ConversationId",
     "Event",
     "HumanReviewCompleted",
+    "HumanReviewNotification",
     "HumanReviewStep",
     "Message",
     "MessageId",

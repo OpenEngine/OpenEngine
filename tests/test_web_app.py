@@ -2,8 +2,11 @@
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, replace
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import openengine as oe
@@ -90,7 +93,22 @@ from engine.runtime import (
     ResponseStyle,
     WorkflowCatalog,
 )
+from engine.graph_runtime import (
+    CheckpointId,
+    GraphCompilationError,
+    GraphId,
+    NodeId,
+    RunSnapshot,
+    RunStatus,
+)
 from engine.runtime.terminal_mcp import _mcp_response
+from graph_runtime_fakes import (
+    Fail,
+    Say,
+    ScriptedGraph,
+    ScriptedGraphRuntime,
+    ScriptedNode,
+)
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
@@ -1159,10 +1177,12 @@ def _workflow_app(
     store: InMemoryStateStore,
     runner: ConcurrentRunner,
     workspaces: object | None = None,
+    communications: object | None = None,
     workflow_runners: dict[str, ConcurrentRunner] | None = None,
     reviewers: dict[str, ConcurrentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
     workspace_repository: str | None = None,
+    graph_runtime=None,
 ):
     """Wire the app the way the composition root does.
 
@@ -1179,7 +1199,7 @@ def _workflow_app(
             workflow_runtime=unused,
             source_control=unused,
             agent_runner=runner,
-            communications=unused,
+            communications=communications if communications is not None else unused,
             workspace_provider=workspaces or ConversationWorkspaces(),
             state_store=store,
         ),
@@ -1193,6 +1213,7 @@ def _workflow_app(
         workflow_runners=implementers,
         review_runners=chat_runners,
         workflow_catalog=workflow_catalog,
+        graph_runtime=graph_runtime,
     )
 
 
@@ -1376,6 +1397,8 @@ def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
 
 def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     store = InMemoryStateStore()
+    communications = MagicMock()
+    communications.post = AsyncMock(return_value="123.456")
     implementer = TerminalToolRunner(
         "complete_step",
         {
@@ -1388,7 +1411,12 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
         summary="The handling is correct.",
         findings="worker.py cancels the task, and the new test covers it.",
     )
-    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+    app = _workflow_app(
+        store,
+        implementer,
+        communications=communications,
+        reviewers={"test": reviewer},
+    )
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1467,6 +1495,20 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     assert body["steps"][1]["conversationUrl"]
     assert body["steps"][2]["status"] == "action_required"
     assert "worker.py cancels the task" in body["pendingHumanReview"]["summary"]
+    communications.post.assert_awaited_once()
+    channel, notification, notified_run_id = communications.post.await_args.args
+    assert channel == "OpenEngine"
+    assert notification.startswith(
+        "Work order step complete and ready for human review: Review implementation"
+    )
+    assert "The handling is correct." in notification
+    assert "worker.py cancels the task" in notification
+    assert "<https://github.com/acme/api/pull/42|Open pull request>" in notification
+    assert (
+        f"<https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}"
+        "|Open human review task>"
+    ) in notification
+    assert notified_run_id == RunId(body["runId"])
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]
     ]
@@ -4565,3 +4607,574 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path)
     assert page.headers["cache-control"] == "no-cache"
     assert asset.status_code == 200
     assert "immutable" in asset.headers["cache-control"]
+
+
+# --- graph WorkOrders (the [BETA] entries in the dropdown) ---------------------
+#
+# A second kind of workflow can be picked from the same dropdown. It is run by
+# the graph engine rather than by the step executor, and these are the three
+# things that has to mean: it is offered, picking it starts a graph run, and
+# what this app keeps for it is a row rather than a driver.
+
+
+def _graph_app(store: InMemoryStateStore, *graphs: ScriptedGraph):
+    """The web app with a scripted graph engine wired in.
+
+    A real `GraphRuntime` with real tasks, exactly as the graph package's own
+    tests use it -- what it does not have is LangGraph, so no agent is started
+    and no repository is checked out.
+    """
+    runtime = ScriptedGraphRuntime(*graphs)
+
+    @asynccontextmanager
+    async def running(_app=None):
+        yield runtime
+
+    app = _workflow_app(
+        store,
+        ConcurrentRunner(),
+        # The catalog a repository holding both kinds produces: one startable
+        # step workflow, and the graphs beside it.
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), graphs
+        ),
+        graph_runtime=running(),
+    )
+    return app, runtime
+
+
+def _catalog_definition() -> WorkflowDefinition:
+    worker = oe.agent(id="coder", instructions="Change the code.")
+    return oe.workflow(
+        id="steps-v1",
+        name="Steps",
+        version="v1",
+        steps=[
+            oe.agent_step(
+                id="work",
+                name="Work",
+                agent=worker,
+                prompt=oe.template("Do the task"),
+                transitions={"*": oe.succeed()},
+            )
+        ],
+    )
+
+
+def _review_graph() -> ScriptedGraph:
+    return ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Changed it."),)),),
+    )
+
+
+def test_a_graph_workflow_is_offered_as_a_beta_choice() -> None:
+    """The dropdown, which is where a person meets this at all.
+
+    Both kinds in one list -- steps first, then the graphs wearing `[BETA]` --
+    because a person choosing what to run is choosing what should happen, not
+    which engine should do it.
+
+    Asked of a started server, because that is when a graph is offerable: the
+    engine that would run one is opened on startup.
+    """
+    app, _ = _graph_app(InMemoryStateStore(), _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return (await client.get("/api/config")).json()["workflows"]
+
+    offered = asyncio.run(scenario())
+
+    assert offered == [
+        {"id": "steps-v1", "name": "Steps", "version": "v1", "kind": "steps"},
+        {
+            "id": "implementation-review-codex",
+            "name": "[BETA] Implementation review (codex)",
+            "version": "",
+            # Said rather than left to be guessed: the form reads this to
+            # decide whether to ask which runner to use.
+            "kind": "graph",
+        },
+    ]
+
+
+def test_a_graph_workflow_is_not_offered_without_an_engine_to_run_it() -> None:
+    """No graph engine composed, no `[BETA]` entries.
+
+    The alternative is a choice that fails after somebody made it, which is
+    worse than a choice that was never there.
+    """
+    app = _workflow_app(
+        InMemoryStateStore(),
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                (await client.get("/api/config")).json()["workflows"],
+                await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                ),
+            )
+
+    offered, refused = asyncio.run(scenario())
+
+    assert [one["id"] for one in offered] == ["steps-v1"]
+    assert refused.status_code == 400
+
+
+def test_creating_a_beta_work_order_starts_the_graph() -> None:
+    """The whole point: picking one runs it on the graph engine.
+
+    Checked on the engine rather than only on the answer, because a WorkOrder
+    that was recorded and never started would look identical from here.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _graph_app(store, _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                        "runner": "test",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                listed = await client.get("/api/runs")
+                return created, listed, run_id, await runtime.snapshot(run_id)
+
+    created, listed, run_id, snapshot = asyncio.run(scenario())
+
+    assert created.status_code == 201
+    # One run, on the graph engine, carrying the task and the repository the
+    # WorkOrder was created with -- which is everything these graphs need.
+    assert snapshot is not None
+    assert str(snapshot.graph_id) == "implementation-review-codex"
+    assert snapshot.values == {
+        "task": "Add cancellation handling.",
+        "repository": "acme/api",
+    }
+    # And a row for it here, under the graph engine's own run id, named after
+    # the graph rather than after an id nobody chose.
+    assert created.json()["workflowName"] == "Implementation review (codex)"
+    assert created.json()["workflowVersion"] == ""
+    assert created.json()["steps"] == []
+    assert [one["runId"] for one in listed.json()["runs"]] == [str(run_id)]
+
+
+def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
+    """The row follows the graph to its ending.
+
+    Nothing else would move it: the step executor is not driving this run, so
+    without the engine's own report the WorkOrder would claim to be working
+    forever.
+    """
+    store = InMemoryStateStore()
+    app, _ = _graph_app(store, _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                return created.json()["phase"], (
+                    await _await_phase(client, run_id, "succeeded")
+                ).json()["phase"]
+
+    started, ended = asyncio.run(scenario())
+
+    assert started == "running_agent"
+    assert ended == "succeeded"
+
+
+def test_the_graph_engine_answers_under_its_own_prefix() -> None:
+    """Where a `[BETA]` run is watched and approved today.
+
+    This app's pages cannot do either yet, and the graph engine's own API can,
+    so it is served from here rather than left unreachable. Behind `/graph`
+    because both call their runs `/api/runs`.
+    """
+    app, _ = _graph_app(InMemoryStateStore(), _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return await client.get("/graph/api/graphs")
+
+    described = asyncio.run(scenario())
+
+    assert described.status_code == 200
+    assert [one["graphId"] for one in described.json()["graphs"]] == [
+        "implementation-review-codex"
+    ]
+
+
+def test_a_failed_graph_run_says_why_on_its_row() -> None:
+    """The other ending, and the reason that comes with it.
+
+    The reason is read out of the event the engine publishes, so the row and
+    the graph engine's own API give the same answer to "why did this stop?".
+    A renamed key on that event would leave a failed WorkOrder with nothing to
+    show, which is what this is here to catch.
+    """
+    store = InMemoryStateStore()
+    broken = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Fail("codex is out of quota"),)),),
+    )
+    app, _ = _graph_app(store, broken)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                return (await _await_phase(client, run_id, "failed")).json()
+
+    ended = asyncio.run(scenario())
+
+    assert ended["phase"] == "failed"
+    assert ended["failureReason"] == "codex is out of quota"
+
+
+def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded() -> None:
+    """The narrowest bit of ordering in the whole change.
+
+    A graph short enough to be over before `start` answers announces its ending
+    to nobody: there is no row yet for the announcement to land on. So the
+    engine is asked once more after the row is saved, and this is the case that
+    exists for -- a graph with no work in it at all.
+    """
+    store = InMemoryStateStore()
+    instant = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation")),),
+    )
+    app, _ = _graph_app(store, instant)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+
+    created = asyncio.run(scenario())
+
+    # Whether the ending arrived before or after the row was saved, the answer
+    # a person is handed is never "an agent is working" on a run that is over.
+    assert created.json()["phase"] in {"succeeded", "running_agent"}
+    assert created.status_code == 201
+
+
+# --- a `[BETA]` WorkOrder across a restart -------------------------------------
+#
+# What a graph run keeps in the engine's files is where it got to. What it does
+# not keep is the *driver* -- the task working through the graph -- because that
+# lives in a process, and a process that stops takes its drivers with it.
+#
+# Driven against a double rather than the scripted engine, because the thing
+# under test is a second process finding runs a first one left behind, and the
+# scripted engine keeps everything in the process that started it: a run it
+# knows about is, by construction, one it is still driving.
+
+
+@dataclass
+class _EngineAfterARestart:
+    """A graph engine that remembers runs but is driving none of them.
+
+    Everything the recovery pass calls, and nothing else. `resumed` is what a
+    test asserts on: relaunching a stranded run is invisible in this app's own
+    state, because the run carries on being a run that is working.
+    """
+
+    answers: dict[RunId, RunSnapshot | None]
+    resumed: list[tuple[RunId, CheckpointId]] = field(default_factory=list)
+
+    def observe(self, observer) -> None:
+        self._observer = observer
+
+    async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
+        return self.answers.get(run_id)
+
+    async def resume_from(self, run_id: RunId, checkpoint_id: CheckpointId):
+        self.resumed.append((run_id, checkpoint_id))
+        return self.answers[run_id]
+
+    def graphs(self) -> tuple:
+        return ()
+
+
+def _restarted(
+    store: InMemoryStateStore, answers: dict[RunId, RunSnapshot | None]
+) -> tuple[object, _EngineAfterARestart]:
+    runtime = _EngineAfterARestart(answers)
+
+    @asynccontextmanager
+    async def running(_app=None):
+        yield runtime
+
+    app = _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+        graph_runtime=running(),
+    )
+    return app, runtime
+
+
+def _interrupted_run() -> RunState:
+    return RunState(
+        run_id=RunId("run-graph"),
+        task_id=TaskId("task-graph"),
+        workflow_id=WorkflowId("implementation-review-codex"),
+        phase=RunPhase.RUNNING_AGENT,
+        prompt="Add cancellation handling.",
+        repository="acme/api",
+    )
+
+
+def _graph_snapshot(status: RunStatus, error: str = "") -> RunSnapshot:
+    return RunSnapshot(
+        run_id=RunId("run-graph"),
+        graph_id=GraphId("implementation-review-codex"),
+        status=status,
+        checkpoint_id=CheckpointId("checkpoint-3"),
+        error=error,
+    )
+
+
+def _after_a_restart(app, store: InMemoryStateStore, run: RunState) -> RunState:
+    async def scenario():
+        await store.save(run)
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+        restored = await store.load(run.run_id)
+        assert restored is not None
+        return restored
+
+    return asyncio.run(scenario())
+
+
+def test_a_graph_run_interrupted_mid_execution_is_picked_back_up() -> None:
+    """The reason this pass exists at all.
+
+    A run that was working when the process died has no driver in the process
+    that replaces it, and nothing else would build one: the step executor
+    cannot -- a graph has no steps -- and the engine only builds one when a run
+    is started or a decision arrives. So the run is sent back to the last
+    position it saved and carried on from there.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(store, {RunId("run-graph"): _graph_snapshot(RunStatus.RUNNING)})
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == [(RunId("run-graph"), CheckpointId("checkpoint-3"))]
+    # Still working, and still not the step executor's: a resumed graph run is
+    # a graph run, and nothing here started a step for it.
+    assert restored.phase is RunPhase.RUNNING_AGENT
+    assert restored.failure_reason == ""
+
+
+def test_a_graph_run_waiting_on_a_person_is_left_where_it_is() -> None:
+    """The case that already worked, and must not be disturbed.
+
+    A run parked on a question is picked back up by the answer, not by the
+    restart. Resuming it here would throw the question away -- the execution
+    that asked it is gone, so the person's answer would have nowhere to go.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(
+        store, {RunId("run-graph"): _graph_snapshot(RunStatus.AWAITING_APPROVAL)}
+    )
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == []
+    assert restored.phase is RunPhase.RUNNING_AGENT
+
+
+def test_a_graph_run_that_ended_while_the_server_was_down_catches_up() -> None:
+    """An ending announced to a process that was not there to hear it.
+
+    `graph_event` only moves a row while this process is running. A run that
+    finished during a restart would otherwise be a row that says "working"
+    about a run the engine considers over.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(
+        store,
+        {RunId("run-graph"): _graph_snapshot(RunStatus.FAILED, "the checkout vanished")},
+    )
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == []
+    assert restored.phase is RunPhase.FAILED
+    assert restored.failure_reason == "the checkout vanished"
+
+
+def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working() -> None:
+    """State deleted from under a row -- `graph-state/` thrown away, say.
+
+    Nothing can recover it and nobody will ever answer it, so it is failed with
+    a reason. The alternative is a WorkOrder that claims to be working for as
+    long as the database survives.
+    """
+    store = InMemoryStateStore()
+    app, _ = _restarted(store, {})
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert restored.phase is RunPhase.FAILED
+    assert "no record" in restored.failure_reason
+
+
+def _app_over(store: InMemoryStateStore, engine):
+    """The web app with a graph engine that behaves however a test needs."""
+    return _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+        graph_runtime=engine,
+    )
+
+
+def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A broken definition is not something to carry on without.
+
+    A graph that does not compile means a file in this deployment's workflow
+    directory says something that is not a graph. Starting anyway would serve a
+    deployment nobody configured, and the person who could fix it would find out
+    the first time somebody picked the workflow. So startup fails.
+
+    What is logged is the only way anybody learns which one: the graph's id and
+    the reason it would not compile. "a graph failed to compile" is not
+    actionable in a directory holding several.
+    """
+    store = InMemoryStateStore()
+
+    @asynccontextmanager
+    async def broken(_app=None):
+        raise GraphCompilationError(
+            GraphId("implementation-review-codex"),
+            ValueError("node 'review' is not reachable from '__start__'"),
+        )
+        yield  # pragma: no cover -- unreachable, and required to make this a CM
+
+    app = _app_over(store, broken())
+
+    async def scenario():
+        async with app.router.lifespan_context(app):  # pragma: no cover -- raises
+            pass
+
+    with caplog.at_level(logging.ERROR, logger="engine.apps.web.api"):
+        with pytest.raises(GraphCompilationError):
+            asyncio.run(scenario())
+
+    assert "implementation-review-codex" in caplog.text
+    assert "not reachable" in caplog.text
+
+
+def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Everything else that can go wrong stays inside the `[BETA]` feature.
+
+    Opening the engine also creates a directory and opens two SQLite files, and
+    those fail for reasons that are about this machine rather than about any
+    graph: a state directory it cannot write, a checkpoint file another process
+    is holding. None of them is a reason for chats, projects and the step
+    WorkOrders to go down, so the engine simply does not run here.
+
+    The failure is logged, because it is the only place anybody could find out.
+    """
+    store = InMemoryStateStore()
+
+    @asynccontextmanager
+    async def refusing(_app=None):
+        raise PermissionError("graph-state/: read-only file system")
+        yield  # pragma: no cover -- unreachable, and required to make this a CM
+
+    app = _app_over(store, refusing())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return (
+                    await client.get("/api/config"),
+                    await client.post(
+                        "/api/runs",
+                        json={
+                            "workflowId": "implementation-review-codex",
+                            "prompt": "Add cancellation handling.",
+                            "repository": "acme/api",
+                        },
+                    ),
+                    await client.get("/graph/api/graphs"),
+                )
+
+    with caplog.at_level(logging.ERROR, logger="engine.apps.web.api"):
+        config, refused, graph = asyncio.run(scenario())
+
+    # The application is up, and answering about everything it can still do.
+    assert config.status_code == 200
+    assert [one["id"] for one in config.json()["workflows"]] == ["steps-v1"]
+    # Nothing offers the graph, so picking one is picking something that does
+    # not exist rather than something that cannot be started.
+    assert refused.status_code == 400
+    assert graph.status_code == 503
+    assert "read-only file system" in caplog.text

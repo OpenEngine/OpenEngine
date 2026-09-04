@@ -15,6 +15,9 @@ module:
 * `apps/web/e2e` drives a browser against a real server wired to them, with a
   script naming exactly what the agent says and does on the way through.
 
+There is a third fake here for a third protocol: `fake_acp` is an ACP agent,
+which is what a *graph* workflow's nodes talk to. It reads the same script.
+
 The script is JSON, read from `ENGINE_FAKE_SCRIPT` on every invocation, so a
 test can change what the agent will do next without restarting the server it is
 talking to:
@@ -367,6 +370,209 @@ def _close(process: "subprocess.Popen[str]") -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+# --- acp ---------------------------------------------------------------------
+#
+# The third protocol, and the one a *graph* workflow's agents are reached over.
+# `ACPNode` does not run `codex` or `claude`: it talks ACP to an adapter that
+# wraps one, so a scripted graph run needs an agent that speaks ACP rather than
+# either CLI's own protocol.
+#
+# The same script drives it, minus the step kinds an ACP turn has no equivalent
+# for. A graph node ends by finishing its turn, so there is no `complete_step`
+# to call and no MCP server bound to the invocation -- which is exactly the
+# difference between the two runtimes, and why a `tool` step is refused here
+# rather than quietly skipped.
+
+#: The id this agent asks its permission questions under. One outstanding
+#: question at a time, which is all an ACP turn can have.
+_ACP_PERMISSION_ID = 8001
+
+
+def fake_acp(directory: Path) -> str:
+    """An ACP agent, for the graph runtime's `ACPNode`."""
+
+    return install("acp", directory)
+
+
+def _acp(arguments: Sequence[str]) -> int:
+    """One ACP agent over stdio, for as long as the client keeps it open.
+
+    Long-lived, unlike the two above: a graph run opens a session per node and
+    keeps the connection for the whole turn, including while it is stopped
+    waiting for somebody to answer a permission request.
+    """
+
+    working_directories: dict[str, str] = {}
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return 0
+        if not line.strip():
+            continue
+        message = json.loads(line)
+        method = message.get("method")
+        if method is None:
+            continue  # An answer to something this agent asked.
+        message_id = message.get("id")
+        params = message.get("params") or {}
+
+        if method == "initialize":
+            _acp_respond(
+                message_id,
+                {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "loadSession": True,
+                        "promptCapabilities": {"image": False, "embeddedContext": False},
+                    },
+                },
+            )
+        elif method == "session/new":
+            session_id = f"acp-{len(working_directories) + 1}"
+            working_directories[session_id] = str(params.get("cwd") or "")
+            _acp_respond(message_id, {"sessionId": session_id})
+        elif method == "session/load":
+            session_id = str(params.get("sessionId"))
+            working_directories[session_id] = str(params.get("cwd") or "")
+            _acp_respond(message_id, {})
+        elif method == "session/prompt":
+            session_id = str(params.get("sessionId"))
+            _acp_turn(
+                message_id,
+                session_id,
+                _acp_prompt(params),
+                working_directories.get(session_id, ""),
+            )
+        elif method == "session/cancel":
+            continue  # A notification, and this agent has nothing to abandon.
+        elif message_id is not None:
+            _send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message_id,
+                    "error": {"code": -32601, "message": f"no such method: {method}"},
+                }
+            )
+
+
+def _acp_turn(message_id: object, session_id: str, prompt: str, cwd: str) -> None:
+    """Play this prompt's scenario, then end the turn."""
+
+    for step in _steps(prompt):
+        kind = str(step.get("type"))
+        if kind == "say":
+            _acp_say(session_id, str(step.get("text", "")))
+        elif kind == "run":
+            command = _command(step, prompt)
+            if step.get("approval", True) and not _acp_allowed(session_id, command):
+                _acp_say(session_id, "Stopped, as asked.")
+                _acp_respond(message_id, {"stopReason": "refusal"})
+                return
+            _acp_ran(session_id, command, *_execute(command, cwd or os.getcwd()))
+        else:
+            raise SystemExit(
+                f"an ACP turn cannot do a {kind!r} step: a graph node ends by "
+                "finishing its turn, so it has no run-bound MCP server to call"
+            )
+    _acp_respond(message_id, {"stopReason": "end_turn"})
+
+
+def _acp_allowed(session_id: str, command: str) -> bool:
+    """Ask, and block until the client answers or the pipe closes."""
+
+    _send(
+        {
+            "jsonrpc": "2.0",
+            "id": _ACP_PERMISSION_ID,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": session_id,
+                "toolCall": {
+                    "toolCallId": "call-1",
+                    "title": command,
+                    "kind": "execute",
+                    "rawInput": {"command": command},
+                },
+                "options": [
+                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                ],
+            },
+        }
+    )
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            raise SystemExit("the client closed the transport mid-question")
+        if not line.strip():
+            continue
+        reply = json.loads(line)
+        if reply.get("id") != _ACP_PERMISSION_ID:
+            continue
+        outcome = (reply.get("result") or {}).get("outcome") or {}
+        return bool(
+            outcome.get("outcome") == "selected" and outcome.get("optionId") == "allow"
+        )
+
+
+def _acp_prompt(params: Mapping[str, object]) -> str:
+    blocks = params.get("prompt")
+    return "".join(
+        str(block.get("text", ""))
+        for block in (blocks if isinstance(blocks, list) else ())
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _acp_respond(message_id: object, result: Mapping[str, object]) -> None:
+    _send({"jsonrpc": "2.0", "id": message_id, "result": result})
+
+
+def _acp_update(session_id: str, update: Mapping[str, object]) -> None:
+    _send(
+        {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {"sessionId": session_id, "update": update},
+        }
+    )
+
+
+def _acp_say(session_id: str, text: str) -> None:
+    _acp_update(
+        session_id,
+        {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": text},
+        },
+    )
+
+
+def _acp_ran(session_id: str, command: str, code: int, output: str) -> None:
+    """Report one command the way an agent reports a tool call it made."""
+
+    _acp_update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-1",
+            "title": command,
+            "kind": "execute",
+            "status": "in_progress",
+            "rawInput": {"command": command},
+        },
+    )
+    _acp_update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "completed" if code == 0 else "failed",
+            "content": [{"type": "content", "content": {"type": "text", "text": output}}],
+        },
+    )
 
 
 # --- codex ------------------------------------------------------------------
@@ -735,7 +941,7 @@ def _claude_interactive(arguments: Sequence[str]) -> int:
     return 0
 
 
-PROVIDERS = {"codex": _codex, "claude": _claude}
+PROVIDERS = {"acp": _acp, "codex": _codex, "claude": _claude}
 
 
 def main(argv: Sequence[str]) -> int:
@@ -749,6 +955,7 @@ __all__ = [
     "DIRECTIVE_SCRIPT",
     "SCRIPT_ENVIRONMENT_VARIABLE",
     "UNSCRIPTED_TITLE",
+    "fake_acp",
     "fake_claude",
     "fake_codex",
     "install",
