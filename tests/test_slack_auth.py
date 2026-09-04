@@ -12,6 +12,7 @@ from engine.adapters.communications.slack import (
     SlackCredentials,
     authorization_url,
 )
+from engine.ports import Message, MessageLink
 
 
 def test_slack_communications_posts_to_requested_channel() -> None:
@@ -68,6 +69,30 @@ def test_slack_communications_posts_to_requested_channel() -> None:
             },
         ),
     ]
+
+
+def test_slack_communications_renders_structured_links_as_mrkdwn() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": True, "ts": "123.456"}
+
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
+        client = client_type.return_value.__aenter__.return_value
+        client.post = AsyncMock(return_value=response)
+        __import__("asyncio").run(
+            SlackCommunications(store).post(
+                "C12345678",
+                Message(
+                    "Review run-42",
+                    (MessageLink("Open review", "https://example.com/review"),),
+                ),
+            )
+        )
+
+    assert client.post.await_args.kwargs["json"]["text"] == (
+        "Review run-42\n<https://example.com/review|Open review>"
+    )
 
 
 def test_slack_communications_resolves_name_that_starts_like_an_id() -> None:
