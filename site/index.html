@@ -3,10 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111111" />
     <title>OpenEngine — your SDLC, automated</title>
     <meta
       name="description"
-      content="OpenEngine turns a change into a safe change: a pool of reviewers, reranking, impact radius analysis, and a system diagram — on any model provider."
+      content="OpenEngine plans the work, dispatches it to Claude Code or Codex under your own budgets, reviews what comes back, and puts a person on the decision. Open source, provider-neutral."
     />
     <link rel="canonical" href="https://openengine.sh/" />
 
@@ -15,192 +16,605 @@
     <meta property="og:title" content="OpenEngine — your SDLC, automated" />
     <meta
       property="og:description"
-      content="Changes → pool of reviewers → reranking → impact radius → system diagram → a safe change."
+      content="Plan → dispatch → implement → review → decide. Workflows as code, on any coding CLI, with a person on every merge."
     />
     <meta name="twitter:card" content="summary" />
 
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- The same two faces the product uses. Both stacks fall back to system
+         fonts, so a blocked or slow font host costs polish and nothing else. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d7f36d'/%3E%3Ctext x='16' y='23' font-family='ui-monospace,monospace' font-size='19' text-anchor='middle' fill='%231e261e'%3Ee%3C/text%3E%3C/svg%3E"
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
     />
 
     <style>
+      /* openengine — a square, printed, high-contrast system.
+       *
+       *  Three surfaces and one accent: a near-black rail, a paper page, and
+       *  flame for the one thing that wants acting on. Nothing is rounded and
+       *  nothing floats; structure is drawn with rules, not with shadows.
+       *  Labels and figures are monospaced so columns of them line up.
+       *
+       *  Amber is the one deliberate exception, and it is a different verb
+       *  rather than a second accent. Here it carries the code strings and the
+       *  one message that says something went wrong. */
+
       :root {
-        --ink: #1d211d;
-        --paper: #f4f1ea;
-        --forest: #20271f;
-        --lime: #d7f36d;
-        --muted: #6d746b;
-        --rule: #dedbd2;
+        --ink: #111111;
+        --ink-soft: #3c3c39;
+        --muted: #6d6d68;
+        --faint: #8b8b85;
+
+        --paper: #f0efed;
+        --fill: #e7e6e3;
+        --fill-hover: #dedcd7;
+        --white: #ffffff;
+        --rule: #d4d3cf;
+
+        --flame: #e8452b;
+        --flame-deep: #c9351d;
+
+        --amber: #f08b1e;
+
+        --night: #111111;
+        --night-raised: #1c1c1b;
+        --night-rule: #2b2b29;
+        --night-ink: #f4f3f1;
+        --night-muted: #8d8d86;
+
+        --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+        --gutter: clamp(18px, 2.6vw, 44px);
+
         color: var(--ink);
         background: var(--paper);
-        font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+        font-family: var(--sans);
         font-synthesis: none;
         text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
       }
 
       * { box-sizing: border-box; }
-      body { margin: 0; min-width: 320px; line-height: 1.6; }
-      input, button { font: inherit; }
+      body { margin: 0; min-width: 320px; }
+      button, input { font: inherit; color: inherit; }
       a { color: inherit; }
+      h1, h2, h3, p, dl, dd, ol, ul { margin: 0; }
+      ul, ol { padding: 0; list-style: none; }
 
-      .wrap { width: min(720px, calc(100% - 48px)); margin: 0 auto; }
+      .wrap { width: min(1120px, 100%); margin: 0 auto; padding: 0 var(--gutter); }
 
-      header { padding: 40px 0 0; }
-      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.02em; }
-      .brand-mark {
-        display: grid;
-        place-items: center;
-        width: 28px;
-        height: 28px;
-        color: #1e261e;
-        background: var(--lime);
-        border-radius: 8px;
-        font-family: ui-monospace, monospace;
-        font-weight: 500;
+      /* --- shared vocabulary ------------------------------------------------ */
+
+      .eyebrow {
+        color: var(--faint);
+        font: 500 11px/1 var(--mono);
+        letter-spacing: .16em;
+        text-transform: uppercase;
+      }
+      .lede { color: var(--muted); font-size: 16px; line-height: 1.55; }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 44px;
+        padding: 0 18px;
+        background: var(--white);
+        border: 1px solid var(--ink);
+        border-radius: 0;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -.005em;
+        text-decoration: none;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .btn:hover:enabled, a.btn:hover { background: var(--fill); }
+      .btn:disabled { cursor: default; opacity: .4; }
+      .btn-primary { color: var(--white); background: var(--flame); border-color: var(--flame); }
+      .btn-primary:hover:enabled, a.btn-primary:hover {
+        background: var(--flame-deep);
+        border-color: var(--flame-deep);
       }
 
-      .hero { padding: 72px 0 8px; }
-      h1 {
-        margin: 0 0 18px;
-        font-size: clamp(38px, 7vw, 68px);
-        line-height: 0.98;
-        letter-spacing: -0.055em;
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        background: var(--white);
+        border: 1px solid var(--rule);
+        font: 500 12px/1 var(--mono);
+        white-space: nowrap;
       }
-      .lede { max-width: 34em; margin: 0; color: var(--muted); font-size: 17px; }
+      .chip-flame { color: var(--flame); background: transparent; border-color: var(--flame); }
+      .chip-beta { color: var(--white); background: var(--ink); border-color: var(--ink); }
 
+      section { border-top: 1px solid var(--rule); }
+      .section-body { padding: clamp(44px, 6vw, 72px) 0; }
+      .section-head { display: grid; gap: 12px; max-width: 62ch; margin-bottom: 34px; }
+      .section-head h2 { font-size: clamp(24px, 2.6vw, 33px); font-weight: 800; letter-spacing: -.035em; }
+
+      /* --- masthead --------------------------------------------------------- */
+
+      .masthead { color: var(--night-ink); background: var(--night); }
+      .masthead .wrap {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px 24px;
+        align-items: center;
+        justify-content: space-between;
+        padding-block: 14px;
+      }
+      .brand { display: flex; gap: 12px; align-items: center; text-decoration: none; }
+      .brand-mark { flex: 0 0 auto; width: 34px; height: 34px; }
+      .brand-mark img { display: block; width: 100%; height: 100%; }
+      .brand-wordmark { font-size: 19px; font-weight: 800; letter-spacing: -.025em; }
+      .masthead nav { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
+      .masthead nav a {
+        color: var(--night-muted);
+        font: 500 12px/1 var(--mono);
+        letter-spacing: .1em;
+        text-decoration: none;
+        text-transform: uppercase;
+      }
+      .masthead nav a:hover { color: var(--night-ink); }
+
+      /* --- hero ------------------------------------------------------------- */
+
+      .hero { display: grid; gap: 22px; padding: clamp(44px, 7vw, 90px) 0 clamp(30px, 4vw, 46px); }
+      .hero h1 {
+        max-width: 16ch;
+        font-size: clamp(42px, 6.6vw, 84px);
+        font-weight: 800;
+        line-height: .93;
+        letter-spacing: -.045em;
+      }
+      .hero .lede { max-width: 52ch; font-size: clamp(16px, 1.4vw, 19px); }
+      .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+
+      /* The README's line, drawn. The last cell is the outcome, so it is the
+         one printed in flame. */
       .pipeline {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
         align-items: center;
-        margin: 34px 0 0;
-        padding: 0;
-        list-style: none;
-        color: #40492f;
-        font: 500 12px/1 ui-monospace, monospace;
+        margin-top: 12px;
       }
-      .pipeline li { padding: 7px 11px; background: #e8ecc9; border: 1px solid #cfd8a8; border-radius: 99px; }
-      .pipeline li:last-child { color: #1e261e; background: var(--lime); }
-      .pipeline span { color: #9aa397; }
+      .pipeline .arrow { color: var(--faint); font: 500 12px/1 var(--mono); }
 
-      h2 {
-        margin: 0 0 16px;
-        color: #667064;
-        font: 500 10px/1 ui-monospace, monospace;
-        letter-spacing: 0.12em;
+      /* --- stat strip ------------------------------------------------------- */
+
+      /* Separators are drawn as cell borders rather than a gap over a coloured
+         backing, so the row's outer padding can be dropped and the figures line
+         up with the gutter the rest of the page is set to. */
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+      }
+      .stat {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+        min-width: 0;
+        padding: 16px 24px;
+        border-left: 1px solid var(--rule);
+      }
+      .stat:first-child { padding-left: 0; border-left: 0; }
+      .stat:last-child { padding-right: 0; }
+      .stat dt {
+        color: var(--faint);
+        font: 500 10px/1 var(--mono);
+        letter-spacing: .14em;
         text-transform: uppercase;
       }
+      .stat dd { margin: 0; font: 500 15px/1.2 var(--mono); letter-spacing: -.02em; }
 
-      section { padding: 56px 0; border-top: 1px solid var(--rule); }
-      section:first-of-type { border-top: 0; }
+      /* --- the loop --------------------------------------------------------- */
 
-      .points { display: grid; gap: 18px; margin: 0; padding: 0; list-style: none; }
-      .points strong { display: block; font-size: 15px; }
-      .points p { max-width: 46em; margin: 3px 0 0; color: var(--muted); font-size: 14px; }
+      .loop { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--rule); }
+      .loop li { display: grid; gap: 10px; align-content: start; padding: 20px; background: var(--paper); }
+      .loop .step-no {
+        color: var(--flame);
+        font: 600 12px/1 var(--mono);
+        letter-spacing: .14em;
+      }
+      .loop h3 { font-size: 16px; font-weight: 700; letter-spacing: -.015em; }
+      .loop p { color: var(--muted); font-size: 14px; line-height: 1.5; }
 
-      .signup { padding: 32px; background: var(--forest); border-radius: 18px; color: #edf0e7; }
-      .signup h2 { color: #9caf8d; }
-      .signup p { max-width: 40em; margin: 0 0 22px; color: #b6bfb2; font-size: 14px; }
+      /* --- shipped cards ---------------------------------------------------- */
+
+      .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; }
+      .card {
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        gap: 12px;
+        padding: 18px 20px 22px;
+        background: var(--fill);
+        border-top: 3px solid var(--ink);
+      }
+      .card[data-accent="flame"] { border-top-color: var(--flame); }
+      .card-top { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+      .card h3 { font-size: 17px; font-weight: 700; line-height: 1.3; letter-spacing: -.015em; }
+      .card p { color: var(--muted); font-size: 14px; line-height: 1.55; }
+
+      /* --- code ------------------------------------------------------------- */
+
+      .code-split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(24px, 4vw, 48px); align-items: start; }
+      /* Grid items are min-width:auto by default, so the listing below would
+         widen its own column rather than scroll inside it, and take the whole
+         page's width with it. */
+      .code-split > * { min-width: 0; }
+      .code-split .section-head { margin-bottom: 0; }
+      .code {
+        overflow-x: auto;
+        margin: 0;
+        padding: 22px;
+        color: var(--night-ink);
+        background: var(--night);
+        font: 400 13px/1.7 var(--mono);
+        tab-size: 2;
+      }
+      .code .c-fn { color: var(--flame); }
+      .code .c-str { color: var(--amber); }
+      .code .c-note { color: var(--night-muted); }
+      .code-caption { margin-top: 10px; color: var(--faint); font: 400 12px/1.5 var(--mono); }
+
+      /* --- principles ------------------------------------------------------- */
+
+      .points { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 26px 34px; }
+      .points h3 { margin-bottom: 6px; font-size: 16px; font-weight: 700; letter-spacing: -.015em; }
+      .points p { color: var(--muted); font-size: 14px; line-height: 1.55; }
+
+      /* --- waitlist --------------------------------------------------------- */
+
+      .signup { padding: clamp(26px, 4vw, 44px); color: var(--night-ink); background: var(--night); }
+      .signup h2 { max-width: 20ch; font-size: clamp(24px, 2.6vw, 33px); font-weight: 800; letter-spacing: -.035em; }
+      .signup .eyebrow { color: var(--night-muted); }
+      .signup-copy { display: grid; gap: 12px; max-width: 54ch; margin-bottom: 26px; }
+      .signup-copy p { color: var(--night-muted); font-size: 15px; line-height: 1.55; }
       form { display: flex; flex-wrap: wrap; gap: 10px; }
       label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
       input[type="email"] {
-        flex: 1 1 260px;
+        flex: 1 1 280px;
         min-width: 0;
-        padding: 13px 15px;
-        color: #edf0e7;
-        background: #2a3328;
-        border: 1px solid #3d4839;
-        border-radius: 10px;
+        height: 44px;
+        padding: 0 14px;
+        color: var(--night-ink);
+        background: var(--night-raised);
+        border: 1px solid var(--night-rule);
+        border-radius: 0;
         font-size: 15px;
       }
-      input[type="email"]::placeholder { color: #8f9d8d; }
-      input[type="email"]:focus-visible { outline: 2px solid var(--lime); outline-offset: 1px; }
-      button {
-        padding: 13px 22px;
-        color: #172016;
-        background: var(--lime);
-        border: 0;
-        border-radius: 10px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      button:hover:enabled { background: #e1fa83; }
-      button:disabled { cursor: default; opacity: 0.55; }
+      input[type="email"]::placeholder { color: var(--night-muted); }
+      input[type="email"]:focus-visible { border-color: var(--flame); outline: 0; }
       .hp { position: absolute; left: -9999px; }
-      .status { min-height: 22px; margin: 14px 0 0; font-size: 14px; }
-      .status[data-state="ok"] { color: var(--lime); }
-      .status[data-state="error"] { color: #ffb5a9; }
+      .status { min-height: 22px; margin-top: 14px; font: 400 14px/1.5 var(--mono); }
+      /* Flame is the product's "acting on this" colour and is already the
+         button; a result reads as neutral ink, and only a failure takes a
+         colour of its own. */
+      .status[data-state="ok"] { color: var(--night-ink); }
+      .status[data-state="error"] { color: var(--amber); }
 
-      footer {
+      /* --- footer ----------------------------------------------------------- */
+
+      footer { border-top: 1px solid var(--rule); }
+      footer .wrap {
         display: flex;
         flex-wrap: wrap;
-        gap: 6px 18px;
-        padding: 28px 0 48px;
-        border-top: 1px solid var(--rule);
-        color: #8a9087;
-        font: 400 12px/1.5 ui-monospace, monospace;
+        gap: 8px 24px;
+        justify-content: space-between;
+        padding-block: 26px 44px;
+        color: var(--faint);
+        font: 400 12px/1.6 var(--mono);
       }
       footer a:hover { color: var(--ink); }
+
+      /* --- narrow ----------------------------------------------------------- */
+
+      @media (max-width: 860px) {
+        .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .stat:nth-child(2n + 1) { padding-left: 0; border-left: 0; }
+        .stat:nth-child(2n) { padding-right: 0; }
+        .stat:nth-child(n + 3) { border-top: 1px solid var(--rule); }
+        .code-split { grid-template-columns: minmax(0, 1fr); }
+      }
     </style>
   </head>
 
   <body>
-    <div class="wrap">
-      <header>
-        <div class="brand"><span class="brand-mark" aria-hidden="true">e</span> OpenEngine</div>
-      </header>
+    <header class="masthead">
+      <div class="wrap">
+        <a class="brand" href="/">
+          <span class="brand-mark"><img src="/favicon.svg" alt="" width="34" height="34" /></span>
+          <span class="brand-wordmark">OpenEngine</span>
+        </a>
+        <nav>
+          <a href="#loop">How it works</a>
+          <a href="#shipped">What's shipped</a>
+          <a href="https://github.com/spiralsoft-ai/openengine">Source</a>
+          <a href="#waitlist">Waitlist</a>
+        </nav>
+      </div>
+    </header>
 
-      <main>
+    <main>
+      <div class="wrap">
         <div class="hero">
+          <p class="eyebrow">Open source · Apache-2.0 · Early</p>
           <h1>Your SDLC, automated.</h1>
           <p class="lede">
-            OpenEngine takes a change and does the work around it that you never have time for —
-            reviews it from every angle, works out what it can break, and shows you the system it
-            lands in. What comes out the other side is a change you can ship.
+            OpenEngine plans the work, dispatches it to the coding CLI you already pay for, and does
+            the part nobody has time for: reviewing what came back, working out what it can break,
+            and putting the decision in front of a person. It runs on your machine, against your
+            repository, on your budget.
           </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#waitlist">Join the waitlist</a>
+            <a class="btn" href="https://github.com/spiralsoft-ai/openengine">Read the source</a>
+          </div>
           <ul class="pipeline">
-            <li>Change</li>
-            <li aria-hidden="true"><span>→</span></li>
-            <li>Pool of reviewers</li>
-            <li aria-hidden="true"><span>→</span></li>
-            <li>Reranking</li>
-            <li aria-hidden="true"><span>→</span></li>
-            <li>Impact radius</li>
-            <li aria-hidden="true"><span>→</span></li>
-            <li>System diagram</li>
-            <li aria-hidden="true"><span>→</span></li>
-            <li>Safe change</li>
+            <li><span class="chip">Change</span></li>
+            <li class="arrow" aria-hidden="true">→</li>
+            <li><span class="chip">Pool of reviewers</span></li>
+            <li class="arrow" aria-hidden="true">→</li>
+            <li><span class="chip">Reranking</span></li>
+            <li class="arrow" aria-hidden="true">→</li>
+            <li><span class="chip">Impact radius</span></li>
+            <li class="arrow" aria-hidden="true">→</li>
+            <li><span class="chip">System diagram</span></li>
+            <li class="arrow" aria-hidden="true">→</li>
+            <li><span class="chip chip-flame">Safe change</span></li>
           </ul>
         </div>
+      </div>
 
-        <section>
-          <h2>Why</h2>
-          <ul class="points">
-            <li>
-              <strong>Not coupled to any provider.</strong>
-              <p>Claude Code, Codex, whatever comes next. The conversation is ours, not a vendor's, so any runner can pick up where another left off.</p>
-            </li>
-            <li>
-              <strong>Workflows that encode your review standards.</strong>
-              <p>Stringent security reviews and checklists, defined once and applied to every change.</p>
-            </li>
-            <li>
-              <strong>Work from your phone, on any project.</strong>
-              <p>Runs are durable and survive restarts, so you can start one anywhere and read the result later.</p>
-            </li>
-            <li>
-              <strong>It augments your workflow; it doesn't replace it.</strong>
-              <p>You stay the one who decides what ships.</p>
-            </li>
-          </ul>
-        </section>
+      <div class="wrap">
+        <dl class="stats">
+          <div class="stat">
+            <dt>Runners</dt>
+            <dd>Claude Code · Codex</dd>
+          </div>
+          <div class="stat">
+            <dt>Runs on</dt>
+            <dd>Your machine</dd>
+          </div>
+          <div class="stat">
+            <dt>State</dt>
+            <dd>SQLite · Postgres</dd>
+          </div>
+          <div class="stat">
+            <dt>Licence</dt>
+            <dd>Apache-2.0</dd>
+          </div>
+        </dl>
+      </div>
 
-        <section>
+      <section id="loop">
+        <div class="wrap section-body">
+          <div class="section-head">
+            <p class="eyebrow">How it works</p>
+            <h2>A change goes all the way round before anyone is asked to merge it.</h2>
+            <p class="lede">
+              A project holds a timeline and its milestones. A WorkOrder is one piece of that work,
+              and this is the loop it runs.
+            </p>
+          </div>
+          <ol class="loop">
+            <li>
+              <span class="step-no">01</span>
+              <h3>Plan</h3>
+              <p>
+                A planning agent projects the timeline and the relative size of each milestone from
+                the goals you state, so there is a schedule to dispatch against.
+              </p>
+            </li>
+            <li>
+              <span class="step-no">02</span>
+              <h3>Dispatch</h3>
+              <p>
+                The orchestrator starts WorkOrders at the token flow rate you set. It drives the
+                Claude Code and Codex CLIs, so the work runs on the subscription you already have.
+              </p>
+            </li>
+            <li>
+              <span class="step-no">03</span>
+              <h3>Implement</h3>
+              <p>
+                Each WorkOrder gets its own git worktree branched from your default branch. The
+                agent works there, commits, and opens the pull request.
+              </p>
+            </li>
+            <li>
+              <span class="step-no">04</span>
+              <h3>Review</h3>
+              <p>
+                A reviewer that cannot write reads the diff and the code around it, then leaves
+                every finding inline on the pull request — including when it finds nothing.
+              </p>
+            </li>
+            <li>
+              <span class="step-no">05</span>
+              <h3>Decide</h3>
+              <p>
+                The run stops on a human review step and Slack tells you it is waiting, with a link
+                to the pull request. Approving or rejecting is yours, always.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap section-body">
+          <div class="code-split">
+            <div class="section-head">
+              <p class="eyebrow">Workflows as code</p>
+              <h2>Your SDLC, written down once.</h2>
+              <p class="lede">
+                Workflows live in your repository as zero-dependency Python. A definition is
+                compiled at startup and snapshotted onto every run, so editing the file never
+                changes a run already in flight.
+              </p>
+            </div>
+            <div>
+              <pre class="code"><code>workflow = <span class="c-fn">oe.workflow</span>(
+    id=<span class="c-str">"implementation-review-v1"</span>,
+    workspace=<span class="c-fn">oe.workspace</span>(),
+    steps=[
+        <span class="c-fn">oe.agent_step</span>(
+            id=<span class="c-str">"implementation"</span>,
+            agent=implementation_agent,
+            workspace_access=<span class="c-str">"write"</span>,
+            required_outputs=[<span class="c-str">"pr_url"</span>],
+            transitions={<span class="c-str">"success"</span>: <span class="c-fn">oe.goto</span>(<span class="c-str">"review"</span>), <span class="c-str">"*"</span>: <span class="c-fn">oe.fail</span>()},
+        ),
+        <span class="c-fn">oe.agent_step</span>(
+            id=<span class="c-str">"review"</span>,
+            agent=review_agent,
+            <span class="c-note"># A reviewer that cannot write cannot quietly fix</span>
+            <span class="c-note"># what it was asked to report.</span>
+            workspace_access=<span class="c-str">"read"</span>,
+            transitions={<span class="c-str">"*"</span>: <span class="c-fn">oe.goto</span>(<span class="c-str">"human-review"</span>)},
+        ),
+        <span class="c-fn">oe.human_review_step</span>(
+            id=<span class="c-str">"human-review"</span>,
+            approved=<span class="c-fn">oe.succeed</span>(),
+            rejected=<span class="c-fn">oe.fail</span>(),
+            notification=<span class="c-fn">oe.slack_notification</span>(channel=<span class="c-str">"OpenEngine"</span>),
+        ),
+    ],
+)</code></pre>
+              <p class="code-caption">workflows/implementation_review.py — the workflow that builds OpenEngine.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="shipped">
+        <div class="wrap section-body">
+          <div class="section-head">
+            <p class="eyebrow">What's shipped</p>
+            <h2>Running today, in the open.</h2>
+            <p class="lede">
+              OpenEngine builds itself with the loop above. Everything here is in the repository
+              now, not on a roadmap.
+            </p>
+          </div>
+          <div class="cards">
+            <article class="card" data-accent="flame">
+              <div class="card-top"><span class="eyebrow">Approvals</span></div>
+              <h3>One policy, both runners</h3>
+              <p>
+                Capabilities — read, edit, bash, web, mcp — plus per-command shell globs where
+                deny outranks ask outranks allow. Preapproved work never interrupts you; anything
+                the policy has not ruled on is put to a person.
+              </p>
+            </article>
+            <article class="card">
+              <div class="card-top"><span class="eyebrow">Portability</span></div>
+              <h3>The conversation is yours</h3>
+              <p>
+                History lives in OpenEngine's own store, not in a vendor's session. A provider
+                session is an optimisation, so one runner can pick up where another stopped.
+              </p>
+            </article>
+            <article class="card">
+              <div class="card-top">
+                <span class="eyebrow">Graph WorkOrders</span>
+                <span class="chip chip-beta">BETA</span>
+              </div>
+              <h3>LangGraph, when a graph fits better</h3>
+              <p>
+                Graph workflows sit beside the step-based ones in the same directory and start on
+                the graph engine, with their progress reported the same way.
+              </p>
+            </article>
+            <article class="card">
+              <div class="card-top"><span class="eyebrow">Durability</span></div>
+              <h3>Work outlives its checkout</h3>
+              <p>
+                A workspace is a durable branch plus a worktree you can detach and reattach. A
+                supervised local Temporal service keeps runs going across restarts.
+              </p>
+            </article>
+            <article class="card">
+              <div class="card-top"><span class="eyebrow">GitHub</span></div>
+              <h3>Connected in six steps</h3>
+              <p>
+                OAuth device flow, tokens in your OS keychain, refreshed automatically when they
+                expire. OpenEngine opens the pull requests and posts the review comments.
+              </p>
+            </article>
+            <article class="card">
+              <div class="card-top"><span class="eyebrow">Interface</span></div>
+              <h3>Start it anywhere, read it later</h3>
+              <p>
+                A web control interface with projects, milestone timelines, WorkOrders, and
+                approvals answered inline — from a laptop or a phone on the same network.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap section-body">
+          <div class="section-head">
+            <p class="eyebrow">Why</p>
+            <h2>Positions we are not going to trade away.</h2>
+          </div>
+          <div class="points">
+            <div>
+              <h3>Not coupled to any provider.</h3>
+              <p>
+                Claude Code, Codex, whatever comes next. The conversation is ours, not a vendor's,
+                so any runner can pick up where another left off.
+              </p>
+            </div>
+            <div>
+              <h3>Workflows encode your review standards.</h3>
+              <p>
+                Stringent security reviews and checklists, defined once in your repository and
+                applied to every change that goes through.
+              </p>
+            </div>
+            <div>
+              <h3>Your budget, your machine.</h3>
+              <p>
+                OpenEngine drives the CLIs you already subscribe to, on hardware you already own,
+                at a token flow rate you set.
+              </p>
+            </div>
+            <div>
+              <h3>It augments your workflow; it doesn't replace it.</h3>
+              <p>
+                Every run ends at a person. You stay the one who decides what ships.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="waitlist">
+        <div class="wrap section-body">
           <div class="signup">
-            <h2>Interested?</h2>
-            <p>Leave your email and we'll get in touch when there's something to try.</p>
-            <form id="waitlist" data-endpoint="__WAITLIST_ENDPOINT__">
+            <div class="signup-copy">
+              <p class="eyebrow">Interested?</p>
+              <h2>Leave your email and we'll get in touch.</h2>
+              <p>
+                We'll write when there is something worth trying. In the meantime the source is
+                public and the issues are open.
+              </p>
+            </div>
+            <form id="waitlist-form" data-endpoint="__WAITLIST_ENDPOINT__">
               <label for="email">Email address</label>
               <input
                 id="email"
@@ -212,22 +626,24 @@
               />
               <!-- Honeypot: bots fill everything, people never see it. -->
               <input class="hp" type="text" name="_gotcha" tabindex="-1" autocomplete="off" aria-hidden="true" />
-              <button type="submit">Join the waitlist</button>
+              <button class="btn btn-primary" type="submit">Join the waitlist</button>
             </form>
             <p class="status" id="status" role="status" aria-live="polite"></p>
           </div>
-        </section>
-      </main>
+        </div>
+      </section>
+    </main>
 
-      <footer>
+    <footer>
+      <div class="wrap">
         <a href="https://github.com/spiralsoft-ai/openengine">github.com/spiralsoft-ai/openengine</a>
-        <span>Early. Built in the open.</span>
-      </footer>
-    </div>
+        <span>Apache-2.0 · Early. Built in the open.</span>
+      </div>
+    </footer>
 
     <script>
       (function () {
-        var form = document.getElementById("waitlist");
+        var form = document.getElementById("waitlist-form");
         var status = document.getElementById("status");
         var button = form.querySelector("button");
         var endpoint = form.dataset.endpoint;
