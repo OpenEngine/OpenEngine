@@ -302,16 +302,27 @@ def test_a_session_with_no_step_lists_only_the_repository_tools() -> None:
                 *config.args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            assert server.stdin is not None and server.stdout is not None
+            assert server.stdin is not None
+            assert server.stdout is not None
+            assert server.stderr is not None
             try:
                 request = {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"}
                 server.stdin.write(json.dumps(request).encode() + b"\n")
                 await server.stdin.drain()
-                answer = json.loads(await server.stdout.readline())
+                # Bounded, so a server that never answers fails this test
+                # rather than hanging the suite; the `finally` then reports
+                # what it said on stderr, so one that died on its arguments
+                # says so instead of surfacing as unparseable emptiness.
+                line = await asyncio.wait_for(server.stdout.readline(), timeout=5)
+                assert line, "the stdio MCP server exited without a response"
+                answer = json.loads(line)
             finally:
                 server.stdin.close()
-                await server.wait()
+                await server.stdin.wait_closed()
+                return_code = await asyncio.wait_for(server.wait(), timeout=5)
+                assert return_code == 0, (await server.stderr.read()).decode()
         return [tool["name"] for tool in answer["result"]["tools"]]
 
     assert asyncio.run(scenario()) == ["view_work_item"]

@@ -393,6 +393,15 @@ class WorkflowExecutor:
             return state
         name = _clean_workflow_name(turn.message.content)
         if not name:
+            # The other way to end up unnamed, and now the likelier one: a turn
+            # that used tools can answer with something `_clean_workflow_name`
+            # keeps nothing of. Logged with what was said, because unlike the
+            # raising path there is no exception to describe it.
+            logger.warning(
+                "run %s was not named; the naming turn answered %r",
+                state.run_id,
+                turn.message.content,
+            )
             return state
         named, commands = await self._transition(
             state, RunNamed(run_id=state.run_id, name=name), definition
