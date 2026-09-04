@@ -150,6 +150,7 @@ def build_capabilities(
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     _store = credential_store
     _refresh_lock: asyncio.Lock | None = None
+    _refresh_persistence_failed = False
 
     def _token() -> str:
         if _store is not None:
@@ -165,8 +166,14 @@ def build_capabilities(
         Serialising refresh avoids racing GitHub's single-use refresh tokens;
         a waiter retries with credentials written by the first caller.
         """
-        nonlocal _refresh_lock
+        nonlocal _refresh_lock, _refresh_persistence_failed
         if _store is None:
+            return False
+        # GitHub rotates refresh tokens.  If we receive a fresh pair but cannot
+        # durably save it, retrying with the stale stored token would consume
+        # another one and eventually strand the user.  Stop retrying until a
+        # new connection is established or this process is restarted.
+        if _refresh_persistence_failed:
             return False
         client_id = settings.github_client_id or _store.get_client_id()
         if not client_id:
@@ -188,13 +195,17 @@ def build_capabilities(
                 refreshed = await refresh_access_token(
                     client_id, credentials.refresh_token
                 )
-                _store.set_credentials(refreshed)
             except GitHubRefreshTokenInvalidError:
                 _store.delete()
                 return False
             except GitHubAuthError:
                 # A network or GitHub-service failure is temporary; retain the
                 # token pair for the next request.
+                return False
+            try:
+                _store.set_credentials(refreshed)
+            except GitHubAuthError:
+                _refresh_persistence_failed = True
                 return False
             return True
 
