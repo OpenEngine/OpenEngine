@@ -207,7 +207,10 @@ jobs:
 
       - name: Record which adapter releases these are
         # `npx --yes` resolves at run time, so the versions that failed have to
-        # be in the log of the failure rather than inferred from the date.
+        # be in the log of the failure rather than inferred from the date. The
+        # bundled Codex is recorded too: the ACP adapter runs its own rather
+        # than the `codex` binary the jobs above pin, so "which Codex broke"
+        # has no other answer here.
         shell: bash
         run: |
           set -euo pipefail
@@ -216,6 +219,9 @@ jobs:
             echo "::notice::$package resolves to $version"
             echo "### $package $version" >> "$GITHUB_STEP_SUMMARY"
           done
+          codex=$(npm view "@agentclientprotocol/codex-acp" "dependencies[@openai/codex]")
+          echo "::notice::codex-acp bundles @openai/codex $codex"
+          echo "### bundled @openai/codex $codex" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Handshake, a turn, and a permission round trip over ACP
         env:
