@@ -10,15 +10,14 @@ This is currently a source installation; the agreed path to Homebrew and a
 verified shell installer is tracked in the
 [portable distribution plan](docs/portability.md).
 
+
+First, clone the repo:
 ```bash
 uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
-uv run pytest      # run the suite, including the boundary checks
 ```
-
-All three entrypoints run today and report their wiring:
-
+Then, run it by pointing it at your project:
 ```bash
 uv run \
   --project /path/to/your/project \
