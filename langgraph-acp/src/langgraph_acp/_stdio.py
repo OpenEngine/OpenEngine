@@ -18,12 +18,16 @@ and then handed to whatever policy the connection was built with, which is
 `deny_permission` unless the caller supplied one. See
 `langgraph_acp.permissions`.
 
-The child's stderr is drained into a small ring buffer. When a launch fails or
-a process dies mid-request, that tail is the only thing that says why, and a
-pipe nobody reads eventually blocks the process writing into it.
+The child's stderr is drained into a small ring buffer. When a launch fails, a
+process dies mid-request, or an agent answers "internal error" without saying
+what was internal, that tail is often the only thing that says why -- and a pipe
+nobody reads eventually blocks the process writing into it. Where that text is
+allowed to go is a decision rather than a detail; see `_refusal`.
 """
 
 import asyncio
+import json
+import logging
 import os
 from collections import deque
 from collections.abc import AsyncGenerator, Mapping, Sequence
@@ -58,6 +62,15 @@ MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 #: How much of a failed agent's complaint to keep for the error message.
 STDERR_TAIL_LINES = 20
+
+#: How many characters of one of those parts to keep. An agent's error `data`
+#: can be an entire HTTP response body and a single stderr line can be the same,
+#: while this text ends up in a run record and in a log line; enough to name the
+#: cause is the useful amount.
+MAX_DETAIL_CHARS = 2000
+
+#: Where this module says what it could not put in an exception.
+log = logging.getLogger(__name__)
 
 #: What this client tells an agent it can do. Nothing, for now: the filesystem
 #: and terminal methods an agent may call belong to tickets that have not
@@ -276,7 +289,7 @@ class StdioACPClient:
             return await self._peer.request(method, params)
         except JSONRPCError as exc:
             raise failure(
-                f"the agent refused {method}: {exc.message}",
+                self._refusal(method, exc, session_id),
                 agent=self._agent,
                 session_id=session_id,
                 operation=method,
@@ -409,6 +422,51 @@ class StdioACPClient:
             return
         await asyncio.wait({self._draining}, timeout=5)
 
+    def _stderr_tail(self) -> str:
+        """What the child has said lately. Empty when it has said nothing.
+
+        Trimmed from the front, because the interesting end of a process's
+        output is the end it stopped at.
+        """
+        return _last("\n".join(self._stderr))
+
+    def _refusal(self, method: str, exc: JSONRPCError, session_id: str | None) -> str:
+        """A refusal, rendered with the parts of it that say what failed.
+
+        Only `message` is required to be legible, and agents routinely send one
+        that is not: `-32603 "Internal error"` is what an adapter answers when
+        something underneath *it* failed, and the sentence naming the cause is
+        in `data`, or in what the process wrote to stderr on its way past. The
+        Codex adapter rejecting a model it is too old to run puts the upstream
+        400 in both and neither in `message`, so a message built from `message`
+        alone rendered every such failure identically.
+
+        `data` goes in the message and the stderr tail does not, and the split
+        is deliberate. This text is caught by callers that store it and show it:
+        a graph run keeps it as the reason it failed, and whoever opened the
+        work reads it there. `data` is the agent's own account of the request it
+        just refused. The tail is neither -- it is whatever the process happened
+        to write lately, which is arbitrary output, and one connection carries
+        several sessions, so it may belong to a conversation other than this
+        one. That belongs in an operator's log, and the message says where it
+        went rather than carrying it.
+        """
+        rendered = f"the agent refused {method}: {exc.message} (code {exc.code})"
+        if exc.data is not None:
+            rendered += f"; data: {_capped(json.dumps(exc.data))}"
+        tail = self._stderr_tail()
+        if not tail:
+            return rendered
+        log.error(
+            "agent %r refused %s (session %s); the agent process's recent "
+            "output was:\n%s",
+            self._agent,
+            method,
+            session_id or "none",
+            tail,
+        )
+        return rendered + "; the agent process's recent output is in the log"
+
     def _closed_error(self) -> BaseException:
         status = self._process.returncode
         ended = (
@@ -416,9 +474,13 @@ class StdioACPClient:
             if status is not None
             else "stopped answering"
         )
-        tail = "\n".join(self._stderr)
+        # Here the tail *is* the diagnosis and there is no next request to carry
+        # one: a process that died wrote its reason on the way out, and nothing
+        # else in this failure says what it was.
+        tail = self._stderr_tail()
         return ACPConnectionError(
-            f"the ACP agent {ended}" + (f"; its last output was:\n{tail}" if tail else ""),
+            f"the ACP agent {ended}"
+            + (f"; its last output was:\n{tail}" if tail else ""),
             agent=self._agent,
         )
 
@@ -505,6 +567,31 @@ class StdioACPSession:
             stream.put_nowait(
                 _Completion(result=as_mapping(result, field="the session/prompt result"))
             )
+
+
+def _capped(detail: str) -> str:
+    """Enough of a detail to name a cause, and never a whole response body.
+
+    Kept from the start, which is where a structured error puts its type and
+    its message and where a response body puts everything worth reading.
+    """
+    if len(detail) <= MAX_DETAIL_CHARS:
+        return detail
+    dropped = len(detail) - MAX_DETAIL_CHARS
+    return f"{detail[:MAX_DETAIL_CHARS]}... ({dropped} more characters)"
+
+
+def _last(detail: str) -> str:
+    """The same, kept from the other end.
+
+    What a process wrote last is what it wrote about the thing that just went
+    wrong; trimming a dying agent's output to its first two thousand characters
+    would drop exactly the part worth having.
+    """
+    if len(detail) <= MAX_DETAIL_CHARS:
+        return detail
+    dropped = len(detail) - MAX_DETAIL_CHARS
+    return f"({dropped} earlier characters) ...{detail[-MAX_DETAIL_CHARS:]}"
 
 
 def _content_blocks(prompt: ACPPrompt) -> tuple[JSONObject, ...]:
