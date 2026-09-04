@@ -23,6 +23,8 @@ def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     assert loaded.path is None
     assert loaded.config.attribution is True
     assert loaded.config.default_branch == "main"
+    assert loaded.config.public_url == ""
+    assert loaded.config.slack.channel_id == ""
     assert loaded.config.orchestrator.host == "127.0.0.1:7233"
     assert loaded.config.orchestrator.database == ".engine/temporal.sqlite3"
     assert loaded.config.orchestrator.health_check_interval == 5.0
@@ -71,6 +73,19 @@ def test_loads_a_configured_default_branch(tmp_path: Path) -> None:
     loaded = load_engine_config(path, environ={}, cwd=tmp_path)
 
     assert loaded.config.default_branch == "master"
+
+
+def test_loads_slack_notification_configuration(tmp_path: Path) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text(
+        'public_url = "https://engine.example/"\n'
+        '[slack]\nchannel_id = "C12345678"\n'
+    )
+
+    loaded = load_engine_config(path, environ={}, cwd=tmp_path)
+
+    assert loaded.config.public_url == "https://engine.example"
+    assert loaded.config.slack.channel_id == "C12345678"
 
 
 def test_loads_github_deployment_credentials(tmp_path: Path) -> None:

@@ -397,8 +397,8 @@ def test_checked_in_definition_is_the_implementation_review_source_of_truth() ->
     assert review.workspace_access is WorkspaceAccess.READ
     assert isinstance(human, HumanReviewStep)
     assert human.notification is not None
-    assert human.notification.channel == "OpenEngine"
-    assert human.notification.public_url == "https://sheas-mac-mini.taileb7fdb.ts.net"
+    assert human.notification.channel == ""
+    assert human.notification.public_url == ""
 
 
 def test_sqlite_round_trips_a_workflow_definition_snapshot() -> None:
