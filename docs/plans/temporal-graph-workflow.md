@@ -17,6 +17,69 @@ This is more than registering the current `GraphRunWorkflow` placeholder.
 own run metadata; and `sqlite_runtime` owns the LangGraph checkpointer and run
 store. Those three lifecycles need one composition boundary.
 
+## Current LangGraph execution and reboot behavior
+
+Today the web process opens `sqlite_runtime` during application startup. That
+context opens two SQLite files, compiles every configured graph against a
+shared `AsyncSqliteSaver`, constructs one `LangGraphRuntime`, and closes the
+runtime and both stores at shutdown:
+
+- `checkpoints.sqlite3` is LangGraph's source of truth for each thread's
+  values, checkpoint ancestry, frontier (`next`), and task state;
+- `graph-runs.sqlite3` maps an Engine run id to its graph id, records terminal
+  errors, and persists approval and ACP continuation records; and
+- the runtime's `_live` map, `ExecutionRegistry`, driver tasks, control locks,
+  and event observer are process-local only.
+
+`start()` allocates an Engine run id and uses it as LangGraph's `thread_id`. It
+records the run-to-graph mapping, publishes `run.started`, and seeds the input
+with `aupdate_state` before returning. That seed deliberately creates a real
+opening checkpoint. The runtime then launches an untracked-by-Temporal
+`asyncio.Task` which calls `graph.astream(None, config, stream_mode=[
+"checkpoints", "tasks"])`. At every checkpoint/superstep boundary it publishes
+the checkpoint, replaces the in-memory set of addressable node executions, and
+announces node starts and finishes. Graph values and status are not cached:
+snapshots read the latest LangGraph state and derive `running`,
+`awaiting_approval`, or `completed` from its frontier plus durable approvals;
+a stored error overrides that as `failed`.
+
+Steering is delivered directly to a live `NodeExecution`, so it only works
+while the process that owns that execution is alive. Approvals are different:
+the request, decision, and ACP continuation are persisted. If the original
+execution is alive, a decision releases its waiter. If it is gone, accepted
+decisions remain inert until all approvals for that superstep are answered;
+the runtime then starts the thread again at its current checkpoint, and the
+node reconnects to the stored ACP conversation. `resume_from()` similarly
+cancels the current process-local driver, abandons approvals from that attempt,
+writes an explicit child/fork checkpoint, and launches a new driver from it.
+
+On graceful shutdown, `LangGraphRuntime.aclose()` cancels every driver and
+releases its live executions. On a crash those tasks disappear without that
+cleanup. In either case the SQLite run record and last committed LangGraph
+checkpoint survive, but work performed after that checkpoint does not. The
+driver itself, pending steering messages, in-memory event history/subscribers,
+and any uncheckpointed node result are lost.
+
+The web app now performs an explicit recovery pass on its next startup. For
+each non-terminal graph WorkOrder in the app state store it asks the fresh
+runtime for a snapshot:
+
+- a `running` run is forked/resumed from its latest checkpoint, creating a new
+  driver and potentially repeating node side effects since that checkpoint;
+- an `awaiting_approval` run is left parked, because the eventual decision uses
+  the persisted continuation to restart it safely;
+- a run already `completed` or `failed` is copied into the WorkOrder state, in
+  case its terminal event was missed while the web process was down; and
+- a WorkOrder whose graph run record is missing is marked failed rather than
+  remaining stuck as running.
+
+Recovery is therefore checkpoint-based replay coordinated by web startup, not
+durable execution. There is no independently running worker, no workflow
+history, no automatic retry while the web process is down, and no exactly-once
+boundary around node side effects. This is the behavior the initial Temporal
+binding must preserve where intentional and replace where it is merely a
+consequence of process-local drivers.
+
 ## Boundaries and names
 
 Keep these concepts distinct:
