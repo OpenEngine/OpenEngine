@@ -987,6 +987,8 @@ def create_app(
     github_client_id_source: str = "configuration",
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
+    slack_channel_id: str = "",
+    public_url: str = "",
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -1078,6 +1080,8 @@ def create_app(
         approval_handler=workflow_approval_handler,
         catalog=catalog,
         default_branch=default_branch,
+        slack_channel_id=slack_channel_id,
+        public_url=public_url,
     )
     workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
     workflow_restart_locks: dict[RunId, asyncio.Lock] = {}

@@ -96,8 +96,10 @@ class AgentStep:
 
 @dataclass(frozen=True, slots=True)
 class HumanReviewNotification:
-    channel: str
-    public_url: str
+    """Marker enabling the configured human-review notification destination."""
+
+    channel: str = ""
+    public_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)

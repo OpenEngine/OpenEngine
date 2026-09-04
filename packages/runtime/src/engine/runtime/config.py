@@ -76,12 +76,21 @@ class ClaudeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SlackConfig:
+    """Slack destination used for human-review notifications."""
+
+    channel_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     """All configuration understood by this version of Engine."""
 
     default_branch: str = "main"
     github_client_id: str = ""
     github_token: str = ""
+    public_url: str = ""
+    slack: SlackConfig = SlackConfig()
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
     orchestrator: OrchestratorConfig = OrchestratorConfig()
@@ -167,6 +176,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_client_id",
             "github_token",
             "orchestrator",
+            "public_url",
+            "slack",
             "workflows",
         },
         "configuration",
@@ -184,6 +195,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     )
     github_token = _optional_nonblank_string(
         document.get("github_token", ""), "github_token"
+    )
+    public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
+
+    slack = _table(document.get("slack", {}), "slack")
+    _reject_unknown(slack, {"channel_id"}, "slack")
+    slack_channel_id = _optional_nonblank_string(
+        slack.get("channel_id", ""), "slack.channel_id"
     )
 
     claude = _table(document.get("claude", {}), "claude")
@@ -245,6 +263,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         default_branch=default_branch,
         github_client_id=github_client_id,
         github_token=github_token,
+        public_url=public_url.rstrip("/"),
+        slack=SlackConfig(channel_id=slack_channel_id),
         claude=ClaudeConfig(output_style=output_style),
         approvals=ApprovalConfig(
             auto_approve=auto_approve,

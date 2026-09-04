@@ -173,11 +173,17 @@ def human_review_step(
     )
 
 
-def slack_notification(*, channel: str, public_url: str) -> HumanReviewNotification:
+def slack_notification(
+    *, channel: str = "", public_url: str = ""
+) -> HumanReviewNotification:
     """Notify a Slack channel when a human-review step becomes ready."""
     return HumanReviewNotification(
-        channel=_nonempty(channel, "Slack notification channel"),
-        public_url=_nonempty(public_url, "Slack notification public_url").rstrip("/"),
+        channel=_nonempty(channel, "Slack notification channel") if channel else "",
+        public_url=(
+            _nonempty(public_url, "Slack notification public_url").rstrip("/")
+            if public_url
+            else ""
+        ),
     )
 
 
