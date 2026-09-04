@@ -177,16 +177,18 @@ jobs:
           retention-days: 14
 
   acp-adapter:
-    name: codex over ACP
+    name: agents over ACP
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # The jobs above reach Codex by running the `codex` binary. `langgraph-acp`
-    # reaches it over ACP, through an adapter that is a different package on a
-    # different release cadence -- so nothing above would notice the handshake,
-    # the session update shapes, or the capability names moving under it.
+    # The jobs above reach the agents by running the `codex` and `claude`
+    # binaries. `langgraph-acp` reaches them over ACP, through adapters that are
+    # separate packages on separate release cadences -- so nothing above would
+    # notice the handshake, the session update shapes, or the capability names
+    # moving under it.
     #
-    # Unpinned on purpose, matching `CODEX_ACP_COMMAND`: what this job is for is
-    # finding out that the current adapter broke, which a pin would hide.
+    # Unpinned on purpose, matching `CODEX_ACP_COMMAND` and
+    # `CLAUDE_ACP_COMMAND`: what this job is for is finding out that the current
+    # adapter broke, which a pin would hide.
     defaults:
       run:
         working-directory: langgraph-acp
@@ -203,20 +205,23 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Record which adapter release this is
-        # `npx --yes` resolves at run time, so the version that failed has to be
-        # in the log of the failure rather than inferred from the date.
+      - name: Record which adapter releases these are
+        # `npx --yes` resolves at run time, so the versions that failed have to
+        # be in the log of the failure rather than inferred from the date.
         shell: bash
         run: |
           set -euo pipefail
-          version=$(npm view @agentclientprotocol/codex-acp version)
-          echo "::notice::@agentclientprotocol/codex-acp resolves to $version"
-          echo "### codex-acp $version" >> "$GITHUB_STEP_SUMMARY"
+          for package in @agentclientprotocol/codex-acp @zed-industries/claude-agent-acp; do
+            version=$(npm view "$package" version)
+            echo "::notice::$package resolves to $version"
+            echo "### $package $version" >> "$GITHUB_STEP_SUMMARY"
+          done
 
-      - name: Handshake and one turn over ACP
+      - name: Handshake, a turn, and a permission round trip over ACP
         env:
-          # Absent, the turn skips and the handshake still runs: initialize is
+          # Absent, the turns skip and the handshake still runs: initialize is
           # answered before anyone is asked to authenticate, so protocol drift
           # is catchable without a credential.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: uv run --locked pytest -m compatibility -v
