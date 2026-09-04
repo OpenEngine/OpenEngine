@@ -17,7 +17,6 @@ from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
     CodexAgentRunner,
 )
-from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.communications.slack import SlackCommunications
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
@@ -143,16 +142,17 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
 
 def test_web_selects_the_configured_communications_provider() -> None:
     slack = build_communications(Settings())
-    buzz = build_communications(
-        Settings(
-            engine_config=EngineConfig(
-                communications=CommunicationsConfig(provider="buzz")
-            )
-        )
-    )
 
     assert isinstance(slack, SlackCommunications)
-    assert isinstance(buzz, BuzzCommunications)
+
+    with pytest.raises(RuntimeError, match="provider 'buzz' is not available yet"):
+        build_communications(
+            Settings(
+                engine_config=EngineConfig(
+                    communications=CommunicationsConfig(provider="buzz")
+                )
+            )
+        )
 
 
 def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeypatch) -> None:

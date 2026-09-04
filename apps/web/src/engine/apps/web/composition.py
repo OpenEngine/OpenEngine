@@ -32,7 +32,6 @@ from engine.adapters.agent_runner.claude_code import (
     allowed_tools_for,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
-from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.communications.slack import SlackCommunications, SlackCredentialStore
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
@@ -118,8 +117,6 @@ class Settings:
     github_token: str = ""
     github_client_id: str = ""
     source_control_preferences: SourceControlPreferences | None = None
-    buzz_base_url: str = ""
-    buzz_api_token: str = ""
     workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"
     graph_state_directory: str = "graph-state"
@@ -243,7 +240,10 @@ def build_communications(
     """Build the configured communications provider."""
     provider = settings.engine_config.communications.provider
     if provider == "buzz":
-        return BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token)
+        raise RuntimeError(
+            "communications provider 'buzz' is not available yet; "
+            "configure communications.provider = 'slack'"
+        )
     return SlackCommunications(slack_credential_store or SlackCredentialStore())
 
 
