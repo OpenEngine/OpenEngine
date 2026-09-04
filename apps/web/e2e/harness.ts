@@ -25,10 +25,14 @@ import { fileURLToPath } from "node:url";
 import { test as base, type Page, type TestInfo } from "@playwright/test";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WEB_ROOT = path.resolve(HERE, "..");
 const REPO_ROOT = path.resolve(HERE, "../../..");
 const SERVER = path.join(HERE, "harness", "server.py");
 const SEED = path.join(HERE, "harness", "seed.py");
 const V0_DATABASE = path.join(HERE, "fixtures", "v0.0.0.sqlite3");
+/** Vite itself rather than `npm run dev`, so the process we spawn is the
+ *  process holding the port and stopping it does not need a process group. */
+const VITE = path.join(WEB_ROOT, "node_modules", ".bin", "vite");
 
 /** How long a composed server may take to answer. Long enough for `uv run` to
  *  resolve the workspace on a cold machine, short enough to fail rather than
@@ -78,7 +82,12 @@ export class Engine {
 
 export type SeededDatabase = false | "current" | "v0.0.0";
 
-export const test = base.extend<{ engine: Engine; seededDatabase: SeededDatabase }>({
+export const test = base.extend<{
+  engine: Engine;
+  seededDatabase: SeededDatabase;
+  /** Where the interface answers when `engine-dev` is serving it. */
+  devServer: string;
+}>({
   seededDatabase: [false, { option: true }],
   engine: async ({ seededDatabase }, use, testInfo) => {
     const root = mkdtempSync(path.join(tmpdir(), "engine-e2e-"));
@@ -115,6 +124,49 @@ export const test = base.extend<{ engine: Engine; seededDatabase: SeededDatabase
         console.log(`[engine] kept the failed run's directory: ${root}`);
       } else {
         rmSync(root, { recursive: true, force: true });
+      }
+    }
+  },
+  /** The Vite dev server, in front of that test's API, as `engine-dev` runs it.
+   *
+   *  Lazy, like every fixture: only a spec that asks for it pays for a second
+   *  process. Worth the cost for the specs that do, because the dev server is a
+   *  second origin with routing of its own -- `vite.config.ts` forwards the
+   *  prefixes it was told about and answers everything else with `index.html`
+   *  -- and no spec opening the built client can reach a mistake in it.
+   *
+   *  `ENGINE_API_URL` is how `engine-dev` tells the proxy which port the API
+   *  actually took, and it is how the test does too. */
+  devServer: async ({ engine }, use, testInfo) => {
+    const url = `http://127.0.0.1:${await freePort()}`;
+    const started = spawn(
+      VITE,
+      ["--host", "127.0.0.1", "--port", new URL(url).port, "--strictPort"],
+      {
+        cwd: WEB_ROOT,
+        env: { ...process.env, ENGINE_API_URL: engine.url },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const server: Server = { process: started, log: [] };
+    started.stdout?.on("data", (chunk: Buffer) => server.log.push(chunk.toString()));
+    started.stderr?.on("data", (chunk: Buffer) => server.log.push(chunk.toString()));
+    started.on("error", (error) => {
+      server.failure = `${VITE} could not be started: ${error.message}`;
+    });
+    try {
+      // Through the proxy, so this waits for both halves rather than for Vite
+      // alone -- a dev server answering while the API behind it is still
+      // starting is the one state this fixture must not hand a test.
+      await waitUntilServing(url, server);
+      await use(url);
+    } finally {
+      await stop(server);
+      if (testInfo.status !== testInfo.expectedStatus) {
+        await testInfo.attach("dev server", {
+          body: server.log.join(""),
+          contentType: "text/plain",
+        });
       }
     }
   },

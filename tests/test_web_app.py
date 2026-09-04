@@ -3,9 +3,11 @@
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -3223,6 +3225,55 @@ def test_run_api_presents_human_rejection_as_the_final_decision() -> None:
     assert body["humanDecision"]["outcome"] == "rejected"
     assert body["humanDecision"]["summary"] == rejection.summary
     assert body["steps"][1]["outcome"] == "changes_requested"
+
+
+#: The dev server's proxy table. TypeScript because Vite is what reads it, so
+#: this is the one list about this application that cannot be imported.
+PROXY_SOURCE = Path(__file__).resolve().parent.parent / "apps/web/src/api-proxy.ts"
+
+
+def _proxied_prefixes() -> set[str]:
+    """`PROXIED_PREFIXES`, read out of the source rather than restated here.
+
+    Read the way `layout.py` reads `capabilities.py`: a second copy of a list
+    that must not drift is the thing that drifts.
+    """
+    source = PROXY_SOURCE.read_text()
+    listing = re.search(r"PROXIED_PREFIXES\s*=\s*\[(.*?)\]", source, re.DOTALL)
+    assert listing is not None, f"no PROXIED_PREFIXES in {PROXY_SOURCE}"
+    return set(re.findall(r'"([^"]+)"', listing.group(1)))
+
+
+def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards() -> None:
+    """The failure this is here for is silent, and only in development.
+
+    `apps/web/vite.config.ts` forwards the prefixes it was told about and
+    answers everything else with `index.html` and a 200, so a prefix this
+    application serves and the proxy has not heard of does not arrive as a 404
+    -- the client gets a page where it asked for JSON, and reports a parse
+    error. Every other test in this file talks to the application directly and
+    cannot see it. That is how `/graph` was served, read by the client, and
+    unproxied for two releases.
+
+    Composed without a static directory, so what is left is the surface that is
+    not the client's own: the SPA's pages are Vite's to answer and must not be
+    forwarded.
+    """
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()})
+
+    served = {
+        "/" + route.path.lstrip("/").split("/")[0]
+        for route in app.routes
+        # The placeholder page for a checkout with no build, which is the
+        # client's address rather than this application's.
+        if route.path != "/"
+    }
+
+    # Containment rather than equality in both directions: adding a prefix to
+    # both sides is the correct change and must stay green, and a test that
+    # went red for it would be edited into agreement without being read.
+    assert {"/api", "/graph"} <= served
+    assert served <= _proxied_prefixes()
 
 
 def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
