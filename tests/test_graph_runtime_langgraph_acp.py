@@ -48,7 +48,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry, StdioACPProvider
 
-from acp_stub_agent import DONE
+from acp_stub_agent import DONE, NARRATED_TOOL, NARRATION
 from graph_runtime_backends import State
 
 STUB = Path(__file__).parent / "acp_stub_agent.py"
@@ -65,7 +65,11 @@ PATIENCE = 30.0
 
 
 def registry(
-    tmp_path: Path, *, asks: bool = False, response: str = DONE
+    tmp_path: Path,
+    *,
+    asks: bool = False,
+    response: str = DONE,
+    narrates: bool = False,
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -78,6 +82,7 @@ def registry(
                     "STUB_ACP_LOG": str(tmp_path / "agent.log"),
                     "STUB_ACP_RESPONSE": response,
                     **({"STUB_ACP_ASK": "1"} if asks else {}),
+                    **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
                 },
                 # The seam the whole design turns on: a permission request comes
                 # in on the ACP connection, and this is what routes it back to
@@ -180,6 +185,19 @@ def transcript(events: Sequence[RuntimeEvent]) -> list[tuple[str, str]]:
     ]
 
 
+def activity(events: Sequence[RuntimeEvent], node_id: NodeId) -> list[tuple[str, str]]:
+    """What one node did, in order: what it said and what it called."""
+    interesting = {"transcript", "tool.call", "tool.result"}
+    return [
+        (
+            event.kind.value,
+            str(event.payload["text" if event.kind.value == "transcript" else "name"]),
+        )
+        for event in events
+        if event.kind.value in interesting and event.node_id == node_id
+    ]
+
+
 def sessions(tmp_path: Path) -> dict[str, dict[str, Any]]:
     """Every conversation the agent kept, as the agent left it on disk."""
     return {
@@ -237,6 +255,34 @@ def test_an_acp_node_runs_a_turn_and_publishes_what_happened(tmp_path: Path) -> 
     # One conversation, started once. The node did not open a second.
     assert len(sent(tmp_path, "session/new")) == 1
     assert prompts(tmp_path) == [PROMPT]
+
+
+def test_what_an_agent_says_is_published_where_it_said_it(tmp_path: Path) -> None:
+    """A line written before a tool call is published before that call.
+
+    An agent narrates as it works -- a sentence, a tool call, the next
+    sentence -- and a reader following along needs the sentence that explains a
+    call to arrive before it. Holding every word until the turn ends would put
+    the whole narration after all of the work it describes, which reads as an
+    agent that did a pile of things silently and then summarized them.
+    """
+
+    async def scenario() -> list[RuntimeEvent]:
+        async with runtime_over(tmp_path, registry(tmp_path, narrates=True)) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            return await until(log, run.run_id, "run.finished")
+
+    events = asyncio.run(scenario())
+
+    assert activity(events, IMPLEMENTATION) == [
+        ("transcript", NARRATION),
+        ("tool.call", NARRATED_TOOL),
+        ("tool.result", NARRATED_TOOL),
+        ("transcript", DONE),
+    ]
 
 
 # --- steering ---------------------------------------------------------------

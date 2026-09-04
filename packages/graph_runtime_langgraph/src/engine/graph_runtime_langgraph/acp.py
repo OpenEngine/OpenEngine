@@ -431,20 +431,39 @@ class ACPNode:
     async def _speak(
         self, execution: NodeExecution, session: ACPSession, prompt: ACPPrompt
     ) -> str:
-        """One ACP turn, with what happens in it republished as runtime events."""
-        message: list[str] = []
+        """One ACP turn, with what happens in it republished as runtime events.
+
+        Message deltas are gathered rather than published one by one -- a
+        transcript event per token would be unreadable -- but they are gathered
+        only as far as the next tool call. An agent narrates what it is about
+        to do and then does it, so a line written before a call is published
+        before that call, and somebody following the run reads the explanation
+        with the work it explains rather than after all of it.
+        """
+        said: list[str] = []
+        pending: list[str] = []
+
+        async def flush() -> None:
+            text = "".join(pending)
+            pending.clear()
+            if text:
+                said.append(text)
+                await execution.say(text)
+
         async for event in session.prompt(prompt):
+            if event.type == ACPEventType.TOOL_STARTED:
+                await flush()
             await self._republish(execution, event)
             if event.type == ACPEventType.MESSAGE_DELTA:
                 block = event.data.get("content")
                 if isinstance(block, Mapping) and block.get("type") == "text":
                     text = block.get("text")
                     if isinstance(text, str):
-                        message.append(text)
-        said = "".join(message)
-        if said:
-            await execution.say(said)
-        return said
+                        pending.append(text)
+        await flush()
+        # The node's durable output is still the whole turn: what the graph
+        # carries forward does not change with where the words were published.
+        return "".join(said)
 
     async def _republish(self, execution: NodeExecution, event: Any) -> None:
         if event.type == ACPEventType.TOOL_STARTED:

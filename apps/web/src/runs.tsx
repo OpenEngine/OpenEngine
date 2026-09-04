@@ -582,6 +582,48 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   );
 }
 
+/** One thing an agent did, as the conversation page draws it: something it
+ *  said, or a tool it called and how that call ended. */
+type ConversationEntry = {
+  sequence: number;
+  text?: string;
+  tool?: string;
+  result?: string;
+};
+
+/** What a node's agent has done, in the order it did it.
+ *
+ *  Tool calls belong here rather than only the messages, because of when each
+ *  one is published: an ACP turn reports every call as it makes it and its
+ *  message only once the whole turn is over. An implementation agent works for
+ *  as long as the change takes, so a page reading transcript events alone has
+ *  nothing to show for all of it and reports a busy conversation as one that
+ *  never started. */
+function conversationActivity(events: ApiGraphEvent[]): ConversationEntry[] {
+  const results = new Map(
+    events
+      .filter((event) => event.type === "tool.result")
+      .map((event) => [
+        String(event.payload.callId ?? ""),
+        String(event.payload.result ?? ""),
+      ]),
+  );
+  return events.flatMap((event): ConversationEntry[] => {
+    if (event.type === "transcript")
+      return [{ sequence: event.sequence, text: String(event.payload.text ?? "") }];
+    if (event.type !== "tool.call") return [];
+    return [
+      {
+        sequence: event.sequence,
+        // A call the agent named nothing is still a call it made, and saying
+        // so beats a blank line where the work was.
+        tool: String(event.payload.name ?? "") || "Tool call",
+        result: results.get(String(event.payload.callId ?? "")) ?? "",
+      },
+    ];
+  });
+}
+
 export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId: string }) {
   const [events, setEvents] = useState<ApiGraphEvent[]>();
   const [error, setError] = useState("");
@@ -610,7 +652,7 @@ export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runId, nodeId]);
-  const transcript = events?.filter((event) => event.type === "transcript");
+  const activity = events && conversationActivity(events);
   return (
     <main className="panel-scroll">
       <header className="hero hero-narrow">
@@ -618,15 +660,23 @@ export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId
         <p className="eyebrow">Graph conversation</p>
         <h1>{phaseLabel(nodeId)}</h1>
       </header>
-      {error ? <p className="notice notice-block">{error}</p> : !events ? (
+      {error ? <p className="notice notice-block">{error}</p> : !activity ? (
         <p className="state-inline">Loading conversation…</p>
-      ) : transcript?.length === 0 ? (
+      ) : activity.length === 0 ? (
         <p className="state-inline">Waiting for agent activity…</p>
       ) : (
-        <section className="timeline" aria-label="Conversation transcript">
-          {transcript?.map((event) => (
-            <article className="callout" key={event.sequence}>
-              <p>{String(event.payload.text ?? "")}</p>
+        <section className="timeline" aria-label="Conversation activity">
+          {activity.map((entry) => (
+            <article className="callout" key={entry.sequence}>
+              {entry.tool ? (
+                <>
+                  <p className="eyebrow">Tool</p>
+                  <p>{entry.tool}</p>
+                  {entry.result && <p className="micro">{entry.result}</p>}
+                </>
+              ) : (
+                <p>{entry.text}</p>
+              )}
             </article>
           ))}
         </section>

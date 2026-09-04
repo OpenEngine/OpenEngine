@@ -40,6 +40,13 @@ DONE = "Ran the command."
 #: And once it has been refused.
 REFUSED = "Stopped, as asked."
 
+#: What the agent says *before* it calls a tool, under `STUB_ACP_NARRATE`.
+NARRATION = "I'll start by reading the tests."
+
+#: The call it narrates, and what it is called.
+NARRATED_CALL = "call_read"
+NARRATED_TOOL = "Read tests"
+
 
 def state_dir() -> Path:
     return Path(os.environ["STUB_ACP_STATE"])
@@ -83,6 +90,35 @@ def say(session_id: str, text: str) -> None:
     update(
         session_id,
         {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
+    )
+
+
+def narrate_a_tool_call(session_id: str) -> None:
+    """Say what it is about to do, do it, and report that it finished.
+
+    The shape of a real turn: an agent writes a line, calls a tool, and only
+    then writes the next line. A stub that only ever speaks at the end cannot
+    tell an ordering bug from a correct implementation.
+    """
+    say(session_id, NARRATION)
+    update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": NARRATED_CALL,
+            "title": NARRATED_TOOL,
+            "kind": "read",
+            "status": "pending",
+        },
+    )
+    update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": NARRATED_CALL,
+            "title": NARRATED_TOOL,
+            "status": "completed",
+        },
     )
 
 
@@ -169,6 +205,8 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
         respond(message_id, {"stopReason": "end_turn"})
         return
     save(session_id, session)
+    if os.environ.get("STUB_ACP_NARRATE"):
+        narrate_a_tool_call(session_id)
     say(session_id, os.environ.get("STUB_ACP_RESPONSE", DONE))
     respond(message_id, {"stopReason": "end_turn"})
 

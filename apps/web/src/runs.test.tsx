@@ -556,6 +556,88 @@ describe("RunDetailPage", () => {
     expect(screen.getByText("Reading the code.")).toBeVisible();
   });
 
+  it("shows the tool work an agent does before it says anything", async () => {
+    // What an implementation conversation actually looks like while it runs:
+    // an ACP turn publishes its tool calls as it goes and its message only
+    // when the turn ends, so a page that reads transcript events alone says
+    // "waiting" for the length of the work it is watching.
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "conversation.started",
+          nodeId: "implementation",
+          payload: { agent: "codex", sessionId: "session-1", resumed: false },
+        },
+        {
+          sequence: 2,
+          type: "tool.call",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.tsx", arguments: {} },
+        },
+        {
+          sequence: 3,
+          type: "tool.result",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.tsx", result: "completed" },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    expect(screen.getByText("Read runs.tsx")).toBeVisible();
+    expect(
+      screen.queryByText("Waiting for agent activity…"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps what the agent said next to the work it was describing", async () => {
+    // An agent narrates and then acts, and the page draws the run in the order
+    // it happened rather than sorting speech to one end.
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "I'll start by reading the tests." },
+        },
+        {
+          sequence: 2,
+          type: "tool.call",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.test.tsx", arguments: {} },
+        },
+        {
+          sequence: 3,
+          type: "tool.result",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.test.tsx", result: "completed" },
+        },
+        {
+          sequence: 4,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "Ran the command." },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    const entries = within(
+      screen.getByLabelText("Conversation activity"),
+    ).getAllByRole("article");
+    expect(entries.map((entry) => entry.textContent)).toEqual([
+      "I'll start by reading the tests.",
+      "ToolRead runs.test.tsxcompleted",
+      "Ran the command.",
+    ]);
+  });
+
   it("renders steps from an arbitrary workflow definition", async () => {
     const generic = run({
       workflowId: "release-v2",
