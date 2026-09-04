@@ -18,6 +18,7 @@ import os
 import signal
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from uvicorn.config import Config
@@ -185,11 +186,47 @@ def test_defaults_are_left_alone_when_there_is_nothing_to_say() -> None:
 
 
 def test_the_browser_tier_is_started_from_the_directory_that_owns_its_scripts() -> None:
-    assert dev.web_command() == ["npm", "--prefix", str(dev.WEB_ROOT), "run", "dev"]
+    assert dev.web_command() == [
+        "npm",
+        "--prefix",
+        str(dev.WEB_ROOT),
+        "run",
+        "dev",
+        "--",
+        "--strictPort",
+    ]
     assert dev.web_command(port=4000)[-2:] == ["--port", "4000"]
 
 
 # --- stopping ---------------------------------------------------------------
+
+
+def test_sigterm_cleans_up_children_before_the_supervisor_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """launchd uses SIGTERM, so it must take the same cleanup path as Ctrl-C."""
+    handlers: dict[signal.Signals, object] = {}
+    stopped: list[dev.Child] = []
+
+    def install(sent: signal.Signals, handler: object) -> object:
+        previous = handlers.get(sent, signal.SIG_DFL)
+        handlers[sent] = handler
+        return previous
+
+    process = SimpleNamespace(stdout=[], poll=lambda: None)
+    child = dev.Child(name="web", process=process)
+    monkeypatch.setattr(signal, "signal", install)
+    monkeypatch.setattr(dev, "stop", stopped.append)
+
+    def interrupt(_seconds: float) -> None:
+        handler = handlers[signal.SIGTERM]
+        assert callable(handler)
+        handler(signal.SIGTERM, None)
+
+    monkeypatch.setattr(dev.time, "sleep", interrupt)
+
+    assert dev.supervise([child], lambda _line: None) == 0
+    assert stopped == [child]
 
 
 def test_a_child_that_ignores_the_interrupt_is_killed_anyway(

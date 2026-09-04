@@ -166,9 +166,9 @@ def api_command(*, host: str, port: int, watch: ReloadWatch) -> list[str]:
 
 def web_command(*, port: int | None = None) -> list[str]:
     """The Vite dev server, which owns the browser tier."""
-    command = ["npm", "--prefix", str(WEB_ROOT), "run", "dev"]
+    command = ["npm", "--prefix", str(WEB_ROOT), "run", "dev", "--", "--strictPort"]
     if port is not None:
-        command += ["--", "--port", str(port)]
+        command += ["--port", str(port)]
     return command
 
 
@@ -320,7 +320,11 @@ def supervise(children: Sequence[Child], announce: Callable[[str], None]) -> int
     port.
     """
     interrupted = threading.Event()
-    previously = signal.signal(signal.SIGINT, lambda _number, _frame: interrupted.set())
+    handled_signals = (signal.SIGINT, signal.SIGTERM)
+    previously = {
+        sent: signal.signal(sent, lambda _number, _frame: interrupted.set())
+        for sent in handled_signals
+    }
     for child in children:
         threading.Thread(target=relay, args=(child, announce), daemon=True).start()
     try:
@@ -335,7 +339,8 @@ def supervise(children: Sequence[Child], announce: Callable[[str], None]) -> int
     finally:
         for child in children:
             stop(child)
-        signal.signal(signal.SIGINT, previously)
+        for sent, handler in previously.items():
+            signal.signal(sent, handler)
 
 
 # --- ports ------------------------------------------------------------------
