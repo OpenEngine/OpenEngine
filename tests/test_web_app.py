@@ -1505,10 +1505,11 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     channel, notification, notified_run_id = communications.post.await_args.args
     assert channel == "OpenEngine"
     assert notification.startswith(
-        "Work order step complete and ready for human review: Review implementation"
+        "Ready for human review: Review implementation for task-"
     )
-    assert "The handling is correct." in notification
-    assert "worker.py cancels the task" in notification
+    assert "\nOutcome: success\n" in notification
+    assert "The handling is correct." not in notification
+    assert "worker.py cancels the task" not in notification
     assert "<https://github.com/acme/api/pull/42|Open pull request>" in notification
     assert (
         f"<https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}"
