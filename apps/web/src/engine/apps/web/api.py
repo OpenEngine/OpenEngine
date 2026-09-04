@@ -1776,6 +1776,33 @@ def create_app(
             assert run is not None
         return JSONResponse(_run_json(run))
 
+    async def graph_run_events(request: Request) -> JSONResponse:
+        """Replay the graph transcript for the WorkOrder UI.
+
+        The graph control surface deliberately exposes a live event stream. The
+        WorkOrder page also needs a finite snapshot when it opens after an
+        agent has finished, so serve the same recorded events as JSON here.
+        """
+        run_id = RunId(request.path_params["run_id"])
+        state = await session.state_store.load(run_id)
+        if state is None:
+            return _error("run not found", 404)
+        if str(state.workflow_id) not in graph_workflows:
+            return _error("run is not a graph WorkOrder", 409)
+        return JSONResponse(
+            {
+                "events": [
+                    {
+                        "sequence": event.sequence,
+                        "type": event.kind.value,
+                        "nodeId": str(event.node_id) if event.node_id else None,
+                        "payload": dict(event.payload),
+                    }
+                    for event in graph_events.since(run_id)
+                ]
+            }
+        )
+
     async def complete_human_review(request: Request) -> JSONResponse:
         run_id = RunId(request.path_params["run_id"])
         state = await session.state_store.load(run_id)
@@ -2471,6 +2498,7 @@ def create_app(
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
+        Route("/api/runs/{run_id}/graph-events", graph_run_events),
         Route(
             "/api/runs/{run_id}/human-review",
             complete_human_review,

@@ -8,6 +8,7 @@ export type Route =
   | { kind: "project"; projectId: string }
   | { kind: "milestone"; projectId: string; milestoneId: string }
   | { kind: "new-task"; projectId: string; milestoneId: string }
+  | { kind: "graph-conversation"; runId: string; nodeId: string }
   /** `plan` is the same chat page, opened on the planning agent and always on
    *  a new conversation. */
   | { kind: "chat"; threadId?: string; runId?: string; plan?: boolean };
@@ -37,13 +38,22 @@ export function routeForPath(pathname: string): Route {
       milestoneId: decodeURIComponent(milestoneDetails[2]),
     };
   const workflowConversation = path.match(
-    /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
+    /^\/runs\/([^/]+)\/conversations\/graph--([^/]+)$/,
   );
   if (workflowConversation)
     return {
-      kind: "chat",
+      kind: "graph-conversation",
       runId: decodeURIComponent(workflowConversation[1]),
-      threadId: decodeURIComponent(workflowConversation[2]),
+      nodeId: decodeURIComponent(workflowConversation[2]),
+    };
+  const stepConversation = path.match(
+    /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
+  );
+  if (stepConversation)
+    return {
+      kind: "chat",
+      runId: decodeURIComponent(stepConversation[1]),
+      threadId: decodeURIComponent(stepConversation[2]),
     };
   if (path.startsWith("/runs/"))
     return { kind: "run", runId: decodeURIComponent(path.slice("/runs/".length)) };

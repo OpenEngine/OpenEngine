@@ -412,7 +412,25 @@ describe("RunDetailPage", () => {
       currentStepId: null,
       steps: [],
     });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(graphRun)));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1")
+        return json({
+          runId: "run-1",
+          graphId: graphRun.workflowId,
+          status: "running",
+          activeExecutions: [],
+          nextNodes: [],
+          values: {},
+          pendingApprovals: [],
+          error: "",
+        });
+      if (path === `/graph/api/graphs/${graphRun.workflowId}`)
+        return json({ graphId: graphRun.workflowId, nodes: [] });
+      if (path === "/api/runs/run-1/graph-events") return json({ events: [] });
+      return json({ error: "not found" }, { status: 404 });
+    }));
 
     render(<RunDetailPage runId="run-1" />);
 
