@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -40,6 +41,7 @@ from engine.apps.web.github_auth import (
     DeviceFlowState,
     GitHubAuthError,
     GitHubCredentialStore,
+    credentials_from_device_flow,
     poll_device_flow,
     start_device_flow,
 )
@@ -2163,10 +2165,25 @@ def create_app(
         return github_client_id or _credential_store.get_client_id() or ""
 
     async def github_status(_request: Request) -> JSONResponse:
-        token = _credential_store.get()
+        credentials = _credential_store.get_credentials()
+        now = time.time()
+        connected = bool(
+            credentials
+            and (
+                credentials.expires_at is None
+                or credentials.expires_at > now
+                or (
+                    credentials.refresh_token is not None
+                    and (
+                        credentials.refresh_token_expires_at is None
+                        or credentials.refresh_token_expires_at > now
+                    )
+                )
+            )
+        )
         return JSONResponse(
             {
-                "connected": bool(token),
+                "connected": connected,
                 "clientIdConfigured": bool(_effective_client_id()),
             }
         )
@@ -2187,6 +2204,20 @@ def create_app(
                     "message": cli.message,
                 },
             }
+        )
+
+    async def source_control_provider_status(_request: Request) -> JSONResponse:
+        """Return the chosen provider without probing an unrelated CLI.
+
+        A saved OAuth choice is a local settings-file read.  Do not make the
+        Settings panel wait for ``gh auth status`` merely to render that choice.
+        First-run auto-selection still performs its one required CLI probe.
+        """
+        provider, auto_selected = source_control_settings.selected_or_detected_provider(
+            _source_control_preferences
+        )
+        return JSONResponse(
+            {"provider": provider, "autoSelected": auto_selected}
         )
 
     async def set_source_control_provider(request: Request) -> Response:
@@ -2276,7 +2307,7 @@ def create_app(
             return _error(str(error), 502)
         if isinstance(result, DeviceFlowComplete):
             try:
-                _credential_store.set(result.access_token)
+                _credential_store.set_credentials(credentials_from_device_flow(result))
             except GitHubAuthError as error:
                 _active_flow = None
                 return _error(str(error), 500)
@@ -2406,6 +2437,7 @@ def create_app(
         Route("/api/config", config),
         Route("/api/github/status", github_status),
         Route("/api/source-control/status", source_control_status),
+        Route("/api/source-control/provider", source_control_provider_status),
         Route(
             "/api/source-control/provider",
             set_source_control_provider,

@@ -19,6 +19,7 @@ The state store is SQLite rather than Postgres: conversations survive a process
 restart without requiring an external database service.
 """
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -42,7 +43,12 @@ from engine.adapters.workspace_provider.git_worktree import (
     DEFAULT_ROOT_DIRECTORY,
     GitWorktreeWorkspaceProvider,
 )
-from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.github_auth import (
+    GitHubAuthError,
+    GitHubCredentialStore,
+    GitHubRefreshTokenInvalidError,
+    refresh_access_token,
+)
 from engine.apps.web.slack_auth import SlackCommunications, SlackCredentialStore
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
@@ -143,6 +149,7 @@ def build_capabilities(
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     _store = credential_store
+    _refresh_lock: asyncio.Lock | None = None
 
     def _token() -> str:
         if _store is not None:
@@ -151,10 +158,52 @@ def build_capabilities(
                 return stored
         return settings.github_token
 
+    async def _refresh_after_unauthorized(failed_token: str) -> bool:
+        """Refresh once for a 401, safely sharing a rotated token pair.
+
+        Several source-control calls can fail together when a token expires.
+        Serialising refresh avoids racing GitHub's single-use refresh tokens;
+        a waiter retries with credentials written by the first caller.
+        """
+        nonlocal _refresh_lock
+        if _store is None:
+            return False
+        client_id = settings.github_client_id or _store.get_client_id()
+        if not client_id:
+            return False
+        if _refresh_lock is None:
+            _refresh_lock = asyncio.Lock()
+        async with _refresh_lock:
+            credentials = _store.get_credentials()
+            if credentials is None:
+                return False
+            if credentials.access_token != failed_token:
+                return True
+            if not credentials.refresh_token:
+                # Legacy bare tokens and manually saved PATs are not
+                # refreshable.  A 401 alone is not sufficient reason to erase
+                # a user credential that this process did not issue.
+                return False
+            try:
+                refreshed = await refresh_access_token(
+                    client_id, credentials.refresh_token
+                )
+                _store.set_credentials(refreshed)
+            except GitHubRefreshTokenInvalidError:
+                _store.delete()
+                return False
+            except GitHubAuthError:
+                # A network or GitHub-service failure is temporary; retain the
+                # token pair for the next request.
+                return False
+            return True
+
     oauth = GitHubSourceControl(
         _token,
         workspace_provider=workspace_provider,
-        transport=GitHubOAuthTransport(_token),
+        transport=GitHubOAuthTransport(
+            _token, on_token_unauthorized=_refresh_after_unauthorized
+        ),
     )
     if settings.source_control_preferences is None:
         source_control = oauth

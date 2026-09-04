@@ -2,11 +2,13 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
+    GitHubOAuthTransport,
     GitHubTransportError,
 )
 from engine.apps.web.source_control import (
@@ -96,6 +98,73 @@ def test_cli_transport_turns_missing_binary_into_actionable_error() -> None:
 
     with pytest.raises(GitHubTransportError, match="not installed"):
         asyncio.run(transport.request("GET", "/user"))
+
+
+def test_oauth_transport_refreshes_once_after_401_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        httpx.Response(401, json={"message": "Bad credentials"}),
+        httpx.Response(200, json={"login": "octocat"}),
+    ]
+    authorizations: list[str] = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            pass
+
+        async def request(self, _method: str, _url: str, **kwargs: object):
+            headers = kwargs["headers"]
+            assert isinstance(headers, dict)
+            authorizations.append(headers.get("Authorization", ""))
+            return responses.pop(0)
+
+    current_token = {"value": "old"}
+
+    async def refresh(failed_token: str) -> bool:
+        assert failed_token == "old"
+        current_token["value"] = "new"
+        return True
+
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient", Client
+    )
+    transport = GitHubOAuthTransport(
+        lambda: current_token["value"], on_token_unauthorized=refresh
+    )
+    assert asyncio.run(transport.request("GET", "/user")) == {"login": "octocat"}
+    assert authorizations == ["Bearer old", "Bearer new"]
+
+
+def test_oauth_transport_does_not_retry_a_second_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        httpx.Response(401, json={"message": "Bad credentials"}),
+        httpx.Response(401, json={"message": "Still bad"}),
+    ]
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            pass
+
+        async def request(self, *_: object, **__: object):
+            return responses.pop(0)
+
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient", Client
+    )
+    transport = GitHubOAuthTransport("old", on_token_unauthorized=refresh)
+    with pytest.raises(GitHubTransportError, match="Still bad"):
+        asyncio.run(transport.request("GET", "/user"))
+    refresh.assert_awaited_once_with("old")
 
 
 def test_router_identifies_the_provider_in_a_source_control_failure(

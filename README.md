@@ -198,9 +198,11 @@ no server configuration is required beyond the step below.
 5. Open that link, enter the code, click **Authorize**
 6. The panel switches to **Connected** automatically
 
-The token is stored in the OS keychain (macOS Keychain, Secret Service on
-Linux, Windows Credential Manager). Each colleague repeats steps 1–6 once with
-the same client ID.
+The OAuth token set is stored in the OS keychain (macOS Keychain, Secret
+Service on Linux, Windows Credential Manager). When GitHub issues expiring
+tokens, OpenEngine refreshes them automatically after an authorization failure
+and retries the interrupted GitHub request once. Each colleague repeats steps
+1–6 once with the same client ID.
 
 ### Environment variable fallback
 

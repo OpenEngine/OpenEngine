@@ -10,6 +10,7 @@ vi.mock("./api", () => ({
   disconnectGitHub: vi.fn(),
   getGitHubClientId: vi.fn(),
   getGitHubStatus: vi.fn(),
+  getSourceControlProvider: vi.fn(),
   getSourceControlStatus: vi.fn(),
   pollGitHubConnect: vi.fn(),
   setGitHubClientId: vi.fn(),
@@ -29,6 +30,10 @@ describe("SettingsPanel Slack connection", () => {
     });
     vi.mocked(api.getGitHubClientId).mockResolvedValue({ source: "none", hint: "" });
     vi.mocked(api.getGitHubStatus).mockResolvedValue({ connected: false, clientIdConfigured: false });
+    vi.mocked(api.getSourceControlProvider).mockResolvedValue({
+      provider: "gh-cli",
+      autoSelected: false,
+    });
     vi.mocked(api.getSourceControlStatus).mockResolvedValue({
       provider: "gh-cli",
       autoSelected: false,

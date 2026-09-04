@@ -9,6 +9,7 @@ import {
   disconnectGitHub,
   getGitHubClientId,
   getGitHubStatus,
+  getSourceControlProvider,
   getSourceControlStatus,
   pollGitHubConnect,
   setGitHubClientId,
@@ -59,7 +60,7 @@ type SourceControlState =
         authenticated: boolean;
         account: string;
         message: string;
-      };
+      } | null;
     };
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -127,13 +128,25 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         setConnection({ phase: "disconnected" });
       });
     loadClientId();
-    getSourceControlStatus().then((status) => {
+    getSourceControlProvider().then((status) => {
       setSourceControl({
         phase: "ready",
         provider: status.provider,
         autoSelected: status.autoSelected,
-        ghCli: status.ghCli,
+        ghCli: null,
       });
+      // OAuth is already selected: its UI does not need a GH CLI subprocess.
+      // Load that diagnostic only when it is the active provider.
+      if (status.provider === "gh-cli") {
+        void getSourceControlStatus().then((cliStatus) => {
+          setSourceControl({
+            phase: "ready",
+            provider: cliStatus.provider,
+            autoSelected: cliStatus.autoSelected,
+            ghCli: cliStatus.ghCli,
+          });
+        });
+      }
     });
     getSlackStatus()
       .then((status) => setSlack((value) => ({ ...value, ...status, loading: false })))
@@ -143,6 +156,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   const chooseProvider = useCallback(
     async (provider: "gh-cli" | "github-oauth") => {
+      if (provider === "github-oauth") {
+        await setSourceControlProvider(provider);
+        setSourceControl({
+          phase: "ready",
+          provider,
+          autoSelected: false,
+          ghCli: sourceControl.phase === "ready" ? sourceControl.ghCli : null,
+        });
+        return;
+      }
       await setSourceControlProvider(provider);
       const status = await getSourceControlStatus();
       setSourceControl({
@@ -152,7 +175,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         ghCli: status.ghCli,
       });
     },
-    [],
+    [sourceControl],
   );
 
   const handleSaveClientId = useCallback(async () => {
@@ -341,7 +364,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 }
                 disabled={
                   sourceControl.phase !== "ready" ||
-                  !sourceControl.ghCli.installed
+                  (sourceControl.ghCli !== null && !sourceControl.ghCli.installed)
                 }
                 name="source-control-provider"
                 onChange={() => void chooseProvider("gh-cli")}
@@ -371,12 +394,22 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           {sourceControl.phase === "loading" && (
             <p className="settings-status settings-status-muted">
               <span aria-hidden="true" className="settings-spinner" />
-              Checking whether GH CLI is installed and authenticated…
+              Choosing a source control provider…
             </p>
           )}
 
           {sourceControl.phase === "ready" &&
-            sourceControl.provider === "gh-cli" && (
+            sourceControl.provider === "gh-cli" &&
+            sourceControl.ghCli === null && (
+              <p className="settings-status settings-status-muted">
+                <span aria-hidden="true" className="settings-spinner" />
+                Checking whether GH CLI is installed and authenticated…
+              </p>
+            )}
+
+          {sourceControl.phase === "ready" &&
+            sourceControl.provider === "gh-cli" &&
+            sourceControl.ghCli !== null && (
               <p
                 className={
                   sourceControl.ghCli.authenticated
@@ -398,6 +431,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           )}
 
           {sourceControl.phase === "ready" &&
+            sourceControl.ghCli !== null &&
             !sourceControl.ghCli.installed && (
               <p className="settings-status settings-status-muted">
                 Install it with <code>brew install gh</code>, then run{" "}
