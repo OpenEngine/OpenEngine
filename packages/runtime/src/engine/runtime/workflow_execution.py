@@ -318,10 +318,8 @@ class WorkflowExecutor:
             ),
             None,
         )
-        message = (
-            f"Work order step complete and ready for human review: "
-            f"{command.title}\n{command.summary}"
-        )
+        outcome = state.step_results[-1].outcome if state.step_results else "unknown"
+        message = f"Ready for human review: {command.title}\nOutcome: {outcome}"
         if pull_request_url:
             message += f"\n<{pull_request_url}|Open pull request>"
         message += (
