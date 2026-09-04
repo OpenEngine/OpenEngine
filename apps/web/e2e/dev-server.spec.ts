@@ -15,8 +15,12 @@
  *
  *  Deliberately not tagged `@beta`. The `@beta` job is allowed to be red and is
  *  left out of `npm run test:e2e`; this is a bug in the dev server rather than
- *  a gap in the graph interface, and it has to be a test that goes red for
- *  everyone when the next prefix is added on one side only. */
+ *  a gap in the graph interface, and it has to go red for everyone.
+ *
+ *  This proves the proxy carries a page that reads both servers. It does not
+ *  notice a *third* prefix added to the application and not to the proxy --
+ *  nothing in a browser can, because the list of what the application serves
+ *  is Python. `tests/test_web_app.py` compares the two lists directly. */
 
 import { expect, shot, test, type Script } from "./harness";
 
@@ -60,8 +64,8 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
     "Review",
     "Human review",
   ]);
-  // Afterwards, because the page polls: a prefix forwarded to the wrong place
-  // would draw the run once and then report the parse error over the top of it.
+  // Named because it is the report this exists for, and because the page polls:
+  // a proxy that answers once and then stops replaces the run with it.
   await expect(page.getByText("Could not load WorkOrder")).toHaveCount(0);
   await shot(page, testInfo, "1 the WorkOrder, served by the dev server");
 });

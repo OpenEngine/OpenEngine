@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_API_URL, apiProxy, apiProxyTarget } from "./api-proxy";
+import { DEFAULT_API_URL, PROXIED_PREFIXES, apiProxy, apiProxyTarget } from "./api-proxy";
 
 describe("apiProxyTarget", () => {
   it("follows the API the development server actually started", () => {
@@ -22,14 +22,12 @@ describe("apiProxyTarget", () => {
 });
 
 describe("apiProxy", () => {
-  it("forwards every prefix the API serves, not only its own", () => {
-    // `/graph` is the graph engine's control surface, which the `[BETA]`
-    // WorkOrder page reads. Left out, Vite answers it with `index.html` and a
-    // 200, and the page reports a JSON parse error instead of showing the run.
-    expect(Object.keys(apiProxy({ ENGINE_API_URL: "http://localhost:8123" }))).toEqual([
-      "/api",
-      "/graph",
-    ]);
+  it("gives every prefix in the list an entry, so listing one is enough", () => {
+    // Derived from the constant rather than repeating it: whether the list
+    // itself covers what the application serves is not knowable from here,
+    // because the routes are Python. `tests/test_web_app.py` compares those two
+    // and is what goes red when a prefix is added on one side only.
+    expect(Object.keys(apiProxy())).toEqual([...PROXIED_PREFIXES]);
   });
 
   it("sends every prefix to the API the development server started", () => {

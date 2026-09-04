@@ -18,7 +18,12 @@ export const DEFAULT_API_URL = "http://localhost:8000";
  *
  *  `/graph` is the `[BETA]` half: the graph engine's own control surface, which
  *  the API mounts beside its own `/api` because both servers call their runs
- *  `/api/runs`. Two prefixes on the server, so two here. */
+ *  `/api/runs`. Two prefixes on the server, so two here.
+ *
+ *  That this list still matches the server's is not something the client can
+ *  check -- the routes are Python. `tests/test_web_app.py` reads this array and
+ *  compares it against the application's own, and is what goes red when a
+ *  prefix is added there and not here. */
 export const PROXIED_PREFIXES = ["/api", "/graph"] as const;
 
 export function apiProxyTarget(
