@@ -1147,6 +1147,72 @@ def test_cancelling_a_run_stops_it_and_says_it_is_over(build: Backend) -> None:
     assert state["activeExecutions"] == []
 
 
+def test_cancelling_a_run_parked_on_a_question_settles_it_undecided(
+    build: Backend,
+) -> None:
+    """The state a WorkOrder mostly sits in, so it is the one worth stopping.
+
+    A run waiting on permission has no task making progress, and stopping the
+    executor is not enough on its own: the questions it raised outlive it in
+    whatever the runtime writes them down in. Left pending they would report a
+    run that is over as still waiting on a person, and answering one would go
+    to an execution that no longer exists.
+
+    Three tasks of one node, each mid-question, because a superstep is plural
+    and a cancel has to take all of them. Settled rather than deleted and
+    without an `approval.resolved` for any of them: nobody decided these, so a
+    client still showing one is told it is no longer pending rather than that
+    it was answered or never existed.
+    """
+    runtime = build(
+        _repeated(Ask("delete the branch", command="git branch -D main"), Say("Done."))
+    )
+
+    async def scenario() -> dict[str, object]:
+        async with _server(runtime) as surface:
+            run = await _start(surface, REPEATED)
+            run_id = str(run["runId"])
+            async with surface.subscribe(run_id) as feed:
+                await feed.until("approval.requested", 3)
+                waiting = await surface.client.get(f"/api/runs/{run_id}")
+                requests = waiting.json()["pendingApprovals"]
+                cancelled = await runtime.cancel(RunId(run_id))
+                events = await feed.until("run.failed")
+            return {
+                "waiting": waiting.json(),
+                "requests": requests,
+                "cancelled": cancelled,
+                "state": (await surface.client.get(f"/api/runs/{run_id}")).json(),
+                # Aimed at a question that was open when the run was stopped.
+                "decided": await surface.client.post(
+                    f"/api/runs/{run_id}/approvals/{requests[0]['approvalId']}",
+                    json={"decision": "accept"},
+                ),
+                "events": events,
+                "running": [str(one) for one in runtime.running()],
+            }
+
+    outcome = asyncio.run(scenario())
+
+    # The run really was parked on the questions, rather than racing past them.
+    assert outcome["waiting"]["status"] == "awaiting_approval"
+    assert len(outcome["requests"]) == 3
+    assert outcome["cancelled"].status is RunStatus.FAILED
+    assert outcome["cancelled"].error == CANCELLED
+    assert outcome["cancelled"].pending_approvals == ()
+    assert outcome["running"] == []
+    state = outcome["state"]
+    assert state["status"] == "failed"
+    assert state["error"] == CANCELLED
+    assert state["pendingApprovals"] == []
+    assert state["activeExecutions"] == []
+    # Nobody answered them, and nobody can now: 409 rather than the 404 a
+    # forgotten request would give.
+    assert outcome["decided"].status_code == 409
+    assert _of_kind(outcome["events"], "approval.resolved") == []
+    assert len(_of_kind(outcome["events"], "run.failed")) == 1
+
+
 def test_cancelling_a_finished_run_leaves_what_it_said_about_itself(
     build: Backend,
 ) -> None:
