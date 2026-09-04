@@ -94,6 +94,7 @@ from engine.runtime import (
     WorkflowCatalog,
 )
 from engine.graph_runtime import (
+    CANCELLED,
     CheckpointId,
     GraphCompilationError,
     GraphId,
@@ -103,6 +104,7 @@ from engine.graph_runtime import (
 )
 from engine.runtime.terminal_mcp import _mcp_response
 from graph_runtime_fakes import (
+    AwaitSteering,
     Fail,
     Say,
     ScriptedGraph,
@@ -4867,6 +4869,99 @@ def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
 
     assert started == "running_agent"
     assert ended == "succeeded"
+
+
+def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
+    """The rail's x on a `[BETA]` row has to reach the other engine.
+
+    None of what stops a step WorkOrder touches a graph one: its driver is a
+    task inside the graph engine rather than in this app's `workflow_tasks`,
+    and the agent it has open is not an agent run this app started. So a delete
+    that only forgot the row would take the WorkOrder off the rail and leave
+    the run working -- agents still going in the repository, and nothing left
+    on screen to stop them by.
+
+    Scripted on a node that waits, so there is something still in flight at the
+    moment the row is deleted; a graph that had already finished would pass
+    this whatever the handler did.
+    """
+    store = InMemoryStateStore()
+    waiting = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
+    )
+    app, runtime = _graph_app(store, waiting)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                # The node is scripted to wait, so this is a run with something
+                # genuinely in flight rather than one that raced to its end.
+                while not runtime.running():
+                    await asyncio.sleep(0)
+                deleted = await client.delete(f"/api/runs/{run_id}")
+                listed = await client.get("/api/runs")
+                # Read here rather than after the loop is closed, which would
+                # cancel the driver itself and pass whether or not the delete
+                # had.
+                driving = [str(one) for one in runtime.running()]
+                return deleted, listed, run_id, driving, await runtime.snapshot(run_id)
+
+    deleted, listed, run_id, driving, snapshot = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert listed.json()["runs"] == []
+    assert asyncio.run(store.load(run_id)) is None
+    # Nothing left driving it, and the engine says the run is over rather than
+    # reporting one that is working with no row and nobody watching.
+    assert driving == []
+    assert snapshot is not None
+    assert snapshot.status is RunStatus.FAILED
+    assert snapshot.error == CANCELLED
+
+
+def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> None:
+    """A row whose graph state is gone is still the reader's to throw away.
+
+    The case `restore_graph_runs` fails a run for: the engine has no record of
+    it, so there is nothing to cancel. Refusing the delete would leave a
+    WorkOrder that cannot be removed and that nothing is working on.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _graph_app(store, _review_graph())
+    stranded = RunState(
+        run_id=RunId("run-stranded"),
+        task_id=TaskId("task-stranded"),
+        workflow_id=WorkflowId("implementation-review-codex"),
+        phase=RunPhase.RUNNING_AGENT,
+        prompt="Add cancellation handling.",
+        repository="acme/api",
+    )
+
+    async def scenario():
+        await store.save(stranded)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                deleted = await client.delete(f"/api/runs/{stranded.run_id}")
+                return deleted, [str(one) for one in runtime.running()]
+
+    deleted, driving = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert asyncio.run(store.load(stranded.run_id)) is None
+    assert driving == []
 
 
 def test_the_graph_engine_answers_under_its_own_prefix() -> None:

@@ -54,6 +54,7 @@ from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.control import (
+    CANCELLED,
     ApprovalNotPendingError,
     PendingApproval,
     RunNotSteerableError,
@@ -286,6 +287,24 @@ class LangGraphRuntime:
         if decision is ApprovalDecision.CANCEL:
             await self._refuse(record)
         return await self._snapshot(run_id)
+
+    async def cancel(self, run_id: RunId) -> RunSnapshot:
+        record = await self._require(run_id)
+        live = self._live.setdefault(run_id, _Live(run_id, record.graph_id))
+        # The same lock a fork holds, for the same reason: stopping is
+        # asynchronous, and a resume arriving inside it would start a driver for
+        # a run that is being ended.
+        async with live.control:
+            # Read before anything is stopped, because stopping changes the
+            # answer: releasing the executions settles the approvals a waiting
+            # run is waiting on, and a run read afterwards would look like one
+            # that was simply working.
+            ending = (await self._snapshot(run_id)).status
+            await self._stop(live)
+            await self._store.abandon_run_approvals(run_id)
+            if ending not in (RunStatus.COMPLETED, RunStatus.FAILED):
+                await self._fail(live, CANCELLED, None)
+            return await self._snapshot(run_id)
 
     async def aclose(self) -> None:
         for live in tuple(self._live.values()):
