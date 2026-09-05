@@ -452,6 +452,30 @@ describe("Sidebar", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
+  /** The project row's ×, on a WorkOrder. What it hands back is the whole run,
+   *  because throwing one away is the owner's call to make, not the rail's. */
+  it("deletes a WorkOrder from the rail", async () => {
+    const user = userEvent.setup();
+    const remove = vi.fn();
+    render(
+      <Sidebar runs={[run]} initialSection="workflows" onDeleteRun={remove} />,
+    );
+
+    await user.click(
+      within(body("WorkOrders")).getByRole("button", { name: "Delete First run" }),
+    );
+
+    expect(remove).toHaveBeenCalledWith(run);
+  });
+
+  it("omits the delete control when no handler is given", () => {
+    render(<Sidebar runs={[run]} initialSection="workflows" />);
+
+    expect(
+      within(body("WorkOrders")).queryByRole("button", { name: "Delete First run" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("marks a workflow conversation that is waiting for input", () => {
     const waiting = {
       ...run,

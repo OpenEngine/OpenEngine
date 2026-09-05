@@ -18,7 +18,7 @@ import { MilestoneDetailsPage } from "./milestone-details";
 import { MilestoneTimeline } from "./milestone-timeline";
 import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
-import { NewTaskPage, NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
+import { GraphConversationPage, NewTaskPage, NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar, type RailSection } from "./sidebar";
 import "./styles.css";
@@ -289,6 +289,7 @@ function currentRoute(): Route {
  *  showing where you are. A workflow's own conversation belongs to its run;
  *  other conversations open alongside projects. */
 function sectionFor(route: Route): RailSection {
+  if (route.kind === "graph-conversation") return "workflows";
   if (route.kind === "chat")
     return route.runId ? "workflows" : "projects";
   return route.kind === "project" || route.kind === "milestone" ? "projects" : "workflows";
@@ -353,7 +354,7 @@ function App() {
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
-  const { runs, error: runsError, loaded: runsLoaded } = useRuns();
+  const { runs, error: runsError, loaded: runsLoaded, remove: deleteRun } = useRuns();
   const { projects, archive: archiveProject } = useProjects();
 
   // Settled for this mount: the route is read once, and every move between
@@ -377,7 +378,7 @@ function App() {
     return <main className="state">Starting openengine…</main>;
 
   const chat = route.kind === "chat";
-  const activeRunId = route.kind === "run" || route.kind === "chat" ? route.runId : undefined;
+  const activeRunId = route.kind === "run" || route.kind === "chat" || route.kind === "graph-conversation" ? route.runId : undefined;
   // The conversation on screen, and the only thing that says whether it is a
   // project's: a plan's URL is an ordinary chat's, so the projects list is what
   // tells them apart. It arrives after the first paint, and the rail follows.
@@ -399,6 +400,7 @@ function App() {
       activeMilestonesPage={route.kind === "project"}
       activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
       onArchiveProject={archiveProject}
+      onDeleteRun={deleteRun}
     />
   );
   return (
@@ -435,6 +437,8 @@ function App() {
           />
         ) : route.kind === "run" ? (
           <RunDetailPage runId={route.runId} />
+        ) : route.kind === "graph-conversation" ? (
+          <GraphConversationPage runId={route.runId} nodeId={route.nodeId} />
         ) : route.kind === "project" ? (
           <ProjectMilestonesPage projectId={route.projectId} />
         ) : route.kind === "milestone" ? (

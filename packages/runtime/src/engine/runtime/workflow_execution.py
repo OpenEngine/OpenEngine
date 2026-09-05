@@ -12,6 +12,7 @@ from engine.core.workflow_interpreter import (
     current_agent_command,
 )
 from engine.domain import (
+    AgentProfile,
     AgentRunId,
     AgentStep,
     AgentStepPaused,
@@ -37,10 +38,20 @@ from engine.domain import (
     WorkspaceAccess,
     WorkspaceProvisioned,
 )
-from engine.ports import AgentRunner, ApprovalHandler, InteractiveMcpAgentRunner
+from engine.ports import (
+    AgentRunner,
+    AgentTurn,
+    ApprovalHandler,
+    InteractiveMcpAgentRunner,
+    McpAgentRunner,
+    Message as CommunicationMessage,
+    MessageLink,
+)
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
+from engine.runtime.profiles import with_granted_tools
 from engine.runtime.step_results import requests_clarification_or_escalation
+from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
 from engine.runtime.workflows import WorkflowCatalog
 
 
@@ -68,6 +79,8 @@ class WorkflowExecutor:
         approval_handler: Callable[[StartAgentRun, str], ApprovalHandler] | None = None,
         catalog: WorkflowCatalog | None = None,
         default_branch: str = "main",
+        communications_channel: str = "",
+        public_url: str = "",
     ) -> None:
         self._capabilities = capabilities
         self._dispatcher = Dispatcher(capabilities)
@@ -80,6 +93,8 @@ class WorkflowExecutor:
             else WorkflowCatalog.from_definitions(())
         )
         self._default_branch = default_branch
+        self._communications_channel = communications_channel
+        self._public_url = public_url.rstrip("/")
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
             raise WorkflowExecutionError(
@@ -303,6 +318,8 @@ class WorkflowExecutor:
         step = definition.step(command.step_id)
         if not isinstance(step, HumanReviewStep) or step.notification is None:
             return
+        if not self._communications_channel or not self._public_url:
+            return
         pull_request_url = next(
             (
                 output.value
@@ -312,19 +329,21 @@ class WorkflowExecutor:
             ),
             None,
         )
-        message = (
-            f"Work order step complete and ready for human review: "
-            f"{command.title}\n{command.summary}"
-        )
+        outcome = state.step_results[-1].outcome if state.step_results else "unknown"
+        message_text = f"Ready for human review: {command.title}\nOutcome: {outcome}"
+        links = []
         if pull_request_url:
-            message += f"\n<{pull_request_url}|Open pull request>"
-        message += (
-            f"\n<{step.notification.public_url}/runs/{command.run_id}"
-            "|Open human review task>"
+            links.append(MessageLink("Open pull request", pull_request_url))
+        links.append(
+            MessageLink(
+                "Open human review task",
+                f"{self._public_url}/runs/{command.run_id}",
+            )
         )
+        message = CommunicationMessage(message_text, tuple(links))
         try:
             await self._capabilities.communications.post(
-                step.notification.channel,
+                self._communications_channel,
                 message,
                 command.run_id,
             )
@@ -358,18 +377,31 @@ class WorkflowExecutor:
         if definition.naming_profile is None or not definition.naming_prompt:
             return state
         try:
-            turn = await self._runners[runner_name].run_turn(
-                AgentRunId(f"{state.run_id}:name:run"),
-                definition.naming_profile,
-                (Message.user(state.prompt), Message.user(definition.naming_prompt)),
-                workspace_id=state.workspace_id,
+            turn = await self._naming_turn(
+                state, definition.naming_profile, definition.naming_prompt, runner_name
             )
         except asyncio.CancelledError:
             raise
         except Exception:
+            # An unnamed run is the right fallback -- naming is not the work --
+            # but it is not a silent one. The naming turn is neither an agent
+            # run nor a conversation, so nothing else records it: without this
+            # line an unauthenticated `gh`, an issue that does not exist and a
+            # provider that could not attach the server are indistinguishable
+            # from a run whose prompt simply made a good enough name.
+            logger.exception("could not name run %s", state.run_id)
             return state
         name = _clean_workflow_name(turn.message.content)
         if not name:
+            # The other way to end up unnamed, and now the likelier one: a turn
+            # that used tools can answer with something `_clean_workflow_name`
+            # keeps nothing of. Logged with what was said, because unlike the
+            # raising path there is no exception to describe it.
+            logger.warning(
+                "run %s was not named; the naming turn answered %r",
+                state.run_id,
+                turn.message.content,
+            )
             return state
         named, commands = await self._transition(
             state, RunNamed(run_id=state.run_id, name=name), definition
@@ -377,6 +409,56 @@ class WorkflowExecutor:
         if commands:
             raise WorkflowExecutionError("naming a workflow emitted commands")
         return named
+
+    async def _naming_turn(
+        self,
+        state: RunState,
+        profile: AgentProfile,
+        prompt: str,
+        runner_name: str,
+    ) -> AgentTurn:
+        """Name a run, with the repository tools its naming profile is granted.
+
+        Naming happens once the workspace exists, so a granted profile can read
+        what the request points at rather than paraphrase the request: "Resolve
+        issue 270" is worth a name only after somebody has read issue 270.
+
+        The server bound here serves those tools and nothing else -- this turn
+        is not a step, so there is no step for `complete_step` to complete. A
+        profile that is granted nothing servable runs as it always has, with no
+        server at all.
+        """
+
+        runner = self._runners[runner_name]
+        agent_run_id = AgentRunId(f"{state.run_id}:name:run")
+        messages = (Message.user(state.prompt), Message.user(prompt))
+        served = (
+            self._dispatcher.repository_tools(profile)
+            if isinstance(runner, McpAgentRunner)
+            else ()
+        )
+        if not served:
+            return await runner.run_turn(
+                agent_run_id, profile, messages, workspace_id=state.workspace_id
+            )
+        async with TerminalMcpBroker(
+            run_id=state.run_id,
+            agent_run_id=agent_run_id,
+            step=None,
+            # Its own registry: the guard is against a second terminal result
+            # for one agent run, and this session serves no way to submit one.
+            registry=TerminalResultRegistry(),
+        ) as broker:
+            broker.enable_repository_tools(
+                self._capabilities.source_control, served, state.workspace_id
+            )
+            return await runner.run_turn_with_mcp(
+                agent_run_id,
+                with_granted_tools(profile, served),
+                messages,
+                broker.config,
+                workspace_id=state.workspace_id,
+            )
 
     async def _run_step(
         self,
@@ -529,7 +611,10 @@ def resolve_default_branch(
 
 def _clean_workflow_name(value: str) -> str:
     first_line = value.strip().splitlines()[0] if value.strip() else ""
-    return first_line.strip(" \t\"'`).:;!?")[:80]
+    # Long enough for a name that leads with an issue number and then says what
+    # the issue is; the guard is against an agent answering with a paragraph,
+    # not against a name a person would recognise.
+    return first_line.strip(" \t\"'`).:;!?")[:120]
 
 
 __all__ = ["WorkflowExecutionError", "WorkflowExecutor", "resolve_default_branch"]

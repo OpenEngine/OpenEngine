@@ -11,6 +11,7 @@ that cannot resume, one that asks permission, one that dies mid-request.
 
 import asyncio
 import json
+import logging
 import sys
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import aclosing, asynccontextmanager
@@ -282,6 +283,69 @@ async def test_a_refused_prompt_names_the_session_that_was_refused() -> None:
 
 
 @asyncio_test
+async def test_a_refusal_keeps_the_parts_of_it_that_explain_it() -> None:
+    """`message` is the one field a refusal is allowed to be useless in.
+
+    `-32603 "Internal error"` is what an adapter answers when something under it
+    failed, and the sentence naming the cause is in `data` -- so an error built
+    from `message` alone renders every such failure identically.
+    """
+    async with connected("--refuse-prompt") as client:
+        session = await client.new_session()
+
+        with pytest.raises(ACPSessionError) as caught:
+            async for _ in session.prompt("hello"):
+                pass
+
+    rendered = str(caught.value)
+    assert "code -32000" in rendered
+    assert "quota exhausted" in rendered
+
+
+@asyncio_test
+async def test_a_refusal_carrying_a_response_body_is_capped() -> None:
+    """This text is stored on a run record and shown; a body is not a cause."""
+    async with connected("--refuse-prompt") as client:
+        session = await client.new_session()
+
+        with pytest.raises(ACPSessionError) as caught:
+            async for _ in session.prompt("hello"):
+                pass
+
+    assert "xxxx" in str(caught.value)
+    assert "more characters)" in str(caught.value)
+    assert len(str(caught.value)) < 4000
+
+
+@asyncio_test
+async def test_a_refusal_logs_the_agent_s_output_rather_than_carrying_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Where the process's own account of a refusal goes, and why not here.
+
+    A caller stores this message as the reason its run failed and shows it to
+    whoever opened the work. The stderr tail is not written for that reader: it
+    is whatever the process happened to say lately, and one connection carries
+    several sessions, so it may not even be about this conversation. So it goes
+    to the log an operator reads, and the message says that it did.
+    """
+    with caplog.at_level(logging.ERROR, logger="langgraph_acp._stdio"):
+        async with connected("--refuse-prompt") as client:
+            session = await client.new_session()
+
+            with pytest.raises(ACPSessionError) as caught:
+                async for _ in session.prompt("hello"):
+                    pass
+
+    assert "upstream said 429" not in str(caught.value)
+    assert "recent output is in the log" in str(caught.value)
+    assert "upstream said 429" in caplog.text
+    # Placed, so the line is legible in a log with several agents in it.
+    assert "'fake'" in caplog.text
+    assert "sess_fake_1" in caplog.text
+
+
+@asyncio_test
 async def test_a_permission_request_is_streamed_and_answered() -> None:
     """Answered rather than ignored: an unanswered request hangs the turn."""
     async with connected("--permission") as client:
@@ -373,6 +437,24 @@ async def test_an_agent_that_dies_says_how_it_died() -> None:
     assert caught.value.agent == "fake"
     assert caught.value.operation == "session/new"
     assert "status 3" in str(caught.value)
+
+
+@asyncio_test
+async def test_a_dying_agent_s_last_words_survive_the_trim() -> None:
+    """The output that explains a death is the output nearest to it.
+
+    A cap that kept the beginning would keep what the process wrote before
+    anything was wrong and drop the line it died on, which is the one line the
+    error exists to carry.
+    """
+    async with connected("--die-on-new-session", "--noisy") as client:
+        with pytest.raises(ACPConnectionError) as caught:
+            await client.new_session()
+
+    rendered = str(caught.value)
+    assert "everything is on fire" in rendered
+    assert "earlier characters)" in rendered
+    assert "codex-acp: 0 noise" not in rendered
 
 
 @asyncio_test

@@ -3,9 +3,11 @@
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -17,6 +19,7 @@ from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
     CodexAgentRunner,
 )
+from engine.adapters.communications.slack import SlackCommunications
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.__main__ import build_app
@@ -24,6 +27,7 @@ from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
+    build_communications,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -72,6 +76,8 @@ from engine.ports import (
     ApprovalRequest,
     InteractiveAgentRunner,
     McpServerConfig,
+    Message as CommunicationMessage,
+    MessageLink,
     UserInputAnswer,
     UserInputOption,
     UserInputQuestion,
@@ -89,11 +95,13 @@ from engine.runtime import (
     ApprovalConfig,
     Capabilities,
     ClaudeConfig,
+    CommunicationsConfig,
     EngineConfig,
     ResponseStyle,
     WorkflowCatalog,
 )
 from engine.graph_runtime import (
+    CANCELLED,
     CheckpointId,
     GraphCompilationError,
     GraphId,
@@ -103,6 +111,7 @@ from engine.graph_runtime import (
 )
 from engine.runtime.terminal_mcp import _mcp_response
 from graph_runtime_fakes import (
+    AwaitSteering,
     Fail,
     Say,
     ScriptedGraph,
@@ -133,6 +142,21 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_web_selects_the_configured_communications_provider() -> None:
+    slack = build_communications(Settings())
+
+    assert isinstance(slack, SlackCommunications)
+
+    with pytest.raises(RuntimeError, match="provider 'buzz' is not available yet"):
+        build_communications(
+            Settings(
+                engine_config=EngineConfig(
+                    communications=CommunicationsConfig(provider="buzz")
+                )
+            )
+        )
 
 
 def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeypatch) -> None:
@@ -1183,6 +1207,8 @@ def _workflow_app(
     workflow_catalog: WorkflowCatalog | None = None,
     workspace_repository: str | None = None,
     graph_runtime=None,
+    communications_channel: str = "",
+    public_url: str = "",
 ):
     """Wire the app the way the composition root does.
 
@@ -1214,6 +1240,8 @@ def _workflow_app(
         review_runners=chat_runners,
         workflow_catalog=workflow_catalog,
         graph_runtime=graph_runtime,
+        communications_channel=communications_channel,
+        public_url=public_url,
     )
 
 
@@ -1349,6 +1377,53 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
+def test_deleting_a_run_forgets_it_along_with_its_history() -> None:
+    """The rail's × on a WorkOrder is not the project row's archive.
+
+    Nothing lists or restores what it removes, so the row and the events behind
+    it go together: a run kept without its history would still answer its own
+    page, with a WorkOrder that cannot say how it got anywhere.
+    """
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.SUCCEEDED, HUMAN_REVIEW_STEP)
+    asyncio.run(store.save(state))
+    asyncio.run(
+        store.append_events(
+            state.run_id,
+            (
+                RunRequested(
+                    run_id=state.run_id,
+                    task_id=state.task_id,
+                    prompt=state.prompt,
+                    repository=state.repository,
+                    workflow_id=state.workflow_id,
+                ),
+            ),
+        )
+    )
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            deleted = await client.delete(f"/api/runs/{state.run_id}")
+            listed = await client.get("/api/runs")
+            detail = await client.get(f"/api/runs/{state.run_id}")
+            again = await client.delete(f"/api/runs/{state.run_id}")
+            return deleted, listed, detail, again
+
+    deleted, listed, detail, again = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert listed.json()["runs"] == []
+    assert detail.status_code == 404
+    # A second × on a row the poll has not cleared yet says the same thing the
+    # page does, rather than pretending to delete it twice.
+    assert again.status_code == 404
+    assert asyncio.run(store.load(state.run_id)) is None
+    assert asyncio.run(store.history(state.run_id)) == ()
+
+
 def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
     """Every screen polls `/api/runs` once a second to keep its rail current.
 
@@ -1416,6 +1491,8 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
         implementer,
         communications=communications,
         reviewers={"test": reviewer},
+        communications_channel="OpenEngine",
+        public_url="https://sheas-mac-mini.taileb7fdb.ts.net",
     )
 
     async def scenario():
@@ -1498,16 +1575,20 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     communications.post.assert_awaited_once()
     channel, notification, notified_run_id = communications.post.await_args.args
     assert channel == "OpenEngine"
-    assert notification.startswith(
-        "Work order step complete and ready for human review: Review implementation"
+    assert isinstance(notification, CommunicationMessage)
+    assert notification.text.startswith(
+        "Ready for human review: Review implementation for task-"
     )
-    assert "The handling is correct." in notification
-    assert "worker.py cancels the task" in notification
-    assert "<https://github.com/acme/api/pull/42|Open pull request>" in notification
-    assert (
-        f"<https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}"
-        "|Open human review task>"
-    ) in notification
+    assert "\nOutcome: success" in notification.text
+    assert "The handling is correct." not in notification.text
+    assert "worker.py cancels the task" not in notification.text
+    assert notification.links == (
+        MessageLink("Open pull request", "https://github.com/acme/api/pull/42"),
+        MessageLink(
+            "Open human review task",
+            f"https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}",
+        ),
+    )
     assert notified_run_id == RunId(body["runId"])
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]
@@ -3144,6 +3225,55 @@ def test_run_api_presents_human_rejection_as_the_final_decision() -> None:
     assert body["humanDecision"]["outcome"] == "rejected"
     assert body["humanDecision"]["summary"] == rejection.summary
     assert body["steps"][1]["outcome"] == "changes_requested"
+
+
+#: The dev server's proxy table. TypeScript because Vite is what reads it, so
+#: this is the one list about this application that cannot be imported.
+PROXY_SOURCE = Path(__file__).resolve().parent.parent / "apps/web/src/api-proxy.ts"
+
+
+def _proxied_prefixes() -> set[str]:
+    """`PROXIED_PREFIXES`, read out of the source rather than restated here.
+
+    Read the way `layout.py` reads `capabilities.py`: a second copy of a list
+    that must not drift is the thing that drifts.
+    """
+    source = PROXY_SOURCE.read_text()
+    listing = re.search(r"PROXIED_PREFIXES\s*=\s*\[(.*?)\]", source, re.DOTALL)
+    assert listing is not None, f"no PROXIED_PREFIXES in {PROXY_SOURCE}"
+    return set(re.findall(r'"([^"]+)"', listing.group(1)))
+
+
+def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards() -> None:
+    """The failure this is here for is silent, and only in development.
+
+    `apps/web/vite.config.ts` forwards the prefixes it was told about and
+    answers everything else with `index.html` and a 200, so a prefix this
+    application serves and the proxy has not heard of does not arrive as a 404
+    -- the client gets a page where it asked for JSON, and reports a parse
+    error. Every other test in this file talks to the application directly and
+    cannot see it. That is how `/graph` was served, read by the client, and
+    unproxied for two releases.
+
+    Composed without a static directory, so what is left is the surface that is
+    not the client's own: the SPA's pages are Vite's to answer and must not be
+    forwarded.
+    """
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()})
+
+    served = {
+        "/" + route.path.lstrip("/").split("/")[0]
+        for route in app.routes
+        # The placeholder page for a checkout with no build, which is the
+        # client's address rather than this application's.
+        if route.path != "/"
+    }
+
+    # Containment rather than equality in both directions: adding a prefix to
+    # both sides is the correct change and must stay green, and a test that
+    # went red for it would be edited into agreement without being read.
+    assert {"/api", "/graph"} <= served
+    assert served <= _proxied_prefixes()
 
 
 def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
@@ -4813,6 +4943,99 @@ def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
 
     assert started == "running_agent"
     assert ended == "succeeded"
+
+
+def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
+    """The rail's x on a `[BETA]` row has to reach the other engine.
+
+    None of what stops a step WorkOrder touches a graph one: its driver is a
+    task inside the graph engine rather than in this app's `workflow_tasks`,
+    and the agent it has open is not an agent run this app started. So a delete
+    that only forgot the row would take the WorkOrder off the rail and leave
+    the run working -- agents still going in the repository, and nothing left
+    on screen to stop them by.
+
+    Scripted on a node that waits, so there is something still in flight at the
+    moment the row is deleted; a graph that had already finished would pass
+    this whatever the handler did.
+    """
+    store = InMemoryStateStore()
+    waiting = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
+    )
+    app, runtime = _graph_app(store, waiting)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                # The node is scripted to wait, so this is a run with something
+                # genuinely in flight rather than one that raced to its end.
+                while not runtime.running():
+                    await asyncio.sleep(0)
+                deleted = await client.delete(f"/api/runs/{run_id}")
+                listed = await client.get("/api/runs")
+                # Read here rather than after the loop is closed, which would
+                # cancel the driver itself and pass whether or not the delete
+                # had.
+                driving = [str(one) for one in runtime.running()]
+                return deleted, listed, run_id, driving, await runtime.snapshot(run_id)
+
+    deleted, listed, run_id, driving, snapshot = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert listed.json()["runs"] == []
+    assert asyncio.run(store.load(run_id)) is None
+    # Nothing left driving it, and the engine says the run is over rather than
+    # reporting one that is working with no row and nobody watching.
+    assert driving == []
+    assert snapshot is not None
+    assert snapshot.status is RunStatus.FAILED
+    assert snapshot.error == CANCELLED
+
+
+def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> None:
+    """A row whose graph state is gone is still the reader's to throw away.
+
+    The case `restore_graph_runs` fails a run for: the engine has no record of
+    it, so there is nothing to cancel. Refusing the delete would leave a
+    WorkOrder that cannot be removed and that nothing is working on.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _graph_app(store, _review_graph())
+    stranded = RunState(
+        run_id=RunId("run-stranded"),
+        task_id=TaskId("task-stranded"),
+        workflow_id=WorkflowId("implementation-review-codex"),
+        phase=RunPhase.RUNNING_AGENT,
+        prompt="Add cancellation handling.",
+        repository="acme/api",
+    )
+
+    async def scenario():
+        await store.save(stranded)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                deleted = await client.delete(f"/api/runs/{stranded.run_id}")
+                return deleted, [str(one) for one in runtime.running()]
+
+    deleted, driving = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert asyncio.run(store.load(stranded.run_id)) is None
+    assert driving == []
 
 
 def test_the_graph_engine_answers_under_its_own_prefix() -> None:

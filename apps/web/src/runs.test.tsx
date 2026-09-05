@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiMilestone, ApiProject, ApiWorkflowRun, EngineConfig } from "./api";
 import {
   conversationCount,
+  GraphConversationPage,
   NewWorkflowPage,
   phaseAccent,
   phaseLabel,
@@ -349,6 +350,45 @@ describe("useRuns", () => {
     expect(result.current.loaded).toBe(true);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+
+  /** Nothing puts a deleted run back, so the click is asked about first and
+   *  the row leaves on the answer rather than a poll later. */
+  it("deletes a run once the reader confirms, and drops its row at once", async () => {
+    const fetch = stubPageApi([run()]);
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+
+    const { result } = renderHook(() => useRuns());
+    await waitFor(() => expect(result.current.runs).toHaveLength(1));
+
+    await act(async () => result.current.remove(result.current.runs[0]));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Delete First run? This cannot be undone.",
+    );
+    expect(result.current.runs).toEqual([]);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/runs/run-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("keeps the run when the reader says no", async () => {
+    const fetch = stubPageApi([run()]);
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(false));
+
+    const { result } = renderHook(() => useRuns());
+    await waitFor(() => expect(result.current.runs).toHaveLength(1));
+
+    await act(async () => result.current.remove(result.current.runs[0]));
+
+    expect(result.current.runs).toHaveLength(1);
+    expect(fetch).not.toHaveBeenCalledWith(
+      "/api/runs/run-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
 });
 
 describe("RunsPage", () => {
@@ -412,12 +452,256 @@ describe("RunDetailPage", () => {
       currentStepId: null,
       steps: [],
     });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(graphRun)));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1")
+        return json({
+          runId: "run-1",
+          graphId: graphRun.workflowId,
+          status: "running",
+          activeExecutions: [],
+          nextNodes: [],
+          values: {},
+          pendingApprovals: [],
+          error: "",
+        });
+      if (path === `/graph/api/graphs/${graphRun.workflowId}`)
+        return json({ graphId: graphRun.workflowId, nodes: [] });
+      if (path === "/api/runs/run-1/graph-events") return json({ events: [] });
+      return json({ error: "not found" }, { status: 404 });
+    }));
 
     render(<RunDetailPage runId="run-1" />);
 
     expect(await screen.findByText("Beta workflow")).toBeVisible();
     expect(screen.getByText("Implementation review (codex)")).toBeVisible();
+  });
+
+  it("opens a beta conversation before its first transcript arrives", async () => {
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      workflowName: "Implementation review (codex)",
+      workflowVersion: "",
+      currentStepId: null,
+      steps: [],
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1")
+        return json({
+          runId: "run-1",
+          graphId: graphRun.workflowId,
+          status: "running",
+          activeExecutions: [{ executionId: "execution-1", nodeId: "implementation" }],
+          nextNodes: ["implementation"],
+          values: {},
+          pendingApprovals: [],
+          error: "",
+        });
+      if (path === `/graph/api/graphs/${graphRun.workflowId}`)
+        return json({
+          graphId: graphRun.workflowId,
+          nodes: [{ nodeId: "implementation", name: "Implementation", kind: "agent" }],
+        });
+      if (path === "/api/runs/run-1/graph-events")
+        return json({
+          events: [{
+            sequence: 4,
+            type: "conversation.started",
+            nodeId: "implementation",
+            payload: { agent: "codex", sessionId: "session-1", resumed: false },
+          }],
+        });
+      return json({ error: "not found" }, { status: 404 });
+    }));
+
+    render(<RunDetailPage runId="run-1" />);
+
+    const link = await screen.findByRole("link", { name: /Open conversation/ });
+    expect(link).toHaveAttribute(
+      "href",
+      "/runs/run-1/conversations/graph--implementation",
+    );
+    expect(screen.queryByText("Conversation not started")).not.toBeInTheDocument();
+  });
+
+  it("keeps an opened beta conversation current", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      reads += 1;
+      return json({
+        events: reads === 1 ? [{
+          sequence: 4,
+          type: "conversation.started",
+          nodeId: "implementation",
+          payload: {},
+        }] : [{
+          sequence: 5,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "Reading the code." },
+        }],
+      });
+    }));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+    expect(screen.getByText("Waiting for agent activity…")).toBeVisible();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+    expect(screen.getByText("Reading the code.")).toBeVisible();
+  });
+
+  it("shows the tool work an agent does before it says anything", async () => {
+    // What an implementation conversation looks like while it runs, when the
+    // agent gets straight to work: tool calls published as it makes them and
+    // not a word said yet. A page that reads transcript events alone says
+    // "waiting" for the length of the work it is watching.
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "conversation.started",
+          nodeId: "implementation",
+          payload: { agent: "codex", sessionId: "session-1", resumed: false },
+        },
+        {
+          sequence: 2,
+          type: "tool.call",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.tsx", arguments: {} },
+        },
+        {
+          sequence: 3,
+          type: "tool.result",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.tsx", result: "completed" },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    expect(screen.getByText("Read runs.tsx")).toBeVisible();
+    expect(
+      screen.queryByText("Waiting for agent activity…"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps what the agent said next to the work it was describing", async () => {
+    // An agent narrates and then acts, and the page draws the run in the order
+    // it happened rather than sorting speech to one end.
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "I'll start by reading the tests." },
+        },
+        {
+          sequence: 2,
+          type: "tool.call",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.test.tsx", arguments: {} },
+        },
+        {
+          sequence: 3,
+          type: "tool.result",
+          nodeId: "implementation",
+          payload: { callId: "call-1", name: "Read runs.test.tsx", result: "completed" },
+        },
+        {
+          sequence: 4,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "Ran the command." },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    const entries = within(
+      screen.getByLabelText("Conversation activity"),
+    ).getAllByRole("article");
+    expect(entries.map((entry) => entry.textContent)).toEqual([
+      "I'll start by reading the tests.",
+      "ToolRead runs.test.tsxcompleted",
+      "Ran the command.",
+    ]);
+  });
+
+  it("shows the question a node blocked on a person is blocked on", async () => {
+    // The other state an implementation run spends real time in, and the one it
+    // can sit in for hours: the agent asked to run something and nobody has
+    // answered. Nothing else is published while it waits, so a page that
+    // ignored the request would report the run as one that never started —
+    // to the very person it is waiting on.
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "I'll run the tests now." },
+        },
+        {
+          sequence: 2,
+          type: "approval.requested",
+          nodeId: "implementation",
+          payload: {
+            approvalId: "approval-1",
+            kind: "command_execution",
+            reason: "run the tests",
+            command: "pytest",
+            toolName: "execute",
+          },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    expect(screen.getByText("pytest")).toBeVisible();
+    expect(screen.getByText("Waiting for your decision.")).toBeVisible();
+    expect(
+      screen.queryByText("Waiting for agent activity…"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says how a request was answered once it has been", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "approval.requested",
+          nodeId: "implementation",
+          payload: { approvalId: "approval-1", reason: "run the tests", command: "pytest" },
+        },
+        {
+          sequence: 2,
+          type: "approval.resolved",
+          nodeId: "implementation",
+          payload: { approvalId: "approval-1", decision: "accept" },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    expect(screen.getByText("Approved.")).toBeVisible();
+    expect(
+      screen.queryByText("Waiting for your decision."),
+    ).not.toBeInTheDocument();
   });
 
   it("renders steps from an arbitrary workflow definition", async () => {

@@ -26,9 +26,12 @@ implementation_agent = oe.agent(
 naming_agent = oe.agent(
     id="implementation-agent",
     instructions=(
-        "Give a submitted workflow a concise display name. Do not inspect or change "
-        "the workspace and do not perform the requested task."
+        "Give a submitted workflow a concise display name. When the request points at "
+        "an issue or a pull request instead of describing the work -- \"resolve issue "
+        "270\" -- read that item first and name what it is actually about. Do not "
+        "change the workspace and do not perform the requested task."
     ),
+    capabilities=["view_work_item", "view_change_request", "list_work_items"],
     description="Names a submitted implementation workflow.",
 )
 
@@ -68,9 +71,11 @@ workflow = oe.workflow(
     workspace=oe.workspace(),
     naming_agent=naming_agent,
     naming_prompt=(
-        "Name this workflow based on the task above. Do not perform the task or use "
-        "tools. Reply with only a concise name of at most eight words, with no quotes "
-        "or ending punctuation."
+        "Name this workflow based on the task above. If it names an issue or pull "
+        "request by number, read that item first and lead the name with the number, "
+        "as in \"#270 Dependencies can run arbitrary install scripts\". Do not perform "
+        "the task. Reply with only a concise name of at most twelve words, with no "
+        "quotes or ending punctuation."
     ),
     steps=[
         oe.agent_step(
@@ -127,10 +132,7 @@ workflow = oe.workflow(
             ),
             approved=oe.succeed(),
             rejected=oe.fail(),
-            notification=oe.slack_notification(
-                channel="OpenEngine",
-                public_url="https://sheas-mac-mini.taileb7fdb.ts.net/",
-            ),
+            notification=oe.slack_notification(),
         ),
     ],
 )

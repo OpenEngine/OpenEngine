@@ -175,3 +175,59 @@ jobs:
           if-no-files-found: warn
           # Diagnostics, not archives: long enough to read after a Monday run.
           retention-days: 14
+
+  acp-adapter:
+    name: agents over ACP
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The jobs above reach the agents by running the `codex` and `claude`
+    # binaries. `langgraph-acp` reaches them over ACP, through adapters that are
+    # separate packages on separate release cadences -- so nothing above would
+    # notice the handshake, the session update shapes, or the capability names
+    # moving under it.
+    #
+    # Unpinned on purpose, matching `CODEX_ACP_COMMAND` and
+    # `CLAUDE_ACP_COMMAND`: what this job is for is finding out that the current
+    # adapter broke, which a pin would hide.
+    defaults:
+      run:
+        working-directory: langgraph-acp
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Record which adapter releases these are
+        # `npx --yes` resolves at run time, so the versions that failed have to
+        # be in the log of the failure rather than inferred from the date. The
+        # bundled Codex is recorded too: the ACP adapter runs its own rather
+        # than the `codex` binary the jobs above pin, so "which Codex broke"
+        # has no other answer here.
+        shell: bash
+        run: |
+          set -euo pipefail
+          for package in @agentclientprotocol/codex-acp @zed-industries/claude-agent-acp; do
+            version=$(npm view "$package" version)
+            echo "::notice::$package resolves to $version"
+            echo "### $package $version" >> "$GITHUB_STEP_SUMMARY"
+          done
+          codex=$(npm view "@agentclientprotocol/codex-acp" "dependencies[@openai/codex]")
+          echo "::notice::codex-acp bundles @openai/codex $codex"
+          echo "### bundled @openai/codex $codex" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Handshake, a turn, and a permission round trip over ACP
+        env:
+          # Absent, the turns skip and the handshake still runs: initialize is
+          # answered before anyone is asked to authenticate, so protocol drift
+          # is catchable without a credential.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run --locked pytest -m compatibility -v

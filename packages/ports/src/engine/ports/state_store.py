@@ -55,6 +55,15 @@ class StateStore(Protocol):
         """Return persisted workflow runs, newest first, optionally by workstream."""
         ...
 
+    async def delete_run(self, run_id: RunId) -> bool:
+        """Forget one run and its events, returning whether it existed.
+
+        The run is the record, so removing it removes the whole record: a row
+        left without its history would still be listed, and would answer its
+        own page with a run that cannot say how it got anywhere.
+        """
+        ...
+
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         ...
 

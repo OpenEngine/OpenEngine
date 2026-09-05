@@ -98,6 +98,11 @@ class InMemoryStateStore:
             states = [state for state in states if state.workstream_id == workstream_id]
         return tuple(reversed(states))
 
+    async def delete_run(self, run_id: RunId) -> bool:
+        with self._lock:
+            self._events.pop(run_id, None)
+            return self._states.pop(run_id, None) is not None
+
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         with self._lock:
             self._events.setdefault(run_id, []).extend(events)

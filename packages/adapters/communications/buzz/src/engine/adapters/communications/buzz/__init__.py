@@ -5,6 +5,7 @@ no transport and no credentials yet.
 """
 
 from engine.domain.ids import RunId
+from engine.ports import Message
 
 
 class BuzzCommunications:
@@ -17,7 +18,9 @@ class BuzzCommunications:
         self._base_url = base_url
         self._api_token = api_token
 
-    async def post(self, channel: str, message: str, run_id: RunId | None = None) -> str:
+    async def post(
+        self, channel: str, message: str | Message, run_id: RunId | None = None
+    ) -> str:
         raise NotImplementedError("Buzz delivery lands with the communications ticket")
 
     async def reply(self, message_id: str, message: str) -> str:

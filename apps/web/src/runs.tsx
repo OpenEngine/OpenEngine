@@ -3,8 +3,12 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   api,
   completeHumanReview,
+  deleteRun,
   milestoneDetailsUrl,
   type ApiMilestone,
+  type ApiGraphEvent,
+  type ApiGraphRun,
+  type ApiGraphTopology,
   type ApiProject,
   type ApiRunStep,
   type ApiWorkflowRun,
@@ -95,7 +99,16 @@ export function useRuns() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, []);
-  return { runs, error, loaded };
+  // Deleting is not archiving: there is no list the run moves into and nothing
+  // to restore it from, so the click is asked about before it is made. The row
+  // then leaves on the click rather than a second later, when the poll next
+  // reads the list -- and that same poll puts it back if the delete failed.
+  const remove = (run: ApiWorkflowRunListing) => {
+    if (!window.confirm(`Delete ${run.name}? This cannot be undone.`)) return;
+    setRuns((current) => current.filter((item) => item.runId !== run.runId));
+    void deleteRun(run.runId).catch(() => {});
+  };
+  return { runs, error, loaded, remove };
 }
 
 export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error: string }) {
@@ -569,21 +582,108 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   );
 }
 
-export function RunDetailPage({ runId }: { runId: string }) {
-  const [run, setRun] = useState<ApiWorkflowRun>();
+/** One thing an agent did, as the conversation page draws it. */
+type ConversationEntry = {
+  sequence: number;
+  /** What it said, for the entries that are speech. */
+  text?: string;
+  /** For the entries that are work: what kind of thing it was, what the agent
+   *  called the thing it was doing, and how that ended once it has. */
+  did?: { label: string; name: string; outcome: string };
+};
+
+/** How a decision on a request reads, in the words `chat.tsx` uses for one. */
+function decisionText(decision: string): string {
+  switch (decision) {
+    case "accept":
+      return "Approved.";
+    case "accept_for_session":
+      return "Approved, and allowed again for this conversation without asking.";
+    case "cancel":
+      return "Cancelled — the action did not run.";
+    default:
+      return "Answered.";
+  }
+}
+
+/** What a node's agent has done, in the order it did it.
+ *
+ *  Work belongs here beside the messages, because of when each is published: an
+ *  ACP turn reports a tool call as it makes it and a permission request as it
+ *  raises it, but a message only once the agent stops to do one of those. An
+ *  implementation agent works for as long as the change takes, and one that has
+ *  asked to run something waits for as long as the person does — so a page
+ *  reading transcript events alone has nothing to show for either, and reports
+ *  the two states an implementation run spends its time in as a conversation
+ *  that never started. */
+function conversationActivity(events: ApiGraphEvent[]): ConversationEntry[] {
+  // Keyed by what raised the question as well as by its id, because the two
+  // vocabularies are the agent's and the runtime's and nothing says a call id
+  // cannot read like an approval id.
+  const outcomes = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === "tool.result")
+      outcomes.set(`tool:${String(event.payload.callId ?? "")}`, String(event.payload.result ?? ""));
+    if (event.type === "approval.resolved")
+      outcomes.set(
+        `approval:${String(event.payload.approvalId ?? "")}`,
+        decisionText(String(event.payload.decision ?? "")),
+      );
+  }
+  return events.flatMap((event): ConversationEntry[] => {
+    if (event.type === "transcript")
+      return [{ sequence: event.sequence, text: String(event.payload.text ?? "") }];
+    if (event.type === "tool.call")
+      return [
+        {
+          sequence: event.sequence,
+          did: {
+            label: "Tool",
+            // A call the agent named nothing is still a call it made, and
+            // saying so beats a blank line where the work was.
+            name: String(event.payload.name ?? "") || "Tool call",
+            outcome: outcomes.get(`tool:${String(event.payload.callId ?? "")}`) ?? "",
+          },
+        },
+      ];
+    if (event.type !== "approval.requested") return [];
+    return [
+      {
+        sequence: event.sequence,
+        did: {
+          label: "Approval",
+          // The command, because that is the thing being consented to. The
+          // agent's own description of it when there is no command to show.
+          name:
+            String(event.payload.command ?? "") ||
+            String(event.payload.reason ?? "") ||
+            String(event.payload.toolName ?? "") ||
+            "Permission request",
+          // An unanswered request says so rather than sitting blank: a run
+          // stopped here is stopped on somebody, and this page is where they
+          // find out that it is them.
+          outcome:
+            outcomes.get(`approval:${String(event.payload.approvalId ?? "")}`) ??
+            "Waiting for your decision.",
+        },
+      },
+    ];
+  });
+}
+
+export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId: string }) {
+  const [events, setEvents] = useState<ApiGraphEvent[]>();
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
-    // Kept up even once the run has finished, the way the rail's list is: an
-    // editable step reopens when its conversation is written to, so a page that
-    // stopped reading at "succeeded" would go on saying so while the
-    // implementation it names is working again.
     const load = () => {
-      api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`)
+      api<{ events: ApiGraphEvent[] }>(
+        `/api/runs/${encodeURIComponent(runId)}/graph-events`,
+      )
         .then((value) => {
           if (cancelled) return;
-          setRun(value);
+          setEvents(value.events.filter((event) => event.nodeId === nodeId));
           setError("");
         })
         .catch((reason: Error) => {
@@ -598,7 +698,194 @@ export function RunDetailPage({ runId }: { runId: string }) {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
+  }, [runId, nodeId]);
+  const activity = events && conversationActivity(events);
+  return (
+    <main className="panel-scroll">
+      <header className="hero hero-narrow">
+        <a className="back-link" href={`/runs/${encodeURIComponent(runId)}`}>← WorkOrder</a>
+        <p className="eyebrow">Graph conversation</p>
+        <h1>{phaseLabel(nodeId)}</h1>
+      </header>
+      {error ? <p className="notice notice-block">{error}</p> : !activity ? (
+        <p className="state-inline">Loading conversation…</p>
+      ) : activity.length === 0 ? (
+        <p className="state-inline">Waiting for agent activity…</p>
+      ) : (
+        <section className="timeline" aria-label="Conversation activity">
+          {activity.map((entry) => (
+            <article className="callout" key={entry.sequence}>
+              {entry.did ? (
+                <>
+                  <p className="eyebrow">{entry.did.label}</p>
+                  <p>{entry.did.name}</p>
+                  {entry.did.outcome && <p className="micro">{entry.did.outcome}</p>}
+                </>
+              ) : (
+                <p>{entry.text}</p>
+              )}
+            </article>
+          ))}
+        </section>
+      )}
+    </main>
+  );
+}
+
+function GraphApprovalDecision({
+  runId,
+  approval,
+  onDecided,
+}: {
+  runId: string;
+  approval: ApiGraphRun["pendingApprovals"][number];
+  onDecided: (run: ApiGraphRun) => void;
+}) {
+  const [submitting, setSubmitting] = useState<string>();
+  const [error, setError] = useState("");
+
+  const decide = async (decision: string) => {
+    setSubmitting(decision);
+    setError("");
+    try {
+      onDecided(
+        await api<ApiGraphRun>(
+          `/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approval.approvalId)}`,
+          { method: "POST", body: JSON.stringify({ decision }) },
+        ),
+      );
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setSubmitting(undefined);
+    }
+  };
+
+  return (
+    <div className="decision">
+      <label>
+        <span>Decision note</span>
+        <textarea rows={3} />
+      </label>
+      {error && <p className="notice">Could not record decision: {error}</p>}
+      <div className="decision-actions">
+        {approval.allowedDecisions.includes("accept") && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={submitting !== undefined}
+            onClick={() => void decide("accept")}
+          >
+            {submitting === "accept" ? "Approving…" : "Approve"}
+          </button>
+        )}
+        {approval.allowedDecisions.includes("accept_for_session") && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={submitting !== undefined}
+            onClick={() => void decide("accept_for_session")}
+          >
+            {submitting === "accept_for_session" ? "Approving…" : "Approve for session"}
+          </button>
+        )}
+        {approval.allowedDecisions.includes("cancel") && (
+          <button
+            type="button"
+            className="btn"
+            disabled={submitting !== undefined}
+            onClick={() => void decide("cancel")}
+          >
+            {submitting === "cancel" ? "Rejecting…" : "Reject"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function RunDetailPage({ runId }: { runId: string }) {
+  const [baseRun, setRun] = useState<ApiWorkflowRun>();
+  const [graph, setGraph] = useState<ApiGraphRun>();
+  const [topology, setTopology] = useState<ApiGraphTopology>();
+  const [graphEvents, setGraphEvents] = useState<ApiGraphEvent[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    // Kept up even once the run has finished, the way the rail's list is: an
+    // editable step reopens when its conversation is written to, so a page that
+    // stopped reading at "succeeded" would go on saying so while the
+    // implementation it names is working again.
+    const load = async () => {
+      try {
+        const value = await api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`);
+        if (cancelled) return;
+        setRun(value);
+        if (!value.workflowVersion) {
+          const [nextGraph, nextTopology, eventLog] = await Promise.all([
+            api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`),
+            api<ApiGraphTopology>(`/graph/api/graphs/${encodeURIComponent(value.workflowId)}`),
+            api<{ events: ApiGraphEvent[] }>(`/api/runs/${encodeURIComponent(runId)}/graph-events`),
+          ]);
+          if (cancelled) return;
+          setGraph(nextGraph);
+          setTopology(nextTopology);
+          setGraphEvents(eventLog.events);
+        }
+        setError("");
+      } catch (reason) {
+        if (!cancelled) setError((reason as Error).message);
+      } finally {
+        if (!cancelled) timer = window.setTimeout(load, 1000);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [runId]);
+  const shownRun = useMemo(() => {
+    if (!baseRun || !graph || !topology) return baseRun;
+    const completed = new Set(
+      graphEvents.filter((event) => event.type === "node.finished").map((event) => event.nodeId),
+    );
+    const active = new Set(graph.activeExecutions.map((execution) => execution.nodeId));
+    const waiting = new Set(graph.pendingApprovals.map((approval) => approval.nodeId));
+    return {
+      ...baseRun,
+      phase: graph.status === "awaiting_approval" ? "awaiting_human_review" : baseRun.phase,
+      currentStepId: graph.activeExecutions[0]?.nodeId ?? graph.nextNodes[0] ?? null,
+      failureReason: graph.error || baseRun.failureReason,
+      steps: topology.nodes.filter((node) => node.kind !== "workspace").map((node) => ({
+        stepId: node.nodeId,
+        name: node.name,
+        kind: node.kind === "human" ? "human" as const : "agent" as const,
+        status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed" : "pending",
+        outcome: completed.has(node.nodeId) ? "completed" : null,
+        changesRequested: false,
+        agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
+        agentInstanceId: null,
+        agentRunId: null,
+        conversationId: null,
+        conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
+          event.type === "conversation.started" || event.type === "transcript"
+        ))
+          ? `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(node.nodeId)}` : null,
+        waiting: waiting.has(node.nodeId),
+        summary: typeof graph.values[node.nodeId] === "string" ? String(graph.values[node.nodeId]) : "",
+        outputs: [],
+      })),
+      pendingHumanReview: graph.pendingApprovals[0] ? {
+        stepId: graph.pendingApprovals[0].nodeId,
+        title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
+        summary: "",
+        prUrl: null,
+      } : null,
+    } satisfies ApiWorkflowRun;
+  }, [baseRun, graph, topology, graphEvents, runId]);
+  const run = shownRun;
   const workspaceThreadId = run
     ? (run.steps.find(
         (step) => step.stepId === run.currentStepId && step.agentInstanceId,
@@ -641,7 +928,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
           </StatStrip>
-          {workspaceThreadId && (
+          {graph && typeof graph.values.workspace === "string" ? (
+            <section className="run-workspace" aria-label="WorkOrder checkout">
+              <div className="workspace-control"><span className="micro">Working in</span><code className="dock-path">cd {graph.values.workspace}</code></div>
+            </section>
+          ) : workspaceThreadId && (
             <section className="run-workspace" aria-label="WorkOrder checkout">
               <WorkspaceControl threadId={workspaceThreadId} />
             </section>
@@ -661,7 +952,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
               </p>
             </section>
           )}
-          {run.pendingHumanReview && (
+          {run.pendingHumanReview && graph?.pendingApprovals[0] ? (
+            <section className="callout callout-action">
+              <p className="eyebrow">Action required</p>
+              <h2>{run.pendingHumanReview.title}</h2>
+              <GraphApprovalDecision
+                runId={runId}
+                approval={graph.pendingApprovals[0]}
+                onDecided={setGraph}
+              />
+            </section>
+          ) : run.pendingHumanReview && (
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
               <h2>{run.pendingHumanReview.title}</h2>

@@ -42,6 +42,7 @@ approval handoff -- see `engine.graph_runtime_langgraph.acp`.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
@@ -53,6 +54,7 @@ from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.control import (
+    CANCELLED,
     ApprovalNotPendingError,
     PendingApproval,
     RunNotSteerableError,
@@ -75,6 +77,13 @@ from engine.graph_runtime_langgraph.store import (
     InMemoryGraphRuntimeStore,
     RunRecord,
 )
+
+#: Where a failure that a client only sees as a sentence is written down whole.
+#: A run's `error` is one string, published once and stored once, with no type
+#: and no traceback; this is where the operator reading the process log finds
+#: what actually raised. Written by `_fail`, which is what decides whether this
+#: failure is the one being reported.
+log = logging.getLogger(__name__)
 
 #: LangGraph's reasons a checkpoint exists, in the contract's vocabulary.
 #: `update` is here because a run is seeded with one -- that seeded position is
@@ -279,6 +288,40 @@ class LangGraphRuntime:
             await self._refuse(record)
         return await self._snapshot(run_id)
 
+    async def cancel(self, run_id: RunId) -> RunSnapshot:
+        record = await self._require(run_id)
+        live = self._live.setdefault(run_id, _Live(run_id, record.graph_id))
+        # The same lock a fork holds, for the same reason: stopping is
+        # asynchronous, and a resume arriving inside it would start a driver for
+        # a run that is being ended.
+        async with live.control:
+            # Read before anything is stopped, because stopping changes the
+            # answer: releasing the executions settles the approvals a waiting
+            # run is waiting on, and a run read afterwards would look like one
+            # that was simply working.
+            ending = (await self._snapshot(run_id)).status
+            stopping = ending not in (RunStatus.COMPLETED, RunStatus.FAILED)
+            if stopping:
+                # Written down before anything is let go, in the order and for
+                # the reason `_refuse` uses: the executions the stop releases
+                # may raise on their way out, and the first reason recorded is
+                # the one a client was already told.
+                await self._store.remember_run(replace(record, error=CANCELLED))
+            await self._stop(live)
+            # Settled rather than deleted, and without an `approval.resolved`
+            # for any of them: nobody decided these, and the execution that
+            # asked is gone, so nobody can.
+            await self._store.abandon_run_approvals(run_id)
+            if stopping:
+                # Published here rather than through `_fail`, which logs the
+                # ending with a traceback for an operator to read. A run stopped
+                # because a person threw its WorkOrder away is not a fault, and
+                # there is no exception behind it to print.
+                await self.publish(
+                    live.run_id, EventKind.RUN_FAILED, {"error": CANCELLED}
+                )
+            return await self._snapshot(run_id)
+
     async def aclose(self) -> None:
         for live in tuple(self._live.values()):
             await self._stop(live)
@@ -461,7 +504,7 @@ class LangGraphRuntime:
         except Exception as failure:
             await self._release_all(live)
             blamed = await self._blamed(definition, live.run_id) or failed_at
-            await self._fail(live, str(failure), blamed)
+            await self._fail(live, str(failure), blamed, failure)
 
     async def _blamed(
         self, definition: LangGraphDefinition, run_id: RunId
@@ -542,18 +585,41 @@ class LangGraphRuntime:
             },
         )
 
-    async def _fail(self, live: _Live, error: str, node_id: NodeId | None) -> None:
-        """Stop the run, once.
+    async def _fail(
+        self,
+        live: _Live,
+        error: str,
+        node_id: NodeId | None,
+        failure: BaseException,
+    ) -> None:
+        """Stop the run, once, and write down what stopped it.
 
         A refusal and the node noticing it are two things that can both arrive:
         the decision ends the run, and the agent it released may raise on its
         way out before the cancellation reaches it. The first answer is the one
         a client was already told, so a second would contradict it. A fork
         clears the error, which is what lets a re-attempt fail on its own.
+
+        The log line is written here rather than where the exception was caught
+        because it is subject to the same "once": the exception a refused run
+        raises on its way out is the expected end of a run that ended for a
+        reason a person chose, and logging it as a failure would put a
+        traceback in the log every time somebody said no.
         """
         record = await self._store.run(live.run_id)
         if record is not None and record.error:
             return
+        # Identifiers in the message, not in `extra`: no process here installs a
+        # handler that renders extra fields, so a run id put there is a run id
+        # nobody can read.
+        log.error(
+            "graph run %s (graph %s, node %s) failed: %s",
+            live.run_id,
+            live.graph_id,
+            node_id if node_id is not None else "unknown",
+            error,
+            exc_info=failure,
+        )
         if record is not None:
             await self._store.remember_run(replace(record, error=error))
         await self.publish(

@@ -102,14 +102,20 @@ class TerminalResultRegistry:
 
 
 class TerminalMcpBroker:
-    """Bind one local MCP bridge to one workflow execution context."""
+    """Bind one local MCP bridge to one workflow execution context.
+
+    A broker with no step serves the repository tools and nothing else. That is
+    the naming turn: it reads the repository to say what a run is about, and
+    there is no step for `complete_step` to complete -- so offering the terminal
+    tools would be offering a turn that cannot end this way a way to end it.
+    """
 
     def __init__(
         self,
         *,
         run_id: RunId,
         agent_run_id: AgentRunId,
-        step: StepSpec,
+        step: StepSpec | None,
         registry: TerminalResultRegistry,
         deliver: TerminalDelivery | None = None,
     ) -> None:
@@ -199,6 +205,8 @@ class TerminalMcpBroker:
         )
         for name in self._repository_tools:
             arguments = (*arguments, "--repository-tool", name)
+        if self._step is None:
+            arguments = (*arguments, "--repository-tools-only")
         return McpServerConfig(
             name=_SERVER_NAME,
             command=sys.executable,
@@ -248,6 +256,13 @@ class TerminalMcpBroker:
                 if name not in self._repository_tools:
                     return {"ok": False, "error": f"{name} is not enabled for this step"}
                 return await self._repository_call(name, arguments, request_id)
+            if self._step is None:
+                # Listed by nobody and served by nobody: a session with no step
+                # says so rather than failing later on a step it does not have.
+                return {
+                    "ok": False,
+                    "error": f"{name} is not available in this session",
+                }
             if name == "clarify":
                 if not isinstance(arguments, dict) or arguments:
                     return {
@@ -444,64 +459,75 @@ class TerminalMcpBroker:
         return None
 
 
-def terminal_tool_names(repository_tools: Sequence[str] = ()) -> tuple[str, ...]:
+def terminal_tool_names(
+    repository_tools: Sequence[str] = (), *, terminal_tools: bool = True
+) -> tuple[str, ...]:
     """The tools a step's server serves, in the order it lists them.
 
     Read off the listing rather than restated beside it, so a tool added to
     `_tools` cannot end up served without the step being told it holds one.
     """
-    return tuple(str(tool["name"]) for tool in _tools(repository_tools))
+    return tuple(
+        str(tool["name"])
+        for tool in _tools(repository_tools, terminal_tools=terminal_tools)
+    )
 
 
-def _tools(repository_tools: Sequence[str] = ()) -> list[dict[str, object]]:
-    tools: list[dict[str, object]] = [
-        {
-            "name": "complete_step",
-            "description": "Complete the bound workflow step.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "outcome": {"type": "string", "enum": ["success"]},
-                    "summary": {"type": "string"},
-                    "outputs": {
-                        "type": "object",
-                        "additionalProperties": {"type": "string"},
-                    },
-                },
-                "required": ["outcome", "summary", "outputs"],
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": "fail_step",
-            "description": "Fail the bound workflow run when the step cannot continue.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"summary": {"type": "string", "minLength": 1}},
-                "required": ["summary"],
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": "clarify",
-            "description": (
-                "Finish answering a human question without changing workflow "
-                "run state. Call this after the answer when no implementation "
-                "change was requested or made."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False,
-            },
-        },
-    ]
+def _tools(
+    repository_tools: Sequence[str] = (), *, terminal_tools: bool = True
+) -> list[dict[str, object]]:
+    tools: list[dict[str, object]] = list(_TERMINAL_TOOLS) if terminal_tools else []
     tools.extend(
         _REPOSITORY_TOOLS[name]
         for name in REPOSITORY_TOOL_NAMES
         if name in repository_tools
     )
     return tools
+
+
+#: The tools every step's server serves, whatever it was granted.
+_TERMINAL_TOOLS: tuple[dict[str, object], ...] = (
+    {
+        "name": "complete_step",
+        "description": "Complete the bound workflow step.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "outcome": {"type": "string", "enum": ["success"]},
+                "summary": {"type": "string"},
+                "outputs": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            },
+            "required": ["outcome", "summary", "outputs"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "fail_step",
+        "description": "Fail the bound workflow run when the step cannot continue.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"summary": {"type": "string", "minLength": 1}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "clarify",
+        "description": (
+            "Finish answering a human question without changing workflow "
+            "run state. Call this after the answer when no implementation "
+            "change was requested or made."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+)
 
 
 #: The repository tools' declarations, by name.
@@ -767,14 +793,24 @@ async def _forward_call(
 
 
 async def _serve_stdio(
-    host: str, port: int, token: str, *, repository_tools: Sequence[str] = ()
+    host: str,
+    port: int,
+    token: str,
+    *,
+    repository_tools: Sequence[str] = (),
+    terminal_tools: bool = True,
 ) -> None:
     """Serve newline-delimited MCP JSON-RPC without writing logs to stdout."""
     while line := await asyncio.to_thread(sys.stdin.buffer.readline):
         try:
             request: Any = json.loads(line)
             response = await _mcp_response(
-                host, port, token, request, repository_tools=repository_tools
+                host,
+                port,
+                token,
+                request,
+                repository_tools=repository_tools,
+                terminal_tools=terminal_tools,
             )
             if response is None:
                 continue
@@ -795,6 +831,7 @@ async def _mcp_response(
     request: object,
     *,
     repository_tools: Sequence[str] = (),
+    terminal_tools: bool = True,
 ) -> dict[str, object] | None:
     if not isinstance(request, dict):
         return _rpc_error(None, -32600, "Invalid Request")
@@ -821,7 +858,10 @@ async def _mcp_response(
     if method == "ping":
         return _rpc_result(request_id, {})
     if method == "tools/list":
-        return _rpc_result(request_id, {"tools": _tools(repository_tools)})
+        return _rpc_result(
+            request_id,
+            {"tools": _tools(repository_tools, terminal_tools=terminal_tools)},
+        )
     if method != "tools/call":
         return _rpc_error(request_id, -32601, "Method not found")
     if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
@@ -891,6 +931,11 @@ def main() -> None:
         choices=REPOSITORY_TOOL_NAMES,
         dest="repository_tools",
     )
+    parser.add_argument(
+        "--repository-tools-only",
+        action="store_true",
+        help="serve the granted repository tools without the terminal tools",
+    )
     args = parser.parse_args()
     asyncio.run(
         _serve_stdio(
@@ -898,6 +943,7 @@ def main() -> None:
             args.port,
             args.token,
             repository_tools=tuple(args.repository_tools),
+            terminal_tools=not args.repository_tools_only,
         )
     )
 

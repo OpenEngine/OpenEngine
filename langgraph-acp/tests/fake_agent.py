@@ -32,8 +32,11 @@ def respond(message_id: Any, result: Any) -> None:
     send({"jsonrpc": "2.0", "id": message_id, "result": result})
 
 
-def fail(message_id: Any, code: int, text: str) -> None:
-    send({"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": text}})
+def fail(message_id: Any, code: int, text: str, data: Any = None) -> None:
+    error: dict[str, Any] = {"code": code, "message": text}
+    if data is not None:
+        error["data"] = data
+    send({"jsonrpc": "2.0", "id": message_id, "error": error})
 
 
 def update(payload: dict[str, Any]) -> None:
@@ -155,6 +158,12 @@ def run_turn(message_id: Any, options: set[str]) -> None:
 
 def main() -> int:
     options = set(sys.argv[1:])
+    if "--refuse-prompt" in options:
+        # Said early and on the other pipe, the way a real adapter says it: the
+        # complaint that explains a refusal is written while the turn is being
+        # attempted, and the refusal itself arrives afterwards.
+        print("fake-agent: upstream said 429: quota exhausted", file=sys.stderr)
+        sys.stderr.flush()
     while True:
         message = receive()
         if message is None:
@@ -168,6 +177,12 @@ def main() -> int:
             respond(message_id, capabilities(options))
         elif method == "session/new":
             if "--die-on-new-session" in options:
+                if "--noisy" in options:
+                    # More than the client will keep, so that which end it keeps
+                    # is a choice this agent can make it demonstrate. Nineteen
+                    # lines leaves room for the fatal one in a 20-line buffer.
+                    for index in range(19):
+                        print(f"codex-acp: {index} " + "noise " * 40, file=sys.stderr)
                 print("codex-acp: everything is on fire", file=sys.stderr, flush=True)
                 return 3
             if "--nameless-session" in options:
@@ -184,7 +199,15 @@ def main() -> int:
             respond(message_id, None)
         elif method == "session/prompt":
             if "--refuse-prompt" in options:
-                fail(message_id, -32000, "this session is over quota")
+                # `data` carries the cause and a body the size real ones come
+                # in -- an agent that puts an entire HTTP response in a refusal
+                # is what the client's cap is for.
+                fail(
+                    message_id,
+                    -32000,
+                    "this session is over quota",
+                    {"reason": "quota exhausted", "body": "x" * 4000},
+                )
             else:
                 run_turn(message_id, options)
         elif method == "session/cancel":

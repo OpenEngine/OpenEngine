@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-import { apiProxyTarget } from "./src/api-proxy";
+import { apiProxy } from "./src/api-proxy";
 
 export default defineConfig({
   plugins: [react()],
@@ -18,13 +18,8 @@ export default defineConfig({
     // name, which Vite's host check rejects by default. The leading dot admits
     // any `*.ts.net` host rather than pinning one machine's.
     allowedHosts: [".ts.net"],
-    proxy: {
-      // `changeOrigin: false` keeps the browser's Host header, which Vite
-      // otherwise rewrites to the proxy target. The API's CSRF guard accepts
-      // an Origin only when it matches localhost or the request's own host, so
-      // a rewritten Host turns every mutating call made under the tailnet name
-      // into a 403.
-      "/api": { target: apiProxyTarget(process.env), changeOrigin: false },
-    },
+    // Which prefixes, and why each is forwarded the way it is, is
+    // `src/api-proxy.ts` -- a module a test can read, unlike this file.
+    proxy: apiProxy(process.env),
   },
 });

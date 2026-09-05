@@ -223,6 +223,34 @@ export type ApiWorkflowRun = Omit<ApiWorkflowRunListing, "steps"> & {
   } | null;
 };
 
+export type ApiGraphRun = {
+  runId: string;
+  graphId: string;
+  status: "running" | "awaiting_approval" | "completed" | "failed";
+  activeExecutions: { executionId: string; nodeId: string }[];
+  nextNodes: string[];
+  values: Record<string, unknown>;
+  pendingApprovals: {
+    approvalId: string;
+    nodeId: string;
+    reason: string;
+    allowedDecisions: string[];
+  }[];
+  error: string;
+};
+
+export type ApiGraphTopology = {
+  graphId: string;
+  nodes: { nodeId: string; name: string; kind: string }[];
+};
+
+export type ApiGraphEvent = {
+  sequence: number;
+  type: string;
+  nodeId: string | null;
+  payload: Record<string, unknown>;
+};
+
 /** Record the decision a run stopped for, and get the finished run back.
  *
  *  The response is the whole run rather than the decision, because approving is
@@ -241,6 +269,16 @@ export function completeHumanReview(
       body: JSON.stringify({ approved, summary }),
     },
   );
+}
+
+/** Throw a WorkOrder away for good.
+ *
+ *  Unlike archiving a project there is nothing to restore afterwards: the run,
+ *  its steps and its history go with it, which is why the rail asks first. */
+export function deleteRun(runId: string): Promise<void> {
+  return api<void>(`/api/runs/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
+  });
 }
 
 /** Choose the runner that answers this conversation from now on.

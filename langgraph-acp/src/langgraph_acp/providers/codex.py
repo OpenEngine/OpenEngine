@@ -1,8 +1,21 @@
 """Codex, reached over ACP.
 
-The Codex CLI does not speak ACP itself; `@zed-industries/codex-acp` is the
-adapter that wraps it, and running it through `npx` is what makes
-`ACPNode(agent="codex")` work on a machine where only Codex is installed.
+The Codex CLI does not speak ACP itself; `@agentclientprotocol/codex-acp` is the
+adapter that does, and running it through `npx` is what makes
+`ACPNode(agent="codex")` work without a global install of anything.
+
+**The adapter brings its own Codex.** It depends on `@openai/codex` and drives
+that as `codex app-server`, so the `codex` on the operator's `PATH` is not what
+answers here -- adapter 1.9.0 ships Codex 0.153.2 whatever is installed. Two
+consequences worth knowing before reading a surprising transcript:
+
+* This path runs a Codex outside the release matrix in
+  `.github/cli-versions.json`, which pins what the step-workflow CLIs are tested
+  against. The two paths reach different Codex versions by construction.
+* `CODEX_PATH` is how the adapter is told to run a specific binary instead, and
+  it needs no support from this package -- `env` reaches it:
+
+      CodexACPProvider(env={"CODEX_PATH": "/usr/local/bin/codex"})
 
 An installation that would rather not shell out to `npx` -- a container image
 with the adapter baked in, an air-gapped runner -- overrides the command and
@@ -10,9 +23,10 @@ keeps everything else:
 
     CodexACPProvider(command=["codex-acp"])
 
-Authentication is Codex's own: the adapter uses whatever `codex login` left
-behind. Nothing here reads or carries a credential, which is the property the
-secrets ticket has to preserve rather than establish.
+Authentication is Codex's own, and is unaffected by which binary runs: the
+bundled Codex reads `CODEX_HOME` (`~/.codex` by default), so it uses whatever
+`codex login` left behind. Nothing here reads or carries a credential, which is
+the property the secrets ticket has to preserve rather than establish.
 """
 
 import os
@@ -23,10 +37,25 @@ from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
 from langgraph_acp.permissions import ACPPermissionHandler
 
-#: The ACP adapter for Codex, run without a global install. Pinned to no version
-#: on purpose: the adapter tracks the Codex CLI, and an old pin here would fail
-#: against a current Codex rather than protect anyone from it.
-CODEX_ACP_COMMAND = ("npx", "--yes", "@zed-industries/codex-acp")
+#: The ACP adapter for Codex, run without a global install.
+#:
+#: Unpinned, which is a deliberate exemption from the policy `cli-versions.json`
+#: states for the provider CLIs, not an oversight. That policy pins so a red
+#: compatibility run names a version somebody can reinstall; the cost of a pin
+#: here is different, because the adapter ships the Codex it drives. Pinning
+#: would freeze both halves against a service that keeps moving -- model
+#: retirements and auth changes arrive from the far side, where no pin helps --
+#: and this repository has no `cli-versions.yml` equivalent that would notice
+#: the pin going stale.
+#:
+#: What that exemption costs: a new major lands in production without a diff.
+#: What limits it: the `agents over ACP` job in `cli-compatibility.yml` runs the
+#: adapter on a schedule and records the version `npx` resolved, so a break
+#: names a version even though this line does not.
+#:
+#: An installation that wants the pin takes it, and gives up the above:
+#: `CodexACPProvider(command=["npx", "--yes", "@agentclientprotocol/codex-acp@1.9.0"])`.
+CODEX_ACP_COMMAND = ("npx", "--yes", "@agentclientprotocol/codex-acp")
 
 
 @dataclass(frozen=True, slots=True)

@@ -376,7 +376,12 @@ def test_checked_in_definition_is_the_implementation_review_source_of_truth() ->
     assert definition.naming_profile is not None
     assert definition.naming_profile.agent_id == AgentId("implementation-agent")
     assert "concise display name" in definition.naming_profile.instructions
-    assert "at most eight words" in definition.naming_prompt
+    assert definition.naming_profile.capabilities == (
+        "view_work_item",
+        "view_change_request",
+        "list_work_items",
+    )
+    assert "at most twelve words" in definition.naming_prompt
     assert isinstance(implementation, AgentStep)
     assert implementation.step_id == StepId("implementation")
     assert implementation.profile.agent_id == AgentId("implementation-agent")
@@ -397,8 +402,8 @@ def test_checked_in_definition_is_the_implementation_review_source_of_truth() ->
     assert review.workspace_access is WorkspaceAccess.READ
     assert isinstance(human, HumanReviewStep)
     assert human.notification is not None
-    assert human.notification.channel == "OpenEngine"
-    assert human.notification.public_url == "https://sheas-mac-mini.taileb7fdb.ts.net"
+    assert human.notification.channel == ""
+    assert human.notification.public_url == ""
 
 
 def test_sqlite_round_trips_a_workflow_definition_snapshot() -> None:

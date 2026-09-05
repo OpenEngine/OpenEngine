@@ -61,7 +61,7 @@ runtime exists.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -86,6 +86,13 @@ from engine.graph_runtime_langgraph.executions import NodeExecution, current_exe
 #: session id. Module-level because a provider is configured long before a
 #: runtime is, and the key is globally unique so nothing can collide.
 _TURNS: dict[str, "_Turn"] = {}
+
+#: The events that mean the agent has stopped writing and started doing, and so
+#: that whatever it has said so far is a finished thought worth publishing. See
+#: `ACPNode._speak`.
+_INTERRUPTS_THE_NARRATION = frozenset(
+    {ACPEventType.TOOL_STARTED, ACPEventType.PERMISSION_REQUESTED}
+)
 
 #: What a continuation carries for this package, under `ACPContinuation.metadata`.
 #: Flat names rather than a nested object: this ends up as JSON in somebody
@@ -125,6 +132,15 @@ class _Turn:
     answer: ApprovalDecision | None = None
     """An answer given before this process existed. Applied once, then cleared."""
     answered: ApprovalId | None = None
+    narrating: Callable[[], Awaitable[None]] | None = None
+    """`_speak`'s buffer flush, for as long as a turn is in flight.
+
+    Called from here rather than only from the loop that fills the buffer,
+    because these are two tasks: the events of a turn are consumed by `_speak`,
+    while a permission request is answered on a task of the connection's own.
+    Publishing the words from the task that raises the question is what puts
+    them *before* it without depending on how the two get scheduled.
+    """
 
     async def ask(self, request: ACPPermissionRequest) -> ACPPermissionOutcome:
         """Turn an ACP permission request into a runtime approval, or apply one.
@@ -134,6 +150,10 @@ class _Turn:
         asking the person twice for one command is exactly what a handoff that
         had not really worked would look like.
         """
+        # Whatever the agent said on its way to asking, published before
+        # anything about the question is. See `narrating`.
+        if self.narrating is not None:
+            await self.narrating()
         if self.answer is not None:
             decision, self.answer = self.answer, None
             await self._settle()
@@ -338,8 +358,16 @@ class ACPNode:
                 await runtime.store.remember_session(
                     execution.run_id, key, self._binding(execution, session, key)
                 )
+            await execution.emit(
+                EventKind.CONVERSATION_STARTED,
+                {
+                    "agent": self.agent,
+                    "sessionId": session.session_id,
+                    "resumed": resuming is not None,
+                },
+            )
             said = await self._speak(
-                execution,
+                turn,
                 session,
                 self.continuation_prompt if resuming else self._prompt(state),
             )
@@ -348,7 +376,7 @@ class ACPNode:
             # transcript, same tool history.
             for message in execution.pending_messages():
                 await execution.say(message, role="user")
-                said = await self._speak(execution, session, message)
+                said = await self._speak(turn, session, message)
             return {self.output_key or str(execution.node_id): said}
         finally:
             _TURNS.pop(session.session_id, None)
@@ -420,23 +448,56 @@ class ACPNode:
         decision = await runtime.recorded_decision(approval_id)
         return None if decision is None else (decision, approval_id)
 
-    async def _speak(
-        self, execution: NodeExecution, session: ACPSession, prompt: ACPPrompt
-    ) -> str:
-        """One ACP turn, with what happens in it republished as runtime events."""
-        message: list[str] = []
-        async for event in session.prompt(prompt):
-            await self._republish(execution, event)
-            if event.type == ACPEventType.MESSAGE_DELTA:
-                block = event.data.get("content")
-                if isinstance(block, Mapping) and block.get("type") == "text":
-                    text = block.get("text")
-                    if isinstance(text, str):
-                        message.append(text)
-        said = "".join(message)
-        if said:
-            await execution.say(said)
-        return said
+    async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:
+        """One ACP turn, with what happens in it republished as runtime events.
+
+        Message deltas are gathered rather than published one by one -- a
+        transcript event per token would be unreadable -- but they are gathered
+        only as far as the next thing the agent does. An agent narrates what it
+        is about to do and then does it, so a line written before a call is
+        published before that call, and somebody following the run reads the
+        explanation with the work it explains rather than after all of it.
+
+        A permission request counts as something it does, and is the case that
+        matters most: it is the one point where a turn can stop for as long as
+        a person takes to answer. Held to the end of the turn, the sentence
+        saying *why* the agent is asking would be published only once somebody
+        had already answered -- so for the whole time the run was genuinely
+        waiting on them, the conversation would have nothing in it at all.
+        `langgraph-acp` streams the request before it calls the handler, for
+        this reason, and `_Turn.narrating` is the other half of it.
+        """
+        execution = turn.execution
+        said: list[str] = []
+        pending: list[str] = []
+
+        async def flush() -> None:
+            # Emptied before anything is awaited, so the two tasks that can
+            # call this cannot publish the same words twice.
+            text = "".join(pending)
+            pending.clear()
+            if text:
+                said.append(text)
+                await execution.say(text)
+
+        turn.narrating = flush
+        try:
+            async for event in session.prompt(prompt):
+                if event.type in _INTERRUPTS_THE_NARRATION:
+                    await flush()
+                await self._republish(execution, event)
+                if event.type == ACPEventType.MESSAGE_DELTA:
+                    block = event.data.get("content")
+                    if isinstance(block, Mapping) and block.get("type") == "text":
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            pending.append(text)
+            await flush()
+        finally:
+            turn.narrating = None
+        # The node's durable output is still the whole turn: what the graph
+        # carries forward does not change with where the words were published.
+        return "".join(said)
 
     async def _republish(self, execution: NodeExecution, event: Any) -> None:
         if event.type == ACPEventType.TOOL_STARTED:

@@ -40,6 +40,17 @@ DONE = "Ran the command."
 #: And once it has been refused.
 REFUSED = "Stopped, as asked."
 
+#: What the agent says *before* it calls a tool, under `STUB_ACP_NARRATE`.
+NARRATION = "I'll start by reading the tests."
+
+#: And what it says before asking permission, under the same switch. Separate
+#: from `NARRATION` so a test can tell which of the two it is looking at.
+ASK_NARRATION = "I'll run the tests now."
+
+#: The call it narrates, and what it is called.
+NARRATED_CALL = "call_read"
+NARRATED_TOOL = "Read tests"
+
 
 def state_dir() -> Path:
     return Path(os.environ["STUB_ACP_STATE"])
@@ -83,6 +94,35 @@ def say(session_id: str, text: str) -> None:
     update(
         session_id,
         {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
+    )
+
+
+def narrate_a_tool_call(session_id: str) -> None:
+    """Say what it is about to do, do it, and report that it finished.
+
+    The shape of a real turn: an agent writes a line, calls a tool, and only
+    then writes the next line. A stub that only ever speaks at the end cannot
+    tell an ordering bug from a correct implementation.
+    """
+    say(session_id, NARRATION)
+    update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": NARRATED_CALL,
+            "title": NARRATED_TOOL,
+            "kind": "read",
+            "status": "pending",
+        },
+    )
+    update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": NARRATED_CALL,
+            "title": NARRATED_TOOL,
+            "status": "completed",
+        },
     )
 
 
@@ -152,6 +192,10 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
         # leaves an agent that still knows it was interrupted mid-tool-call.
         session["awaiting_permission"] = True
         save(session_id, session)
+        # Said before the question, the way an agent explains what it is about
+        # to ask for. Nothing else is sent until the client answers.
+        if os.environ.get("STUB_ACP_NARRATE"):
+            say(session_id, ASK_NARRATION)
         outcome = ask_permission(session_id)
         if outcome is None:
             return  # The client went away. The file remembers where we were.
@@ -169,6 +213,8 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
         respond(message_id, {"stopReason": "end_turn"})
         return
     save(session_id, session)
+    if os.environ.get("STUB_ACP_NARRATE"):
+        narrate_a_tool_call(session_id)
     say(session_id, os.environ.get("STUB_ACP_RESPONSE", DONE))
     respond(message_id, {"stopReason": "end_turn"})
 

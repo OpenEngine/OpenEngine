@@ -37,7 +37,6 @@ class StoredCredentials:
             )
         )
 
-
 class OAuthCredentialStore:
     """A secure keychain entry for one provider and one account identity."""
 

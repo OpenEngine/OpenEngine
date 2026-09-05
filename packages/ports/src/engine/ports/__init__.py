@@ -31,7 +31,7 @@ from engine.ports.agent_runner import (
     UserInputQuestion,
     UserInputResponse,
 )
-from engine.ports.communications import Communications
+from engine.ports.communications import Communications, Message, MessageLink
 from engine.ports.permissions import (
     ApprovalCapability,
     PermissionScope,
@@ -64,6 +64,8 @@ __all__ = [
     "ApprovalCapability",
     "ChangeRequest",
     "Communications",
+    "Message",
+    "MessageLink",
     "Discussion",
     "FinishReason",
     "GitResult",
