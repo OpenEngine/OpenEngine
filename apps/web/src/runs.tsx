@@ -582,6 +582,95 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   );
 }
 
+/** One thing an agent did, as the conversation page draws it. */
+type ConversationEntry = {
+  sequence: number;
+  /** What it said, for the entries that are speech. */
+  text?: string;
+  /** For the entries that are work: what kind of thing it was, what the agent
+   *  called the thing it was doing, and how that ended once it has. */
+  did?: { label: string; name: string; outcome: string };
+};
+
+/** How a decision on a request reads, in the words `chat.tsx` uses for one. */
+function decisionText(decision: string): string {
+  switch (decision) {
+    case "accept":
+      return "Approved.";
+    case "accept_for_session":
+      return "Approved, and allowed again for this conversation without asking.";
+    case "cancel":
+      return "Cancelled — the action did not run.";
+    default:
+      return "Answered.";
+  }
+}
+
+/** What a node's agent has done, in the order it did it.
+ *
+ *  Work belongs here beside the messages, because of when each is published: an
+ *  ACP turn reports a tool call as it makes it and a permission request as it
+ *  raises it, but a message only once the agent stops to do one of those. An
+ *  implementation agent works for as long as the change takes, and one that has
+ *  asked to run something waits for as long as the person does — so a page
+ *  reading transcript events alone has nothing to show for either, and reports
+ *  the two states an implementation run spends its time in as a conversation
+ *  that never started. */
+function conversationActivity(events: ApiGraphEvent[]): ConversationEntry[] {
+  // Keyed by what raised the question as well as by its id, because the two
+  // vocabularies are the agent's and the runtime's and nothing says a call id
+  // cannot read like an approval id.
+  const outcomes = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === "tool.result")
+      outcomes.set(`tool:${String(event.payload.callId ?? "")}`, String(event.payload.result ?? ""));
+    if (event.type === "approval.resolved")
+      outcomes.set(
+        `approval:${String(event.payload.approvalId ?? "")}`,
+        decisionText(String(event.payload.decision ?? "")),
+      );
+  }
+  return events.flatMap((event): ConversationEntry[] => {
+    if (event.type === "transcript")
+      return [{ sequence: event.sequence, text: String(event.payload.text ?? "") }];
+    if (event.type === "tool.call")
+      return [
+        {
+          sequence: event.sequence,
+          did: {
+            label: "Tool",
+            // A call the agent named nothing is still a call it made, and
+            // saying so beats a blank line where the work was.
+            name: String(event.payload.name ?? "") || "Tool call",
+            outcome: outcomes.get(`tool:${String(event.payload.callId ?? "")}`) ?? "",
+          },
+        },
+      ];
+    if (event.type !== "approval.requested") return [];
+    return [
+      {
+        sequence: event.sequence,
+        did: {
+          label: "Approval",
+          // The command, because that is the thing being consented to. The
+          // agent's own description of it when there is no command to show.
+          name:
+            String(event.payload.command ?? "") ||
+            String(event.payload.reason ?? "") ||
+            String(event.payload.toolName ?? "") ||
+            "Permission request",
+          // An unanswered request says so rather than sitting blank: a run
+          // stopped here is stopped on somebody, and this page is where they
+          // find out that it is them.
+          outcome:
+            outcomes.get(`approval:${String(event.payload.approvalId ?? "")}`) ??
+            "Waiting for your decision.",
+        },
+      },
+    ];
+  });
+}
+
 export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId: string }) {
   const [events, setEvents] = useState<ApiGraphEvent[]>();
   const [error, setError] = useState("");
@@ -610,7 +699,7 @@ export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runId, nodeId]);
-  const transcript = events?.filter((event) => event.type === "transcript");
+  const activity = events && conversationActivity(events);
   return (
     <main className="panel-scroll">
       <header className="hero hero-narrow">
@@ -618,15 +707,23 @@ export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId
         <p className="eyebrow">Graph conversation</p>
         <h1>{phaseLabel(nodeId)}</h1>
       </header>
-      {error ? <p className="notice notice-block">{error}</p> : !events ? (
+      {error ? <p className="notice notice-block">{error}</p> : !activity ? (
         <p className="state-inline">Loading conversation…</p>
-      ) : transcript?.length === 0 ? (
+      ) : activity.length === 0 ? (
         <p className="state-inline">Waiting for agent activity…</p>
       ) : (
-        <section className="timeline" aria-label="Conversation transcript">
-          {transcript?.map((event) => (
-            <article className="callout" key={event.sequence}>
-              <p>{String(event.payload.text ?? "")}</p>
+        <section className="timeline" aria-label="Conversation activity">
+          {activity.map((entry) => (
+            <article className="callout" key={entry.sequence}>
+              {entry.did ? (
+                <>
+                  <p className="eyebrow">{entry.did.label}</p>
+                  <p>{entry.did.name}</p>
+                  {entry.did.outcome && <p className="micro">{entry.did.outcome}</p>}
+                </>
+              ) : (
+                <p>{entry.text}</p>
+              )}
             </article>
           ))}
         </section>
