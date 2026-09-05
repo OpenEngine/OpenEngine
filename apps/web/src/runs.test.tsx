@@ -557,9 +557,9 @@ describe("RunDetailPage", () => {
   });
 
   it("shows the tool work an agent does before it says anything", async () => {
-    // What an implementation conversation actually looks like while it runs:
-    // an ACP turn publishes its tool calls as it goes and its message only
-    // when the turn ends, so a page that reads transcript events alone says
+    // What an implementation conversation looks like while it runs, when the
+    // agent gets straight to work: tool calls published as it makes them and
+    // not a word said yet. A page that reads transcript events alone says
     // "waiting" for the length of the work it is watching.
     vi.stubGlobal("fetch", vi.fn(async () => json({
       events: [
@@ -636,6 +636,72 @@ describe("RunDetailPage", () => {
       "ToolRead runs.test.tsxcompleted",
       "Ran the command.",
     ]);
+  });
+
+  it("shows the question a node blocked on a person is blocked on", async () => {
+    // The other state an implementation run spends real time in, and the one it
+    // can sit in for hours: the agent asked to run something and nobody has
+    // answered. Nothing else is published while it waits, so a page that
+    // ignored the request would report the run as one that never started —
+    // to the very person it is waiting on.
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "transcript",
+          nodeId: "implementation",
+          payload: { role: "assistant", text: "I'll run the tests now." },
+        },
+        {
+          sequence: 2,
+          type: "approval.requested",
+          nodeId: "implementation",
+          payload: {
+            approvalId: "approval-1",
+            kind: "command_execution",
+            reason: "run the tests",
+            command: "pytest",
+            toolName: "execute",
+          },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    expect(screen.getByText("pytest")).toBeVisible();
+    expect(screen.getByText("Waiting for your decision.")).toBeVisible();
+    expect(
+      screen.queryByText("Waiting for agent activity…"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says how a request was answered once it has been", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      events: [
+        {
+          sequence: 1,
+          type: "approval.requested",
+          nodeId: "implementation",
+          payload: { approvalId: "approval-1", reason: "run the tests", command: "pytest" },
+        },
+        {
+          sequence: 2,
+          type: "approval.resolved",
+          nodeId: "implementation",
+          payload: { approvalId: "approval-1", decision: "accept" },
+        },
+      ],
+    })));
+
+    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
+    await act(async () => {});
+
+    expect(screen.getByText("Approved.")).toBeVisible();
+    expect(
+      screen.queryByText("Waiting for your decision."),
+    ).not.toBeInTheDocument();
   });
 
   it("renders steps from an arbitrary workflow definition", async () => {

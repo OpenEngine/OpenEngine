@@ -43,6 +43,10 @@ REFUSED = "Stopped, as asked."
 #: What the agent says *before* it calls a tool, under `STUB_ACP_NARRATE`.
 NARRATION = "I'll start by reading the tests."
 
+#: And what it says before asking permission, under the same switch. Separate
+#: from `NARRATION` so a test can tell which of the two it is looking at.
+ASK_NARRATION = "I'll run the tests now."
+
 #: The call it narrates, and what it is called.
 NARRATED_CALL = "call_read"
 NARRATED_TOOL = "Read tests"
@@ -188,6 +192,10 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
         # leaves an agent that still knows it was interrupted mid-tool-call.
         session["awaiting_permission"] = True
         save(session_id, session)
+        # Said before the question, the way an agent explains what it is about
+        # to ask for. Nothing else is sent until the client answers.
+        if os.environ.get("STUB_ACP_NARRATE"):
+            say(session_id, ASK_NARRATION)
         outcome = ask_permission(session_id)
         if outcome is None:
             return  # The client went away. The file remembers where we were.

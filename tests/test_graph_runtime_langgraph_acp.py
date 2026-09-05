@@ -48,7 +48,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry, StdioACPProvider
 
-from acp_stub_agent import DONE, NARRATED_TOOL, NARRATION
+from acp_stub_agent import ASK_NARRATION, DONE, NARRATED_TOOL, NARRATION
 from graph_runtime_backends import State
 
 STUB = Path(__file__).parent / "acp_stub_agent.py"
@@ -185,16 +185,21 @@ def transcript(events: Sequence[RuntimeEvent]) -> list[tuple[str, str]]:
     ]
 
 
+#: Which field names the thing each kind of activity is about.
+_NAMED_BY = {
+    "transcript": "text",
+    "tool.call": "name",
+    "tool.result": "name",
+    "approval.requested": "reason",
+}
+
+
 def activity(events: Sequence[RuntimeEvent], node_id: NodeId) -> list[tuple[str, str]]:
-    """What one node did, in order: what it said and what it called."""
-    interesting = {"transcript", "tool.call", "tool.result"}
+    """What one node did, in order: what it said, called, and asked for."""
     return [
-        (
-            event.kind.value,
-            str(event.payload["text" if event.kind.value == "transcript" else "name"]),
-        )
+        (event.kind.value, str(event.payload[_NAMED_BY[event.kind.value]]))
         for event in events
-        if event.kind.value in interesting and event.node_id == node_id
+        if event.kind.value in _NAMED_BY and event.node_id == node_id
     ]
 
 
@@ -282,6 +287,43 @@ def test_what_an_agent_says_is_published_where_it_said_it(tmp_path: Path) -> Non
         ("tool.call", NARRATED_TOOL),
         ("tool.result", NARRATED_TOOL),
         ("transcript", DONE),
+    ]
+
+
+def test_a_line_explaining_a_request_is_published_before_the_wait(
+    tmp_path: Path,
+) -> None:
+    """And a permission request is where that matters most.
+
+    It is the one point where a turn stops for as long as a person takes to
+    answer, and the sentence saying why the agent is asking is written just
+    before it. Held to the end of the turn, that sentence would be published
+    only once somebody had answered -- so for the whole time the run was
+    genuinely waiting on them, the conversation would be empty.
+    """
+
+    async def scenario() -> list[RuntimeEvent]:
+        async with runtime_over(
+            tmp_path, registry(tmp_path, asks=True, narrates=True)
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            # Everything published up to the question and no further. The
+            # answer is given only after this, so whatever is in here arrived
+            # while the run was still blocked on a person.
+            asked = await until(log, run.run_id, "approval.requested")
+            await runtime.decide(
+                run.run_id,
+                asked[-1].payload["approvalId"],  # type: ignore[arg-type]
+                ApprovalDecision.ACCEPT,
+            )
+            await until(log, run.run_id, "run.finished")
+            return asked
+
+    waiting = asyncio.run(scenario())
+
+    assert activity(waiting, IMPLEMENTATION) == [
+        ("transcript", ASK_NARRATION),
+        ("approval.requested", "run the tests"),
     ]
 
 
