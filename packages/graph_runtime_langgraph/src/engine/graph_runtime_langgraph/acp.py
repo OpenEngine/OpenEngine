@@ -388,7 +388,16 @@ class ACPNode:
             # holds only the agent's half is not a conversation: a reader
             # opening one has to guess what was asked, and cannot tell the work
             # the node was sent to do from the work somebody steered it into.
-            await execution.say(prompt_text(asked), role="user")
+            #
+            # The task only, never the continuation. `continuation_prompt` is
+            # machinery -- it tells a resumed session that its question was
+            # answered -- and `role="user"` is the channel a person's own words
+            # arrive on. Publishing one as the other would put the runtime's
+            # sentence on screen as something the reader appears to have typed,
+            # directly beneath the approval they just answered. An empty prompt
+            # is skipped for the same reason: a turn nobody spoke.
+            if resuming is None and (opening := prompt_text(asked)):
+                await execution.say(opening, role="user")
             said = await self._speak(turn, session, asked)
             # Steering that arrived while the agent worked is a further turn in
             # the same conversation rather than a restart: same session id, same

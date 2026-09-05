@@ -826,7 +826,7 @@ export function ApprovalEntry({
   );
 }
 
-function ApprovalList({
+export function ApprovalList({
   threadId,
   entries,
   className,

@@ -575,6 +575,23 @@ export function disconnectSlack(): Promise<void> {
   return api<void>("/api/slack/disconnect", { method: "POST" });
 }
 
+/** A refusal, carrying the status it was refused with.
+ *
+ *  The message is what a reader is shown and is unchanged, so nothing that
+ *  catches an `Error` has to know about this. The status is for the callers
+ *  that have to tell "there is no such thing" from "the server could not say
+ *  right now" -- the two are the same sentence and mean opposite things about
+ *  whether the state a page is holding is still good. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -585,7 +602,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? `${response.status} ${response.statusText}`);
+    throw new ApiError(
+      body.error ?? `${response.status} ${response.statusText}`,
+      response.status,
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

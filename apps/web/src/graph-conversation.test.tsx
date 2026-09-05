@@ -261,6 +261,57 @@ describe("graphConversation", () => {
       ["assistant", [{ type: "text", text: "Ran the fast suite." }]],
     ]);
   });
+
+  it("holds an open request the event log has no record of raising", () => {
+    // Approvals are in the store and the event log is in the server's memory,
+    // so this is what a restart leaves: a run the snapshot says is stopped on
+    // somebody, and a feed that does not say why.
+    const { requests, unplaced } = graphConversation([], [
+      {
+        approvalId: "approval-1",
+        nodeId: NODE,
+        reason: "Approve this WorkOrder",
+        allowedDecisions: ["accept", "cancel"],
+        kind: "user_input",
+        command: "",
+        toolName: "",
+      },
+    ]);
+
+    expect(requests).toEqual([]);
+    expect(unplaced).toHaveLength(1);
+    expect(unplaced[0].approval).toMatchObject({
+      id: "approval-1",
+      status: "pending",
+      kind: "user_input",
+      reason: "Approve this WorkOrder",
+      toolCallId: null,
+      allowedDecisions: ["accept", "cancel"],
+    });
+  });
+
+  it("keeps a request that was raised out of the unplaced ones", () => {
+    const { requests, unplaced } = graphConversation(
+      [
+        event({
+          sequence: 1,
+          type: "approval.requested",
+          payload: { approvalId: "approval-1", command: "pytest" },
+        }),
+      ],
+      [
+        {
+          approvalId: "approval-1",
+          nodeId: NODE,
+          reason: "run the tests",
+          allowedDecisions: ["accept"],
+        },
+      ],
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(unplaced).toEqual([]);
+  });
 });
 
 describe("GraphConversationPage", () => {
@@ -418,6 +469,171 @@ describe("GraphConversationPage", () => {
 
     expect(screen.getByText("Wrote the greeting.")).toBeVisible();
     expect(screen.queryByLabelText("Message the agent")).toBeNull();
+  });
+
+  it("keeps what it knows when a poll cannot read the run", async () => {
+    // A 502 or a dropped connection is not news about the run. Answering it by
+    // forgetting the snapshot would, for a second, take the composer away and
+    // report the open request as one nobody can answer -- in front of the
+    // person the run is waiting on.
+    const run = graphRun({
+      status: "awaiting_approval",
+      pendingApprovals: [
+        {
+          approvalId: "approval-1",
+          nodeId: NODE,
+          reason: "run the tests",
+          allowedDecisions: ["accept", "cancel"],
+        },
+      ],
+    });
+    const events = [
+      event({
+        sequence: 1,
+        type: "approval.requested",
+        payload: {
+          approvalId: "approval-1",
+          command: "pytest",
+          toolCallId: "call-1",
+          toolName: "execute",
+        },
+      }),
+    ];
+    let snapshots = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === `/api/runs/${runId}/graph-events`) return json({ events });
+        snapshots += 1;
+        // Read once, then the server stops being able to say.
+        return snapshots === 1
+          ? json(run)
+          : json({ error: "upstream is restarting" }, { status: 502 });
+      }),
+    );
+
+    render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+    await act(async () => {});
+    expect(await screen.findByRole("button", { name: "Approve" })).toBeVisible();
+
+    // Several failed polls later, the request is still answerable and the
+    // composer is still there.
+    await waitFor(() => expect(snapshots).toBeGreaterThan(2), { timeout: 5000 });
+    expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
+    expect(screen.getByLabelText("Message the agent")).toBeVisible();
+    expect(screen.queryByText(/can no longer be answered/)).toBeNull();
+  });
+
+  it("answers a request the transcript has no record of raising", async () => {
+    // What a restart leaves: the run is stopped on somebody and the feed is
+    // empty. The card has nowhere in the transcript to sit, so it is drawn
+    // where what-needs-you-now belongs.
+    const fetch = serve(
+      [],
+      graphRun({
+        status: "awaiting_approval",
+        activeExecutions: [],
+        pendingApprovals: [
+          {
+            approvalId: "approval-1",
+            nodeId: NODE,
+            reason: "Approve this WorkOrder",
+            allowedDecisions: ["accept", "cancel"],
+            kind: "user_input",
+          },
+        ],
+      }),
+    );
+    render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+    await act(async () => {});
+
+    expect(await screen.findByText(/Approve this WorkOrder/)).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        `/graph/api/runs/${runId}/approvals/approval-1`,
+        expect.objectContaining({ body: '{"decision":"accept"}' }),
+      ),
+    );
+  });
+
+  it("says why a run stopped, whichever turn it stopped after", async () => {
+    // The agent died during its first turn, so the transcript is the prompt
+    // and nothing else. Hung on the last turn the failure would be lost here,
+    // which is the case a reader most needs told.
+    await open(
+      [
+        event({
+          sequence: 1,
+          type: "transcript",
+          payload: { role: "user", text: "Implement the change." },
+        }),
+        event({
+          sequence: 2,
+          type: "run.failed",
+          payload: { error: "codex exited before answering" },
+        }),
+      ],
+      graphRun({ status: "failed", activeExecutions: [] }),
+    );
+
+    expect(screen.getByText("codex exited before answering")).toBeVisible();
+  });
+
+  it("says why a run stopped when it stopped before anything was said", async () => {
+    await open(
+      [
+        event({
+          sequence: 1,
+          type: "run.failed",
+          payload: { error: "the agent could not be started" },
+        }),
+      ],
+      graphRun({ status: "failed", activeExecutions: [] }),
+    );
+
+    expect(screen.getByText("the agent could not be started")).toBeVisible();
+  });
+
+  it("shows one node's conversation and not its sibling's", async () => {
+    // Two agents fanned out in the same superstep publish into the same feed.
+    // The filter is what stands between that and one reading the other's work.
+    await open([
+      event({
+        sequence: 1,
+        type: "transcript",
+        payload: { role: "assistant", text: "Reading the code." },
+      }),
+      event({
+        sequence: 2,
+        nodeId: "review",
+        type: "transcript",
+        payload: { role: "assistant", text: "Reviewing the change." },
+      }),
+      event({
+        sequence: 3,
+        nodeId: "review",
+        type: "approval.requested",
+        payload: {
+          approvalId: "approval-9",
+          command: "git diff",
+          toolCallId: "call-9",
+        },
+      }),
+      event({
+        sequence: 4,
+        nodeId: "review",
+        type: "run.failed",
+        payload: { error: "the reviewer died" },
+      }),
+    ], graphRun({ status: "failed", activeExecutions: [] }));
+
+    expect(screen.getByText("Reading the code.")).toBeVisible();
+    expect(screen.queryByText("the reviewer died")).toBeNull();
+    expect(screen.queryByText("Reviewing the change.")).toBeNull();
+    expect(screen.queryByText(/git diff/)).toBeNull();
   });
 
   it("leads back to the WorkOrder the node belongs to", async () => {

@@ -67,6 +67,10 @@ restarting the server empties it: the run picks back up (see below), but what
 was said before the restart is gone from the page. Nothing else keeps a graph
 run's transcript, so this is the one thing to know before relying on it.
 
+A question the run is stopped on is not lost with it — approvals are stored, not
+remembered — so after a restart the conversation still shows what is waiting on
+you, above the message box, with nothing above it to explain what led there.
+
 Everything the pages read is served by the graph engine's own API, which the web
 server passes through under `/graph`:
 

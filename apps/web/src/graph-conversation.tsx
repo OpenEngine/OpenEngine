@@ -32,6 +32,7 @@ import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/uti
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  ApiError,
   decideGraphApproval,
   getGraphEvents,
   getGraphRun,
@@ -43,7 +44,7 @@ import {
   type ApprovalDecision,
 } from "./api";
 import { answerApprovalsWith, publishApproval, type InlineApproval } from "./approvals";
-import { ChatThread, ConversationStats } from "./chat";
+import { ApprovalList, ChatThread, ConversationStats } from "./chat";
 import { phaseLabel } from "./runs";
 
 /** What a node's conversation is called in the approvals store, and in the URL
@@ -75,9 +76,23 @@ export type GraphConversation = {
   messages: GraphMessage[];
   /** Every request this node raised, with the turn it interrupted. */
   requests: InlineApproval[];
+  /** Open requests the transcript has no record of raising.
+   *
+   *  Approvals are in the store and the event log is in the server's memory,
+   *  so a restart leaves exactly this: a run the snapshot says is stopped on a
+   *  person, and a feed with nothing in it that says why. The transcript
+   *  cannot place these -- there is no turn and no call to put them under --
+   *  so they are drawn where what-needs-you-now belongs, above the composer.
+   *  Not showing them would leave the run stopped on somebody who has no way
+   *  to see they are being waited on. */
+  unplaced: InlineApproval[];
   /** Why the run stopped here, when it stopped here. */
   failure: string;
 };
+
+/** Where an approval no turn can hold is anchored. No message has this index,
+ *  so neither slot in the transcript claims one. */
+const NO_TURN = -1;
 
 type Request = {
   approvalId: string;
@@ -261,6 +276,7 @@ export function graphConversation(
   const open = new Map(
     pending.map((approval) => [approval.approvalId, approval] as const),
   );
+  const raised = new Set(requests.map((request) => request.approvalId));
   return {
     messages,
     failure,
@@ -268,6 +284,24 @@ export function graphConversation(
       messageIndex: request.messageIndex,
       approval: approvalOf(request, open.get(request.approvalId), resolved),
     })),
+    unplaced: pending
+      .filter((approval) => !raised.has(approval.approvalId))
+      .map((approval) => ({
+        messageIndex: NO_TURN,
+        approval: approvalOf(
+          {
+            approvalId: approval.approvalId,
+            kind: approval.kind ?? "",
+            reason: approval.reason,
+            command: approval.command ?? "",
+            toolName: approval.toolName ?? "",
+            toolCallId: "",
+            messageIndex: NO_TURN,
+          },
+          approval,
+          resolved,
+        ),
+      })),
   };
 }
 
@@ -300,6 +334,26 @@ function approvalOf(
   };
 }
 
+/** A poll that could not read the snapshot, as distinct from one that read it
+ *  and was told there is no such run. */
+const UNREAD = Symbol("unread");
+
+/** The run as it is now, or why there is no answer.
+ *
+ *  `undefined` is the engine's answer: it has no record of this run. The
+ *  transcript is still worth reading and there is nothing on such a run to
+ *  steer or approve, so the page keeps going without it.
+ *
+ *  `UNREAD` is not an answer at all -- a 502, a dropped connection, a server
+ *  on its way back up. What the page already knows is still the best it has. */
+async function readSnapshot(runId: string): Promise<ApiGraphRun | undefined | typeof UNREAD> {
+  try {
+    return await getGraphRun(runId);
+  } catch (reason) {
+    return reason instanceof ApiError && reason.status === 404 ? undefined : UNREAD;
+  }
+}
+
 /** Everything the graph engine says about a run, kept current while a page is
  *  open. Both halves are needed and neither answers for the other: the feed is
  *  what happened, and the snapshot is what is true now -- which node is
@@ -318,11 +372,7 @@ function useGraphRun(runId: string) {
       try {
         const [feed, snapshot] = await Promise.all([
           getGraphEvents(runId),
-          // Tolerated, because what a reader came for is the transcript. A run
-          // the engine no longer has a record of still has one here, and
-          // failing the page over the snapshot would hide it -- there is
-          // nothing to steer or answer on such a run anyway.
-          getGraphRun(runId).catch(() => undefined),
+          readSnapshot(runId),
         ]);
         if (cancelled) return;
         // Replaced only when it changed. The transcript is rebuilt from these,
@@ -331,11 +381,17 @@ function useGraphRun(runId: string) {
         setEvents((current) =>
           current.length === feed.events.length ? current : feed.events,
         );
-        setRun((current) =>
-          current && JSON.stringify(current) === JSON.stringify(snapshot)
+        setRun((current) => {
+          // A read that did not land is not news about the run. Overwriting a
+          // good snapshot with nothing would, for the second until the next
+          // poll, take the composer away, drop the checkout line, and report
+          // every open request as one nobody can answer any more -- in front
+          // of the person the run is still waiting on.
+          if (snapshot === UNREAD) return current;
+          return current && JSON.stringify(current) === JSON.stringify(snapshot)
             ? current
-            : snapshot,
-        );
+            : snapshot;
+        });
         setError("");
         setLoaded(true);
       } catch (reason) {
@@ -387,19 +443,35 @@ function GraphComposer() {
 }
 
 function GraphDock({
+  conversationId,
   working,
   workspace,
   error,
+  failure,
+  unplaced,
 }: {
+  conversationId: string;
   working: boolean;
   workspace: string;
   error: string;
+  failure: string;
+  unplaced: readonly InlineApproval[];
 }) {
   return (
     <ThreadPrimitive.ViewportFooter className="dock">
       <ThreadPrimitive.ScrollToBottom className="btn jump-button">
         Jump to latest
       </ThreadPrimitive.ScrollToBottom>
+      <ApprovalList
+        threadId={conversationId}
+        entries={unplaced}
+        className="approvals"
+      />
+      {/* Here rather than on the last turn, because the run may have died
+          before the agent said anything, or right after somebody steered it --
+          and a failure hung on the last turn is lost in both cases, which are
+          the two where a reader most needs to be told. */}
+      {failure && <p className="notice">{failure}</p>}
       {working ? <GraphComposer /> : <p className="step-note">{IDLE_NOTE}</p>}
       {error && <p className="notice">{error}</p>}
       {workspace && (
@@ -445,7 +517,7 @@ export function GraphConversationPage({
     typeof run?.values.workspace === "string" ? run.values.workspace : "";
 
   useEffect(() => {
-    for (const entry of conversation.requests)
+    for (const entry of [...conversation.requests, ...conversation.unplaced])
       publishApproval(conversationId, entry.approval, entry.messageIndex);
   }, [conversation, conversationId]);
 
@@ -468,27 +540,17 @@ export function GraphConversationPage({
     [conversationId, refresh, runId],
   );
 
+  // Nothing to add: every turn takes the status assistant-ui derives from
+  // `isRunning`, which is what makes a call the agent is still making read as
+  // one. A failure is the run's rather than a turn's, and is drawn in the dock
+  // where it cannot be lost to whichever turn happens to be last.
   const convertMessage = useCallback(
-    (message: GraphMessage, index: number): ThreadMessageLike => ({
+    (message: GraphMessage): ThreadMessageLike => ({
       id: message.id,
       role: message.role,
       content: message.content,
-      // Only the turn a failure ended, and only when one did. Everything else
-      // takes the status assistant-ui derives from `isRunning`, which is what
-      // makes a call the agent is still making read as one.
-      ...(message.role === "assistant" &&
-      index === conversation.messages.length - 1 &&
-      conversation.failure
-        ? {
-            status: {
-              type: "incomplete" as const,
-              reason: "error" as const,
-              error: conversation.failure,
-            },
-          }
-        : {}),
     }),
-    [conversation],
+    [],
   );
 
   const threads = useMemo(
@@ -549,7 +611,14 @@ export function GraphConversationPage({
             </p>
           }
           dock={
-            <GraphDock working={working} workspace={workspace} error={steerError} />
+            <GraphDock
+              conversationId={conversationId}
+              working={working}
+              workspace={workspace}
+              error={steerError}
+              failure={conversation.failure}
+              unplaced={conversation.unplaced}
+            />
           }
         />
       </AssistantRuntimeProvider>

@@ -603,6 +603,11 @@ def test_an_approval_survives_the_runtime_that_raised_it(tmp_path: Path) -> None
     assert prompts(tmp_path).count(PROMPT) == 1
     assert len(prompts(tmp_path)) == 2
     assert PROMPT not in prompts(tmp_path)[1]
+    # And it is not published. `role="user"` is the channel a person's own words
+    # arrive on, and the continuation is the runtime telling a resumed session
+    # that its question was answered -- said under that role it would read, to
+    # whoever just answered the question, as something they had typed.
+    assert transcript(outcome["events"]) == [("assistant", DONE)]
 
 
 def test_two_lost_approvals_are_both_answered_before_anything_restarts(
