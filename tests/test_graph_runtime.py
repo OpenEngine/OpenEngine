@@ -345,12 +345,16 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 "name": "Implementation",
                 "kind": "agent",
                 "description": "",
+                # A node that says nothing about where it belongs is somewhere
+                # a person can go and read, which is what a client offers.
+                "showInSidebar": True,
             },
             {
                 "nodeId": str(REVIEW),
                 "name": "Review",
                 "kind": "agent",
                 "description": "",
+                "showInSidebar": True,
             },
         ],
         "edges": [

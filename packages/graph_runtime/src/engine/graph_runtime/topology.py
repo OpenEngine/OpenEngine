@@ -38,6 +38,18 @@ class GraphNode:
     describe graphs it can otherwise drive perfectly well.
     """
     description: str = ""
+    show_in_sidebar: bool = True
+    """Whether a client listing this run's conversations should offer this node.
+
+    True by default, because a node is normally somewhere a person can go and
+    read what happened. A node says otherwise about itself -- the checkout that
+    holds no conversation, the decision that is the reader's own -- so that a
+    navigation built from a graph does not have to keep a list of the nodes it
+    should leave out.
+
+    Advice to a client rather than a permission: the node is still in the
+    topology, still has a position, and is still readable at its own address.
+    """
 
 
 @dataclass(frozen=True, slots=True)
