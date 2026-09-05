@@ -84,14 +84,18 @@ export type GraphConversation = {
    *  cannot place these -- there is no turn and no call to put them under --
    *  so they are drawn where what-needs-you-now belongs, above the composer.
    *  Not showing them would leave the run stopped on somebody who has no way
-   *  to see they are being waited on. */
+   *  to see they are being waited on.
+   *
+   *  Rebuilt from the snapshot on every poll and never published, so answering
+   *  one takes it off the page rather than leaving a card behind that no state
+   *  will ever come back to correct. */
   unplaced: InlineApproval[];
   /** Why the run stopped here, when it stopped here. */
   failure: string;
 };
 
-/** Where an approval no turn can hold is anchored. No message has this index,
- *  so neither slot in the transcript claims one. */
+/** The turn an unplaced request belongs to, which is none: it is drawn from
+ *  this list rather than from a position in the transcript. */
 const NO_TURN = -1;
 
 type Request = {
@@ -516,8 +520,15 @@ export function GraphConversationPage({
   const workspace =
     typeof run?.values.workspace === "string" ? run.values.workspace : "";
 
+  // The requests the transcript can place, and only those. An unplaced one is
+  // held rather than published: the store keeps what it is given and keeps the
+  // turn it was first given for, and neither is true of these. Published, one
+  // would go on being counted as open after it was answered and had left the
+  // dock, and one caught in the window between the snapshot listing it and its
+  // event arriving would be pinned to a turn that does not exist -- drawn
+  // nowhere at all, for the life of the page.
   useEffect(() => {
-    for (const entry of [...conversation.requests, ...conversation.unplaced])
+    for (const entry of conversation.requests)
       publishApproval(conversationId, entry.approval, entry.messageIndex);
   }, [conversation, conversationId]);
 
@@ -603,7 +614,7 @@ export function GraphConversationPage({
       </header>
       {error && <p className="notice notice-block">{error}</p>}
       <AssistantRuntimeProvider runtime={runtime}>
-        <ConversationStats />
+        <ConversationStats held={conversation.unplaced} />
         <ChatThread
           empty={
             <p className="state-inline">

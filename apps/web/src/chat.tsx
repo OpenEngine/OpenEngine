@@ -28,6 +28,10 @@ import { approvalActions, useApprovals, type InlineApproval } from "./approvals"
 import { Stat, StatStrip } from "./brand";
 import { WorkspaceControl } from "./workspace";
 
+/** Shared so an omitted list is the same list every render, and the memo that
+ *  reads it is not invalidated by a fresh `[]`. */
+const NO_ENTRIES: readonly InlineApproval[] = [];
+
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const COMPOSER_QUEUE_KEY_PREFIX = "engine.composerQueue.";
 const NEW_CHAT_DRAFT_ID = "new";
@@ -908,11 +912,26 @@ function TurnApprovals() {
  *
  *  Every cell is counted from the transcript this browser is holding, so each
  *  one is a fact about what is on screen rather than an estimate of anything. */
-export function ConversationStats() {
+export function ConversationStats({
+  held = NO_ENTRIES,
+}: {
+  /** Requests this conversation holds itself rather than publishing.
+   *
+   *  A request that no turn and no call can place is drawn from the state that
+   *  reports it, and is gone from that state the moment it is answered. Counted
+   *  from the same place for the same reason: published, it would outlive the
+   *  card and leave the strip saying one is open with nothing on screen to
+   *  answer. */
+  held?: readonly InlineApproval[];
+} = {}) {
   const messages = useAuiState((state) => state.thread.messages);
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const approvals = useApprovals(remoteId);
+  const published = useApprovals(remoteId);
+  const approvals = useMemo(
+    () => (held.length ? [...published, ...held] : published),
+    [published, held],
+  );
 
   const toolCalls = useMemo(
     () =>

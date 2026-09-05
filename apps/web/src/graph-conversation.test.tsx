@@ -559,6 +559,124 @@ describe("GraphConversationPage", () => {
     );
   });
 
+  it("stops counting an unplaced request once it has been answered", async () => {
+    // Held rather than published, so the strip is read from the same state the
+    // card is. Published, it would go on saying one is open after the card had
+    // gone, and nothing would ever come back to correct it: there is no event
+    // behind an unplaced request to say it was decided.
+    const asked = graphRun({
+      status: "awaiting_approval",
+      activeExecutions: [],
+      pendingApprovals: [
+        {
+          approvalId: "approval-1",
+          nodeId: NODE,
+          reason: "Approve this WorkOrder",
+          allowedDecisions: ["accept", "cancel"],
+          kind: "user_input",
+        },
+      ],
+    });
+    let answered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === `/api/runs/${runId}/graph-events`) return json({ events: [] });
+        if (path.startsWith(`/graph/api/runs/${runId}/approvals/`)) {
+          answered = true;
+          return json(graphRun({ status: "completed", activeExecutions: [] }));
+        }
+        return json(
+          answered ? graphRun({ status: "completed", activeExecutions: [] }) : asked,
+        );
+      }),
+    );
+
+    render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+    await act(async () => {});
+
+    const strip = document.querySelector(".stats") as HTMLElement;
+    expect(within(strip).getByText("Approvals").parentElement).toHaveTextContent(
+      "1 · 1 open",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(within(strip).getByText("Approvals").parentElement).toHaveTextContent("0"),
+    );
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  it("places a request whose event arrives after the snapshot listed it", async () => {
+    // A poll served between `remember_approval` and the event being published
+    // sees a pending request with nothing behind it. Held rather than
+    // published, so when the event does arrive the request is placed by that
+    // event -- rather than pinned to the turn it had when the store first saw
+    // it, which is no turn at all, and drawn nowhere for the life of the page.
+    const run = graphRun({
+      status: "awaiting_approval",
+      pendingApprovals: [
+        {
+          approvalId: "approval-1",
+          nodeId: NODE,
+          reason: "Approve the plan",
+          allowedDecisions: ["accept", "cancel"],
+          kind: "plan_approval",
+        },
+      ],
+    });
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === `/graph/api/runs/${runId}`) return json(run);
+        reads += 1;
+        return json({
+          events:
+            reads === 1
+              ? []
+              : [
+                  event({
+                    sequence: 1,
+                    type: "transcript",
+                    payload: { role: "assistant", text: "Here is the plan." },
+                  }),
+                  event({
+                    sequence: 2,
+                    type: "approval.requested",
+                    payload: {
+                      approvalId: "approval-1",
+                      kind: "plan_approval",
+                      reason: "Approve the plan",
+                    },
+                  }),
+                ],
+        });
+      }),
+    );
+
+    render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+    await act(async () => {});
+    // Drawn in the dock while the transcript cannot account for it.
+    expect(
+      screen.getByText(/Approve the plan/).closest(".dock"),
+    ).not.toBeNull();
+
+    // And under the turn that raised it once the event says which turn that
+    // was, rather than nowhere.
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText(/Approve the plan/).closest(".message-assistant"),
+        ).not.toBeNull(),
+      { timeout: 5000 },
+    );
+    expect(screen.getAllByText(/Approve the plan/)).toHaveLength(1);
+  });
+
   it("says why a run stopped, whichever turn it stopped after", async () => {
     // The agent died during its first turn, so the transcript is the prompt
     // and nothing else. Hung on the last turn the failure would be lost here,
