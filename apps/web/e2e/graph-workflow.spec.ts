@@ -161,6 +161,32 @@ test("@beta the checkout a graph run works in is on its WorkOrder page", async (
   await expect(checkout).toContainText("cd ");
 });
 
+test("@beta the rail offers a graph WorkOrder's conversations by node", async ({
+  page,
+  engine,
+}) => {
+  engine.script(SCRIPT);
+
+  const runUrl = await create(page, engine.repository);
+  await page.goto(runUrl);
+
+  // The two nodes a person can read, from the moment the run exists: the
+  // checkout and the human verdict are stages of the run rather than
+  // conversations in it, and say so about themselves.
+  const conversations = page.getByLabel(/^Conversations for /);
+  await expect(conversations.getByRole("link")).toHaveText([
+    "Implementation",
+    "Review",
+  ]);
+
+  await conversations.getByRole("link", { name: "Implementation" }).click();
+
+  await expect(page).toHaveURL(/\/conversations\/graph--implementation$/);
+  await expect(page.locator(".rail-sub a[aria-current='page']")).toHaveText(
+    "Implementation",
+  );
+});
+
 /** Open the implementation node's conversation from the WorkOrder page. */
 async function openConversation(page: Page, runUrl: string): Promise<void> {
   await page.goto(runUrl);

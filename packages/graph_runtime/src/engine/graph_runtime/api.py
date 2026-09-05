@@ -301,6 +301,7 @@ def _topology_json(graph: GraphTopology) -> dict[str, object]:
                 "name": node.name,
                 "kind": node.kind,
                 "description": node.description,
+                "showInSidebar": node.show_in_sidebar,
             }
             for node in graph.nodes
         ],

@@ -344,6 +344,10 @@ def test_a_node_names_itself_so_a_workflow_need_not(tmp_path: Path) -> None:
     # The kinds a client draws differently: a checkout, an agent, and the one
     # stage that is a person.
     assert [node.kind for node in topology.nodes] == ["workspace", "agent", "human"]
+    # And which of them a client offers as one of the run's conversations: the
+    # agent alone. A checkout has nobody to talk to, and a person's own verdict
+    # is made where it is presented rather than read as a transcript.
+    assert [node.show_in_sidebar for node in topology.nodes] == [False, True, False]
     assert str(topology.entry_point) == "workspace"
 
 
@@ -361,8 +365,11 @@ def test_a_graph_may_override_what_a_node_calls_itself(tmp_path: Path) -> None:
 
     assert [node.name for node in topology.nodes] == ["The one step"]
     # A node that says nothing about itself is a plain node, which is the
-    # truthful answer for a graph this package did not write.
+    # truthful answer for a graph this package did not write. It is offered as
+    # one of the run's conversations for the same reason: leaving somebody
+    # else's node out of the one navigation a person has would hide the run.
     assert [node.kind for node in topology.nodes] == ["node"]
+    assert [node.show_in_sidebar for node in topology.nodes] == [True]
 
 
 # --- the components, under a run ---------------------------------------------

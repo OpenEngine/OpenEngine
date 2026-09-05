@@ -52,6 +52,14 @@ class HumanReviewNode:
     graph_node_name: str = "Human review"
     graph_node_kind: str = "human"
     graph_node_description: str = "A person accepts or rejects the run."
+    graph_node_show_in_sidebar: bool = False
+    """Not one of the run's conversations, so it is not offered as one.
+
+    What happens here is the reader's own decision, and it is presented where
+    the decision is made -- the WorkOrder page, beside what it is made from.
+    A rail entry leading to a transcript of somebody's own verdict would be a
+    conversation with nobody in it.
+    """
 
     async def __call__(self, _state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()

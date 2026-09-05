@@ -11,6 +11,7 @@ import {
   RunDetailPage,
   RunsPage,
   runStatusLabel,
+  useGraphNodes,
   useRuns,
 } from "./runs";
 
@@ -387,6 +388,61 @@ describe("useRuns", () => {
       "/api/runs/run-1",
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+});
+
+describe("useGraphNodes", () => {
+  const graphRun = () =>
+    run({
+      runId: "run-2",
+      workflowId: "implementation-review-codex",
+      workflowVersion: "",
+      steps: [],
+    });
+  const topology = {
+    graphId: "implementation-review-codex",
+    nodes: [
+      { nodeId: "implementation", name: "Implementation", kind: "agent" },
+      { nodeId: "human-review", name: "Human review", kind: "human", showInSidebar: false },
+    ],
+  };
+
+  it("reads the nodes of every graph the WorkOrders on screen run", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === "/graph/api/graphs/implementation-review-codex"
+        ? json(topology)
+        : json({ error: "not found" }, { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const { result, rerender } = renderHook(
+      ({ runs }) => useGraphNodes(runs),
+      { initialProps: { runs: [run(), graphRun()] } },
+    );
+
+    await waitFor(() =>
+      expect(result.current["implementation-review-codex"]).toHaveLength(2),
+    );
+    // The step WorkOrder's definition is not a graph, so nothing asked for it.
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // A poll answering with the same WorkOrders is not news about their graphs,
+    // whose shape does not change while the server is up.
+    rerender({ runs: [run(), graphRun()] });
+    await act(async () => {});
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers nothing when the graph engine will not describe a graph", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(json({ error: "not running graph workflows" }, { status: 502 })),
+    );
+
+    const { result } = renderHook(() => useGraphNodes([graphRun()]));
+
+    await act(async () => {});
+    expect(result.current).toEqual({});
   });
 });
 
