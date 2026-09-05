@@ -45,6 +45,15 @@ from engine.apps.web.github_auth import (
     poll_device_flow,
     start_device_flow,
 )
+from engine.apps.web.gitlab_auth import (
+    DeviceFlowComplete as GitLabDeviceFlowComplete,
+    GitLabAuthError,
+    GitLabCredentialStore,
+    credentials_from_device_flow as gitlab_credentials_from_device_flow,
+    normalize_origin as normalize_gitlab_origin,
+    poll_device_flow as poll_gitlab_device_flow,
+    start_device_flow as start_gitlab_device_flow,
+)
 from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
@@ -2266,20 +2275,7 @@ def create_app(
     async def github_status(_request: Request) -> JSONResponse:
         credentials = _credential_store.get_credentials()
         now = time.time()
-        connected = bool(
-            credentials
-            and (
-                credentials.expires_at is None
-                or credentials.expires_at > now
-                or (
-                    credentials.refresh_token is not None
-                    and (
-                        credentials.refresh_token_expires_at is None
-                        or credentials.refresh_token_expires_at > now
-                    )
-                )
-            )
-        )
+        connected = bool(credentials and credentials.is_usable(now))
         return JSONResponse(
             {
                 "connected": connected,
@@ -2424,6 +2420,116 @@ def create_app(
         _credential_store.delete()
         return Response(status_code=204)
 
+    # GitLab credentials are per OAuth issuer, unlike GitHub's single public
+    # issuer.  Keep one in-flight device flow per canonical instance so tabs
+    # cannot race an authorization code for the same account.
+    _gitlab_flows: dict[str, tuple[object, int]] = {}
+
+    def _gitlab_origin(request: Request | None = None, body: Mapping[str, object] | None = None) -> str:
+        value = (
+            body.get("origin") if body is not None else request.query_params.get("origin") if request is not None else None
+        )
+        try:
+            return normalize_gitlab_origin(value if isinstance(value, str) else "https://gitlab.com")
+        except ValueError as error:
+            raise GitLabAuthError(str(error)) from error
+
+    def _gitlab_connected(store: GitLabCredentialStore) -> bool:
+        credentials = store.get_credentials()
+        now = time.time()
+        return bool(credentials and credentials.is_usable(now))
+
+    async def gitlab_status(request: Request) -> JSONResponse:
+        try:
+            origin = _gitlab_origin(request)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        store = GitLabCredentialStore(origin)
+        return JSONResponse({"origin": origin, "connected": _gitlab_connected(store), "clientIdConfigured": bool(store.get_client_id())})
+
+    async def gitlab_set_client_id(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        client_id = body.get("clientId")
+        if not isinstance(client_id, str) or not client_id.strip():
+            return _error("clientId is required", 400)
+        try:
+            GitLabCredentialStore(origin).set_client_id(client_id.strip())
+        except GitLabAuthError as error:
+            return _error(str(error), 500)
+        return Response(status_code=204)
+
+    async def gitlab_connect(request: Request) -> JSONResponse:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        client_id = GitLabCredentialStore(origin).get_client_id()
+        if not client_id:
+            return _error("GitLab client ID is not configured for this instance.", 503)
+        active = _gitlab_flows.get(origin)
+        if active is None:
+            try:
+                flow = await start_gitlab_device_flow(origin, client_id)
+            except GitLabAuthError as error:
+                return _error(str(error), 502)
+            active = (flow, flow.interval)
+            _gitlab_flows[origin] = active
+        flow, interval = active
+        return JSONResponse({"origin": origin, "userCode": flow.user_code, "verificationUri": flow.verification_uri, "expiresIn": flow.expires_in, "interval": interval})
+
+    async def gitlab_connect_poll(request: Request) -> JSONResponse:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        active = _gitlab_flows.get(origin)
+        if active is None:
+            return _error("no active GitLab device flow; call POST /api/gitlab/connect first", 409)
+        flow, interval = active
+        client_id = GitLabCredentialStore(origin).get_client_id()
+        if not client_id:
+            _gitlab_flows.pop(origin, None)
+            return _error("GitLab client ID is not configured for this instance.", 503)
+        try:
+            result = await poll_gitlab_device_flow(origin, client_id, flow.device_code, interval)
+        except GitLabAuthError as error:
+            _gitlab_flows.pop(origin, None)
+            return _error(str(error), 502)
+        if isinstance(result, GitLabDeviceFlowComplete):
+            try:
+                GitLabCredentialStore(origin).set_credentials(gitlab_credentials_from_device_flow(result))
+            except GitLabAuthError as error:
+                _gitlab_flows.pop(origin, None)
+                return _error(str(error), 500)
+            _gitlab_flows.pop(origin, None)
+            return JSONResponse({"status": "complete"})
+        _gitlab_flows[origin] = (flow, result.next_interval)
+        return JSONResponse({"status": "pending", "nextInterval": result.next_interval})
+
+    async def gitlab_disconnect(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        _gitlab_flows.pop(origin, None)
+        GitLabCredentialStore(origin).delete()
+        return Response(status_code=204)
+
     async def graph_surface(scope: Scope, receive: Receive, send: Send) -> None:
         """Pass anything under `/graph` to the graph engine's own server.
 
@@ -2539,6 +2645,11 @@ def create_app(
         Route("/api/source-control/provider", source_control_provider_status),
         Route(
             "/api/source-control/provider",
+            source_control_provider_status,
+            methods=["GET"],
+        ),
+        Route(
+            "/api/source-control/provider",
             set_source_control_provider,
             methods=["POST"],
         ),
@@ -2547,6 +2658,11 @@ def create_app(
         Route("/api/github/connect", github_connect, methods=["POST"]),
         Route("/api/github/connect/poll", github_connect_poll, methods=["POST"]),
         Route("/api/github/disconnect", github_disconnect, methods=["POST"]),
+        Route("/api/gitlab/status", gitlab_status),
+        Route("/api/gitlab/client-id", gitlab_set_client_id, methods=["POST"]),
+        Route("/api/gitlab/connect", gitlab_connect, methods=["POST"]),
+        Route("/api/gitlab/connect/poll", gitlab_connect_poll, methods=["POST"]),
+        Route("/api/gitlab/disconnect", gitlab_disconnect, methods=["POST"]),
         Route("/api/slack/status", slack_status),
         Route("/api/slack/credentials", slack_set_credentials, methods=["POST"]),
         Route("/api/slack/connect", slack_connect, methods=["POST"]),

@@ -71,11 +71,14 @@ class GitHubOAuthTransport:
                 )
         if response.is_error:
             raise self._request_error(method, path, response)
-        return (
-            {}
-            if response.status_code == 204 or not response.content
-            else response.json()
-        )
+        if response.status_code == 204 or not response.content:
+            return {}
+        try:
+            return response.json()
+        except ValueError as error:
+            raise GitHubTransportError(
+                f"GitHub API {method} {path} returned invalid JSON"
+            ) from error
 
     async def download(self, path: str) -> bytes:
         token = self._token
