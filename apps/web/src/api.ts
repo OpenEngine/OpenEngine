@@ -247,8 +247,37 @@ export type ApiGraphRun = {
 
 export type ApiGraphTopology = {
   graphId: string;
-  nodes: { nodeId: string; name: string; kind: string }[];
+  nodes: {
+    nodeId: string;
+    name: string;
+    kind: string;
+    /** Whether the rail should offer this node's conversation. Absent means
+     *  shown: a node that says nothing is one a person can go and read. */
+    showInSidebar?: boolean;
+  }[];
 };
+
+/** The nodes of one graph, which is the same before a run of it has started.
+ *
+ *  A compiled graph's shape does not change while the server is up, so a client
+ *  reads this once per graph rather than per run. */
+export function getGraphTopology(
+  graphId: string,
+  signal?: AbortSignal,
+): Promise<ApiGraphTopology> {
+  return api<ApiGraphTopology>(
+    `/graph/api/graphs/${encodeURIComponent(graphId)}`,
+    { signal },
+  );
+}
+
+/** Where one graph node's conversation is read and steered.
+ *
+ *  `graph--` rather than a thread id, because nothing about a node's transcript
+ *  is a thread: it is folded from the run's events. See `routeForPath`. */
+export function graphConversationUrl(runId: string, nodeId: string): string {
+  return `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(nodeId)}`;
+}
 
 export type ApiGraphEvent = {
   sequence: number;

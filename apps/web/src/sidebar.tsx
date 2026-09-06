@@ -10,12 +10,63 @@
 
 import { useState, type ReactNode } from "react";
 
-import { projectMilestonesUrl, type ApiProject, type ApiWorkflowRunListing } from "./api";
+import {
+  graphConversationUrl,
+  projectMilestonesUrl,
+  type ApiGraphTopology,
+  type ApiProject,
+  type ApiWorkflowRunListing,
+} from "./api";
 import { RailBrand, RailFoot } from "./brand";
 import { SettingsPanel } from "./settings-panel";
-import { conversationCount, IN_PROGRESS_PHASES, runStatusLabel } from "./runs";
+import { isGraphRun, IN_PROGRESS_PHASES, runStatusLabel } from "./runs";
 
 export type RailSection = "projects" | "workflows";
+
+/** The nodes of each graph, by the id of the graph they belong to. */
+export type GraphNodes = Record<string, ApiGraphTopology["nodes"]>;
+
+/** One shortcut under a WorkOrder's name: a conversation it holds. */
+type RailConversation = {
+  key: string;
+  name: string;
+  href: string;
+  waiting: boolean;
+};
+
+/** What one WorkOrder offers beneath its name.
+ *
+ *  A step run offers the conversations its steps have started, named after the
+ *  step that owns each. A `[BETA]` run has no steps: its stages are its graph's
+ *  nodes, so those are what it offers, under their own names and from the moment
+ *  the run exists rather than once an agent has said something. A node that says
+ *  it is not one of the run's conversations -- the checkout, the person's own
+ *  verdict -- is left out; see `show_in_sidebar` on `GraphNode`.
+ *
+ *  A graph whose nodes have not been read yet offers nothing, which is the rail
+ *  as it read before they were offered at all. */
+function conversationsOf(
+  run: ApiWorkflowRunListing,
+  nodes: GraphNodes,
+): RailConversation[] {
+  if (isGraphRun(run))
+    return (nodes[run.workflowId] ?? [])
+      .filter((node) => node.showInSidebar !== false)
+      .map((node) => ({
+        key: node.nodeId,
+        name: node.name,
+        href: graphConversationUrl(run.runId, node.nodeId),
+        waiting: false,
+      }));
+  return run.steps
+    .filter((step) => step.conversationUrl)
+    .map((step) => ({
+      key: step.stepId,
+      name: `${step.name} conversation`,
+      href: step.conversationUrl!,
+      waiting: step.waiting,
+    }));
+}
 
 function Section({
   id,
@@ -135,6 +186,7 @@ function ProjectItem({
 export function Sidebar({
   projects = [],
   runs,
+  graphNodes = {},
   initialSection,
   activeRunId,
   activeConversationUrl,
@@ -146,6 +198,10 @@ export function Sidebar({
 }: {
   projects?: ApiProject[];
   runs: ApiWorkflowRunListing[];
+  /** The graphs behind the `[BETA]` WorkOrders listed, which is where their
+   *  conversations are named. Empty until they have been read, and for a rail
+   *  whose owner does not follow them. */
+  graphNodes?: GraphNodes;
   /** Which section the page on screen belongs to, followed until the reader
    *  opens one themselves. */
   initialSection: RailSection;
@@ -241,62 +297,67 @@ export function Sidebar({
             </a>
           </div>
           <nav className="rail-scroll" aria-label="Recent WorkOrders">
-            {runs.map((run) => (
-              <div className="rail-group" key={run.runId}>
-                <div
-                  className="rail-item"
-                  data-active={
-                    activeRunId === run.runId && !activeConversationUrl ? true : undefined
-                  }
-                >
-                  <a className="rail-item-trigger" href={`/runs/${run.runId}`}>
-                    <span className="rail-item-title" data-clamp="">
-                      {run.name}
-                    </span>
-                    <span className="rail-item-meta">
-                      {IN_PROGRESS_PHASES.has(run.phase) && (
-                        <span className="rail-live" aria-label="WorkOrder is in progress" />
-                      )}
-                      {runStatusLabel(run)} · {run.workflowVersion || run.workflowId}
-                    </span>
-                  </a>
-                  {/* The project row's × put next to a WorkOrder, where it
-                      throws the run away rather than putting it aside: a run
-                      has no archived list to sit in, so the click is asked
-                      about before it is made. */}
-                  {onDeleteRun && (
-                    <button
-                      aria-label={`Delete ${run.name}`}
-                      className="rail-item-action"
-                      onClick={() => onDeleteRun(run)}
-                      title="Delete WorkOrder"
-                      type="button"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-                {conversationCount(run) > 0 && (
-                  <div className="rail-sub" aria-label={`Conversations for ${run.name}`}>
-                    {run.steps
-                      .filter((step) => step.conversationUrl)
-                      .map((step) => (
+            {runs.map((run) => {
+              const conversations = conversationsOf(run, graphNodes);
+              return (
+                <div className="rail-group" key={run.runId}>
+                  <div
+                    className="rail-item"
+                    data-active={
+                      activeRunId === run.runId && !activeConversationUrl ? true : undefined
+                    }
+                  >
+                    <a className="rail-item-trigger" href={`/runs/${run.runId}`}>
+                      <span className="rail-item-title" data-clamp="">
+                        {run.name}
+                      </span>
+                      <span className="rail-item-meta">
+                        {IN_PROGRESS_PHASES.has(run.phase) && (
+                          <span className="rail-live" aria-label="WorkOrder is in progress" />
+                        )}
+                        {runStatusLabel(run)} · {run.workflowVersion || run.workflowId}
+                      </span>
+                    </a>
+                    {/* The project row's × put next to a WorkOrder, where it
+                        throws the run away rather than putting it aside: a run
+                        has no archived list to sit in, so the click is asked
+                        about before it is made. */}
+                    {onDeleteRun && (
+                      <button
+                        aria-label={`Delete ${run.name}`}
+                        className="rail-item-action"
+                        onClick={() => onDeleteRun(run)}
+                        title="Delete WorkOrder"
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                  {conversations.length > 0 && (
+                    <div className="rail-sub" aria-label={`Conversations for ${run.name}`}>
+                      {conversations.map((conversation) => (
                         <a
                           aria-current={
-                            activeConversationUrl === step.conversationUrl ? "page" : undefined
+                            activeConversationUrl === conversation.href ? "page" : undefined
                           }
-                          data-active={activeConversationUrl === step.conversationUrl || undefined}
-                          href={step.conversationUrl!}
-                          key={step.stepId}
+                          data-active={
+                            activeConversationUrl === conversation.href || undefined
+                          }
+                          href={conversation.href}
+                          key={conversation.key}
                         >
-                          {step.name} conversation
-                          {step.waiting && <span aria-label="Waiting for input"> ❔</span>}
+                          {conversation.name}
+                          {conversation.waiting && (
+                            <span aria-label="Waiting for input"> ❔</span>
+                          )}
                         </a>
                       ))}
-                  </div>
-                )}
-              </div>
-            ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </nav>
         </Section>
       </div>

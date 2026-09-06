@@ -53,6 +53,13 @@ class WorkspaceNode:
     graph_node_name: str = "Workspace"
     graph_node_kind: str = "workspace"
     graph_node_description: str = "Checks the repository out for this run."
+    graph_node_show_in_sidebar: bool = False
+    """Not a conversation, so it is not offered as one.
+
+    A checkout says what it did -- the run's page prints the directory, and the
+    provisioning is a tool call on the run's feed -- but there is nobody here to
+    talk to. The conversations a rail offers are the agents'.
+    """
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()

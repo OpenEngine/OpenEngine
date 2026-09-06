@@ -7,6 +7,8 @@ import {
   deleteRun,
   getGraphEvents,
   getGraphRun,
+  getGraphTopology,
+  graphConversationUrl,
   milestoneDetailsUrl,
   type ApiMilestone,
   type ApiGraphEvent,
@@ -68,6 +70,56 @@ export function phaseAccent(phase: string): "flame" | "quiet" | undefined {
 
 export function conversationCount(run: ApiWorkflowRunListing) {
   return run.steps.filter((step) => step.conversationUrl).length;
+}
+
+/** Whether the graph engine runs this WorkOrder: the `[BETA]` kind.
+ *
+ *  A graph has no version yet, and that absence is the only tell the runs list
+ *  carries. Written down once so the two readers of it agree. */
+export function isGraphRun(run: Pick<ApiWorkflowRunListing, "workflowVersion">) {
+  return !run.workflowVersion;
+}
+
+/** The nodes of every graph the WorkOrders on screen run.
+ *
+ *  A `[BETA]` WorkOrder keeps no steps in the runs list -- a graph is not made
+ *  of them -- so what it offers instead is its graph's nodes, which exist from
+ *  the moment the run does. Read once per graph rather than per run or per
+ *  poll: a compiled graph's shape does not change while the server is up, and
+ *  the list this follows is re-read every second.
+ *
+ *  A graph the engine will not describe -- it is not running these workflows,
+ *  or it is on its way back up -- contributes nothing, which leaves the rail
+ *  as it reads today rather than putting an error in it. */
+export function useGraphNodes(runs: ApiWorkflowRunListing[]) {
+  const [nodes, setNodes] = useState<Record<string, ApiGraphTopology["nodes"]>>({});
+  // A string rather than the array, so a poll that answers with the same
+  // WorkOrders does not re-run the effect a new array identity would. Encoded
+  // rather than joined, because nothing promises a graph id has no separator
+  // in it.
+  const graphIds = JSON.stringify(
+    [...new Set(runs.filter(isGraphRun).map((run) => run.workflowId))].sort(),
+  );
+  useEffect(() => {
+    const wanted: string[] = JSON.parse(graphIds);
+    if (!wanted.length) return;
+    const controller = new AbortController();
+    void Promise.all(
+      wanted.map(async (graphId) => {
+        try {
+          return [graphId, (await getGraphTopology(graphId, controller.signal)).nodes] as const;
+        } catch {
+          return undefined;
+        }
+      }),
+    ).then((answers) => {
+      if (controller.signal.aborted) return;
+      const found = answers.filter((answer) => answer !== undefined);
+      if (found.length) setNodes((current) => ({ ...current, ...Object.fromEntries(found) }));
+    });
+    return () => controller.abort();
+  }, [graphIds]);
+  return nodes;
 }
 
 /** The runs behind both the workflow pages and the rail's Workflows section,
@@ -671,10 +723,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
         const value = await api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`);
         if (cancelled) return;
         setRun(value);
-        if (!value.workflowVersion) {
+        if (isGraphRun(value)) {
           const [nextGraph, nextTopology, eventLog] = await Promise.all([
             getGraphRun(runId),
-            api<ApiGraphTopology>(`/graph/api/graphs/${encodeURIComponent(value.workflowId)}`),
+            getGraphTopology(value.workflowId),
             getGraphEvents(runId),
           ]);
           if (cancelled) return;
@@ -721,7 +773,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
           event.type === "conversation.started" || event.type === "transcript"
         ))
-          ? `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(node.nodeId)}` : null,
+          ? graphConversationUrl(runId, node.nodeId) : null,
         waiting: waiting.has(node.nodeId),
         summary: typeof graph.values[node.nodeId] === "string" ? String(graph.values[node.nodeId]) : "",
         outputs: [],

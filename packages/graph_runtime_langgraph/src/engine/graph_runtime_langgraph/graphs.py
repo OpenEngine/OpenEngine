@@ -66,6 +66,15 @@ class DescribesItself(Protocol):
     @property
     def graph_node_description(self) -> str: ...
 
+    @property
+    def graph_node_show_in_sidebar(self) -> bool: ...
+    """Whether a client's list of this run's conversations should offer it.
+
+    True unless the node says otherwise, which is the same reasoning as the
+    name: the node knows -- a checkout has no conversation to open in any
+    graph that has one -- and a workflow file should not have to repeat it.
+    """
+
 
 @dataclass(frozen=True)
 class LangGraphDefinition:
@@ -122,6 +131,7 @@ class LangGraphDefinition:
                     name=self.names.get(node.id) or _name_of(node) or node.id,
                     kind=_kind_of(node),
                     description=_description_of(node),
+                    show_in_sidebar=_shown_in_sidebar(node),
                 )
                 for node in drawn.nodes.values()
                 if node.id not in (START, END)
@@ -172,6 +182,16 @@ def _kind_of(node: Any) -> str:
 
 def _description_of(node: Any) -> str:
     return str(getattr(_described(node), "graph_node_description", ""))
+
+
+def _shown_in_sidebar(node: Any) -> bool:
+    """Whether a node belongs in a client's list of this run's conversations.
+
+    Shown unless the node says otherwise: a graph this package did not write
+    says nothing, and leaving its nodes out of the one navigation a person has
+    would hide the run from them.
+    """
+    return bool(getattr(_described(node), "graph_node_show_in_sidebar", True))
 
 
 __all__ = ["END", "START", "DescribesItself", "LangGraphDefinition"]

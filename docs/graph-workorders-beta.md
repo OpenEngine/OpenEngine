@@ -47,6 +47,13 @@ underneath can do, which is the reason the second one exists:
 
 ## Following one, and talking to it
 
+The rail lists a `[BETA]` WorkOrder's conversations under its name —
+**Implementation** and **Review** — from the moment the run exists, because
+those are its graph's nodes rather than something that has to happen first. The
+checkout and the human verdict are stages of the run rather than conversations
+in it, so they are not offered there; a node says which it is with
+`show_in_sidebar`.
+
 The WorkOrder page shows a graph run's stages, and each agent node has an **Open
 conversation** link once it has said anything. That conversation is the same
 view a chat is: the task the node was given as the first turn, what the agent

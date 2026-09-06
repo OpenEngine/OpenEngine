@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ApiWorkflowRun } from "./api";
+import type { ApiGraphTopology, ApiWorkflowRun } from "./api";
 import { Sidebar } from "./sidebar";
 
 const run: ApiWorkflowRun = {
@@ -42,6 +42,28 @@ const run: ApiWorkflowRun = {
   pendingHumanReview: null,
   humanDecision: null,
 };
+
+/** The same WorkOrder on the graph engine: no version, and no steps, because a
+ *  graph is not made of them. */
+const graphRun: ApiWorkflowRun = {
+  ...run,
+  runId: "run-2",
+  name: "Second run",
+  workflowId: "implementation-review-codex",
+  workflowName: "Implementation review (codex)",
+  workflowVersion: "",
+  currentStepId: null,
+  steps: [],
+};
+
+/** Its graph, as the engine describes one: the two agents a person can read,
+ *  and the two stages that are not conversations. */
+const nodes: ApiGraphTopology["nodes"] = [
+  { nodeId: "workspace", name: "Workspace", kind: "workspace", showInSidebar: false },
+  { nodeId: "implementation", name: "Implementation", kind: "agent" },
+  { nodeId: "review", name: "Review", kind: "agent", showInSidebar: true },
+  { nodeId: "human-review", name: "Human review", kind: "human", showInSidebar: false },
+];
 
 function header(name: string) {
   return screen.getByRole("button", { name });
@@ -473,6 +495,80 @@ describe("Sidebar", () => {
 
     expect(
       within(body("WorkOrders")).queryByRole("button", { name: "Delete First run" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /** A `[BETA]` WorkOrder has no steps -- a graph is not made of them -- so the
+   *  shortcuts under its name are its graph's nodes, offered from the moment
+   *  the run exists rather than once an agent has said something. */
+  it("offers a graph WorkOrder's nodes as its conversations", () => {
+    render(
+      <Sidebar
+        runs={[graphRun]}
+        graphNodes={{ "implementation-review-codex": nodes }}
+        initialSection="workflows"
+        activeRunId="run-2"
+      />,
+    );
+
+    const rail = within(body("WorkOrders"));
+    expect(rail.getByRole("link", { name: "Implementation" })).toHaveAttribute(
+      "href",
+      "/runs/run-2/conversations/graph--implementation",
+    );
+    expect(rail.getByRole("link", { name: "Review" })).toHaveAttribute(
+      "href",
+      "/runs/run-2/conversations/graph--review",
+    );
+  });
+
+  /** The checkout and the person's own verdict are stages, not conversations,
+   *  and each says so about itself. */
+  it("leaves out the nodes that say they do not belong in the rail", () => {
+    render(
+      <Sidebar
+        runs={[graphRun]}
+        graphNodes={{ "implementation-review-codex": nodes }}
+        initialSection="workflows"
+      />,
+    );
+
+    const rail = within(body("WorkOrders"));
+    expect(rail.queryByRole("link", { name: "Workspace" })).not.toBeInTheDocument();
+    expect(rail.queryByRole("link", { name: "Human review" })).not.toBeInTheDocument();
+  });
+
+  it("marks the graph conversation on screen rather than the run it belongs to", () => {
+    render(
+      <Sidebar
+        runs={[graphRun]}
+        graphNodes={{ "implementation-review-codex": nodes }}
+        initialSection="workflows"
+        activeRunId="run-2"
+        activeConversationUrl="/runs/run-2/conversations/graph--review"
+      />,
+    );
+
+    const rail = within(body("WorkOrders"));
+    expect(
+      rail.getByRole("link", { name: /Second run/ }).closest(".rail-item"),
+    ).not.toHaveAttribute("data-active");
+    expect(rail.getByRole("link", { name: "Review" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(rail.getByRole("link", { name: "Implementation" })).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+
+  /** The graph engine may not be running, or may not have answered yet. The
+   *  rail is then the one it was before these were offered at all. */
+  it("offers nothing under a graph WorkOrder whose nodes are unknown", () => {
+    render(<Sidebar runs={[graphRun]} initialSection="workflows" />);
+
+    expect(
+      within(body("WorkOrders")).queryByLabelText("Conversations for Second run"),
     ).not.toBeInTheDocument();
   });
 
