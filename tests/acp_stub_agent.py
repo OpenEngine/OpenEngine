@@ -187,7 +187,14 @@ def ask_permission(session_id: str) -> dict[str, Any] | None:
 def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
     session = load(session_id)
     session["turns"].append(prompt_text)
-    if os.environ.get("STUB_ACP_ASK") and not session.get("granted"):
+    # `STUB_ACP_ASK_EVERY` is what a real agent doing real work looks like: each
+    # turn wants to run something of its own, so each turn asks again. It is the
+    # only way to hold a *steered* turn open long enough for a test to say
+    # something into it.
+    asks = os.environ.get("STUB_ACP_ASK") and (
+        os.environ.get("STUB_ACP_ASK_EVERY") or not session.get("granted")
+    )
+    if asks:
         # Written down *before* asking, so a client that dies without answering
         # leaves an agent that still knows it was interrupted mid-tool-call.
         session["awaiting_permission"] = True

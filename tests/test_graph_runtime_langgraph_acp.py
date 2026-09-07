@@ -68,6 +68,7 @@ def registry(
     tmp_path: Path,
     *,
     asks: bool = False,
+    asks_every: bool = False,
     response: str = DONE,
     narrates: bool = False,
 ) -> ACPAgentRegistry:
@@ -81,7 +82,8 @@ def registry(
                     "STUB_ACP_STATE": str(tmp_path),
                     "STUB_ACP_LOG": str(tmp_path / "agent.log"),
                     "STUB_ACP_RESPONSE": response,
-                    **({"STUB_ACP_ASK": "1"} if asks else {}),
+                    **({"STUB_ACP_ASK": "1"} if asks or asks_every else {}),
+                    **({"STUB_ACP_ASK_EVERY": "1"} if asks_every else {}),
                     **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
                 },
                 # The seam the whole design turns on: a permission request comes
@@ -388,6 +390,62 @@ def test_steering_an_acp_execution_continues_the_same_session(tmp_path: Path) ->
     assert list(sessions(tmp_path).values())[0]["turns"] == [
         PROMPT,
         "Use the fast suite.",
+    ]
+
+
+def test_steering_sent_during_a_steered_turn_still_reaches_the_agent(
+    tmp_path: Path,
+) -> None:
+    """The second message, said while the agent is answering the first.
+
+    A message is delivered when the turn in flight ends, so the window a person
+    types into is whichever turn that is -- and once one instruction has landed,
+    the turn in flight *is* a steered one. It is also the turn they are most
+    likely to be watching, because they just redirected the agent and are
+    reading what it does about it.
+
+    Draining the queue once would take it as it looked before that reply began
+    and leave everything said during it on an execution the node is about to
+    release. Nothing reports that: the run finishes normally, and the message
+    stays on screen as a turn the agent never answered.
+    """
+
+    async def scenario() -> int:
+        async with runtime_over(tmp_path, registry(tmp_path, asks_every=True)) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            unsaid = ["Use the fast suite.", "And skip the linter."]
+            async with asyncio.timeout(PATIENCE):
+                async for event in log.stream(run.run_id):
+                    if event.kind.value == "approval.requested":
+                        # Said while the agent is blocked on its own question,
+                        # which is the moment a person reliably has: the first
+                        # into the turn the node was given, the second into the
+                        # turn that is answering the first.
+                        if unsaid:
+                            await runtime.steer(run.run_id, unsaid.pop(0))
+                        await runtime.decide(
+                            run.run_id,
+                            event.payload["approvalId"],  # type: ignore[arg-type]
+                            ApprovalDecision.ACCEPT,
+                        )
+                    elif event.kind.value in ("run.finished", "run.failed"):
+                        break
+            return runtime.entered(IMPLEMENTATION)
+
+    entered = asyncio.run(scenario())
+
+    assert prompts(tmp_path) == [PROMPT, "Use the fast suite.", "And skip the linter."]
+    # Both of them further turns of the one conversation, and the node entered
+    # once: nothing here restarted anything to carry a message.
+    assert len(sent(tmp_path, "session/new")) == 1
+    assert entered == 1
+    assert list(sessions(tmp_path).values())[0]["turns"] == [
+        PROMPT,
+        "Use the fast suite.",
+        "And skip the linter.",
     ]
 
 

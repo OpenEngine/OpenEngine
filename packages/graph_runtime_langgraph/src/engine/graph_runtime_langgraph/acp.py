@@ -402,9 +402,19 @@ class ACPNode:
             # Steering that arrived while the agent worked is a further turn in
             # the same conversation rather than a restart: same session id, same
             # transcript, same tool history.
-            for message in execution.pending_messages():
-                await execution.say(message, role="user")
-                said = await self._speak(turn, session, message)
+            #
+            # Drained until the queue is empty, not once. Answering a message is
+            # itself a turn, and it is the turn a person is most likely to be
+            # watching when they say the next thing -- so a single snapshot,
+            # taken before the first reply, would leave everything said during
+            # that reply queued on an execution the node is about to release.
+            # Nothing anywhere would say so: the run carries on, the agent never
+            # hears it, and the message stays on screen as a turn nobody
+            # answered.
+            while queued := execution.pending_messages():
+                for message in queued:
+                    await execution.say(message, role="user")
+                    said = await self._speak(turn, session, message)
             return {self.output_key or str(execution.node_id): said}
         finally:
             _TURNS.pop(session.session_id, None)
