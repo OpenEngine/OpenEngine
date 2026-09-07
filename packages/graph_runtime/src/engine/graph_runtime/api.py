@@ -1,9 +1,9 @@
 """HTTP surface for driving a graph.
 
-Six things a client can do, and they are the whole reason this package exists:
+Seven things a client can do, and they are the whole reason this package exists:
 start a run, read its current state, describe the graph it is running, subscribe
-to what it raises, steer an execution that is already running, and send a run
-back to an earlier position.
+to what it raises, steer an execution that is already running, stop the turn one
+is in the middle of, and send a run back to an earlier position.
 
 The shape follows `engine.apps.web.api` deliberately -- JSON under `/api`,
 snapshots rather than deltas, server-sent events for the feed, and refusals that
@@ -139,19 +139,35 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         body = await _json_body(request)
         try:
             message = _required_string(body, "message")
-            execution = _optional_string(body, "execution")
-            node = _optional_string(body, "node")
+            execution, node = _addressed(body)
         except ValueError as error:
             return _error(str(error), 400)
-        if execution and node:
-            # Both is not an intersection worth supporting: an execution id
-            # already implies its node, and a request naming two addresses that
-            # disagree is a client bug worth surfacing rather than resolving.
-            return _error("give at most one of node or execution", 400)
         try:
             run = await runtime.steer(
                 _run_id(request),
                 message,
+                ExecutionId(execution) if execution else None,
+                NodeId(node) if node else None,
+            )
+        except Exception as error:
+            return _refusal(error)
+        return JSONResponse(_snapshot_json(run))
+
+    async def interrupt_run(request: Request) -> JSONResponse:
+        """Stop the turn an execution is in, and leave it in flight.
+
+        Addressed like steering, and for the same reason: a run with three
+        agents in it has three turns to stop. A body is optional -- there is
+        nothing to say, only somewhere to say it -- so a bare POST is the whole
+        request for the ordinary run with one agent working.
+        """
+        try:
+            execution, node = _addressed(await _json_body(request))
+        except ValueError as error:
+            return _error(str(error), 400)
+        try:
+            run = await runtime.interrupt(
+                _run_id(request),
                 ExecutionId(execution) if execution else None,
                 NodeId(node) if node else None,
             )
@@ -217,6 +233,9 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             Route("/api/runs/{run_id}/checkpoints", get_checkpoints),
             Route("/api/runs/{run_id}/events", run_events),
             Route("/api/runs/{run_id}/steering", steer_run, methods=["POST"]),
+            Route(
+                "/api/runs/{run_id}/interruptions", interrupt_run, methods=["POST"]
+            ),
             Route("/api/runs/{run_id}/transitions", transition_run, methods=["POST"]),
             Route(
                 "/api/runs/{run_id}/approvals/{approval_id}",
@@ -420,6 +439,22 @@ def _optional_string(body: Mapping[str, object], name: str) -> str:
     if body.get(name) is None:
         return ""
     return _required_string(body, name)
+
+
+def _addressed(body: Mapping[str, object]) -> tuple[str, str]:
+    """Which execution a request is for, as the two ways of naming one.
+
+    Shared by everything routed to something in flight, so that steering and
+    stopping cannot drift into disagreeing about what addresses an execution.
+    Both is not an intersection worth supporting: an execution id already
+    implies its node, and a request naming two addresses that disagree is a
+    client bug worth surfacing rather than resolving.
+    """
+    execution = _optional_string(body, "execution")
+    node = _optional_string(body, "node")
+    if execution and node:
+        raise ValueError("give at most one of node or execution")
+    return execution, node
 
 
 def _optional_object(body: Mapping[str, object], name: str) -> Mapping[str, object]:

@@ -17,8 +17,9 @@ more thing".
 ## Two kinds of human-in-the-loop, and only one of them is here
 
 **Execution-level.** The agent wants to run a command; the agent wants to use a
-tool; a person wants to redirect the agent it is watching. These are questions
-about the turn in progress. They go to the execution, through `steer()` and
+tool; a person wants to redirect the agent it is watching, or to stop the turn
+it is in so their redirection lands now. These are questions about the turn in
+progress. They go to the execution, through `steer()`, `interrupt()` and
 `decide()`, and the graph does not observe them except as events.
 
 **Workflow-level.** Approve a deployment; accept a milestone; choose a branch;
@@ -32,7 +33,7 @@ whether one agent may run `pytest`.
 
 ## What an execution is
 
-Nothing here knows. `ControllableExecution` is two methods; an agent node
+Nothing here knows. `ControllableExecution` is three methods; an agent node
 registers one backed by its session, a test registers one backed by a script,
 and this package imports neither. A generic runtime that reached for ACP,
 Claude or Codex would be a control surface that only works for the agents it
@@ -66,6 +67,16 @@ class ControllableExecution(Protocol):
 
     async def steer(self, message: str) -> None:
         """Take an instruction now, without being restarted to receive it."""
+        ...
+
+    async def interrupt(self) -> None:
+        """Stop what is in flight, and stay in flight to be told what next.
+
+        The queue's other end. `steer` puts a message where the execution will
+        look; this is what makes it look now, by ending the work it was in the
+        middle of -- an agent's turn is cancelled, and the session it was
+        cancelled in is still the session the next message arrives in.
+        """
         ...
 
     async def decide(

@@ -6,6 +6,7 @@ once, checkpoint history, fork and resume, shutdown. What is here is the part
 that needs a real agent on the other end of a real pipe:
 
 * steering an ACP execution without it becoming a second conversation;
+* stopping the turn a message was queued behind, so it lands now;
 * an approval request that outlives the Python task that raised it;
 * the same, when the runtime is destroyed and rebuilt from files in between;
 * a refusal;
@@ -71,6 +72,7 @@ def registry(
     asks_every: bool = False,
     response: str = DONE,
     narrates: bool = False,
+    lingers: bool = False,
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -85,6 +87,7 @@ def registry(
                     **({"STUB_ACP_ASK": "1"} if asks or asks_every else {}),
                     **({"STUB_ACP_ASK_EVERY": "1"} if asks_every else {}),
                     **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
+                    **({"STUB_ACP_LINGER": "1"} if lingers else {}),
                 },
                 # The seam the whole design turns on: a permission request comes
                 # in on the ACP connection, and this is what routes it back to
@@ -446,6 +449,69 @@ def test_steering_sent_during_a_steered_turn_still_reaches_the_agent(
         PROMPT,
         "Use the fast suite.",
         "And skip the linter.",
+    ]
+
+
+def test_stopping_a_turn_hands_the_queued_message_to_the_same_session(
+    tmp_path: Path,
+) -> None:
+    """What "stop" is for: a turn nobody wants to wait out any more.
+
+    Steering is queued while the agent works, which is right until the work is
+    a long one. Stopping ends that turn at the session -- `session/cancel`, not
+    a cancelled task -- so the node is still inside the same invocation, still
+    holding the same conversation, and the message that was queued behind the
+    turn becomes the next turn in it.
+
+    The assertions worth having are the ones about what did *not* happen: one
+    `session/new`, one entry into the node, and the agent never handed its
+    original prompt a second time.
+    """
+
+    async def scenario() -> dict[str, Any]:
+        async with runtime_over(tmp_path, registry(tmp_path, lingers=True)) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            # Properly mid-turn: the agent has narrated and started a tool call,
+            # and this turn does not end on its own.
+            await until(log, run.run_id, "tool.call")
+            await runtime.steer(run.run_id, "Rename the flag.")
+            # Read before the stop. A queued message is one the agent has not
+            # been given, and this is the only moment that can be checked.
+            queued = prompts(tmp_path)
+            working = await runtime.snapshot(run.run_id)
+            stopped = await runtime.interrupt(run.run_id)
+            events = await until(log, run.run_id, "run.finished")
+            return {
+                "queued": queued,
+                "working": working,
+                "stopped": stopped,
+                "events": events,
+                "entered": runtime.entered(IMPLEMENTATION),
+            }
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome["queued"] == [PROMPT]
+    # Still the same execution afterwards: the turn was stopped, not the node.
+    assert [one.execution_id for one in outcome["stopped"].active_executions] == [
+        one.execution_id for one in outcome["working"].active_executions
+    ]
+    assert prompts(tmp_path) == [PROMPT, "Rename the flag."]
+    assert len(sent(tmp_path, "session/new")) == 1
+    assert len(sent(tmp_path, "session/cancel")) == 1
+    assert outcome["entered"] == 1
+    assert transcript(outcome["events"]) == [
+        ("user", PROMPT),
+        ("assistant", NARRATION),
+        ("user", "Rename the flag."),
+        ("assistant", DONE),
+    ]
+    assert list(sessions(tmp_path).values())[0]["turns"] == [
+        PROMPT,
+        "Rename the flag.",
     ]
 
 

@@ -14,7 +14,9 @@
  *  * the transcript is folded from events instead of loaded from a thread;
  *  * sending is **steering** -- a message for the turn an agent is in the
  *    middle of, refused when that node has nothing in flight, because there is
- *    nobody to say it to;
+ *    nobody to say it to. It is queued for that turn rather than delivered into
+ *    it, which is why the composer offers **Stop**: the turn ends, and the
+ *    message becomes the next one;
  *  * a request is answered on the graph engine's own approvals endpoint, which
  *    `answerApprovalsWith` is how the shared card learns.
  */
@@ -36,6 +38,7 @@ import {
   decideGraphApproval,
   getGraphEvents,
   getGraphRun,
+  interruptGraphRun,
   messageText,
   steerGraphRun,
   type ApiApproval,
@@ -423,24 +426,35 @@ const IDLE_NOTE =
   "Nothing is running here. A message steers an agent while it works, and " +
   "this node has none in flight to take one.";
 
-function GraphComposer() {
+/** The composer, and the two things a person can do with an agent mid-turn.
+ *
+ *  Queue is the default and the safe one: an agent in the middle of a turn is
+ *  not listening, so a message is held for it and answered when that turn ends.
+ *  Stop is for when the turn is a long one and the queue has already said
+ *  everything worth saying -- it ends the turn, and what was queued becomes the
+ *  next one. The words on both are what happens, because "Send" over a queue
+ *  reads as a message that went nowhere. */
+function GraphComposer({ onStop }: { onStop: () => void }) {
   const aui = useAui();
   const canSend = useAuiState((state) => state.composer.canSend);
   return (
     <ComposerPrimitive.Root className="composer">
       <ComposerPrimitive.Input
         className="composer-input"
-        placeholder="Say something to the agent working here…"
+        placeholder="Queue a message for the agent working here…"
         aria-label="Message the agent"
         rows={1}
       />
+      <button type="button" className="btn" onClick={onStop}>
+        Stop
+      </button>
       <button
         type="button"
         className="btn btn-primary"
         disabled={!canSend}
         onClick={() => aui.composer.send()}
       >
-        Send
+        Queue
       </button>
     </ComposerPrimitive.Root>
   );
@@ -453,6 +467,7 @@ function GraphDock({
   error,
   failure,
   unplaced,
+  onStop,
 }: {
   conversationId: string;
   working: boolean;
@@ -460,6 +475,7 @@ function GraphDock({
   error: string;
   failure: string;
   unplaced: readonly InlineApproval[];
+  onStop: () => void;
 }) {
   return (
     <ThreadPrimitive.ViewportFooter className="dock">
@@ -476,7 +492,11 @@ function GraphDock({
           and a failure hung on the last turn is lost in both cases, which are
           the two where a reader most needs to be told. */}
       {failure && <p className="notice">{failure}</p>}
-      {working ? <GraphComposer /> : <p className="step-note">{IDLE_NOTE}</p>}
+      {working ? (
+        <GraphComposer onStop={onStop} />
+      ) : (
+        <p className="step-note">{IDLE_NOTE}</p>
+      )}
       {error && <p className="notice">{error}</p>}
       {workspace && (
         <div className="dock-foot">
@@ -500,6 +520,20 @@ export function GraphConversationPage({
   const { events, run, error, loaded, refresh } = useGraphRun(runId);
   const [steerError, setSteerError] = useState("");
   const conversationId = graphConversationId(runId, nodeId);
+
+  // Ends the turn, not the run. What was queued for this node is taken up as
+  // the next turn of the same conversation, so the page reads on rather than
+  // starting again -- and the poll is asked for the run now, because the
+  // composer goes away if the node had nothing queued and finished here.
+  const stop = useCallback(async () => {
+    setSteerError("");
+    try {
+      await interruptGraphRun(runId, nodeId);
+    } catch (failure) {
+      setSteerError(failure instanceof Error ? failure.message : String(failure));
+    }
+    refresh();
+  }, [nodeId, refresh, runId]);
 
   const nodeEvents = useMemo(
     () => events.filter((event) => event.nodeId === nodeId),
@@ -607,7 +641,7 @@ export function GraphConversationPage({
           <h1>{phaseLabel(nodeId)}</h1>
           <p className="lede">
             {working
-              ? "This node's agent is working. What you send reaches the turn it is in the middle of."
+              ? "This node's agent is working. What you send is queued for the turn it is in the middle of; Stop ends that turn so it lands now."
               : "A WorkOrder node owns this transcript."}
           </p>
         </div>
@@ -629,6 +663,7 @@ export function GraphConversationPage({
               error={steerError}
               failure={conversation.failure}
               unplaced={conversation.unplaced}
+              onStop={stop}
             />
           }
         />

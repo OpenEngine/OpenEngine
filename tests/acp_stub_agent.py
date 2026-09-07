@@ -126,6 +126,28 @@ def narrate_a_tool_call(session_id: str) -> None:
     )
 
 
+def work_until_cancelled(message_id: Any, session_id: str) -> None:
+    """A turn that runs until the client stops it.
+
+    What a person interrupts: the agent has said what it is doing, started
+    doing it, and is not going to finish on its own. Both are sent before the
+    wait, so a test can tell "the turn is properly in flight" from "the turn
+    has not begun" -- and so the thing being cancelled is a real turn rather
+    than a race with one.
+    """
+    narrate_a_tool_call(session_id)
+    while True:
+        message = receive()
+        if message is None:
+            return  # The client went away mid-turn.
+        if message.get("method") == "session/cancel":
+            # The honest ending for a turn that was stopped, and what tells the
+            # client's stream to close: the conversation survives, so the next
+            # prompt is a further turn in it rather than a new session.
+            respond(message_id, {"stopReason": "cancelled"})
+            return
+
+
 def receive() -> dict[str, Any] | None:
     """The next message, recorded on the way past. `None` at end of input."""
     while True:
@@ -187,6 +209,13 @@ def ask_permission(session_id: str) -> dict[str, Any] | None:
 def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
     session = load(session_id)
     session["turns"].append(prompt_text)
+    # `STUB_ACP_LINGER` holds the *first* turn open and answers every later one
+    # normally, which is the shape a stopped turn has: the work somebody had
+    # seen enough of, and then whatever they said instead.
+    if os.environ.get("STUB_ACP_LINGER") and len(session["turns"]) == 1:
+        save(session_id, session)
+        work_until_cancelled(message_id, session_id)
+        return
     # `STUB_ACP_ASK_EVERY` is what a real agent doing real work looks like: each
     # turn wants to run something of its own, so each turn asks again. It is the
     # only way to hold a *steered* turn open long enough for a test to say

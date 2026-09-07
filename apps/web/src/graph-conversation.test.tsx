@@ -414,7 +414,7 @@ describe("GraphConversationPage", () => {
       screen.getByLabelText("Message the agent"),
       "Rename the flag first.",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await userEvent.click(screen.getByRole("button", { name: "Queue" }));
 
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
@@ -427,6 +427,49 @@ describe("GraphConversationPage", () => {
         }),
       ),
     );
+  });
+
+  it("stops the turn a queued message is waiting behind", async () => {
+    const fetch = serve([
+      event({
+        sequence: 1,
+        type: "transcript",
+        payload: { role: "assistant", text: "Reading the code." },
+      }),
+    ]);
+    render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+    await act(async () => {});
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    // The node, not the run: a graph may have several agents working, and the
+    // one on screen is the one whose turn this ends.
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        `/graph/api/runs/${runId}/interruptions`,
+        expect.objectContaining({ body: JSON.stringify({ node: NODE }) }),
+      ),
+    );
+  });
+
+  it("says why stopping was refused rather than looking like nothing happened", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === `/api/runs/${runId}/graph-events`) return json({ events: [] });
+        if (path === `/graph/api/runs/${runId}`) return json(graphRun());
+        return json({ error: "this run has no execution in flight" }, { status: 409 });
+      }),
+    );
+    render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+    await act(async () => {});
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(
+      await screen.findByText(/this run has no execution in flight/),
+    ).toBeVisible();
   });
 
   it("offers no composer to a node with nothing in flight", async () => {

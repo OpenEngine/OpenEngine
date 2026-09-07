@@ -58,6 +58,7 @@ from graph_runtime_fakes import (
     Say,
     ScriptedGraph,
     ScriptedNode,
+    Working,
 )
 
 GRAPH = GraphId("implementation-review")
@@ -888,12 +889,105 @@ def test_steering_a_run_with_nothing_in_flight_is_refused(build: Backend) -> Non
     assert unknown.status_code == 404
 
 
-def test_a_controllable_execution_is_all_the_runtime_asks_of_a_node() -> None:
-    """Two methods, and nothing about ACP, Claude or Codex in either of them.
+# --- stopping the turn, without stopping the execution ----------------------
 
-    A node registers one of these and gets steering and approvals routed to it.
-    Anything the generic runtime needed beyond this would be a control surface
-    that only works for the agents it was written against.
+
+def test_a_message_queued_behind_a_working_agent_lands_when_it_is_stopped(build: Backend) -> None:
+    """Queue while it works; stop when you have seen enough.
+
+    The two halves are one behaviour and this is the test of it. A message sent
+    into a turn is queued rather than answered -- an agent mid-turn is not
+    listening, and the alternative is interrupting one every time somebody adds
+    a sentence. What makes that acceptable is being able to end the turn: the
+    ordering below is the whole claim, with the message accepted first, taken up
+    only after the stop, and the node entered once throughout.
+    """
+    graph = _pipeline(Say("Reading the tree."), Working(), Say("Stopped early."))
+    runtime = build(graph)
+
+    async def scenario() -> tuple[httpx.Response, dict, httpx.Response, list[dict]]:
+        async with _server(runtime) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "transcript")
+            steered = await surface.client.post(
+                f"/api/runs/{run_id}/steering", json={"message": "Rename the flag."}
+            )
+            # Read while the message is still queued: the node is in a stretch
+            # of work that does not end on its own, which is what a long agent
+            # turn is, so nothing has taken it yet.
+            queued = await surface.client.get(f"/api/runs/{run_id}")
+            stopped = await surface.client.post(f"/api/runs/{run_id}/interruptions")
+            events = await surface.read(run_id, "run.finished")
+            return steered, queued.json(), stopped, events
+
+    steered, queued, stopped, events = asyncio.run(scenario())
+
+    assert steered.status_code == 200
+    assert queued["status"] == "running"
+    assert _nodes_of(queued["activeExecutions"]) == [str(IMPLEMENTATION)]
+    assert stopped.status_code == 200
+    # Still executing afterwards: what was stopped is the work, not the thing
+    # doing it, and the same execution is about to answer the queued message.
+    assert _ids_of(stopped.json()["activeExecutions"]) == _ids_of(
+        queued["activeExecutions"]
+    )
+    assert runtime.entered(IMPLEMENTATION) == 1
+    assert _transcript(events) == [
+        ("assistant", "Reading the tree."),
+        ("user", "Rename the flag."),
+        ("assistant", "Stopped early."),
+        ("assistant", "Looks right."),
+    ]
+    interrupted = _of_kind(events, "turn.interrupted")
+    assert len(interrupted) == 1
+    assert interrupted[0]["nodeId"] == str(IMPLEMENTATION)
+    # Named the same way steering is, so a client with three agents on screen
+    # can say which one it stopped.
+    assert interrupted[0]["executionId"] == _ids_of(queued["activeExecutions"])[0]
+    delivered = next(
+        event
+        for event in _of_kind(events, "transcript")
+        if event["payload"]["role"] == "user"
+    )
+    assert (
+        _of_kind(events, "steering.received")[0]["sequence"]
+        < interrupted[0]["sequence"]
+        < delivered["sequence"]
+    )
+
+
+def test_stopping_a_run_with_nothing_in_flight_is_refused(build: Backend) -> None:
+    async def scenario() -> tuple[httpx.Response, httpx.Response, httpx.Response]:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "run.finished")
+            return (
+                await surface.client.post(f"/api/runs/{run_id}/interruptions"),
+                await surface.client.post(
+                    f"/api/runs/{run_id}/interruptions",
+                    json={"node": str(IMPLEMENTATION), "execution": "execution-1"},
+                ),
+                await surface.client.post("/api/runs/run-404/interruptions"),
+            )
+
+    finished, both, unknown = asyncio.run(scenario())
+
+    assert finished.status_code == 409
+    assert finished.json() == {"error": "this run has no execution in flight"}
+    assert both.status_code == 400
+    assert both.json() == {"error": "give at most one of node or execution"}
+    assert unknown.status_code == 404
+
+
+def test_a_controllable_execution_is_all_the_runtime_asks_of_a_node() -> None:
+    """Three methods, and nothing about ACP, Claude or Codex in any of them.
+
+    A node registers one of these and gets steering, interruptions and
+    approvals routed to it. Anything the generic runtime needed beyond this
+    would be a control surface that only works for the agents it was written
+    against.
     """
 
     class Session:
@@ -902,6 +996,9 @@ def test_a_controllable_execution_is_all_the_runtime_asks_of_a_node() -> None:
 
         async def steer(self, message: str) -> None:
             self.messages.append(message)
+
+        async def interrupt(self) -> None:
+            self.messages.append("stop")
 
         async def decide(self, approval_id, decision) -> None:  # noqa: ANN001
             self.messages.append(f"{approval_id}={decision.value}")

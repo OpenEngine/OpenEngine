@@ -15,10 +15,10 @@ only passed tests written after it would prove nothing about the contract.
 
 The LangGraph side is a real graph. `Say` and `Call` are things a node does,
 `Ask` raises an approval the execution waits on without the graph being
-interrupted, `AwaitSteering` waits on the queue steering arrives at, and `Fail`
-raises. `ScriptedNode.tasks` becomes `Send`, which is how LangGraph fans several
-concurrent tasks into one node -- the shape that makes a node name useless as an
-address.
+interrupted, `AwaitSteering` waits on the queue steering arrives at, `Working`
+waits to be stopped, and `Fail` raises. `ScriptedNode.tasks` becomes `Send`,
+which is how LangGraph fans several concurrent tasks into one node -- the shape
+that makes a node name useless as an address.
 
 Two differences between the backends are real rather than incidental, and the
 suite is written to respect them:
@@ -60,6 +60,7 @@ from graph_runtime_fakes import (
     ScriptedGraph,
     ScriptedGraphRuntime,
     ScriptedNode,
+    Working,
 )
 
 
@@ -142,6 +143,13 @@ class _Player:
                     message = await execution.next_message()
                     heard.append(message)
                     await execution.say(message, role="user")
+                case Working():
+                    # The long turn, which ends when somebody ends it. The next
+                    # beat's drain is what then delivers whatever they queued
+                    # behind it -- the same shape as `ACPNode`, where the turn
+                    # is cancelled at the session and the loop after it picks
+                    # the queue up.
+                    await execution.next_interruption()
                 case Fail(message=text):
                     raise ScriptedFailure(text)
         if heard:

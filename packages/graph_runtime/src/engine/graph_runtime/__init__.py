@@ -1,14 +1,16 @@
 """An API control surface over a workflow graph.
 
-Six capabilities, stated once as a protocol and served once over HTTP:
+Seven capabilities, stated once as a protocol and served once over HTTP:
 
 * start runs
 * inspect the current state of one
 * describe a graph's topology
 * subscribe to what a run raises -- approval requests and transcript events,
   tool calls included
-* steer: deliver a message to an execution that is already running, without
+* steer: queue a message for an execution that is already running, without
   interrupting or restarting the graph node driving it
+* interrupt: end the turn that message is queued behind, keeping the execution
+  and the conversation it holds
 * send a run back to an earlier position, forking rather than rewriting
 
 `GraphRuntime` is the contract; `create_app` is the surface. LangGraph is the

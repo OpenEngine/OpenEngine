@@ -316,7 +316,11 @@ export function getGraphRun(
  *  agents working at once, and the conversation on screen is one of them. The
  *  engine refuses this when that node has nothing in flight, because there is
  *  nobody to say it to -- steering is a message for a live turn, not a queued
- *  instruction for whatever runs next. */
+ *  instruction for whatever runs next.
+ *
+ *  Queued rather than delivered. An agent mid-turn is not listening, so the
+ *  message is taken up when that turn ends; `interruptGraphRun` is how somebody
+ *  who does not want to wait for it ends the turn instead. */
 export function steerGraphRun(
   runId: string,
   nodeId: string,
@@ -325,6 +329,22 @@ export function steerGraphRun(
   return api<ApiGraphRun>(
     `/graph/api/runs/${encodeURIComponent(runId)}/steering`,
     { method: "POST", body: JSON.stringify({ message, node: nodeId }) },
+  );
+}
+
+/** Stop the turn this node's agent is in the middle of.
+ *
+ *  Not stopping the run: the execution stays in flight, holding the same
+ *  conversation, and anything queued for it becomes the next turn straight
+ *  away. A node with nothing queued finishes with what it has, and the graph
+ *  carries on to what follows it. */
+export function interruptGraphRun(
+  runId: string,
+  nodeId: string,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/interruptions`,
+    { method: "POST", body: JSON.stringify({ node: nodeId }) },
   );
 }
 

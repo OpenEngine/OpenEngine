@@ -16,11 +16,13 @@ steered.
 
 Nothing here suspends the graph. A steering message is put on this object's
 queue and picked up by the node at its next interruption point; an approval is a
-future this object holds and something outside resolves. The node's coroutine
-stays exactly where it was through both, which is what keeps an agent session
-alive across a question about the command it wants to run. Modelling either as a
-LangGraph interrupt would end the task, discard the session, and re-enter the
-node afterwards with the conversation gone.
+future this object holds and something outside resolves; an interruption ends
+the turn in flight and nothing else. The node's coroutine stays exactly where it
+was through all three, which is what keeps an agent session alive across a
+question about the command it wants to run -- and across somebody deciding they
+have seen enough of the turn it is in. Modelling any of them as a LangGraph
+interrupt would end the task, discard the session, and re-enter the node
+afterwards with the conversation gone.
 
 `current_execution()` is how a node finds its own. It is two lookups rather than
 one: a `ContextVar` says which run is being driven -- set once by the driver, and
@@ -105,7 +107,7 @@ def current_execution() -> "NodeExecution":
 class NodeExecution:
     """One in-flight LangGraph task, as external control sees it.
 
-    Satisfies `engine.graph_runtime.ControllableExecution`: two methods, neither
+    Satisfies `engine.graph_runtime.ControllableExecution`: three methods, none
     of which knows what the node is running. An ACP-backed node attaches its
     live session with `attach`, and the answer to an approval reaches that
     session by resolving the future the session's permission handler is waiting
@@ -127,6 +129,7 @@ class NodeExecution:
         self._steering: asyncio.Queue[str] = asyncio.Queue()
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
         self._session: Any | None = None
+        self._interrupted = asyncio.Event()
 
     # --- what external control routes to us --------------------------------
 
@@ -138,6 +141,23 @@ class NodeExecution:
         that waited for the node to be ready could not.
         """
         self._steering.put_nowait(message)
+
+    async def interrupt(self) -> None:
+        """End the work in flight, without ending the execution doing it.
+
+        For an agent node that is `session.cancel()`: the turn stops, the ACP
+        conversation it was in survives, and the node -- still inside the same
+        invocation -- picks up whatever steering was queued as the next turn in
+        it. Nothing is cancelled at the asyncio level, because the coroutine
+        holding the session is exactly what has to survive.
+
+        The flag is for a node that is driving something else. It cannot be
+        told to stop by cancelling a session it does not have, so it is told
+        here, and reads it at `next_interruption`.
+        """
+        self._interrupted.set()
+        if self._session is not None:
+            await self._session.cancel()
 
     async def decide(
         self, approval_id: ApprovalId, decision: ApprovalDecision
@@ -171,6 +191,17 @@ class NodeExecution:
         """Adopt the ACP session this execution is now driving."""
         self._session = session
 
+    def detach(self) -> None:
+        """Give up the session, for a node that has finished speaking in it.
+
+        The execution outlives the conversation: LangGraph does not commit the
+        superstep until the node returns, so this stays addressable for a while
+        after the last turn ends. Something arriving in that window has nothing
+        to cancel, which is the truth -- and better than reaching for a
+        connection that is on its way down.
+        """
+        self._session = None
+
     async def emit(
         self,
         kind: EventKind,
@@ -202,6 +233,17 @@ class NodeExecution:
     async def next_message(self) -> str:
         """Wait for an instruction. The interruption point steering arrives at."""
         return await self._steering.get()
+
+    async def next_interruption(self) -> None:
+        """Wait until somebody stops what this execution is doing.
+
+        The interruption point for work that is not an agent turn: an ACP
+        session is cut short by `interrupt()` itself, and anything else has to
+        watch for it. Cleared on the way out, so one stop ends one stretch of
+        work rather than every later one too.
+        """
+        await self._interrupted.wait()
+        self._interrupted.clear()
 
     def pending_messages(self) -> tuple[str, ...]:
         """Everything queued right now, taken without waiting for more."""

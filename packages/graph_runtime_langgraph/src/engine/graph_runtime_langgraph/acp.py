@@ -1,15 +1,17 @@
 """An ACP agent as a LangGraph node, controllable while it runs.
 
-    GraphRuntime.steer(execution_id)   -> NodeExecution -> ACPSession
-    GraphRuntime.decide(approval_id)   -> ExecutionId   -> NodeExecution
-                                                        -> ACPSession
+    GraphRuntime.steer(execution_id)     -> NodeExecution -> ACPSession
+    GraphRuntime.interrupt(execution_id) -> NodeExecution -> ACPSession
+    GraphRuntime.decide(approval_id)     -> ExecutionId   -> NodeExecution
+                                                          -> ACPSession
 
-Both arrows stop at the session. The graph node is not interrupted, suspended or
-re-entered to carry either: an instruction becomes a further turn in the *same*
-conversation, and an answer to a permission request resolves the future the
-session's own handler is sitting on. That is why execution-level control is not
-a LangGraph interrupt -- an interrupt ends the task, and the conversation the
-agent was in the middle of goes with it.
+Every arrow stops at the session. The graph node is not interrupted, suspended
+or re-entered to carry any of them: an instruction becomes a further turn in the
+*same* conversation, stopping is `session.cancel()` and ends a turn rather than
+the node holding it, and an answer to a permission request resolves the future
+the session's own handler is sitting on. That is why execution-level control is
+not a LangGraph interrupt -- an interrupt ends the task, and the conversation
+the agent was in the middle of goes with it.
 
 ## Relinquishing the process
 
@@ -403,6 +405,12 @@ class ACPNode:
             # the same conversation rather than a restart: same session id, same
             # transcript, same tool history.
             #
+            # This is also where an interruption arrives. `interrupt()` ends the
+            # turn above by cancelling it at the session, which returns here
+            # rather than out of the node -- so a message that was queued behind
+            # a turn somebody had seen enough of becomes the next turn straight
+            # away, in the conversation that turn was in.
+            #
             # Drained until the queue is empty, not once. Answering a message is
             # itself a turn, and it is the turn a person is most likely to be
             # watching when they say the next thing -- so a single snapshot,
@@ -418,6 +426,11 @@ class ACPNode:
             return {self.output_key or str(execution.node_id): said}
         finally:
             _TURNS.pop(session.session_id, None)
+            # Before the connection goes, and while the execution is still
+            # registered: nothing can be said in this conversation from here on,
+            # and an interruption arriving now should find nothing to stop
+            # rather than a connection being torn down under it.
+            execution.detach()
             await client.close()
 
     def _binding(

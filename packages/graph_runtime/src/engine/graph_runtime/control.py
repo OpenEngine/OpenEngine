@@ -312,6 +312,40 @@ class GraphRuntime(Protocol):
         """
         ...
 
+    async def interrupt(
+        self,
+        run_id: RunId,
+        execution_id: ExecutionId | None = None,
+        node_id: NodeId | None = None,
+    ) -> RunSnapshot:
+        """Cut short what an execution is doing now, keeping the execution.
+
+        The other half of steering, and only meaningful beside it. A message is
+        queued rather than delivered -- an agent mid-turn is not listening --
+        and it is taken up when that turn ends, which is right until the turn is
+        a twenty-minute one and the person watching has already seen enough.
+        This is how they say so: the turn in flight ends, and whatever they
+        queued becomes the next one instead of waiting for work they no longer
+        want.
+
+        Not `cancel`, which ends the run, and not `resume_from`, which replaces
+        the attempt. Nothing about the run's position changes: the same
+        execution stays in flight, holding the same conversation, and an agent
+        node carries on in it. A turn ended this way is a turn that stopped
+        early, not a node that was restarted.
+
+        A node with nothing queued to take up finishes the work it was given
+        with whatever it had done by then, and the graph goes on to what
+        follows. That is what stopping an agent means when nobody has said what
+        to do instead, and it is why this is addressed at an execution rather
+        than offered as a run-wide button.
+
+        Addressed exactly as `steer` is, and refused for the same reasons:
+        `RunNotSteerableError` when nothing matches, `AmbiguousExecutionError`
+        when several do and none was named.
+        """
+        ...
+
     async def decide(
         self, run_id: RunId, approval_id: ApprovalId, decision: ApprovalDecision
     ) -> RunSnapshot:

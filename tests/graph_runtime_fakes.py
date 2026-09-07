@@ -28,8 +28,8 @@ they shared either.
 A node is a tuple of beats. `Say` and `Call` are things it does; `Ask` is a
 pause on consent, taken by the execution rather than by the graph;
 `AwaitSteering` is a point where it waits for an instruction and then carries
-on; `Fail` raises, which is the one thing a real node does that none of the
-others can.
+on; `Working` is a stretch of work that only ends when somebody stops it; `Fail`
+raises, which is the one thing a real node does that none of the others can.
 """
 
 from __future__ import annotations
@@ -99,6 +99,18 @@ class AwaitSteering:
 
 
 @dataclass(frozen=True, slots=True)
+class Working:
+    """The execution works until somebody stops it, and never on its own.
+
+    An agent's long turn, in the one respect that matters to the contract: a
+    message sent into it is queued rather than answered, and the only thing that
+    changes that is an interruption. Scripted as a beat that never ends by
+    itself, because a beat that finished quickly would let a runtime that
+    ignored `interrupt` pass by simply being fast enough.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class Fail:
     """The node raises.
 
@@ -115,7 +127,7 @@ class ScriptedFailure(RuntimeError):
     """What a `Fail` beat raises. Nothing catches it by type."""
 
 
-Beat = Say | Call | Ask | AwaitSteering | Fail
+Beat = Say | Call | Ask | AwaitSteering | Working | Fail
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,11 +306,21 @@ class _Execution:
         self.node_id = node_id
         self._steering: asyncio.Queue[str] = asyncio.Queue()
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
+        self._interrupted = asyncio.Event()
 
     # --- what the runtime routes to us -------------------------------------
 
     async def steer(self, message: str) -> None:
         self._steering.put_nowait(message)
+
+    async def interrupt(self) -> None:
+        """End the beat in flight, and stay in flight for the next one.
+
+        The stand-in for `session.cancel()`: what the execution was doing stops,
+        the execution itself does not, and whatever is queued for it is taken up
+        where the work used to be.
+        """
+        self._interrupted.set()
 
     async def decide(
         self, approval_id: ApprovalId, decision: ApprovalDecision
@@ -363,6 +385,11 @@ class _Execution:
 
     async def next_message(self) -> str:
         return await self._steering.get()
+
+    async def until_interrupted(self) -> None:
+        """Work until somebody stops this execution. Cleared on the way out."""
+        await self._interrupted.wait()
+        self._interrupted.clear()
 
     async def drain(self) -> None:
         """Take whatever has arrived without waiting for more."""
@@ -491,6 +518,27 @@ class ScriptedGraphRuntime:
             run,
             EventKind.STEERING_RECEIVED,
             {"message": message},
+            node_id=target.node_id,
+            execution_id=target.execution_id,
+        )
+        return self._snapshot(run)
+
+    async def interrupt(
+        self,
+        run_id: RunId,
+        execution_id: ExecutionId | None = None,
+        node_id: NodeId | None = None,
+    ) -> RunSnapshot:
+        run = self._require(run_id)
+        target, execution = self._executions.resolve(run_id, execution_id, node_id)
+        await execution.interrupt()
+        # Still in flight afterwards, and the snapshot has to keep saying so:
+        # what was stopped is the work, not the thing doing it, and a client
+        # that was told otherwise would stop offering to steer the execution
+        # that is about to take its message.
+        await self.emit(
+            run,
+            EventKind.TURN_INTERRUPTED,
             node_id=target.node_id,
             execution_id=target.execution_id,
         )
@@ -742,6 +790,8 @@ class ScriptedGraphRuntime:
                 return await execution.ask(beat) is not ApprovalDecision.CANCEL
             case AwaitSteering():
                 await execution.receive(await execution.next_message())
+            case Working():
+                await execution.until_interrupted()
             case Fail(message=message):
                 raise ScriptedFailure(message)
         return True
@@ -825,4 +875,5 @@ __all__ = [
     "ScriptedGraph",
     "ScriptedGraphRuntime",
     "ScriptedNode",
+    "Working",
 ]

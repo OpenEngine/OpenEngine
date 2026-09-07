@@ -62,6 +62,18 @@ working — a box to write in. What you write is *steering*: a message into the
 turn the agent is in the middle of, not a new one. A node that has finished has
 nothing in flight to say it to, so the box is not offered.
 
+An agent mid-turn is not listening, so what you write is **queued** and answered
+when that turn ends — which is why the button says Queue. When the turn is a
+long one and you have seen enough of it, **Stop** ends it: the agent's current
+turn stops, the conversation it was in survives, and what you queued becomes the
+next turn in it straight away. Stop is not cancel — the run is not ended and
+nothing is sent back — and pressing it with nothing queued lets the node finish
+with the work it has done so far, so the graph carries on to the next box.
+
+One case where Stop appears to do nothing: an agent that has stopped to ask you
+something is not mid-turn, it is waiting on you. Answer the question and the
+turn carries on from there, taking anything you queued with it.
+
 When an agent stops to ask permission, the request appears in that conversation
 under the command it is about, with the buttons to answer it. The run's final
 human verdict is answered from the WorkOrder page itself, in the **Action
@@ -87,8 +99,10 @@ GET  /graph/api/runs/{run}                          where a run is now, and what
                                                     it is waiting for
 GET  /graph/api/runs/{run}/events                   a live feed of everything the
                                                     run says
-POST /graph/api/runs/{run}/steering                 send a message to whichever
+POST /graph/api/runs/{run}/steering                 queue a message for whichever
                                                     agent is working
+POST /graph/api/runs/{run}/interruptions            stop the turn it is in, so a
+                                                    queued message lands now
 POST /graph/api/runs/{run}/approvals/{approval}     answer a question it stopped
                                                     on: {"decision": "accept"}
 ```

@@ -64,6 +64,14 @@ class EventKind(Enum):
     APPROVAL_RESOLVED = "approval.resolved"
     STEERING_RECEIVED = "steering.received"
     """A message was routed to an execution that was already running."""
+    TURN_INTERRUPTED = "turn.interrupted"
+    """Somebody cut short what an execution was doing.
+
+    Beside `steering.received` rather than folded into it: a reader has to be
+    able to tell a turn that ended because the agent was done from one that
+    ended because a person stopped it, and only the second explains why the
+    message they queued was answered when it was.
+    """
     RUN_FORKED = "run.forked"
     """A resume was asked for: `from`, `checkpointId`, `nodes`.
 

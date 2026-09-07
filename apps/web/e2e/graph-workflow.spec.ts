@@ -241,7 +241,7 @@ test("@beta an agent waiting on permission is answered in its conversation", asy
   // Steering, while it waits. The agent is holding its turn, so this is a
   // message into the conversation rather than a new one.
   await page.getByLabel("Message the agent").fill(STEER);
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Queue" }).click();
   await expect(page.getByText(STEER)).toBeVisible();
 
   await card.getByRole("button", { name: "Approve" }).click();

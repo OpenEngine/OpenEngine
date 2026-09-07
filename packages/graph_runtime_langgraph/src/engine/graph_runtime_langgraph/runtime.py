@@ -264,6 +264,27 @@ class LangGraphRuntime:
         )
         return await self._snapshot(run_id)
 
+    async def interrupt(
+        self,
+        run_id: RunId,
+        execution_id: ExecutionId | None = None,
+        node_id: NodeId | None = None,
+    ) -> RunSnapshot:
+        await self._require(run_id)
+        target, execution = self._registry.resolve(run_id, execution_id, node_id)
+        await execution.interrupt()
+        # Nothing is released and nothing is stopped here: the execution is
+        # still in flight, still holding its conversation, and the snapshot says
+        # so. What ended is the turn it was in the middle of.
+        await self.publish(
+            run_id,
+            EventKind.TURN_INTERRUPTED,
+            None,
+            target.node_id,
+            target.execution_id,
+        )
+        return await self._snapshot(run_id)
+
     async def decide(
         self, run_id: RunId, approval_id: ApprovalId, decision: ApprovalDecision
     ) -> RunSnapshot:
