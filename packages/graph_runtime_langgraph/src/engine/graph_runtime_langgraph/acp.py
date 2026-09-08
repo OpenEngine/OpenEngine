@@ -68,7 +68,13 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind
+from engine.domain import (
+    ApprovalDecision,
+    ApprovalId,
+    ApprovalKind,
+    RunFailed,
+    StepCompleted,
+)
 from engine.ports import ApprovalHandler, ApprovalRequest
 from langgraph_acp import (
     ACPAgentRegistry,
@@ -90,11 +96,27 @@ from engine.graph_runtime_langgraph.executions import NodeExecution, current_exe
 #: runtime is, and the key is globally unique so nothing can collide.
 _TURNS: dict[str, "_Turn"] = {}
 
+TerminalEvent = StepCompleted | RunFailed
+
+
+@dataclass(frozen=True, slots=True)
+class BoundMcpServer:
+    """One live MCP server and the terminal result it may produce."""
+
+    config: Mapping[str, Any]
+    result: Callable[[], Awaitable[TerminalEvent]] | None = None
+
+
 McpServerBinding = Callable[
     [Mapping[str, object], NodeExecution, ApprovalHandler],
-    AbstractAsyncContextManager[Mapping[str, Any]],
+    AbstractAsyncContextManager[BoundMcpServer],
 ]
 """Open one invocation-bound MCP server and return its ACP description."""
+
+_ACP_APPROVAL = "acp"
+_MCP_APPROVAL = "mcp"
+_REQUEST_CHANNEL = "graph_runtime.request_channel"
+_REQUEST_PAYLOAD = "graph_runtime.request_payload"
 
 #: The events that mean the agent has stopped writing and started doing, and so
 #: that whatever it has said so far is a finished thought worth publishing. See
@@ -138,9 +160,8 @@ class _Turn:
     execution: NodeExecution
     session_key: str
     session_id: str = ""
-    answer: ApprovalDecision | None = None
-    """An answer given before this process existed. Applied once, then cleared."""
-    answered: ApprovalId | None = None
+    answer: "_StoredAnswer | None" = None
+    """An answered request from before this process existed."""
     approval_requested: bool = False
     narrating: Callable[[], Awaitable[None]] | None = None
     """`_speak`'s buffer flush, for as long as a turn is in flight.
@@ -161,6 +182,7 @@ class _Turn:
         had not really worked would look like.
         """
         decision = await self._approve(
+            channel=_ACP_APPROVAL,
             reason=self.node.reason_for(request),
             kind=self.node.kind,
             command=self.node.command_of(request),
@@ -173,6 +195,7 @@ class _Turn:
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
         """Route a run-bound MCP tool's independent approval through the graph."""
         return await self._approve(
+            channel=_MCP_APPROVAL,
             reason=request.reason or "run a repository tool",
             kind=request.kind,
             command=request.command or "",
@@ -187,6 +210,7 @@ class _Turn:
     async def _approve(
         self,
         *,
+        channel: str,
         reason: str,
         kind: ApprovalKind,
         command: str,
@@ -200,18 +224,32 @@ class _Turn:
         # anything about the question is. See `narrating`.
         if self.narrating is not None:
             await self.narrating()
-        if self.answer is not None:
-            decision, self.answer = self.answer, None
+        if self.answer is not None and self.answer.matches(
+            channel=channel,
+            kind=kind,
+            command=command,
+            tool_name=tool_name,
+            request=request,
+        ):
+            decision, answered = self.answer.decision, self.answer.approval_id
+            self.answer = None
             await self._settle()
             await self.execution.emit(
                 EventKind.APPROVAL_RESOLVED,
                 {
-                    "approvalId": str(self.answered or ""),
+                    "approvalId": str(answered),
                     "decision": decision.value,
                     "resumed": True,
                 },
             )
             return decision
+        if self.answer is not None:
+            # The reloaded conversation did not replay the request that was
+            # answered. In particular, an MCP git request and an ACP permission
+            # share this turn but never share authority. Refuse this unrelated
+            # request without consuming the answer; the original replay may
+            # still arrive later in the same turn.
+            return ApprovalDecision.CANCEL
         approval_id = ApprovalId(f"approval-{uuid4().hex[:12]}")
         continuation = ACPContinuation(
             agent=self.node.agent,
@@ -238,7 +276,10 @@ class _Turn:
             tool_name=tool_name,
             session_key=self.session_key,
             continuation=continuation,
-            request=request,
+            request={
+                _REQUEST_CHANNEL: channel,
+                _REQUEST_PAYLOAD: dict(request),
+            },
             approval_id=approval_id,
             tool_call_id=tool_call_id,
         )
@@ -269,6 +310,36 @@ class _Turn:
                 thread_id=str(self.execution.run_id),
                 session_key=self.session_key,
             ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredAnswer:
+    """A durable decision together with the exact request it answered."""
+
+    decision: ApprovalDecision
+    approval_id: ApprovalId
+    channel: str
+    kind: ApprovalKind
+    command: str
+    tool_name: str
+    request: Mapping[str, object]
+
+    def matches(
+        self,
+        *,
+        channel: str,
+        kind: ApprovalKind,
+        command: str,
+        tool_name: str,
+        request: Mapping[str, object],
+    ) -> bool:
+        return (
+            self.channel == channel
+            and self.kind is kind
+            and self.command == command
+            and self.tool_name == tool_name
+            and self.request == request
         )
 
 
@@ -432,12 +503,14 @@ class ACPNode:
 
         async with AsyncExitStack() as servers:
             mcp_servers = list(self.mcp_servers)
+            terminal_results: list[Callable[[], Awaitable[TerminalEvent]]] = []
             for binding in self.mcp_server_bindings:
-                mcp_servers.append(
-                    await servers.enter_async_context(
-                        binding(state, execution, approve)
-                    )
+                bound = await servers.enter_async_context(
+                    binding(state, execution, approve)
                 )
+                mcp_servers.append(bound.config)
+                if bound.result is not None:
+                    terminal_results.append(bound.result)
             stored = await runtime.store.session(execution.run_id, key)
             resuming = await self._answer_to_apply(runtime, stored)
             client, session = await self._open(
@@ -445,9 +518,12 @@ class ACPNode:
             )
             turn = _Turn(self, execution, key, session.session_id)
             if resuming is not None:
-                turn.answer, turn.answered = resuming
+                turn.answer = resuming
             _TURNS[session.session_id] = turn
             execution.attach(session)
+            terminal_tasks = [
+                asyncio.create_task(result()) for result in terminal_results
+            ]
             try:
                 if resuming is None:
                     await runtime.store.remember_session(
@@ -476,7 +552,12 @@ class ACPNode:
                 # is skipped for the same reason: a turn nobody spoke.
                 if resuming is None and (opening := prompt_text(asked)):
                     await execution.say(opening, role="user")
-                said = await self._speak(turn, session, asked)
+                result = await self._speak_or_terminal(
+                    turn, session, asked, terminal_tasks
+                )
+                if isinstance(result, (StepCompleted, RunFailed)):
+                    return self._terminal_update(result)
+                said = result
                 # Steering that arrived while the agent worked is a further turn in
                 # the same conversation rather than a restart: same session id,
                 # same transcript, same tool history.
@@ -492,9 +573,18 @@ class ACPNode:
                 while queued := execution.pending_messages():
                     for message in queued:
                         await execution.say(message, role="user")
-                        said = await self._speak(turn, session, message)
+                        result = await self._speak_or_terminal(
+                            turn, session, message, terminal_tasks
+                        )
+                        if isinstance(result, (StepCompleted, RunFailed)):
+                            return self._terminal_update(result)
+                        said = result
                 return {self.output_key or str(execution.node_id): said}
             finally:
+                for task in terminal_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*terminal_tasks, return_exceptions=True)
                 _TURNS.pop(session.session_id, None)
                 await client.close()
 
@@ -558,7 +648,7 @@ class ACPNode:
 
     async def _answer_to_apply(
         self, runtime: Any, stored: ACPContinuation | None
-    ) -> tuple[ApprovalDecision, ApprovalId] | None:
+    ) -> _StoredAnswer | None:
         """The answer this node was re-entered to deliver, if it was.
 
         Read from the store rather than from graph state: a decision made after
@@ -572,7 +662,53 @@ class ACPNode:
             return None
         approval_id = ApprovalId(named)
         decision = await runtime.recorded_decision(approval_id)
-        return None if decision is None else (decision, approval_id)
+        record = await runtime.store.approval(approval_id)
+        if decision is None or record is None:
+            return None
+        channel = record.request.get(_REQUEST_CHANNEL)
+        request = record.request.get(_REQUEST_PAYLOAD)
+        if not isinstance(channel, str) or not isinstance(request, Mapping):
+            return None
+        return _StoredAnswer(
+            decision=decision,
+            approval_id=approval_id,
+            channel=channel,
+            kind=record.kind,
+            command=record.command,
+            tool_name=record.tool_name,
+            request=request,
+        )
+
+    async def _speak_or_terminal(
+        self,
+        turn: _Turn,
+        session: ACPSession,
+        prompt: ACPPrompt,
+        terminal_tasks: list[asyncio.Task[TerminalEvent]],
+    ) -> str | TerminalEvent:
+        """Prefer an MCP terminal result over the ACP turn it terminates."""
+        if not terminal_tasks:
+            return await self._speak(turn, session, prompt)
+        speaking = asyncio.create_task(self._speak(turn, session, prompt))
+        done, _ = await asyncio.wait(
+            (speaking, *terminal_tasks), return_when=asyncio.FIRST_COMPLETED
+        )
+        completed = next((task for task in terminal_tasks if task in done), None)
+        if completed is None:
+            return await speaking
+        speaking.cancel()
+        await asyncio.gather(speaking, return_exceptions=True)
+        return completed.result()
+
+    def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
+        """Turn the broker's terminal result into graph state or a run failure."""
+        if isinstance(event, RunFailed):
+            raise RuntimeError(event.reason)
+        update: dict[str, object] = {
+            self.output_key or str(current_execution().node_id): event.summary
+        }
+        update.update({output.name: output.value for output in event.outputs})
+        return update
 
     async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:
         """One ACP turn, with what happens in it republished as runtime events.

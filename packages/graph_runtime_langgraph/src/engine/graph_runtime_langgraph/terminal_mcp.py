@@ -11,6 +11,7 @@ from engine.domain.ids import WorkspaceId
 from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
 
+from engine.graph_runtime_langgraph.acp import BoundMcpServer
 from engine.graph_runtime_langgraph.executions import NodeExecution
 
 WORKSPACE_ID = "workspaceId"
@@ -36,7 +37,7 @@ class TerminalMcpServer:
         state: Mapping[str, object],
         execution: NodeExecution,
         approve: ApprovalHandler,
-    ) -> AsyncIterator[Mapping[str, object]]:
+    ) -> AsyncIterator[BoundMcpServer]:
         source_control = self.source_control or execution.runtime.source_control
         if source_control is None:
             raise RuntimeError(
@@ -68,11 +69,14 @@ class TerminalMcpServer:
         )
         async with broker:
             config = broker.config
-            yield {
-                "name": config.name,
-                "command": config.command,
-                "args": list(config.args),
-            }
+            yield BoundMcpServer(
+                config={
+                    "name": config.name,
+                    "command": config.command,
+                    "args": list(config.args),
+                },
+                result=broker.result,
+            )
 
 
 __all__ = ["TerminalMcpServer", "WORKSPACE_ID"]

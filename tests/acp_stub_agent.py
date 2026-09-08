@@ -199,6 +199,34 @@ def exercise_mcp(session_id: str) -> None:
             }
         )
         save(session_id, session)
+    terminal = os.environ.get("STUB_ACP_MCP_TERMINAL")
+    if terminal:
+        session["mcp_terminal"] = terminal
+        save(session_id, session)
+        arguments = (
+            {
+                "outcome": "success",
+                "summary": "Implemented through MCP.",
+                "outputs": {
+                    "pr_url": "https://github.com/acme/repository/pull/7"
+                },
+            }
+            if terminal == "complete_step"
+            else {"summary": "The implementation cannot continue."}
+        )
+        # The broker result is authoritative and may close the ACP connection
+        # before this subprocess receives its acknowledgement.
+        try:
+            call(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "terminal",
+                    "method": "tools/call",
+                    "params": {"name": terminal, "arguments": arguments},
+                }
+            )
+        except RuntimeError:
+            return
     process.stdin.close()
     return_code = process.wait(timeout=5)
     if return_code:

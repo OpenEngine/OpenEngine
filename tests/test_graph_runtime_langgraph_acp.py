@@ -81,6 +81,7 @@ def registry(
     waits_for_cancel: bool = False,
     uses_mcp: bool = False,
     mcp_git: bool = False,
+    mcp_terminal: str = "",
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -98,6 +99,11 @@ def registry(
                     **({"STUB_ACP_WAIT_FOR_CANCEL": "1"} if waits_for_cancel else {}),
                     **({"STUB_ACP_USE_MCP": "1"} if uses_mcp else {}),
                     **({"STUB_ACP_MCP_GIT": "1"} if mcp_git else {}),
+                    **(
+                        {"STUB_ACP_MCP_TERMINAL": mcp_terminal}
+                        if mcp_terminal
+                        else {}
+                    ),
                 },
                 # The seam the whole design turns on: a permission request comes
                 # in on the ACP connection, and this is what routes it back to
@@ -465,6 +471,90 @@ def test_run_bound_git_keeps_the_broker_approval_boundary(tmp_path: Path) -> Non
     assert session["mcp_git"]["result"]["structuredContent"]["output"] == (
         "working tree clean"
     )
+
+
+def test_an_acp_answer_cannot_approve_an_unrelated_mcp_request_after_resume(
+    tmp_path: Path,
+) -> None:
+    source_control = RecordingSourceControl()
+
+    async def raise_it() -> tuple[RunId, str]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            asked = await until(log, run.run_id, "approval.requested")
+            return run.run_id, str(asked[-1].payload["approvalId"])
+
+    async def answer_it(run_id: RunId, approval_id: str) -> None:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True, uses_mcp=True, mcp_git=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            await runtime.decide(
+                run_id,
+                approval_id,  # type: ignore[arg-type]
+                ApprovalDecision.ACCEPT,
+            )
+            await until(log, run_id, "run.finished")
+
+    run_id, approval_id = asyncio.run(raise_it())
+    asyncio.run(answer_it(run_id, approval_id))
+
+    session = next(iter(sessions(tmp_path).values()))
+    assert session["mcp_git"]["result"]["isError"] is True
+    assert "not approved" in session["mcp_git"]["result"]["content"][0]["text"]
+    assert source_control.git_calls == []
+    assert session["granted"] is True
+
+
+def test_complete_step_carries_declared_outputs_into_graph_state(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> dict[str, Any]:
+        async with runtime_over(
+            tmp_path,
+            registry(
+                tmp_path,
+                uses_mcp=True,
+                mcp_terminal="complete_step",
+            ),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.finished")
+            return dict((await runtime.snapshot(run.run_id)).values)
+
+    values = asyncio.run(scenario())
+
+    assert values[str(IMPLEMENTATION)] == "Implemented through MCP."
+    assert values["pr_url"] == "https://github.com/acme/repository/pull/7"
+    assert values[str(REVIEW)] == "Looks right."
+
+
+def test_fail_step_fails_the_graph_run(tmp_path: Path) -> None:
+    async def scenario() -> Any:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_terminal="fail_step"),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.failed")
+            return await runtime.snapshot(run.run_id)
+
+    final = asyncio.run(scenario())
+
+    assert final.status.value == "failed"
+    assert final.error == "The implementation cannot continue."
+    assert str(REVIEW) not in final.values
 
 
 def test_what_an_agent_says_is_published_where_it_said_it(tmp_path: Path) -> None:
