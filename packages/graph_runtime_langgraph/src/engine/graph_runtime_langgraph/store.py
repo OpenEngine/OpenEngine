@@ -90,6 +90,8 @@ class ApprovalRecord:
     """How to reach that conversation again. `None` for a non-ACP execution."""
     request: Mapping[str, object] = field(default_factory=dict)
     """The agent's own `session/request_permission` payload."""
+    cancel_run: bool = True
+    """Whether refusing this request also refuses the graph execution."""
     status: ApprovalStatus = ApprovalStatus.PENDING
     decision: ApprovalDecision | None = None
     """The answer, once somebody gave one. `None` for the other two states.
@@ -398,6 +400,7 @@ def _approval_to_json(record: ApprovalRecord) -> dict[str, object]:
             None if record.continuation is None else record.continuation.to_dict()
         ),
         "request": dict(record.request),
+        "cancel_run": record.cancel_run,
     }
 
 
@@ -420,6 +423,7 @@ def _approval_from(row: sqlite3.Row) -> ApprovalRecord:
             None if continuation is None else ACPContinuation.from_dict(continuation)
         ),
         request=stored.get("request") or {},
+        cancel_run=stored.get("cancel_run", True),
         status=ApprovalStatus(row["status"]),
         decision=(
             None if row["decision"] is None else ApprovalDecision(row["decision"])

@@ -280,6 +280,7 @@ class _Turn:
                 _REQUEST_CHANNEL: channel,
                 _REQUEST_PAYLOAD: dict(request),
             },
+            cancel_run=channel != _MCP_APPROVAL,
             approval_id=approval_id,
             tool_call_id=tool_call_id,
         )

@@ -292,7 +292,7 @@ class LangGraphRuntime:
             record.node_id,
             record.execution_id,
         )
-        if decision is ApprovalDecision.CANCEL:
+        if decision is ApprovalDecision.CANCEL and record.cancel_run:
             await self._refuse(record)
         return await self._snapshot(run_id)
 
@@ -412,6 +412,7 @@ class LangGraphRuntime:
         session_key: str = "",
         continuation: Any | None = None,
         request: Mapping[str, object] | None = None,
+        cancel_run: bool = True,
         approval_id: ApprovalId | None = None,
         tool_call_id: str = "",
     ) -> ApprovalDecision:
@@ -444,6 +445,7 @@ class LangGraphRuntime:
             session_key=session_key,
             continuation=continuation,
             request=dict(request or {}),
+            cancel_run=cancel_run,
         )
         await self._store.remember_approval(record)
         waiting = execution.expect(chosen)
