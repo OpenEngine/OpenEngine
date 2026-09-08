@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 
 import {
   milestoneNewTaskUrl,
+  milestoneScopeUrl,
   projectMilestonesUrl,
   type ApiWorkflowRunListing,
   type ApiWorkstream,
@@ -210,12 +211,20 @@ export function MilestoneDetailsPage({
               </span>
             )}
             {milestone && (
-              <a
-                className="btn btn-primary"
-                href={milestoneNewTaskUrl(projectId, milestone.milestoneId)}
-              >
-                New task
-              </a>
+              <>
+                <a
+                  className="btn"
+                  href={milestoneScopeUrl(projectId, milestone.milestoneId)}
+                >
+                  Scope
+                </a>
+                <a
+                  className="btn btn-primary"
+                  href={milestoneNewTaskUrl(projectId, milestone.milestoneId)}
+                >
+                  New task
+                </a>
+              </>
             )}
           </div>
         </div>

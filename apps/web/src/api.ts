@@ -103,6 +103,13 @@ export function milestoneNewTaskUrl(
   return `${milestoneDetailsUrl(projectId, milestoneId)}/tasks/new`;
 }
 
+export function milestoneScopeUrl(
+  projectId: string,
+  milestoneId: string,
+): string {
+  return `${milestoneDetailsUrl(projectId, milestoneId)}/scope`;
+}
+
 export type ApiWorkstream = {
   workstreamId: string;
   name: string;
@@ -122,6 +129,32 @@ export type ApiProjectMilestones = {
   project: ApiProject;
   milestones: ApiMilestone[];
 };
+
+export type ApiWorkOrderSpec = {
+  milestoneId: string;
+  name: string;
+  objective: string;
+  evidenceRequirements: string[];
+  dependencies: string[];
+};
+
+export type ApiScopingPlan = {
+  create: ApiWorkOrderSpec[];
+  cancel: string[];
+  supersede: { workorderId: string; replacements: ApiWorkOrderSpec[] }[];
+  reasons: string[];
+};
+
+export function scopeMilestone(
+  projectId: string,
+  milestoneId: string,
+  message: string,
+): Promise<ApiScopingPlan> {
+  return api<ApiScopingPlan>(
+    `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/scope`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
+}
 
 export function getProjectMilestones(
   projectId: string,
@@ -630,16 +663,41 @@ export function disconnectGitLab(origin: string): Promise<void> {
   });
 }
 
-export type SlackStatus = { configured: boolean; connected: boolean };
+/**
+ * `events` is whether a mention could start a work order right now, and
+ * `signingSecret` is which of its two halves this server already has.
+ */
+export type SlackStatus = {
+  configured: boolean;
+  connected: boolean;
+  events?: boolean;
+  signingSecret?: boolean;
+};
 
 export function getSlackStatus(): Promise<SlackStatus> {
   return api<SlackStatus>("/api/slack/status");
 }
 
-export function setSlackCredentials(clientId: string, clientSecret: string): Promise<void> {
+export function setSlackCredentials(
+  clientId: string,
+  clientSecret: string,
+  signingSecret?: string,
+): Promise<void> {
   return api<void>("/api/slack/credentials", {
     method: "POST",
-    body: JSON.stringify({ clientId, clientSecret }),
+    body: JSON.stringify({ clientId, clientSecret, signingSecret }),
+  });
+}
+
+/**
+ * Save only the signing secret, against the app already configured. Separate
+ * from `setSlackCredentials` because that one revokes the token and starts the
+ * OAuth flow over, which is not a price for enabling mentions.
+ */
+export function setSlackSigningSecret(signingSecret: string): Promise<void> {
+  return api<void>("/api/slack/credentials", {
+    method: "POST",
+    body: JSON.stringify({ signingSecret }),
   });
 }
 

@@ -32,6 +32,16 @@ describe("routeForPath", () => {
     });
   });
 
+  it("routes a milestone scoping chat separately from milestone details", () => {
+    expect(
+      routeForPath("/projects/project-1/milestones/milestone-1/scope"),
+    ).toEqual({
+      kind: "milestone-scope",
+      projectId: "project-1",
+      milestoneId: "milestone-1",
+    });
+  });
+
   /** A page of its own rather than a conversation: everything unrecognised
    *  falls through to chat, so this has to be matched before it. */
   it("routes the rail's graph icon to the utilization page", () => {

@@ -14,6 +14,7 @@ is how a test asserts on what was *sent* rather than only on what came back.
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 #: The ids the agent uses for the requests it makes of the client.
@@ -104,7 +105,12 @@ def capabilities(options: set[str]) -> dict[str, Any]:
 
 def run_turn(message_id: Any, options: set[str]) -> None:
     """One prompt turn: some updates, maybe a question, then a stop reason."""
-    response = os.environ.get("FAKE_AGENT_RESPONSE", "Looking.")
+    response_file = os.environ.get("FAKE_AGENT_RESPONSE_FILE")
+    response = (
+        Path(response_file).read_text(encoding="utf-8")
+        if response_file
+        else os.environ.get("FAKE_AGENT_RESPONSE", "Looking.")
+    )
     message_chunks = (response[:4], response[4:]) if "--split-message" in options else (response,)
     for text in message_chunks:
         update(

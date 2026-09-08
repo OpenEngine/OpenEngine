@@ -33,6 +33,7 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_communications,
+    build_milestone_scoper,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -62,6 +63,7 @@ from engine.domain import (
     RunPhase,
     RunRequested,
     RunState,
+    ScopingPlan,
     StepCompleted,
     StepId,
     StepReactivated,
@@ -74,6 +76,9 @@ from engine.domain import (
     WorkspaceProvisioned,
     Workstream,
     WorkstreamId,
+    WorkOrderId,
+    WorkOrderSpec,
+    WorkOrderStatus,
     project_id_for_instance,
 )
 from engine.ports import (
@@ -189,6 +194,27 @@ def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeyp
     ]
     # Composed from the working directory, exactly as `engine-web` composes it.
     assert (tmp_path / "conversations.sqlite3").exists()
+    assert app.state.milestone_scoper is not None
+
+
+def test_milestone_scoper_uses_the_configured_codex_provider() -> None:
+    settings = Settings(
+        codex_binary="/opt/openengine/codex",
+        codex_working_directory="/srv/openengine/repository",
+        codex_timeout_seconds=42,
+        codex_model="gpt-scoper",
+    )
+
+    milestone_scoper = build_milestone_scoper(settings)
+    provider = milestone_scoper.scoper.registry.resolve("codex")
+
+    assert provider.env == {
+        "CODEX_PATH": "/opt/openengine/codex",
+        "CODEX_CONFIG": '{"model": "gpt-scoper"}',
+    }
+    assert provider.cwd == "/srv/openengine/repository"
+    assert milestone_scoper.scoper.working_directory == "/srv/openengine/repository"
+    assert milestone_scoper.scoper.timeout_seconds == 42
 
 
 def test_web_offers_one_interactive_runner_per_cli() -> None:
@@ -4274,6 +4300,94 @@ def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
     assert [milestone["name"] for milestone in listed.json()["milestones"]] == [
         "Foundation"
     ]
+
+
+def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_work() -> None:
+    class RecordingMilestoneScoper:
+        request = None
+
+        async def run(self, **request):
+            self.request = request
+            milestone_id = request["milestone"].milestone_id
+            return ScopingPlan(
+                create=(
+                    WorkOrderSpec(
+                        milestone_id,
+                        "Render the plan",
+                        "Draw the proposed work orders.",
+                    ),
+                ),
+                cancel=(WorkOrderId("run-obsolete"),),
+                reasons=("The milestone needs a dedicated scoping view.",),
+            )
+
+    store = InMemoryStateStore()
+    session = _session_with({"test": ConcurrentRunner()}, state_store=store)
+    scoper = RecordingMilestoneScoper()
+    project = Project(ProjectId("project-engine"), "Engine")
+    milestone = Milestone(
+        MilestoneId("milestone-scoping"),
+        project.project_id,
+        "Milestone scoping",
+        "Break milestone requirements into reviewable work orders.",
+    )
+    existing = RunState(
+        run_id=RunId("run-existing"),
+        task_id=TaskId("task-existing"),
+        workflow_id=WORKFLOW_ID,
+        milestone_id=milestone.milestone_id,
+        phase=RunPhase.RUNNING_AGENT,
+        name="Existing implementation",
+        prompt="Implement the existing portion.",
+    )
+
+    async def scenario():
+        await store.save_project(project)
+        await store.save_milestone(milestone)
+        await store.save(existing)
+        app = create_app(
+            session,
+            {"test": ConcurrentRunner()},
+            milestone_scoper=scoper,  # type: ignore[arg-type]
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.post(
+                f"/api/projects/{project.project_id}/milestones/"
+                f"{milestone.milestone_id}/scope",
+                json={"message": "Prefer changes under 1,000 lines."},
+            )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "create": [
+            {
+                "milestoneId": "milestone-scoping",
+                "name": "Render the plan",
+                "objective": "Draw the proposed work orders.",
+                "evidenceRequirements": [],
+                "dependencies": [],
+            }
+        ],
+        "cancel": ["run-obsolete"],
+        "supersede": [],
+        "reasons": ["The milestone needs a dedicated scoping view."],
+    }
+    assert scoper.request["milestone"].name == "Milestone scoping"
+    assert scoper.request["milestone"].requirements == (
+        "Break milestone requirements into reviewable work orders.",
+    )
+    assert scoper.request["policy"].rules == (
+        "Prefer changes under 1,000 lines.",
+    )
+    assert scoper.request["workorders"][0].status is WorkOrderStatus.IN_PROGRESS
+    assert scoper.request["workorders"][0].spec.objective == (
+        "Implement the existing portion."
+    )
 
 
 def test_projects_api_says_how_many_milestones_each_project_has() -> None:

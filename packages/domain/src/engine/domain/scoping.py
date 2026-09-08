@@ -23,6 +23,8 @@ class MilestoneScope:
     requirements: tuple[str, ...] = field(default=())
     evidence_requirements: tuple[str, ...] = field(default=())
     dependencies: tuple[MilestoneId, ...] = field(default=())
+    name: str = ""
+    """Human-readable identity supplied alongside the durable milestone id."""
 
 
 @dataclass(frozen=True, slots=True)

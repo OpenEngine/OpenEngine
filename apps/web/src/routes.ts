@@ -7,6 +7,7 @@ export type Route =
   | { kind: "run"; runId: string }
   | { kind: "project"; projectId: string }
   | { kind: "milestone"; projectId: string; milestoneId: string }
+  | { kind: "milestone-scope"; projectId: string; milestoneId: string }
   | { kind: "new-task"; projectId: string; milestoneId: string }
   | { kind: "graph-conversation"; runId: string; nodeId: string }
   /** What every runner's subscription has been spent on, across providers. */
@@ -32,6 +33,15 @@ export function routeForPath(pathname: string): Route {
       kind: "new-task",
       projectId: decodeURIComponent(newTask[1]),
       milestoneId: decodeURIComponent(newTask[2]),
+    };
+  const milestoneScope = path.match(
+    /^\/projects\/([^/]+)\/milestones\/([^/]+)\/scope$/,
+  );
+  if (milestoneScope)
+    return {
+      kind: "milestone-scope",
+      projectId: decodeURIComponent(milestoneScope[1]),
+      milestoneId: decodeURIComponent(milestoneScope[2]),
     };
   const milestoneDetails = path.match(/^\/projects\/([^/]+)\/milestones\/([^/]+)$/);
   if (milestoneDetails)
