@@ -32,6 +32,7 @@ from collections.abc import (
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
@@ -99,7 +100,6 @@ from engine.domain import (
     project_id_for_instance,
     workstreams_by_milestone,
 )
-from engine.orchestrator import MilestoneWorkflow
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -984,6 +984,18 @@ class _GraphSurface:
     app: Starlette | None = None
 
 
+class MilestoneScoping(Protocol):
+    """The configured in-process scoper supplied by the composition root."""
+
+    async def run(
+        self,
+        *,
+        workorders: Sequence[WorkOrder],
+        milestone: MilestoneScope,
+        policy: ScopingPolicy,
+    ) -> ScopingPlan: ...
+
+
 def create_app(
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -1003,7 +1015,7 @@ def create_app(
     communications_channel: str = "",
     public_url: str = "",
     utilization: UtilizationService | None = None,
-    milestone_workflow: MilestoneWorkflow | None = None,
+    milestone_scoper: MilestoneScoping | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -1056,7 +1068,6 @@ def create_app(
         approval_observer=approval_feed.publish,
     )
     run_reader = RunReader(session.state_store, catalog)
-    milestone_workflow = milestone_workflow or MilestoneWorkflow()
 
     async def approval_presented(_approval: ApprovalRecord) -> None:
         # The broker's observer publishes every persisted transition. This
@@ -1623,7 +1634,7 @@ def create_app(
         )
 
     async def scope_milestone(request: Request) -> JSONResponse:
-        """Run the ACP-backed milestone workflow and return its structured plan."""
+        """Run the configured ACP scoper and return its structured plan."""
         project_id = ProjectId(request.path_params["project_id"])
         milestone_id = MilestoneId(request.path_params["milestone_id"])
         project = await session.state_store.load_project(project_id)
@@ -1647,7 +1658,9 @@ def create_app(
             for run in await session.state_store.list_runs()
             if run.milestone_id == milestone_id or run.workstream_id in workstreams
         )
-        plan = await milestone_workflow.run(
+        if milestone_scoper is None:
+            return _error("milestone scoping is not configured", 503)
+        plan = await milestone_scoper.run(
             workorders=current,
             milestone=MilestoneScope(
                 milestone_id=milestone.milestone_id,
@@ -2733,6 +2746,7 @@ def create_app(
         routes.append(Route("/", _missing_frontend))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.thread_service = service
+    app.state.milestone_scoper = milestone_scoper
     return app
 
 

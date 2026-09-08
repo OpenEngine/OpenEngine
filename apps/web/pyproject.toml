@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 # dependencies live in this directory's package.json.
 dependencies = [
     "engine-runtime",
-    "engine-orchestrator",
+    "engine-scoper",
     # The engine that runs the `[BETA]` graph workflows, and the contract it
     # implements. Startup reads every file in the workflow directory and a
     # workflow file imports the binding, so it would have to be installed even
@@ -51,7 +51,7 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-runtime = { workspace = true }
-engine-orchestrator = { workspace = true }
+engine-scoper = { workspace = true }
 engine-graph-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }

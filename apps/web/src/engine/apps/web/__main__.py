@@ -22,6 +22,7 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_graph_runtime,
+    build_milestone_scoper,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -160,6 +161,7 @@ def compose_app(
         slack_credential_store=slack_credential_store,
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
+        milestone_scoper=build_milestone_scoper(settings),
     )
 
 

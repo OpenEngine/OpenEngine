@@ -13,6 +13,7 @@ is already complete here:
     resolve -> connect and initialize -> session/new -> session/prompt -> result
 """
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -39,12 +40,14 @@ class ACPNode:
     """The provider name to resolve when the node is invoked."""
     registry: ACPAgentRegistry | None = None
     """The registry to resolve against; the shared default when omitted."""
+    working_directory: str | os.PathLike[str] | None = None
+    """The configured workspace supplied when the ACP session is created."""
 
     async def __call__(self, prompt: ACPPrompt) -> ACPResult:
         provider = (self.registry or default_registry()).resolve(self.agent)
         client = await provider.connect()
         try:
-            session = await client.new_session()
+            session = await client.new_session(cwd=self.working_directory)
             message_parts: list[str] = []
             content: list[JSONValue] = []
             stop_reason: str | None = None

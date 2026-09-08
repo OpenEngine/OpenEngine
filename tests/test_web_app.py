@@ -33,6 +33,7 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_communications,
+    build_milestone_scoper,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -193,6 +194,27 @@ def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeyp
     ]
     # Composed from the working directory, exactly as `engine-web` composes it.
     assert (tmp_path / "conversations.sqlite3").exists()
+    assert app.state.milestone_scoper is not None
+
+
+def test_milestone_scoper_uses_the_configured_codex_provider() -> None:
+    settings = Settings(
+        codex_binary="/opt/openengine/codex",
+        codex_working_directory="/srv/openengine/repository",
+        codex_timeout_seconds=42,
+        codex_model="gpt-scoper",
+    )
+
+    milestone_scoper = build_milestone_scoper(settings)
+    provider = milestone_scoper.scoper.registry.resolve("codex")
+
+    assert provider.env == {
+        "CODEX_PATH": "/opt/openengine/codex",
+        "CODEX_CONFIG": '{"model": "gpt-scoper"}',
+    }
+    assert provider.cwd == "/srv/openengine/repository"
+    assert milestone_scoper.scoper.working_directory == "/srv/openengine/repository"
+    assert milestone_scoper.scoper.timeout_seconds == 42
 
 
 def test_web_offers_one_interactive_runner_per_cli() -> None:
@@ -4280,8 +4302,8 @@ def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
     ]
 
 
-def test_milestone_scope_api_invokes_workflow_with_milestone_context_and_current_work() -> None:
-    class RecordingMilestoneWorkflow:
+def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_work() -> None:
+    class RecordingMilestoneScoper:
         request = None
 
         async def run(self, **request):
@@ -4301,7 +4323,7 @@ def test_milestone_scope_api_invokes_workflow_with_milestone_context_and_current
 
     store = InMemoryStateStore()
     session = _session_with({"test": ConcurrentRunner()}, state_store=store)
-    workflow = RecordingMilestoneWorkflow()
+    scoper = RecordingMilestoneScoper()
     project = Project(ProjectId("project-engine"), "Engine")
     milestone = Milestone(
         MilestoneId("milestone-scoping"),
@@ -4326,7 +4348,7 @@ def test_milestone_scope_api_invokes_workflow_with_milestone_context_and_current
         app = create_app(
             session,
             {"test": ConcurrentRunner()},
-            milestone_workflow=workflow,  # type: ignore[arg-type]
+            milestone_scoper=scoper,  # type: ignore[arg-type]
         )
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -4355,15 +4377,15 @@ def test_milestone_scope_api_invokes_workflow_with_milestone_context_and_current
         "supersede": [],
         "reasons": ["The milestone needs a dedicated scoping view."],
     }
-    assert workflow.request["milestone"].name == "Milestone scoping"
-    assert workflow.request["milestone"].requirements == (
+    assert scoper.request["milestone"].name == "Milestone scoping"
+    assert scoper.request["milestone"].requirements == (
         "Break milestone requirements into reviewable work orders.",
     )
-    assert workflow.request["policy"].rules == (
+    assert scoper.request["policy"].rules == (
         "Prefer changes under 1,000 lines.",
     )
-    assert workflow.request["workorders"][0].status is WorkOrderStatus.IN_PROGRESS
-    assert workflow.request["workorders"][0].spec.objective == (
+    assert scoper.request["workorders"][0].status is WorkOrderStatus.IN_PROGRESS
+    assert scoper.request["workorders"][0].spec.objective == (
         "Implement the existing portion."
     )
 

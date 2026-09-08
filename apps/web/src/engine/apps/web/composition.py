@@ -52,6 +52,7 @@ from engine.apps.web.github_auth import (
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+from engine.scoper import MilestoneScoper, codex_milestone_scoper
 from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
@@ -270,6 +271,16 @@ def build_graph_runtime(
     if not graphs:
         return None
     return sqlite_runtime(tuple(graphs), settings.graph_state_directory)
+
+
+def build_milestone_scoper(settings: Settings) -> MilestoneScoper:
+    """Build scoping from the configured Codex executable and workspace."""
+    return codex_milestone_scoper(
+        binary_path=settings.codex_binary,
+        working_directory=settings.codex_working_directory,
+        timeout_seconds=settings.codex_timeout_seconds,
+        model=settings.codex_model,
+    )
 
 
 def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:

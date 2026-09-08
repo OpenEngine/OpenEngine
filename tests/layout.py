@@ -71,6 +71,7 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.adapters",
         "engine.graph_runtime",
         "engine.graph_runtime_langgraph",
+        "engine.scoper",
     ),
 }
 

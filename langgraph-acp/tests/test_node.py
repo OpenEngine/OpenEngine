@@ -70,6 +70,35 @@ def test_the_node_sends_its_invocation_input_as_the_prompt(tmp_path: Path) -> No
     assert prompt == [{"type": "text", "text": "Review ticket 4"}]
 
 
+def test_the_node_starts_its_session_in_the_configured_directory(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "sent.jsonl"
+    registry = ACPAgentRegistry(
+        [
+            StdioACPProvider(
+                name="codex",
+                command=(sys.executable, str(FAKE_AGENT)),
+                env={"FAKE_AGENT_LOG": str(log)},
+            )
+        ]
+    )
+
+    asyncio.run(
+        ACPNode(
+            agent="codex",
+            registry=registry,
+            working_directory=tmp_path,
+        )("Review ticket 4")
+    )
+
+    messages = [json.loads(line) for line in log.read_text().splitlines()]
+    request = next(
+        message for message in messages if message.get("method") == "session/new"
+    )
+    assert request["params"]["cwd"] == str(tmp_path)
+
+
 def test_a_langgraph_graph_invokes_the_node_and_returns_its_result(
     tmp_path: Path,
 ) -> None:

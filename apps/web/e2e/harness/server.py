@@ -55,8 +55,7 @@ from engine.runtime import (  # noqa: E402
     describe_loaded_config,
     load_engine_config,
 )
-from engine.orchestrator import MilestoneWorkflow  # noqa: E402
-from engine.scoper import Scoper  # noqa: E402
+from engine.scoper import MilestoneScoper, Scoper  # noqa: E402
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
 from graph_workflow_fakes import scripted_catalog  # noqa: E402
 from provider_fakes import fake_claude, fake_codex  # noqa: E402
@@ -147,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         graph_runtime=build_graph_runtime(settings, catalog.graphs),
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
-        milestone_workflow=MilestoneWorkflow(
+        milestone_scoper=MilestoneScoper(
             Scoper(agent="codex", registry=scoper_registry)
         ),
     )
