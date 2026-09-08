@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shlex
 import subprocess
 import sys
@@ -470,13 +471,49 @@ def _acp_turn(message_id: object, session_id: str, prompt: str, cwd: str) -> Non
                 _acp_say(session_id, "Stopped, as asked.")
                 _acp_respond(message_id, {"stopReason": "refusal"})
                 return
-            _acp_ran(session_id, command, *_execute(command, cwd or os.getcwd()))
+            _acp_running(session_id, command)
+            code, output, cancelled = _acp_execute(
+                session_id, command, cwd or os.getcwd()
+            )
+            if cancelled:
+                _acp_respond(message_id, {"stopReason": "cancelled"})
+                return
+            _acp_ran(session_id, command, code, output)
         else:
             raise SystemExit(
                 f"an ACP turn cannot do a {kind!r} step: a graph node ends by "
                 "finishing its turn, so it has no run-bound MCP server to call"
             )
     _acp_respond(message_id, {"stopReason": "end_turn"})
+
+
+def _acp_execute(session_id: str, command: str, cwd: str) -> tuple[int, str, bool]:
+    """Run a command while remaining able to receive ACP cancellation."""
+
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    while process.poll() is None:
+        readable, _, _ = select.select([sys.stdin], [], [], 0.05)
+        if not readable:
+            continue
+        message = json.loads(sys.stdin.readline())
+        params = message.get("params") or {}
+        if (
+            message.get("method") != "session/cancel"
+            or params.get("sessionId") != session_id
+        ):
+            continue
+        process.terminate()
+        output, _ = process.communicate()
+        return process.returncode, output, True
+    output, _ = process.communicate()
+    return process.returncode, output, False
 
 
 def _acp_allowed(session_id: str, command: str) -> bool:
@@ -551,8 +588,22 @@ def _acp_say(session_id: str, text: str) -> None:
 
 
 def _acp_ran(session_id: str, command: str, code: int, output: str) -> None:
-    """Report one command the way an agent reports a tool call it made."""
+    """Report the result of a command the agent finished."""
+    _acp_update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "completed" if code == 0 else "failed",
+            "content": [
+                {"type": "content", "content": {"type": "text", "text": output}}
+            ],
+        },
+    )
 
+
+def _acp_running(session_id: str, command: str) -> None:
+    """Report a command before running it, so its turn is observable."""
     _acp_update(
         session_id,
         {
@@ -562,15 +613,6 @@ def _acp_ran(session_id: str, command: str, code: int, output: str) -> None:
             "kind": "execute",
             "status": "in_progress",
             "rawInput": {"command": command},
-        },
-    )
-    _acp_update(
-        session_id,
-        {
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": "call-1",
-            "status": "completed" if code == 0 else "failed",
-            "content": [{"type": "content", "content": {"type": "text", "text": output}}],
         },
     )
 

@@ -14,7 +14,13 @@ Two providers, two shapes of answer, one shape of reading:
 Both land in `RunnerUtilization`, so the interface draws one kind of meter
 rather than one per vendor. A runner that cannot be read keeps its place in the
 list and says why in `error`: "not signed in" is a fact about a runner worth
-printing, not a reason to fail the page.
+printing, not a reason to fail the page. Where a command would fix it, `remedy`
+carries that command, because a page that can only say "sign in again" has told
+the reader the half they already knew.
+
+Finding the credential is most of the work, and Claude's is the awkward one:
+there are two stores, they disagree, and the stale one is not the one you would
+guess. See `claude_credentials`.
 
 The last reading is cached on disk because a scrape is two network round trips
 and the page should have something to draw before either returns. Opening the
@@ -68,9 +74,24 @@ _KEYCHAIN_TIMEOUT_SECONDS = 5.0
 #: does not say who it is gets a 403 rather than an answer.
 _USER_AGENT = "openengine"
 
+#: What to run to sign a runner in again. Carried alongside the error rather
+#: than left to the reader to know, because "sign in again" is only useful next
+#: to the thing that signs you in -- and neither of these is this application's
+#: own login, so nothing here can offer to do it for them.
+CLAUDE_SIGN_IN = "claude setup-token"
+CODEX_SIGN_IN = "codex login"
+
 
 class UtilizationError(RuntimeError):
-    """A runner's utilization could not be read."""
+    """A runner's utilization could not be read.
+
+    `remedy` is the command that would fix it, where one exists. A provider
+    being briefly unreachable has none; a credential too old to use does.
+    """
+
+    def __init__(self, message: str, remedy: str = "") -> None:
+        super().__init__(message)
+        self.remedy = remedy
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +122,7 @@ class RunnerUtilization:
     plan: str = ""
     windows: tuple[UtilizationWindow, ...] = ()
     error: str = ""
+    remedy: str = ""
     read_at: float = 0.0
 
 
@@ -116,24 +138,50 @@ def _number(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
-def _oauth_token_in(path: Path) -> str:
+@dataclass(frozen=True, slots=True)
+class StoredToken:
+    """One Claude Code credential, and when it stops being one.
+
+    `expires_at` is epoch seconds, or zero where the store named none -- a
+    token whose lifetime is not written down is taken at face value, because
+    the alternative is refusing to try one that may well work.
+    """
+
+    access_token: str
+    expires_at: float = 0.0
+
+    @property
+    def expired(self) -> bool:
+        return bool(self.expires_at) and self.expires_at <= time.time()
+
+
+def _stored_token(account: object) -> StoredToken | None:
+    """A credential out of the `claudeAiOauth` object both stores hold."""
+    if not isinstance(account, dict):
+        return None
+    token = account.get("accessToken")
+    if not isinstance(token, str) or not token:
+        return None
+    # Both stores write milliseconds, which is what JavaScript's Date gives.
+    return StoredToken(token, _number(account.get("expiresAt")) / 1000)
+
+
+def _oauth_token_in(path: Path) -> StoredToken | None:
     """The Claude Code OAuth token in a credentials file, if it holds one."""
     try:
         stored = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return ""
-    account = stored.get("claudeAiOauth") if isinstance(stored, dict) else None
-    token = account.get("accessToken") if isinstance(account, dict) else None
-    return token if isinstance(token, str) else ""
+        return None
+    return _stored_token(stored.get("claudeAiOauth") if isinstance(stored, dict) else None)
 
 
-def _keychain_token() -> str:
+def _keychain_token() -> StoredToken | None:
     """The same token, from the macOS keychain Claude Code prefers to a file.
 
     Read with `security` rather than through a keyring library on purpose: the
     entry belongs to Claude Code, and the CLI is what the OS grants access to.
-    Anywhere else this is simply empty, which the caller reports as "not signed
-    in" -- the honest answer when nothing readable holds a token.
+    Anywhere else this is simply nothing, which the caller reports as "not
+    signed in" -- the honest answer when nothing readable holds a token.
 
     Bounded because this is the one call here that can stop and wait on a
     person: an entry this process is not yet trusted with puts a modal in front
@@ -142,7 +190,7 @@ def _keychain_token() -> str:
     nobody answers reads the same as no keychain at all.
     """
     if sys.platform != "darwin":
-        return ""
+        return None
     try:
         found = subprocess.run(
             ["security", "find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"],
@@ -151,24 +199,53 @@ def _keychain_token() -> str:
             timeout=_KEYCHAIN_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return None
     if found.returncode:
-        return ""
+        return None
     try:
         stored = json.loads(found.stdout.decode(errors="replace"))
     except json.JSONDecodeError:
-        return ""
-    account = stored.get("claudeAiOauth") if isinstance(stored, dict) else None
-    token = account.get("accessToken") if isinstance(account, dict) else None
-    return token if isinstance(token, str) else ""
+        return None
+    return _stored_token(stored.get("claudeAiOauth") if isinstance(stored, dict) else None)
+
+
+def claude_credentials(home: Path | None = None) -> tuple[StoredToken, ...]:
+    """Every Claude Code credential this machine holds, newest first.
+
+    There is more than one place to look and they disagree. Claude Code keeps
+    the live credential in the keychain and refreshes it in place; the file is
+    what platforms without a keychain use, and on a Mac it is usually a
+    leftover from before the keychain existed -- months stale, and refused the
+    moment it is sent. Preferring one store over the other picks the wrong one
+    about half the time, so this collects both and sorts by expiry: the token
+    that lasts longest is the one that was refreshed most recently.
+
+    A token given in the environment wins outright. It is the only one somebody
+    chose deliberately, and `claude setup-token` issues it to be long-lived,
+    so there is nothing to compare its lifetime against.
+    """
+    from_environment = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if from_environment:
+        return (StoredToken(from_environment),)
+    found = (
+        _keychain_token(),
+        _oauth_token_in((home or Path.home()) / ".claude" / ".credentials.json"),
+    )
+    return tuple(
+        sorted(
+            (token for token in found if token is not None),
+            key=lambda token: token.expires_at,
+            reverse=True,
+        )
+    )
 
 
 def claude_access_token(home: Path | None = None) -> str:
-    """Claude Code's OAuth token, from wherever this machine keeps it."""
-    from_environment = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
-    if from_environment:
-        return from_environment
-    return _oauth_token_in((home or Path.home()) / ".claude" / ".credentials.json") or _keychain_token()
+    """The freshest Claude Code credential still worth sending, if any."""
+    for token in claude_credentials(home):
+        if not token.expired:
+            return token.access_token
+    return ""
 
 
 def codex_credentials(home: Path | None = None) -> tuple[str, str]:
@@ -193,7 +270,9 @@ def codex_credentials(home: Path | None = None) -> tuple[str, str]:
     )
 
 
-async def _read_json(client: httpx.AsyncClient, url: str, headers: Mapping[str, str]) -> dict[str, object]:
+async def _read_json(
+    client: httpx.AsyncClient, url: str, headers: Mapping[str, str], *, sign_in: str
+) -> dict[str, object]:
     try:
         response = await client.get(
             url,
@@ -203,7 +282,7 @@ async def _read_json(client: httpx.AsyncClient, url: str, headers: Mapping[str, 
     except httpx.HTTPError as error:
         raise UtilizationError(f"could not reach the provider: {error}") from error
     if response.status_code in (401, 403):
-        raise UtilizationError("the stored credential was refused; sign in again")
+        raise UtilizationError("the stored credential was refused", sign_in)
     if response.status_code == 429:
         # These endpoints are metered in their own right, which is the other
         # half of why the last reading is cached rather than re-taken per view.
@@ -236,9 +315,18 @@ async def read_claude_utilization(
     client: httpx.AsyncClient, home: Path | None = None
 ) -> RunnerUtilization:
     """Claude's two windows: the five-hour session and the rolling week."""
-    token = await asyncio.to_thread(claude_access_token, home)
+    stored = await asyncio.to_thread(claude_credentials, home)
+    token = next((held.access_token for held in stored if not held.expired), "")
     if not token:
-        raise UtilizationError("Claude Code is not signed in on this machine")
+        # Two different things to fix, and the same command fixes both -- but
+        # only one of them is worth saying "you are not signed in" about, and
+        # it is not the one where the CLI beside this is working fine.
+        raise UtilizationError(
+            "the stored Claude Code credential has expired"
+            if stored
+            else "Claude Code is not signed in on this machine",
+            CLAUDE_SIGN_IN,
+        )
     payload = await _read_json(
         client,
         CLAUDE_USAGE_URL,
@@ -246,6 +334,7 @@ async def read_claude_utilization(
             "Authorization": f"Bearer {token}",
             "anthropic-beta": CLAUDE_OAUTH_BETA,
         },
+        sign_in=CLAUDE_SIGN_IN,
     )
     windows = [
         window
@@ -288,11 +377,12 @@ async def read_codex_utilization(
     """Codex's weekly window, which is the one its subscription is metered on."""
     token, account = await asyncio.to_thread(codex_credentials, home)
     if not token or not account:
-        raise UtilizationError("Codex is not signed in on this machine")
+        raise UtilizationError("Codex is not signed in on this machine", CODEX_SIGN_IN)
     payload = await _read_json(
         client,
         CODEX_USAGE_URL,
         {"Authorization": f"Bearer {token}", "chatgpt-account-id": account},
+        sign_in=CODEX_SIGN_IN,
     )
     limit = payload.get("rate_limit")
     weekly = _codex_weekly(limit) if isinstance(limit, dict) else None
@@ -367,7 +457,7 @@ class UtilizationService:
         try:
             reading = await self._readers[runner](client)
         except UtilizationError as error:
-            return RunnerUtilization(runner=runner, error=str(error))
+            return RunnerUtilization(runner=runner, error=str(error), remedy=error.remedy)
         except Exception as error:  # noqa: BLE001 -- one runner must not fail the page
             return RunnerUtilization(runner=runner, error=str(error) or type(error).__name__)
         return replace(reading, runner=runner, read_at=time.time())
@@ -407,7 +497,7 @@ def _merge(
     for reading in taken:
         stale = kept.get(reading.runner)
         if reading.error and stale is not None and stale.windows:
-            merged.append(replace(stale, error=reading.error))
+            merged.append(replace(stale, error=reading.error, remedy=reading.remedy))
         else:
             merged.append(reading)
     return tuple(merged)
@@ -418,6 +508,7 @@ def _reading_json(reading: RunnerUtilization) -> dict[str, object]:
         "runner": reading.runner,
         "plan": reading.plan,
         "error": reading.error,
+        "remedy": reading.remedy,
         "readAt": reading.read_at,
         "windows": [
             {
@@ -439,6 +530,7 @@ def _reading_from_json(entry: object) -> RunnerUtilization | None:
         runner=str(entry["runner"]),
         plan=str(entry.get("plan") or ""),
         error=str(entry.get("error") or ""),
+        remedy=str(entry.get("remedy") or ""),
         read_at=_number(entry.get("readAt")),
         windows=tuple(
             UtilizationWindow(
@@ -459,14 +551,18 @@ def utilization_json(readings: Sequence[RunnerUtilization]) -> dict[str, object]
 
 
 __all__ = [
+    "CLAUDE_SIGN_IN",
     "CLAUDE_USAGE_URL",
+    "CODEX_SIGN_IN",
     "CODEX_USAGE_URL",
     "READERS",
     "RunnerUtilization",
+    "StoredToken",
     "UtilizationError",
     "UtilizationService",
     "UtilizationWindow",
     "claude_access_token",
+    "claude_credentials",
     "codex_credentials",
     "read_claude_utilization",
     "read_codex_utilization",

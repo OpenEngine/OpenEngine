@@ -45,6 +45,15 @@ from engine.apps.web.github_auth import (
     poll_device_flow,
     start_device_flow,
 )
+from engine.apps.web.gitlab_auth import (
+    DeviceFlowComplete as GitLabDeviceFlowComplete,
+    GitLabAuthError,
+    GitLabCredentialStore,
+    credentials_from_device_flow as gitlab_credentials_from_device_flow,
+    normalize_origin as normalize_gitlab_origin,
+    poll_device_flow as poll_gitlab_device_flow,
+    start_device_flow as start_gitlab_device_flow,
+)
 from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
@@ -955,6 +964,17 @@ GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
 }
 
 
+def _graph_workorder_name(values: object) -> str:
+    """The concise name a graph's naming node left in its state."""
+    if not isinstance(values, Mapping):
+        return ""
+    value = values.get("name")
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    first_line = value.strip().splitlines()[0]
+    return first_line.strip(" \t\"'`).:;!?")[:120]
+
+
 #: Where this module says what went wrong with something nobody asked it about
 #: -- a graph engine that would not open, a stranded run it could not pick back
 #: up. Those go to the log rather than to a person, because the person who
@@ -1166,25 +1186,27 @@ def create_app(
         The WorkOrder row is the other. A graph run keeps its real progress in
         the graph engine's own files, and this app only holds a row for it, so
         without this the row would say "an agent is working" long after the run
-        had finished or fallen over. Only the two endings are copied across;
-        the rest of what a graph says is about positions inside the graph, and
-        a row has nowhere to put them.
+        had finished or fallen over. The two endings and the name produced by
+        a naming node are copied across. The rest of what a graph says is about
+        positions inside the graph, and a row has nowhere to put it.
         """
         await graph_events.append(event)
         phase = GRAPH_ENDINGS.get(event.kind)
-        if phase is None:
+        name = _graph_workorder_name(event.payload.get("values"))
+        if phase is None and not name:
             return
         state = await session.state_store.load(event.run_id)
         if state is None:
             return
-        await session.state_store.save(
-            replace(
-                state,
-                phase=phase,
-                failure_reason=str(event.payload.get("error", ""))
-                or state.failure_reason,
-            )
+        updated = replace(
+            state,
+            name=name or state.name,
+            phase=phase or state.phase,
+            failure_reason=str(event.payload.get("error", ""))
+            or state.failure_reason,
         )
+        if updated != state:
+            await session.state_store.save(updated)
 
     async def restore_graph_runs(runtime: GraphRuntime) -> None:
         """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
@@ -1236,10 +1258,16 @@ def create_app(
                     await runtime.resume_from(state.run_id, snapshot.checkpoint_id)
                     continue
                 phase = GRAPH_PHASES[snapshot.status]
-                if phase is not state.phase or snapshot.error != state.failure_reason:
+                name = _graph_workorder_name(snapshot.values)
+                if (
+                    phase is not state.phase
+                    or snapshot.error != state.failure_reason
+                    or (name and name != state.name)
+                ):
                     await session.state_store.save(
                         replace(
                             state,
+                            name=name or state.name,
                             phase=phase,
                             failure_reason=snapshot.error or state.failure_reason,
                         )
@@ -1676,9 +1704,16 @@ def create_app(
         # a WorkOrder that claims to be working forever. So the engine is asked
         # once more, now that there is a row for its answer.
         latest = await runtime.snapshot(state.run_id)
-        if latest is not None and GRAPH_PHASES[latest.status] is not state.phase:
+        latest_name = (
+            _graph_workorder_name(latest.values) if latest is not None else ""
+        )
+        if latest is not None and (
+            GRAPH_PHASES[latest.status] is not state.phase
+            or (latest_name and latest_name != state.name)
+        ):
             state = replace(
                 state,
+                name=latest_name or state.name,
                 phase=GRAPH_PHASES[latest.status],
                 failure_reason=latest.error,
             )
@@ -2309,20 +2344,7 @@ def create_app(
     async def github_status(_request: Request) -> JSONResponse:
         credentials = _credential_store.get_credentials()
         now = time.time()
-        connected = bool(
-            credentials
-            and (
-                credentials.expires_at is None
-                or credentials.expires_at > now
-                or (
-                    credentials.refresh_token is not None
-                    and (
-                        credentials.refresh_token_expires_at is None
-                        or credentials.refresh_token_expires_at > now
-                    )
-                )
-            )
-        )
+        connected = bool(credentials and credentials.is_usable(now))
         return JSONResponse(
             {
                 "connected": connected,
@@ -2365,12 +2387,17 @@ def create_app(
     async def set_source_control_provider(request: Request) -> Response:
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        provider = (await request.json()).get("provider")
-        if provider == "gitlab":
-            return _error("GitLab is not supported yet", 409)
-        if provider not in {"gh-cli", "github-oauth"}:
-            return _error("provider must be 'gh-cli' or 'github-oauth'", 400)
-        _source_control_preferences.set(provider)
+        body = await request.json()
+        provider = body.get("provider")
+        if provider not in {"gh-cli", "github-oauth", "gitlab-oauth"}:
+            return _error("provider must be 'gh-cli', 'github-oauth', or 'gitlab-oauth'", 400)
+        origin = body.get("origin") if isinstance(body.get("origin"), str) else None
+        if provider == "gitlab-oauth":
+            try:
+                origin = normalize_gitlab_origin(origin or "https://gitlab.com")
+            except ValueError as error:
+                return _error(str(error), 400)
+        _source_control_preferences.set(provider, origin if provider == "gitlab-oauth" else None)
         return Response(status_code=204)
 
     async def github_get_client_id(_request: Request) -> JSONResponse:
@@ -2465,6 +2492,116 @@ def create_app(
             return _error("forbidden", 403)
         _active_flow = None
         _credential_store.delete()
+        return Response(status_code=204)
+
+    # GitLab credentials are per OAuth issuer, unlike GitHub's single public
+    # issuer.  Keep one in-flight device flow per canonical instance so tabs
+    # cannot race an authorization code for the same account.
+    _gitlab_flows: dict[str, tuple[object, int]] = {}
+
+    def _gitlab_origin(request: Request | None = None, body: Mapping[str, object] | None = None) -> str:
+        value = (
+            body.get("origin") if body is not None else request.query_params.get("origin") if request is not None else None
+        )
+        try:
+            return normalize_gitlab_origin(value if isinstance(value, str) else "https://gitlab.com")
+        except ValueError as error:
+            raise GitLabAuthError(str(error)) from error
+
+    def _gitlab_connected(store: GitLabCredentialStore) -> bool:
+        credentials = store.get_credentials()
+        now = time.time()
+        return bool(credentials and credentials.is_usable(now))
+
+    async def gitlab_status(request: Request) -> JSONResponse:
+        try:
+            origin = _gitlab_origin(request)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        store = GitLabCredentialStore(origin)
+        return JSONResponse({"origin": origin, "connected": _gitlab_connected(store), "clientIdConfigured": bool(store.get_client_id())})
+
+    async def gitlab_set_client_id(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        client_id = body.get("clientId")
+        if not isinstance(client_id, str) or not client_id.strip():
+            return _error("clientId is required", 400)
+        try:
+            GitLabCredentialStore(origin).set_client_id(client_id.strip())
+        except GitLabAuthError as error:
+            return _error(str(error), 500)
+        return Response(status_code=204)
+
+    async def gitlab_connect(request: Request) -> JSONResponse:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        client_id = GitLabCredentialStore(origin).get_client_id()
+        if not client_id:
+            return _error("GitLab client ID is not configured for this instance.", 503)
+        active = _gitlab_flows.get(origin)
+        if active is None:
+            try:
+                flow = await start_gitlab_device_flow(origin, client_id)
+            except GitLabAuthError as error:
+                return _error(str(error), 502)
+            active = (flow, flow.interval)
+            _gitlab_flows[origin] = active
+        flow, interval = active
+        return JSONResponse({"origin": origin, "userCode": flow.user_code, "verificationUri": flow.verification_uri, "expiresIn": flow.expires_in, "interval": interval})
+
+    async def gitlab_connect_poll(request: Request) -> JSONResponse:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        active = _gitlab_flows.get(origin)
+        if active is None:
+            return _error("no active GitLab device flow; call POST /api/gitlab/connect first", 409)
+        flow, interval = active
+        client_id = GitLabCredentialStore(origin).get_client_id()
+        if not client_id:
+            _gitlab_flows.pop(origin, None)
+            return _error("GitLab client ID is not configured for this instance.", 503)
+        try:
+            result = await poll_gitlab_device_flow(origin, client_id, flow.device_code, interval)
+        except GitLabAuthError as error:
+            _gitlab_flows.pop(origin, None)
+            return _error(str(error), 502)
+        if isinstance(result, GitLabDeviceFlowComplete):
+            try:
+                GitLabCredentialStore(origin).set_credentials(gitlab_credentials_from_device_flow(result))
+            except GitLabAuthError as error:
+                _gitlab_flows.pop(origin, None)
+                return _error(str(error), 500)
+            _gitlab_flows.pop(origin, None)
+            return JSONResponse({"status": "complete"})
+        _gitlab_flows[origin] = (flow, result.next_interval)
+        return JSONResponse({"status": "pending", "nextInterval": result.next_interval})
+
+    async def gitlab_disconnect(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        body = await request.json()
+        try:
+            origin = _gitlab_origin(body=body)
+        except GitLabAuthError as error:
+            return _error(str(error), 400)
+        _gitlab_flows.pop(origin, None)
+        GitLabCredentialStore(origin).delete()
         return Response(status_code=204)
 
     async def graph_surface(scope: Scope, receive: Receive, send: Send) -> None:
@@ -2766,6 +2903,11 @@ def create_app(
         Route("/api/source-control/provider", source_control_provider_status),
         Route(
             "/api/source-control/provider",
+            source_control_provider_status,
+            methods=["GET"],
+        ),
+        Route(
+            "/api/source-control/provider",
             set_source_control_provider,
             methods=["POST"],
         ),
@@ -2774,6 +2916,11 @@ def create_app(
         Route("/api/github/connect", github_connect, methods=["POST"]),
         Route("/api/github/connect/poll", github_connect_poll, methods=["POST"]),
         Route("/api/github/disconnect", github_disconnect, methods=["POST"]),
+        Route("/api/gitlab/status", gitlab_status),
+        Route("/api/gitlab/client-id", gitlab_set_client_id, methods=["POST"]),
+        Route("/api/gitlab/connect", gitlab_connect, methods=["POST"]),
+        Route("/api/gitlab/connect/poll", gitlab_connect_poll, methods=["POST"]),
+        Route("/api/gitlab/disconnect", gitlab_disconnect, methods=["POST"]),
         Route("/api/slack/status", slack_status),
         Route("/api/slack/credentials", slack_set_credentials, methods=["POST"]),
         Route("/api/slack/connect", slack_connect, methods=["POST"]),

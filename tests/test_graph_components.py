@@ -51,6 +51,7 @@ from engine.graph_runtime_langgraph import (
 from engine.graph_runtime_langgraph.components import (
     ACPNode,
     HumanReviewNode,
+    NameNode,
     NoWorkingDirectoryError,
     WorkspaceNode,
     checkout,
@@ -437,6 +438,43 @@ def test_state_keeps_what_earlier_nodes_reported(tmp_path: Path) -> None:
     assert values["task"] == TASK
     assert values["work"] == "done"
     assert CHECKOUT in values
+
+
+def test_naming_failure_does_not_keep_the_implementation_from_starting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming is optional metadata, so its provider failing cannot fail work."""
+    started: list[str] = []
+
+    async def cannot_open(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("naming provider unavailable")
+
+    async def implement(_state: dict[str, Any]) -> dict[str, Any]:
+        started.append("implementation")
+        return {"implementation": "done"}
+
+    monkeypatch.setattr(ACPNode, "_open", cannot_open)
+    builder: StateGraph = StateGraph(State)
+    builder.add_node("naming", NameNode(agent="codex", cwd=str(tmp_path)))
+    builder.add_node("implementation", implement)
+    builder.add_edge(START, "naming")
+    builder.add_edge("naming", "implementation")
+    builder.add_edge("implementation", END)
+    workflow = graph_workflow(builder, id="best-effort-name", name="Best effort")
+
+    async def scenario() -> Any:
+        async with running([workflow], tmp_path) as (runtime, log):
+            run = await runtime.start(workflow.graph_id, {"task": TASK})
+            await until(log, run.run_id, "run.finished")
+            return await runtime.snapshot(run.run_id)
+
+    finished = asyncio.run(scenario())
+
+    assert finished.status.value == "completed"
+    assert finished.error == ""
+    assert finished.values["implementation"] == "done"
+    assert "name" not in finished.values
+    assert started == ["implementation"]
 
 
 def test_a_human_review_node_waits_for_a_person_and_records_the_verdict(

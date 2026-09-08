@@ -25,6 +25,7 @@ dependencies = [
     "engine-adapter-communications-buzz",
     "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
+    "engine-adapter-source-control-gitlab",
     "engine-adapter-state-store-sqlite",
     "engine-adapter-workflow-runtime-temporal",
     "engine-adapter-workspace-provider-git-worktree",
@@ -57,6 +58,7 @@ engine-adapter-agent-runner-claude-code = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
 engine-adapter-communications-slack = { workspace = true }
 engine-adapter-source-control-github = { workspace = true }
+engine-adapter-source-control-gitlab = { workspace = true }
 engine-adapter-state-store-sqlite = { workspace = true }
 engine-adapter-workflow-runtime-temporal = { workspace = true }
 engine-adapter-workspace-provider-git-worktree = { workspace = true }

@@ -134,6 +134,8 @@ class ScriptedNode:
     """
     name: str = ""
     kind: str = "agent"
+    output_key: str = ""
+    """State key a spoken answer is written to; the node id when empty."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -714,7 +716,9 @@ class ScriptedGraphRuntime:
         execution_id = execution.execution_id
         match beat:
             case Say(text=text, role=role):
-                run.values[str(node_id)] = text
+                node = run.graph.node(node_id)
+                assert node is not None
+                run.values[node.output_key or str(node_id)] = text
                 await self.emit(
                     run,
                     EventKind.TRANSCRIPT,
