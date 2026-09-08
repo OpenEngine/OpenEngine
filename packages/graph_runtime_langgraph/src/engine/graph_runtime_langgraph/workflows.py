@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Annotated, Any, overload
 
 from engine.graph_runtime import GraphCompilationError, GraphId
+from engine.ports import SourceControl
 from engine.graph_runtime_langgraph.acp import answer_permission
 from engine.graph_runtime_langgraph.graphs import LangGraphDefinition
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
@@ -203,7 +204,10 @@ def _compiled(workflow: GraphWorkflow, checkpointer: Any) -> LangGraphDefinition
 
 @asynccontextmanager
 async def sqlite_runtime(
-    workflows: Sequence[GraphWorkflow], directory: str | Path
+    workflows: Sequence[GraphWorkflow],
+    directory: str | Path,
+    *,
+    source_control: SourceControl | None = None,
 ) -> AsyncIterator[LangGraphRuntime]:
     """Every workflow, compiled against durable files, closed on the way out.
 
@@ -231,7 +235,9 @@ async def sqlite_runtime(
     async with AsyncSqliteSaver.from_conn_string(str(root / CHECKPOINTS)) as saver:
         definitions = tuple(_compiled(workflow, saver) for workflow in workflows)
         store = SqliteGraphRuntimeStore(root / RUNS)
-        runtime = LangGraphRuntime(*definitions, store=store)
+        runtime = LangGraphRuntime(
+            *definitions, store=store, source_control=source_control
+        )
         try:
             yield runtime
         finally:

@@ -50,6 +50,7 @@ from typing import Any
 from uuid import uuid4
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
+from engine.ports import SourceControl
 from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
@@ -128,6 +129,7 @@ class LangGraphRuntime:
         self,
         *graphs: LangGraphDefinition,
         store: GraphRuntimeStore | None = None,
+        source_control: SourceControl | None = None,
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
         self._store: GraphRuntimeStore = store or InMemoryGraphRuntimeStore()
@@ -135,8 +137,14 @@ class LangGraphRuntime:
         self._registry = ExecutionRegistry()
         self._live: dict[RunId, _Live] = {}
         self._entries: dict[NodeId, int] = {}
+        self._source_control = source_control
 
     # --- the contract ------------------------------------------------------
+
+    @property
+    def source_control(self) -> SourceControl | None:
+        """Repository operations available to invocation-bound graph tools."""
+        return self._source_control
 
     def observe(self, observer: EventObserver) -> None:
         self._observer = observer
@@ -284,7 +292,7 @@ class LangGraphRuntime:
             record.node_id,
             record.execution_id,
         )
-        if decision is ApprovalDecision.CANCEL:
+        if decision is ApprovalDecision.CANCEL and record.cancel_run:
             await self._refuse(record)
         return await self._snapshot(run_id)
 
@@ -404,6 +412,7 @@ class LangGraphRuntime:
         session_key: str = "",
         continuation: Any | None = None,
         request: Mapping[str, object] | None = None,
+        cancel_run: bool = True,
         approval_id: ApprovalId | None = None,
         tool_call_id: str = "",
     ) -> ApprovalDecision:
@@ -436,6 +445,7 @@ class LangGraphRuntime:
             session_key=session_key,
             continuation=continuation,
             request=dict(request or {}),
+            cancel_run=cancel_run,
         )
         await self._store.remember_approval(record)
         waiting = execution.expect(chosen)

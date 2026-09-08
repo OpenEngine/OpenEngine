@@ -229,6 +229,19 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
     assert nodes["workspace"].graph_node_kind == "workspace"
 
 
+def test_only_implementation_receives_run_bound_workflow_tools() -> None:
+    module = definition_module()
+    nodes = nodes_of(module.pipeline("codex"))
+
+    implementation = nodes[module.IMPLEMENTATION]
+    review = nodes[module.REVIEW]
+    assert len(implementation.mcp_server_bindings) == 1
+    binding = implementation.mcp_server_bindings[0]
+    assert binding.repository_tools == ("git_subcommand", "open_pull_request")
+    assert binding.required_outputs == ("pr_url",)
+    assert review.mcp_server_bindings == ()
+
+
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
     module = definition_module()
     naming = nodes_of(module.pipeline("claude"))[module.NAMING]

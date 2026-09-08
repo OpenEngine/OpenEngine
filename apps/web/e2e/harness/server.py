@@ -143,7 +143,11 @@ def main(argv: list[str] | None = None) -> int:
         workflow_runners=build_workflow_runners(settings),
         review_runners=read_only_runners,
         workflow_catalog=catalog,
-        graph_runtime=build_graph_runtime(settings, catalog.graphs),
+        graph_runtime=build_graph_runtime(
+            settings,
+            catalog.graphs,
+            source_control=capabilities.source_control,
+        ),
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
         milestone_scoper=MilestoneScoper(

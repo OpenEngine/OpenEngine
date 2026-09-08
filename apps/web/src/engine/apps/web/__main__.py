@@ -142,7 +142,9 @@ def compose_app(
     # is `None` when that directory holds no graphs, and then the interface
     # offers none of them.
     graph_runtime = build_graph_runtime(
-        settings, workflow_catalog.graphs if workflow_catalog is not None else ()
+        settings,
+        workflow_catalog.graphs if workflow_catalog is not None else (),
+        source_control=capabilities.source_control,
     )
     return create_app(
         session,

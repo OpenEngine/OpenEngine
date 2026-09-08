@@ -43,6 +43,7 @@ from engine.adapters.workspace_provider.git_worktree import (
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
     State,
+    TerminalMcpServer,
     agent_registry,
     graph_workflow,
 )
@@ -76,6 +77,12 @@ IMPLEMENTATION_PROMPT = (
     "before editing. The workspace is already based on the current remote main "
     "commit; do not fetch, pull, or merge main before editing. Make the "
     "smallest complete change and report the result.\n\n"
+    "Every git operation goes through the git_subcommand tool. When the change "
+    "is ready, create a descriptive agent/<description> branch, commit only this "
+    "change, push that branch, then call open_pull_request. Finish by calling "
+    "complete_step with the pull request URL as the pr_url output. Use fail_step "
+    "if the work cannot be completed, or clarify only when answering a question "
+    "without changing the implementation.\n\n"
     "The task:\n{task}"
 )
 
@@ -144,6 +151,13 @@ def pipeline(
             # Work in the checkout the workspace node made. Read per run, so
             # one compiled graph serves every run.
             cwd=checkout,
+            mcp_server_bindings=(
+                TerminalMcpServer(
+                    step_id=IMPLEMENTATION,
+                    agent_id=runner,
+                    required_outputs=("pr_url",),
+                ),
+            ),
             output_key=IMPLEMENTATION,
             graph_node_name="Implementation",
             graph_node_description="Makes the requested change.",

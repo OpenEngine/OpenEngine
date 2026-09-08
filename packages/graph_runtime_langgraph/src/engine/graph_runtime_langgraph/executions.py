@@ -229,6 +229,7 @@ class NodeExecution:
         session_key: str = "",
         continuation: Any | None = None,
         request: Mapping[str, object] | None = None,
+        cancel_run: bool = True,
         approval_id: ApprovalId | None = None,
         tool_call_id: str = "",
     ) -> ApprovalDecision:
@@ -251,6 +252,7 @@ class NodeExecution:
             session_key=session_key,
             continuation=continuation,
             request=request,
+            cancel_run=cancel_run,
             approval_id=approval_id,
             tool_call_id=tool_call_id,
         )

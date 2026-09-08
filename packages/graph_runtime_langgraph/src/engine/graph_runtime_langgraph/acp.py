@@ -63,11 +63,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind
+from engine.domain import (
+    ApprovalDecision,
+    ApprovalId,
+    ApprovalKind,
+    RunFailed,
+    StepCompleted,
+)
+from engine.ports import ApprovalHandler, ApprovalRequest
 from langgraph_acp import (
     ACPAgentRegistry,
     ACPContinuation,
@@ -87,6 +95,28 @@ from engine.graph_runtime_langgraph.executions import NodeExecution, current_exe
 #: session id. Module-level because a provider is configured long before a
 #: runtime is, and the key is globally unique so nothing can collide.
 _TURNS: dict[str, "_Turn"] = {}
+
+TerminalEvent = StepCompleted | RunFailed
+
+
+@dataclass(frozen=True, slots=True)
+class BoundMcpServer:
+    """One live MCP server and the terminal result it may produce."""
+
+    config: Mapping[str, Any]
+    result: Callable[[], Awaitable[TerminalEvent]] | None = None
+
+
+McpServerBinding = Callable[
+    [Mapping[str, object], NodeExecution, ApprovalHandler],
+    AbstractAsyncContextManager[BoundMcpServer],
+]
+"""Open one invocation-bound MCP server and return its ACP description."""
+
+_ACP_APPROVAL = "acp"
+_MCP_APPROVAL = "mcp"
+_REQUEST_CHANNEL = "graph_runtime.request_channel"
+_REQUEST_PAYLOAD = "graph_runtime.request_payload"
 
 #: The events that mean the agent has stopped writing and started doing, and so
 #: that whatever it has said so far is a finished thought worth publishing. See
@@ -130,9 +160,8 @@ class _Turn:
     execution: NodeExecution
     session_key: str
     session_id: str = ""
-    answer: ApprovalDecision | None = None
-    """An answer given before this process existed. Applied once, then cleared."""
-    answered: ApprovalId | None = None
+    answer: "_StoredAnswer | None" = None
+    """An answered request from before this process existed."""
     approval_requested: bool = False
     narrating: Callable[[], Awaitable[None]] | None = None
     """`_speak`'s buffer flush, for as long as a turn is in flight.
@@ -152,23 +181,75 @@ class _Turn:
         asking the person twice for one command is exactly what a handoff that
         had not really worked would look like.
         """
+        decision = await self._approve(
+            channel=_ACP_APPROVAL,
+            reason=self.node.reason_for(request),
+            kind=self.node.kind,
+            command=self.node.command_of(request),
+            tool_name=self.node.tool_of(request),
+            request=dict(request.params),
+            tool_call_id=self.node.call_of(request),
+        )
+        return _outcome(decision, request)
+
+    async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        """Route a run-bound MCP tool's independent approval through the graph."""
+        return await self._approve(
+            channel=_MCP_APPROVAL,
+            reason=request.reason or "run a repository tool",
+            kind=request.kind,
+            command=request.command or "",
+            tool_name=request.tool_name or "",
+            request={
+                "approvalId": request.approval_id,
+                "arguments": request.arguments or "",
+            },
+            tool_call_id=request.tool_call_id or "",
+        )
+
+    async def _approve(
+        self,
+        *,
+        channel: str,
+        reason: str,
+        kind: ApprovalKind,
+        command: str,
+        tool_name: str,
+        request: Mapping[str, object],
+        tool_call_id: str,
+    ) -> ApprovalDecision:
+        """Ask once, leaving enough behind to reconnect after process loss."""
         self.approval_requested = True
         # Whatever the agent said on its way to asking, published before
         # anything about the question is. See `narrating`.
         if self.narrating is not None:
             await self.narrating()
-        if self.answer is not None:
-            decision, self.answer = self.answer, None
+        if self.answer is not None and self.answer.matches(
+            channel=channel,
+            kind=kind,
+            command=command,
+            tool_name=tool_name,
+            request=request,
+        ):
+            decision, answered = self.answer.decision, self.answer.approval_id
+            self.answer = None
             await self._settle()
             await self.execution.emit(
                 EventKind.APPROVAL_RESOLVED,
                 {
-                    "approvalId": str(self.answered or ""),
+                    "approvalId": str(answered),
                     "decision": decision.value,
                     "resumed": True,
                 },
             )
-            return _outcome(decision, request)
+            return decision
+        if self.answer is not None:
+            # The reloaded conversation did not replay the request that was
+            # answered. In particular, an MCP git request and an ACP permission
+            # share this turn but never share authority. Refuse this unrelated
+            # request without consuming the answer; the original replay may
+            # still arrive later in the same turn.
+            return ApprovalDecision.CANCEL
         approval_id = ApprovalId(f"approval-{uuid4().hex[:12]}")
         continuation = ACPContinuation(
             agent=self.node.agent,
@@ -189,22 +270,26 @@ class _Turn:
             self.execution.run_id, self.session_key, continuation
         )
         decision = await self.execution.ask(
-            reason=self.node.reason_for(request),
-            kind=self.node.kind,
-            command=self.node.command_of(request),
-            tool_name=self.node.tool_of(request),
+            reason=reason,
+            kind=kind,
+            command=command,
+            tool_name=tool_name,
             session_key=self.session_key,
             continuation=continuation,
-            request=dict(request.params),
+            request={
+                _REQUEST_CHANNEL: channel,
+                _REQUEST_PAYLOAD: dict(request),
+            },
+            cancel_run=channel != _MCP_APPROVAL,
             approval_id=approval_id,
-            tool_call_id=self.node.call_of(request),
+            tool_call_id=tool_call_id,
         )
         # Answered without the process ever going away, so the continuation has
         # done its job and the approval comes back off it. Deliberately not in a
         # `finally`: an `ask` that does not return is a process being taken away
         # mid-question, and that is exactly when the record has to survive.
         await self._settle()
-        return _outcome(decision, request)
+        return decision
 
     async def _settle(self) -> None:
         """Drop the approval from the binding, keeping the conversation.
@@ -226,6 +311,36 @@ class _Turn:
                 thread_id=str(self.execution.run_id),
                 session_key=self.session_key,
             ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredAnswer:
+    """A durable decision together with the exact request it answered."""
+
+    decision: ApprovalDecision
+    approval_id: ApprovalId
+    channel: str
+    kind: ApprovalKind
+    command: str
+    tool_name: str
+    request: Mapping[str, object]
+
+    def matches(
+        self,
+        *,
+        channel: str,
+        kind: ApprovalKind,
+        command: str,
+        tool_name: str,
+        request: Mapping[str, object],
+    ) -> bool:
+        return (
+            self.channel == channel
+            and self.kind is kind
+            and self.command == command
+            and self.tool_name == tool_name
+            and self.request == request
         )
 
 
@@ -353,6 +468,14 @@ class ACPNode:
     opened by a different agent process after the process that first hosted its
     MCP servers has gone away.
     """
+    mcp_server_bindings: tuple[McpServerBinding, ...] = field(default_factory=tuple)
+    """MCP servers created separately for every invocation of this node.
+
+    A binding is entered before ``session/new`` or ``session/load`` and remains
+    live until the ACP client closes. Re-entering a node after process loss
+    therefore starts replacement servers while reconnecting the conversation
+    the agent already owns.
+    """
 
     def __post_init__(self) -> None:
         # A literal is checkable now; a resolver is not, and is checked on the
@@ -374,63 +497,99 @@ class ACPNode:
         # no session worth opening, so it fails having done nothing.
         cwd = self._cwd(state)
         key = self.session_key or str(execution.node_id)
-        stored = await runtime.store.session(execution.run_id, key)
-        resuming = await self._answer_to_apply(runtime, stored)
-        client, session = await self._open(stored if resuming else None, cwd)
-        turn = _Turn(self, execution, key, session.session_id)
-        if resuming is not None:
-            turn.answer, turn.answered = resuming
-        _TURNS[session.session_id] = turn
-        execution.attach(session)
-        try:
-            if resuming is None:
-                await runtime.store.remember_session(
-                    execution.run_id, key, self._binding(execution, session, key)
+        turn: _Turn | None = None
+
+        async def approve(request: ApprovalRequest) -> ApprovalDecision:
+            if turn is None:
+                raise RuntimeError("MCP approval arrived before the ACP session opened")
+            return await turn.approve(request)
+
+        async with AsyncExitStack() as servers:
+            mcp_servers = list(self.mcp_servers)
+            terminal_results: list[Callable[[], Awaitable[TerminalEvent]]] = []
+            for binding in self.mcp_server_bindings:
+                bound = await servers.enter_async_context(
+                    binding(state, execution, approve)
                 )
-            await execution.emit(
-                EventKind.CONVERSATION_STARTED,
-                {
-                    "agent": self.agent,
-                    "sessionId": session.session_id,
-                    "resumed": resuming is not None,
-                },
+                mcp_servers.append(bound.config)
+                if bound.result is not None:
+                    terminal_results.append(bound.result)
+            stored = await runtime.store.session(execution.run_id, key)
+            resuming = await self._answer_to_apply(runtime, stored)
+            client, session = await self._open(
+                stored if resuming else None, cwd, tuple(mcp_servers)
             )
-            asked = self.continuation_prompt if resuming else self._prompt(state)
-            # Published before the turn it starts, because a transcript that
-            # holds only the agent's half is not a conversation: a reader
-            # opening one has to guess what was asked, and cannot tell the work
-            # the node was sent to do from the work somebody steered it into.
-            #
-            # The task only, never the continuation. `continuation_prompt` is
-            # machinery -- it tells a resumed session that its question was
-            # answered -- and `role="user"` is the channel a person's own words
-            # arrive on. Publishing one as the other would put the runtime's
-            # sentence on screen as something the reader appears to have typed,
-            # directly beneath the approval they just answered. An empty prompt
-            # is skipped for the same reason: a turn nobody spoke.
-            if resuming is None and (opening := prompt_text(asked)):
-                await execution.say(opening, role="user")
-            said = await self._speak(turn, session, asked)
-            # Steering that arrived while the agent worked is a further turn in
-            # the same conversation rather than a restart: same session id, same
-            # transcript, same tool history.
-            #
-            # Drained until the queue is empty, not once. Answering a message is
-            # itself a turn, and it is the turn a person is most likely to be
-            # watching when they say the next thing -- so a single snapshot,
-            # taken before the first reply, would leave everything said during
-            # that reply queued on an execution the node is about to release.
-            # Nothing anywhere would say so: the run carries on, the agent never
-            # hears it, and the message stays on screen as a turn nobody
-            # answered.
-            while queued := execution.pending_messages():
-                for message in queued:
-                    await execution.say(message, role="user")
-                    said = await self._speak(turn, session, message)
-            return {self.output_key or str(execution.node_id): said}
-        finally:
-            _TURNS.pop(session.session_id, None)
-            await client.close()
+            turn = _Turn(self, execution, key, session.session_id)
+            if resuming is not None:
+                turn.answer = resuming
+            _TURNS[session.session_id] = turn
+            execution.attach(session)
+            terminal_tasks = [
+                asyncio.create_task(result()) for result in terminal_results
+            ]
+            try:
+                if resuming is None:
+                    await runtime.store.remember_session(
+                        execution.run_id, key, self._binding(execution, session, key)
+                    )
+                await execution.emit(
+                    EventKind.CONVERSATION_STARTED,
+                    {
+                        "agent": self.agent,
+                        "sessionId": session.session_id,
+                        "resumed": resuming is not None,
+                    },
+                )
+                asked = self.continuation_prompt if resuming else self._prompt(state)
+                # Published before the turn it starts, because a transcript that
+                # holds only the agent's half is not a conversation: a reader
+                # opening one has to guess what was asked, and cannot tell the work
+                # the node was sent to do from the work somebody steered it into.
+                #
+                # The task only, never the continuation. `continuation_prompt` is
+                # machinery -- it tells a resumed session that its question was
+                # answered -- and `role="user"` is the channel a person's own words
+                # arrive on. Publishing one as the other would put the runtime's
+                # sentence on screen as something the reader appears to have typed,
+                # directly beneath the approval they just answered. An empty prompt
+                # is skipped for the same reason: a turn nobody spoke.
+                if resuming is None and (opening := prompt_text(asked)):
+                    await execution.say(opening, role="user")
+                result = await self._speak_or_terminal(
+                    turn, session, asked, terminal_tasks
+                )
+                if isinstance(result, (StepCompleted, RunFailed)):
+                    return self._terminal_update(result)
+                said = result
+                # Steering that arrived while the agent worked is a further turn in
+                # the same conversation rather than a restart: same session id,
+                # same transcript, same tool history.
+                #
+                # Drained until the queue is empty, not once. Answering a message is
+                # itself a turn, and it is the turn a person is most likely to be
+                # watching when they say the next thing -- so a single snapshot,
+                # taken before the first reply, would leave everything said during
+                # that reply queued on an execution the node is about to release.
+                # Nothing anywhere would say so: the run carries on, the agent never
+                # hears it, and the message stays on screen as a turn nobody
+                # answered.
+                while queued := execution.pending_messages():
+                    for message in queued:
+                        await execution.say(message, role="user")
+                        result = await self._speak_or_terminal(
+                            turn, session, message, terminal_tasks
+                        )
+                        if isinstance(result, (StepCompleted, RunFailed)):
+                            return self._terminal_update(result)
+                        said = result
+                return {self.output_key or str(execution.node_id): said}
+            finally:
+                for task in terminal_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*terminal_tasks, return_exceptions=True)
+                _TURNS.pop(session.session_id, None)
+                await client.close()
 
     def _binding(
         self, execution: NodeExecution, session: ACPSession, key: str
@@ -443,7 +602,10 @@ class ACPNode:
         )
 
     async def _open(
-        self, stored: ACPContinuation | None, cwd: str
+        self,
+        stored: ACPContinuation | None,
+        cwd: str,
+        mcp_servers: tuple[Mapping[str, Any], ...],
     ) -> tuple[Any, ACPSession]:
         """Reach the conversation: the stored one when resuming, else a new one.
 
@@ -456,13 +618,13 @@ class ACPNode:
                 stored,
                 registry=self.registry,
                 cwd=cwd,
-                mcp_servers=self.mcp_servers,
+                mcp_servers=mcp_servers,
             )
         provider = (self.registry or default_registry()).resolve(self.agent)
         client = await provider.connect()
         try:
             return client, await client.new_session(
-                cwd=cwd, mcp_servers=self.mcp_servers
+                cwd=cwd, mcp_servers=mcp_servers
             )
         except BaseException:
             await client.close()
@@ -489,7 +651,7 @@ class ACPNode:
 
     async def _answer_to_apply(
         self, runtime: Any, stored: ACPContinuation | None
-    ) -> tuple[ApprovalDecision, ApprovalId] | None:
+    ) -> _StoredAnswer | None:
         """The answer this node was re-entered to deliver, if it was.
 
         Read from the store rather than from graph state: a decision made after
@@ -503,7 +665,53 @@ class ACPNode:
             return None
         approval_id = ApprovalId(named)
         decision = await runtime.recorded_decision(approval_id)
-        return None if decision is None else (decision, approval_id)
+        record = await runtime.store.approval(approval_id)
+        if decision is None or record is None:
+            return None
+        channel = record.request.get(_REQUEST_CHANNEL)
+        request = record.request.get(_REQUEST_PAYLOAD)
+        if not isinstance(channel, str) or not isinstance(request, Mapping):
+            return None
+        return _StoredAnswer(
+            decision=decision,
+            approval_id=approval_id,
+            channel=channel,
+            kind=record.kind,
+            command=record.command,
+            tool_name=record.tool_name,
+            request=request,
+        )
+
+    async def _speak_or_terminal(
+        self,
+        turn: _Turn,
+        session: ACPSession,
+        prompt: ACPPrompt,
+        terminal_tasks: list[asyncio.Task[TerminalEvent]],
+    ) -> str | TerminalEvent:
+        """Prefer an MCP terminal result over the ACP turn it terminates."""
+        if not terminal_tasks:
+            return await self._speak(turn, session, prompt)
+        speaking = asyncio.create_task(self._speak(turn, session, prompt))
+        done, _ = await asyncio.wait(
+            (speaking, *terminal_tasks), return_when=asyncio.FIRST_COMPLETED
+        )
+        completed = next((task for task in terminal_tasks if task in done), None)
+        if completed is None:
+            return await speaking
+        speaking.cancel()
+        await asyncio.gather(speaking, return_exceptions=True)
+        return completed.result()
+
+    def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
+        """Turn the broker's terminal result into graph state or a run failure."""
+        if isinstance(event, RunFailed):
+            raise RuntimeError(event.reason)
+        update: dict[str, object] = {
+            self.output_key or str(current_execution().node_id): event.summary
+        }
+        update.update({output.name: output.value for output in event.outputs})
+        return update
 
     async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:
         """One ACP turn, with what happens in it republished as runtime events.

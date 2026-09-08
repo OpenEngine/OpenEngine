@@ -35,13 +35,23 @@ from typing import Any
 
 import pytest
 
-from engine.domain import ApprovalDecision, RunId
+from engine.domain import ApprovalDecision, RunId, WorkspaceId
 from engine.graph_runtime import EventLog, GraphId, NodeId, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     LangGraphDefinition,
     LangGraphRuntime,
     SqliteGraphRuntimeStore,
+    TerminalMcpServer,
     answer_permission,
+)
+from engine.ports import (
+    ChangeRequest,
+    GitResult,
+    JobLogs,
+    PipelineRetry,
+    PipelineStatus,
+    SourceControl,
+    WorkItem,
 )
 from engine.graph_runtime_langgraph.acp import APPROVAL_ID, ACPNode
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -77,6 +87,10 @@ def registry(
     response: str = DONE,
     narrates: bool = False,
     waits_for_cancel: bool = False,
+    uses_mcp: bool = False,
+    mcp_git: bool = False,
+    mcp_terminal: str = "",
+    mcp_omit_outputs: bool = False,
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -92,6 +106,18 @@ def registry(
                     **({"STUB_ACP_ASK_EVERY": "1"} if asks_every else {}),
                     **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
                     **({"STUB_ACP_WAIT_FOR_CANCEL": "1"} if waits_for_cancel else {}),
+                    **({"STUB_ACP_USE_MCP": "1"} if uses_mcp else {}),
+                    **({"STUB_ACP_MCP_GIT": "1"} if mcp_git else {}),
+                    **(
+                        {"STUB_ACP_MCP_TERMINAL": mcp_terminal}
+                        if mcp_terminal
+                        else {}
+                    ),
+                    **(
+                        {"STUB_ACP_MCP_OMIT_OUTPUTS": "1"}
+                        if mcp_omit_outputs
+                        else {}
+                    ),
                 },
                 # The seam the whole design turns on: a permission request comes
                 # in on the ACP connection, and this is what routes it back to
@@ -108,6 +134,7 @@ def pipeline(
     where: Path,
     *,
     mcp_servers: tuple[Mapping[str, Any], ...] = (),
+    mcp_server_bindings: tuple[Any, ...] = (),
 ) -> LangGraphDefinition:
     """implementation -> review, with the implementation node an ACP agent."""
     builder: StateGraph = StateGraph(State)
@@ -119,6 +146,7 @@ def pipeline(
             registry=agents,
             cwd=str(where),
             mcp_servers=mcp_servers,
+            mcp_server_bindings=mcp_server_bindings,
         ),
     )
     builder.add_node(str(REVIEW), _reviewed)
@@ -134,6 +162,113 @@ def pipeline_with_workflow_mcp(
     saver: Any, agents: ACPAgentRegistry, where: Path
 ) -> LangGraphDefinition:
     return pipeline(saver, agents, where, mcp_servers=(WORKFLOW_MCP_SERVER,))
+
+
+def pipeline_with_run_bound_mcp(
+    saver: Any, agents: ACPAgentRegistry, where: Path
+) -> LangGraphDefinition:
+    return pipeline(
+        saver,
+        agents,
+        where,
+        mcp_server_bindings=(
+            TerminalMcpServer(
+                step_id=str(IMPLEMENTATION),
+                agent_id=AGENT,
+                required_outputs=("pr_url",),
+            ),
+        ),
+    )
+
+
+class RecordingSourceControl:
+    def __init__(self) -> None:
+        self.reviews: list[tuple[object, ...]] = []
+        self.git_calls: list[tuple[WorkspaceId, tuple[str, ...]]] = []
+
+    async def run_git(
+        self, workspace_id: WorkspaceId, arguments: Sequence[str]
+    ) -> GitResult:
+        self.git_calls.append((workspace_id, tuple(arguments)))
+        return GitResult(0, "working tree clean", "")
+
+    async def request_review(
+        self,
+        workspace_id: WorkspaceId,
+        branch: str,
+        base_ref: str,
+        title: str,
+        body: str,
+    ) -> str:
+        self.reviews.append((workspace_id, branch, base_ref, title, body))
+        return "https://github.com/acme/repository/pull/7"
+
+    async def create_branch(
+        self, _workspace_id: WorkspaceId, _name: str, _base_ref: str
+    ) -> None:
+        pass
+
+    async def commit_all(self, _workspace_id: WorkspaceId, _message: str) -> str:
+        return "abc123"
+
+    async def publish(self, _workspace_id: WorkspaceId, _branch: str) -> None:
+        pass
+
+    async def add_comment(
+        self,
+        _pr_url: str,
+        _comment: str,
+        _file: str | None = None,
+        _line: int | None = None,
+    ) -> None:
+        pass
+
+    async def view_change_request(
+        self, _workspace_id: WorkspaceId, _number: int
+    ) -> ChangeRequest:
+        raise AssertionError("not called")
+
+    async def list_work_items(
+        self,
+        _workspace_id: WorkspaceId,
+        _state: str = "open",
+        _labels: Sequence[str] = (),
+        _limit: int = 30,
+    ) -> tuple[WorkItem, ...]:
+        return ()
+
+    async def view_work_item(
+        self, _workspace_id: WorkspaceId, _number: int
+    ) -> WorkItem:
+        raise AssertionError("not called")
+
+    async def list_pipeline_status(
+        self,
+        _workspace_id: WorkspaceId,
+        *,
+        ref: str | None = None,
+        change_request_number: int | None = None,
+    ) -> PipelineStatus:
+        raise AssertionError("not called")
+
+    async def get_job_logs(
+        self,
+        _workspace_id: WorkspaceId,
+        _pipeline_id: int,
+        _job_id: int | None = None,
+    ) -> JobLogs:
+        raise AssertionError("not called")
+
+    async def retry_pipeline(
+        self,
+        _workspace_id: WorkspaceId,
+        _pipeline_id: int,
+        _job_id: int | None = None,
+    ) -> PipelineRetry:
+        raise AssertionError("not called")
+
+
+assert isinstance(RecordingSourceControl(), SourceControl)
 
 
 def pool(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
@@ -165,6 +300,7 @@ async def runtime_over(
     tmp_path: Path,
     agents: ACPAgentRegistry,
     build: Any = pipeline,
+    source_control: Any | None = None,
 ) -> AsyncIterator[tuple[LangGraphRuntime, EventLog]]:
     """A runtime built entirely from what is on disk, and closed like a server.
 
@@ -177,7 +313,11 @@ async def runtime_over(
     async with AsyncSqliteSaver.from_conn_string(
         str(tmp_path / "checkpoints.db")
     ) as saver:
-        runtime = LangGraphRuntime(build(saver, agents, tmp_path), store=store)
+        runtime = LangGraphRuntime(
+            build(saver, agents, tmp_path),
+            store=store,
+            source_control=source_control,
+        )
         log = EventLog()
         runtime.observe(log.append)
         try:
@@ -305,6 +445,336 @@ def test_an_acp_node_passes_its_mcp_servers_to_a_new_session(
     created = sent(tmp_path, "session/new")
     assert len(created) == 1
     assert created[0]["params"]["mcpServers"] == [WORKFLOW_MCP_SERVER]
+
+
+def test_run_bound_tools_cross_acp_and_mcp_processes_and_rebind_on_resume(
+    tmp_path: Path,
+) -> None:
+    """A replacement broker reconnects one durable ACP conversation."""
+
+    source_control = RecordingSourceControl()
+
+    async def raise_it() -> tuple[RunId, str]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True, uses_mcp=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            asked = await until(log, run.run_id, "approval.requested")
+            return run.run_id, str(asked[-1].payload["approvalId"])
+
+    async def answer_it(run_id: RunId, approval_id: str) -> None:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True, uses_mcp=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            await runtime.decide(
+                run_id,
+                approval_id,  # type: ignore[arg-type]
+                ApprovalDecision.ACCEPT,
+            )
+            await until(log, run_id, "run.finished")
+
+    run_id, approval_id = asyncio.run(raise_it())
+    asyncio.run(answer_it(run_id, approval_id))
+
+    assert len(sessions(tmp_path)) == 1
+    session = next(iter(sessions(tmp_path).values()))
+    assert session["loads"] == 1
+    assert session["mcp_tools"] == [
+        [
+            "complete_step",
+            "fail_step",
+            "clarify",
+            "git_subcommand",
+            "open_pull_request",
+        ],
+        [
+            "complete_step",
+            "fail_step",
+            "clarify",
+            "git_subcommand",
+            "open_pull_request",
+        ],
+    ]
+    assert len(set(session["mcp_ports"])) == 2
+    assert session["mcp_review"]["result"]["structuredContent"]["output"] == (
+        "https://github.com/acme/repository/pull/7"
+    )
+    assert source_control.reviews == [
+        (
+            WorkspaceId("ws-graph-run"),
+            "agent/graph-tools",
+            "main",
+            "feat: add graph tools",
+            "Test body.",
+        )
+    ]
+    assert source_control.git_calls == []
+    assert len(sent(tmp_path, "session/new")) == 1
+    assert len(sent(tmp_path, "session/load")) == 1
+
+
+def test_run_bound_git_keeps_the_broker_approval_boundary(tmp_path: Path) -> None:
+    source_control = RecordingSourceControl()
+
+    async def scenario() -> tuple[dict[str, Any], list[RuntimeEvent]]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_git=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            events = await until(log, run.run_id, "approval.requested")
+            approval_id = events[-1].payload["approvalId"]
+            assert source_control.git_calls == []
+            await runtime.decide(
+                run.run_id,
+                approval_id,  # type: ignore[arg-type]
+                ApprovalDecision.ACCEPT,
+            )
+            events.extend(await until(log, run.run_id, "run.finished"))
+            return next(iter(sessions(tmp_path).values())), events
+
+    session, events = asyncio.run(scenario())
+
+    requested = [event for event in events if event.kind.value == "approval.requested"]
+    assert requested[-1].payload["command"] == "git status --short"
+    assert requested[-1].payload["toolName"] == "mcp__workflow__git_subcommand"
+    assert source_control.git_calls == [
+        (WorkspaceId("ws-graph-run"), ("status", "--short"))
+    ]
+    assert session["mcp_git"]["result"]["structuredContent"]["output"] == (
+        "working tree clean"
+    )
+
+
+def test_cancelling_run_bound_git_never_calls_source_control(tmp_path: Path) -> None:
+    source_control = RecordingSourceControl()
+
+    async def scenario() -> dict[str, Any]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_git=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            events = await until(log, run.run_id, "approval.requested")
+            await runtime.decide(
+                run.run_id,
+                events[-1].payload["approvalId"],  # type: ignore[arg-type]
+                ApprovalDecision.CANCEL,
+            )
+            await until(log, run.run_id, "run.finished")
+            return next(iter(sessions(tmp_path).values()))
+
+    session = asyncio.run(scenario())
+
+    assert source_control.git_calls == []
+    assert session["mcp_git"]["result"]["isError"] is True
+    assert session["mcp_git"]["result"]["content"] == [
+        {"type": "text", "text": "git_subcommand was not approved"}
+    ]
+
+
+def test_an_acp_answer_cannot_approve_an_unrelated_mcp_request_after_resume(
+    tmp_path: Path,
+) -> None:
+    source_control = RecordingSourceControl()
+
+    async def raise_it() -> tuple[RunId, str]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            asked = await until(log, run.run_id, "approval.requested")
+            return run.run_id, str(asked[-1].payload["approvalId"])
+
+    async def answer_it(run_id: RunId, approval_id: str) -> None:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True, uses_mcp=True, mcp_git=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            await runtime.decide(
+                run_id,
+                approval_id,  # type: ignore[arg-type]
+                ApprovalDecision.ACCEPT,
+            )
+            await until(log, run_id, "run.finished")
+
+    run_id, approval_id = asyncio.run(raise_it())
+    asyncio.run(answer_it(run_id, approval_id))
+
+    session = next(iter(sessions(tmp_path).values()))
+    assert session["mcp_git"]["result"]["isError"] is True
+    assert "not approved" in session["mcp_git"]["result"]["content"][0]["text"]
+    assert source_control.git_calls == []
+    assert session["granted"] is True
+
+
+def test_complete_step_carries_declared_outputs_into_graph_state(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
+        async with runtime_over(
+            tmp_path,
+            registry(
+                tmp_path,
+                uses_mcp=True,
+                mcp_terminal="complete_step",
+            ),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.finished")
+            return (
+                dict((await runtime.snapshot(run.run_id)).values),
+                next(iter(sessions(tmp_path).values())),
+            )
+
+    values, session = asyncio.run(scenario())
+
+    assert session["mcp_terminal"] == "complete_step"
+    assert values[str(IMPLEMENTATION)] == "Implemented through MCP."
+    assert values["pr_url"] == "https://github.com/acme/repository/pull/7"
+    assert values[str(REVIEW)] == "Looks right."
+
+
+def test_complete_step_rejects_a_missing_declared_output(tmp_path: Path) -> None:
+    async def scenario() -> tuple[Any, dict[str, Any]]:
+        async with runtime_over(
+            tmp_path,
+            registry(
+                tmp_path,
+                uses_mcp=True,
+                mcp_terminal="complete_step",
+                mcp_omit_outputs=True,
+            ),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.finished")
+            return (
+                await runtime.snapshot(run.run_id),
+                next(iter(sessions(tmp_path).values())),
+            )
+
+    final, session = asyncio.run(scenario())
+
+    response = session["mcp_terminal_response"]["result"]
+    assert response["isError"] is True
+    assert response["content"] == [
+        {
+            "type": "text",
+            "text": "step result is missing required outputs: pr_url",
+        }
+    ]
+    assert "pr_url" not in final.values
+    assert final.values[str(IMPLEMENTATION)] == DONE
+
+
+def test_fail_step_fails_the_graph_run(tmp_path: Path) -> None:
+    async def scenario() -> tuple[Any, dict[str, Any]]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_terminal="fail_step"),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.failed")
+            return (
+                await runtime.snapshot(run.run_id),
+                next(iter(sessions(tmp_path).values())),
+            )
+
+    final, session = asyncio.run(scenario())
+
+    assert session["mcp_terminal"] == "fail_step"
+    assert final.status.value == "failed"
+    assert final.error == "The implementation cannot continue."
+    assert str(REVIEW) not in final.values
+
+
+@pytest.mark.parametrize(
+    ("state", "source_control", "message"),
+    [
+        (
+            {"workspaceId": "ws-graph-run"},
+            None,
+            "this graph's workflow tools need a SourceControl bound to its runtime",
+        ),
+        (
+            {},
+            RecordingSourceControl(),
+            "this graph's workflow tools need state['workspaceId'] from an upstream "
+            "WorkspaceNode",
+        ),
+    ],
+    ids=("no-source-control", "no-workspace"),
+)
+def test_run_bound_tools_fail_loudly_when_their_binding_is_missing(
+    tmp_path: Path,
+    state: dict[str, object],
+    source_control: SourceControl | None,
+    message: str,
+) -> None:
+    async def scenario() -> Any:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, state)
+            await until(log, run.run_id, "run.failed")
+            return await runtime.snapshot(run.run_id)
+
+    final = asyncio.run(scenario())
+
+    assert final.status.value == "failed"
+    assert final.error == message
+    assert not (tmp_path / "agent.log").exists()
+
+
+def test_run_bound_tools_intersect_with_source_control_capabilities(
+    tmp_path: Path,
+) -> None:
+    class GitOnlySourceControl:
+        async def run_git(
+            self, _workspace_id: WorkspaceId, _arguments: Sequence[str]
+        ) -> GitResult:
+            return GitResult(0, "", "")
+
+    async def scenario() -> None:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True),
+            pipeline_with_run_bound_mcp,
+            GitOnlySourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.finished")
+
+    asyncio.run(scenario())
+
+    session = next(iter(sessions(tmp_path).values()))
+    assert session["mcp_tools"] == [
+        ["complete_step", "fail_step", "clarify", "git_subcommand"]
+    ]
 
 
 def test_what_an_agent_says_is_published_where_it_said_it(tmp_path: Path) -> None:

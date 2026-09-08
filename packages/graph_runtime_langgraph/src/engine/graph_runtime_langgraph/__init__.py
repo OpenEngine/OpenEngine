@@ -63,6 +63,7 @@ from engine.graph_runtime_langgraph.store import (
     RunRecord,
     SqliteGraphRuntimeStore,
 )
+from engine.graph_runtime_langgraph.terminal_mcp import TerminalMcpServer
 from engine.graph_runtime_langgraph.workflows import (
     GraphWorkflow,
     State,
@@ -92,6 +93,7 @@ __all__ = [
     "RunRecord",
     "SqliteGraphRuntimeStore",
     "State",
+    "TerminalMcpServer",
     "WorkspaceNode",
     "agent_registry",
     "answer_permission",
