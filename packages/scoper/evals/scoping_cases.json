@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "dimensions": {
+    "right_sized": "Each implementation work order represents roughly 500-1000 changed lines; estimates are directional, not a reason to invent filler work.",
+    "component_focused": "Each work order changes one cohesive component and preserves existing callers and behavior.",
+    "interface_first": "When work must be stacked, the shared interface is explicit and lands before work that consumes it.",
+    "existing_work_aware": "Completed and in-progress work is reused rather than recreated."
+  },
+  "cases": [
+    {
+      "id": "single_additive_component",
+      "description": "A naturally right-sized additive change should remain one work order.",
+      "input": {
+        "milestones": [{
+          "milestone_id": "milestone-webhook-retries",
+          "requirements": [
+            "Add persisted retry scheduling to the webhook delivery component; implementation is expected to change about 700 lines",
+            "Existing webhook senders and payloads must continue to work without modification"
+          ],
+          "evidence_requirements": ["Unit tests cover retry timing and the existing immediate-delivery path"],
+          "dependencies": []
+        }],
+        "workorders": [],
+        "policy": {"rules": ["Prefer work orders of approximately 500-1000 changed lines", "Keep a work order within one component", "All changes must be backwards compatible"]}
+      },
+      "rubric": {
+        "required": ["right_sized", "component_focused"],
+        "notes": ["Create one implementation work order, not separate tiny work orders for storage, scheduling, and tests", "Require evidence for both new retry behavior and the unchanged delivery contract"]
+      }
+    },
+    {
+      "id": "split_oversized_at_interface",
+      "description": "A large change should split at an interface and express the dependency direction.",
+      "input": {
+        "milestones": [{
+          "milestone_id": "milestone-audit-export",
+          "requirements": [
+            "Add a stable paginated audit-event reader interface in the audit component; expected change is about 600 lines",
+            "Add a CSV export implementation in the export component using that reader; expected change is about 800 lines",
+            "Existing audit queries and export formats must remain supported"
+          ],
+          "evidence_requirements": ["Contract tests exercise the reader", "An integration test exports multiple pages"],
+          "dependencies": []
+        }],
+        "workorders": [],
+        "policy": {"rules": ["Prefer work orders of approximately 500-1000 changed lines", "Keep a work order within one component", "Define stable interfaces before dependent implementations", "All changes must be backwards compatible"]}
+      },
+      "rubric": {
+        "required": ["right_sized", "component_focused", "interface_first"],
+        "notes": ["Create separate audit-reader and CSV-export work orders", "Make the export depend on the reader work order, never the reverse", "Do not create a third coordination-only work order"]
+      }
+    },
+    {
+      "id": "consolidate_tiny_slices",
+      "description": "Closely related tiny edits should not be fragmented merely to mirror implementation steps.",
+      "input": {
+        "milestones": [{
+          "milestone_id": "milestone-cli-colors",
+          "requirements": [
+            "Within the CLI presentation component, add a color preference, apply it to status output, and document it; the combined change is expected to be about 550 lines",
+            "Default output must remain byte-for-byte compatible when color is disabled or output is redirected"
+          ],
+          "evidence_requirements": ["Snapshot tests cover default, color, and redirected output"],
+          "dependencies": []
+        }],
+        "workorders": [],
+        "policy": {"rules": ["Prefer work orders of approximately 500-1000 changed lines", "Keep a work order within one component", "All changes must be backwards compatible"]}
+      },
+      "rubric": {
+        "required": ["right_sized", "component_focused"],
+        "notes": ["Create one cohesive work order rather than preference, rendering, documentation, and test work orders", "Preserve non-color output as an explicit acceptance condition"]
+      }
+    },
+    {
+      "id": "preserve_completed_interface",
+      "description": "A completed interface should be reused by the remaining dependent work.",
+      "input": {
+        "milestones": [{
+          "milestone_id": "milestone-notification-digests",
+          "requirements": ["Expose a backwards-compatible digest query interface", "Implement email digest assembly in the mailer component; expected change is about 750 lines"],
+          "evidence_requirements": ["Integration tests assemble a digest through the query interface"],
+          "dependencies": []
+        }],
+        "workorders": [{
+          "workorder_id": "workorder-digest-query",
+          "spec": {
+            "milestone_id": "milestone-notification-digests",
+            "name": "Digest query interface",
+            "objective": "Add and contract-test the additive digest query interface in the notification component.",
+            "evidence_requirements": ["Contract tests cover old and new query clients"],
+            "dependencies": []
+          },
+          "status": "complete"
+        }],
+        "policy": {"rules": ["Prefer work orders of approximately 500-1000 changed lines", "Define stable interfaces before dependent implementations", "Do not recreate completed or in-progress work"]}
+      },
+      "rubric": {
+        "required": ["right_sized", "interface_first", "existing_work_aware"],
+        "notes": ["Create only the mailer implementation work order", "Make it depend on workorder-digest-query", "Do not cancel, supersede, or recreate the completed interface"]
+      }
+    },
+    {
+      "id": "protect_compatibility_boundary",
+      "description": "A tempting breaking shortcut should be rejected in favor of an additive boundary.",
+      "input": {
+        "milestones": [{
+          "milestone_id": "milestone-token-metadata",
+          "requirements": [
+            "Add token metadata to the authentication component; expected change is about 650 lines",
+            "Some deployed clients still decode the version-one token shape and cannot migrate in lockstep"
+          ],
+          "evidence_requirements": ["Compatibility tests prove version-one clients remain valid", "New clients can read metadata"],
+          "dependencies": []
+        }],
+        "workorders": [],
+        "policy": {"rules": ["Prefer work orders of approximately 500-1000 changed lines", "Keep a work order within one component", "All changes must be backwards compatible"]}
+      },
+      "rubric": {
+        "required": ["right_sized", "component_focused"],
+        "notes": ["Keep the work within authentication", "Require an additive or versioned contract rather than replacing the version-one token shape", "Include both compatibility evidence requirements"]
+      }
+    }
+  ]
+}
