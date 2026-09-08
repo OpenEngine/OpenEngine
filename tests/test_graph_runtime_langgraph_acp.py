@@ -71,6 +71,7 @@ def registry(
     asks_every: bool = False,
     response: str = DONE,
     narrates: bool = False,
+    waits_for_cancel: bool = False,
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -85,6 +86,7 @@ def registry(
                     **({"STUB_ACP_ASK": "1"} if asks or asks_every else {}),
                     **({"STUB_ACP_ASK_EVERY": "1"} if asks_every else {}),
                     **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
+                    **({"STUB_ACP_WAIT_FOR_CANCEL": "1"} if waits_for_cancel else {}),
                 },
                 # The seam the whole design turns on: a permission request comes
                 # in on the ACP connection, and this is what routes it back to
@@ -335,6 +337,32 @@ def test_a_line_explaining_a_request_is_published_before_the_wait(
 
 
 # --- steering ---------------------------------------------------------------
+
+
+def test_steering_interrupts_the_turn_in_flight(tmp_path: Path) -> None:
+    async def scenario() -> list[RuntimeEvent]:
+        async with runtime_over(tmp_path, registry(tmp_path, waits_for_cancel=True)) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            agent_log = tmp_path / "agent.log"
+            async with asyncio.timeout(PATIENCE):
+                while not agent_log.exists() or not prompts(tmp_path):
+                    await asyncio.sleep(0.01)
+            await runtime.steer(run.run_id, "Use the fast suite.")
+            return await until(log, run.run_id, "run.finished")
+
+    events = asyncio.run(scenario())
+
+    assert transcript(events) == [
+        ("user", PROMPT),
+        ("user", "Use the fast suite."),
+        ("assistant", DONE),
+    ]
+    assert prompts(tmp_path) == [PROMPT, "Use the fast suite."]
+    assert len(sent(tmp_path, "session/new")) == 1
+    assert len(sent(tmp_path, "session/cancel")) == 1
 
 
 def test_steering_an_acp_execution_continues_the_same_session(tmp_path: Path) -> None:
