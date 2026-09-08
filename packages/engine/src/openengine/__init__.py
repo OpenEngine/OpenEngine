@@ -16,6 +16,7 @@ from engine.domain import (
     AgentProfile,
     AgentStep,
     HumanReviewStep,
+    HumanReviewNotification,
     OutcomeTransition,
     StepId,
     TemplateBinding,
@@ -92,7 +93,10 @@ def agent(
     )
 
 
-def workspace(*, base_ref: str = "origin/main") -> WorkspaceSpec:
+def workspace(*, base_ref: str | None = None) -> WorkspaceSpec:
+    """Use the configured default branch unless an explicit ref is supplied."""
+    if base_ref is None:
+        return WorkspaceSpec()
     return WorkspaceSpec(base_ref=_nonempty(base_ref, "workspace base_ref"))
 
 
@@ -152,6 +156,7 @@ def human_review_step(
     summary: WorkflowTemplate,
     approved: Transition,
     rejected: Transition,
+    notification: HumanReviewNotification | None = None,
 ) -> HumanReviewStep:
     if not isinstance(title, WorkflowTemplate) or not isinstance(summary, WorkflowTemplate):
         raise TypeError("human review title and summary must be workflow templates")
@@ -164,6 +169,21 @@ def human_review_step(
         summary=summary,
         approved=approved,
         rejected=rejected,
+        notification=notification,
+    )
+
+
+def slack_notification(
+    *, channel: str = "", public_url: str = ""
+) -> HumanReviewNotification:
+    """Notify a Slack channel when a human-review step becomes ready."""
+    return HumanReviewNotification(
+        channel=_nonempty(channel, "Slack notification channel") if channel else "",
+        public_url=(
+            _nonempty(public_url, "Slack notification public_url").rstrip("/")
+            if public_url
+            else ""
+        ),
     )
 
 
@@ -328,6 +348,7 @@ __all__ = [
     "fail",
     "goto",
     "human_review_step",
+    "slack_notification",
     "result",
     "succeed",
     "task",

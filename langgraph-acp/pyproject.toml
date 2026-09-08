@@ -1,0 +1,43 @@
+[project]
+name = "langgraph-acp"
+version = "0.0.0"
+description = "Use ACP-compatible agents as first-class LangGraph nodes."
+readme = "README.md"
+requires-python = ">=3.11"
+# INVARIANT: no dependencies. ACP is JSON-RPC over a pipe, so the client is
+# stdlib asyncio written here rather than a second protocol library in every
+# application that installs this one; LangGraph arrives with the node, and
+# naming an agent is confined to `langgraph_acp.providers`.
+# Enforced by tests/test_public_api.py.
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langgraph_acp"]
+
+[dependency-groups]
+dev = ["langgraph>=1.0", "mypy>=1.15", "pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Live adapter runs are deselected by default and opted into with
+# `-m compatibility`, which is what the scheduled compatibility workflow does.
+# They install the adapter from npm and talk to a real agent, so a default run
+# that included them would mean "did we break something, or is the registry
+# slow today?". The same convention, and the same reasoning, as the root
+# `pyproject.toml`.
+addopts = "-q -m 'not compatibility'"
+markers = [
+    "compatibility: launches the real ACP adapter; scheduled rather than per-PR",
+]
+
+[tool.mypy]
+# `py.typed` promises a downstream type checker that these annotations are
+# true, and only a type checker run against them keeps that promise. The tests
+# are checked too: they are where the spellings this package documents are
+# written out, so an annotation that rejects a documented call fails here.
+strict = true
+files = ["src", "tests"]

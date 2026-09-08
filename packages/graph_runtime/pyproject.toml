@@ -1,0 +1,21 @@
+[project]
+name = "engine-graph-runtime"
+version = "0.0.0"
+description = "An API control surface over a workflow graph: runs, state, topology, events, steering, and resumption."
+requires-python = ">=3.11"
+# LangGraph itself is not named here. This distribution is the control surface
+# and the contract a graph binding has to satisfy; the LangGraph binding is the
+# next package, and it is what will declare the dependency. Neither ACP, Claude
+# nor Codex appear either -- see `engine.graph_runtime.executions` for why the
+# thing a node is driving stays behind a protocol.
+dependencies = ["engine-domain", "starlette>=0.52"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]
+
+[tool.uv.sources]
+engine-domain = { workspace = true }

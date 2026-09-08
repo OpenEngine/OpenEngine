@@ -32,7 +32,7 @@ from engine.domain import (
     ToolSpec,
 )
 from engine.ports import AgentRunner, AgentTurn, FinishReason
-from engine.runtime import Capabilities, Dispatcher
+from engine.runtime import Capabilities, Dispatcher, GRANTED_TOOLS_NOTE
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 FOREMAN = AgentProfile(
@@ -49,7 +49,14 @@ FOREMAN = AgentProfile(
 def test_profile_is_configuration_not_state() -> None:
     """A profile says what an agent is, never what it is currently doing."""
     fields = set(AgentProfile.__dataclass_fields__)
-    assert fields == {"agent_id", "instructions", "capabilities", "model", "description"}
+    assert fields == {
+        "agent_id",
+        "instructions",
+        "capabilities",
+        "model",
+        "description",
+        "read_only",
+    }
 
 
 def test_an_instance_owns_a_conversation_and_may_outlive_many_runs() -> None:
@@ -236,6 +243,31 @@ def test_dispatch_routes_a_start_to_the_agent_runner() -> None:
     assert agent_run_id == AgentRunId("ar-1")
     assert profile is FOREMAN
     assert messages == (Message.user("status?"),)
+
+
+def test_a_standalone_run_announces_no_tools_because_it_serves_none() -> None:
+    """This arm calls `run_turn` with no `tools=`, so a profile's grants become
+    nothing the model can call. Announcing them would trade dispatch's silence
+    for an agent reaching for a tool nobody served it."""
+    runner = FakeAgentRunner()
+    granted = AgentProfile(
+        agent_id=AgentId("foreman"),
+        instructions="Coordinate.",
+        capabilities=("dispatch",),
+    )
+    command = StartAgentRun(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("ar-1"),
+        instance_id=AgentInstanceId("agi-1"),
+        profile=granted,
+        prompt="status?",
+    )
+
+    asyncio.run(Dispatcher(_capabilities(runner)).dispatch(command))
+
+    _, profile, _, _ = runner.calls[0]
+    assert profile.instructions == "Coordinate."
+    assert GRANTED_TOOLS_NOTE not in profile.instructions
 
 
 def test_the_command_carries_the_profile_so_dispatch_needs_no_registry() -> None:

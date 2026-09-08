@@ -62,6 +62,7 @@ from engine.ports.agent_runner import (
     ApprovalRequest,
     FinishReason,
     McpServerConfig,
+    ResponseStyle,
     TokenUsage,
     TurnObserver,
     UserInputOption,
@@ -69,6 +70,10 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.protocol_diagnostics import (
+    AgentProtocolDiagnostics,
+    interaction_rejection_message,
+)
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
 
@@ -88,6 +93,17 @@ WORKSPACE_WRITE_TOOLS = (*READ_ONLY_TOOLS, "Edit", "Write")
 IGNORED_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 
 CLAUDE_FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit"})
+
+#: Claude Code's own output-style names, by the Engine style that selects them.
+#: The capitalization is part of the name: the CLI matches a style by its exact
+#: title and silently keeps its default for anything else, so this table is the
+#: only place a style name is spelled and an untranslatable style is never
+#: guessed at.
+OUTPUT_STYLES: dict[ResponseStyle, str] = {
+    ResponseStyle.CONCISE: "Concise",
+    ResponseStyle.EXPLANATORY: "Explanatory",
+    ResponseStyle.LEARNING: "Learning",
+}
 
 
 class ClaudeUnavailableError(RuntimeError):
@@ -188,6 +204,32 @@ def approval_request_from_control(message: dict[str, Any]) -> ApprovalRequest | 
         questions=questions,
         requires_human=requires_human,
     )
+
+
+def _control_diagnostic_shape(message: dict[str, Any]) -> dict[str, Any]:
+    """Describe a Claude control request without retaining its input values."""
+    request = message.get("request")
+    shaped: dict[str, Any] = {
+        "interaction_type": str(message.get("type", "")),
+        "request_id": str(message["request_id"])
+        if "request_id" in message
+        else None,
+        "request_type": type(request).__name__,
+    }
+    if isinstance(request, dict):
+        shaped.update(
+            {
+                "request_keys": sorted(str(key) for key in request),
+                "subtype": str(request["subtype"])
+                if "subtype" in request
+                else None,
+                "tool_name": str(request["tool_name"])
+                if "tool_name" in request
+                else None,
+                "input_type": type(request.get("input")).__name__,
+            }
+        )
+    return shaped
 
 
 def control_response_for(
@@ -484,6 +526,7 @@ class ClaudeCodeAgentRunner:
         model: str = "",
         workspace_provider: WorkspaceProvider | None = None,
         attribution: bool = True,
+        output_style: ResponseStyle | None = None,
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
@@ -492,6 +535,7 @@ class ClaudeCodeAgentRunner:
         self._working_directory = working_directory
         self._model = model
         self._attribution = attribution
+        self._output_style = output_style
         self._workspace_provider = workspace_provider
         self._running: dict[AgentRunId, asyncio.subprocess.Process] = {}
 
@@ -501,20 +545,16 @@ class ClaudeCodeAgentRunner:
         """The argv this runner would use. Public so the wiring is inspectable
         without running anything."""
         argv = [self._binary_path, "-p", "--output-format", "stream-json", "--verbose"]
+        # One `--settings` for every provider setting Engine configures: the
+        # flag takes a whole document, so a second occurrence would replace the
+        # first rather than add to it.
+        settings: dict[str, Any] = {}
         if not self._attribution:
-            argv += [
-                "--settings",
-                json.dumps(
-                    {
-                        "attribution": {
-                            "commit": "",
-                            "pr": "",
-                            "sessionUrl": False,
-                        }
-                    },
-                    separators=(",", ":"),
-                ),
-            ]
+            settings["attribution"] = {"commit": "", "pr": "", "sessionUrl": False}
+        if self._output_style is not None:
+            settings["outputStyle"] = OUTPUT_STYLES[self._output_style]
+        if settings:
+            argv += ["--settings", json.dumps(settings, separators=(",", ":"))]
         if profile.instructions.strip():
             # A real system-prompt channel, unlike `codex exec` -- so the
             # instructions never enter the conversation text.
@@ -541,6 +581,13 @@ class ClaudeCodeAgentRunner:
                 f"mcp__{mcp_server.name}__clarify",
                 f"mcp__{mcp_server.name}__complete_step",
                 f"mcp__{mcp_server.name}__fail_step",
+                # Reporting rather than acting: it says a sentence in the
+                # conversation the run came from and touches nothing else, so
+                # it belongs with the other three that no profile grants. The
+                # broker serves it only when there is somewhere to report to,
+                # and naming it here when there is not costs nothing -- a tool
+                # the server does not list is a tool the model never sees.
+                f"mcp__{mcp_server.name}__update_status",
                 *(
                     f"mcp__{mcp_server.name}__{capability}"
                     for capability in profile.capabilities
@@ -692,6 +739,8 @@ class ClaudeCodeAgentRunner:
             events, stderr = await asyncio.wait_for(
                 self._read_interactive_stream(
                     process,
+                    agent_run_id,
+                    working_directory,
                     flatten(messages),
                     on_approval,
                     on_message or (lambda _message: None),
@@ -746,6 +795,8 @@ class ClaudeCodeAgentRunner:
     async def _read_interactive_stream(
         self,
         process: asyncio.subprocess.Process,
+        agent_run_id: AgentRunId,
+        working_directory: str,
         prompt: str,
         on_approval: ApprovalHandler,
         on_message: TurnObserver,
@@ -759,6 +810,13 @@ class ClaudeCodeAgentRunner:
         lines = read_lines(process.stdout).__aiter__()
         events: list[dict[str, Any]] = []
         observed: list[Message] = []
+        diagnostics = AgentProtocolDiagnostics.for_run(
+            "claude_code",
+            agent_run_id,
+            shutil.which(self._binary_path) or self._binary_path,
+            working_directory,
+        )
+        diagnostics.record("session_started", adapter_file=__file__)
         try:
             initialize_id = "engine-initialize"
             await _write_json(
@@ -779,6 +837,7 @@ class ClaudeCodeAgentRunner:
                     "Claude Code did not complete control initialization within "
                     f"{self._protocol_timeout_seconds:g}s"
                 ) from error
+            diagnostics.record("session_initialized", adapter_file=__file__)
 
             await _write_json(
                 process.stdin,
@@ -793,7 +852,20 @@ class ClaudeCodeAgentRunner:
             while True:
                 message = await _next_json_message(lines)
                 request = approval_request_from_control(message)
+                if message.get("type") == "control_request":
+                    diagnostics.record(
+                        "interaction_received",
+                        adapter_file=__file__,
+                        **_control_diagnostic_shape(message),
+                    )
                 if request is not None:
+                    diagnostics.record(
+                        "interaction_normalized",
+                        adapter_file=__file__,
+                        request_id=str(message["request_id"]),
+                        approval_kind=request.kind.value,
+                        question_count=len(request.questions),
+                    )
                     decision = await on_approval(request)
                     if (
                         isinstance(decision, ApprovalDecision)
@@ -803,12 +875,32 @@ class ClaudeCodeAgentRunner:
                             f"approval decision {decision.value!r} is not allowed for "
                             f"{request.approval_id}"
                         )
-                    await _write_json(process.stdin, control_response_for(message, decision))
+                    response = control_response_for(message, decision)
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        request_id=str(message["request_id"]),
+                        decision=(
+                            "user_input"
+                            if isinstance(decision, UserInputResponse)
+                            else decision.value
+                        ),
+                    )
+                    await _write_json(process.stdin, response)
                     continue
 
                 if message.get("type") == "control_request":
                     request_id = message.get("request_id")
                     subtype = (message.get("request") or {}).get("subtype")
+                    rejection_message = interaction_rejection_message(
+                        str(subtype), "unsupported_subtype"
+                    )
+                    diagnostics.record(
+                        "interaction_rejected",
+                        adapter_file=__file__,
+                        **_control_diagnostic_shape(message),
+                        rejection_reason="unsupported_subtype",
+                    )
                     await _write_json(
                         process.stdin,
                         {
@@ -816,13 +908,17 @@ class ClaudeCodeAgentRunner:
                             "response": {
                                 "subtype": "error",
                                 "request_id": request_id,
-                                "error": f"unsupported control request {subtype}",
+                                "error": rejection_message,
                             },
                         },
                     )
-                    raise ClaudeExecutionError(
-                        f"Claude requested unsupported interaction {subtype!r}"
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        request_id=str(request_id),
+                        response_error_code="unsupported_control_request",
                     )
+                    continue
                 if message.get("type") in {"control_response", "control_cancel_request"}:
                     continue
 
@@ -940,6 +1036,7 @@ def _tail(text: str, lines: int = 5) -> str:
 
 __all__ = [
     "CLAUDE_PERMISSION_TRANSLATOR",
+    "OUTPUT_STYLES",
     "READ_ONLY_TOOLS",
     "WORKSPACE_WRITE_TOOLS",
     "ClaudeCodeAgentRunner",

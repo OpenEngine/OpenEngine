@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 # Depends on the runtime (and through it ports + domain). Infrastructure SDKs
 # get added here when the capability is actually implemented -- Ticket 1 ships
 # placeholders only, so this package still installs with no third-party deps.
-dependencies = ["engine-runtime"]
+dependencies = ["engine-runtime", "httpx>=0.27"]
 
 [build-system]
 requires = ["hatchling"]

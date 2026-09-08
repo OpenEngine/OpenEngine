@@ -1,6 +1,6 @@
 """Durable workflow-run and conversation persistence backed by SQLite."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 import json
 from pathlib import Path
@@ -8,6 +8,8 @@ import sqlite3
 from threading import RLock
 from uuid import uuid4
 import warnings
+
+from migrations.migration import upgrade_connection
 
 from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRunStatus
 from engine.domain.approvals import (
@@ -50,9 +52,10 @@ from engine.domain.ids import (
     WorkspaceId,
 )
 from engine.domain.planning import Milestone, Project, Workstream
-from engine.domain.state import RunPhase, RunState
+from engine.domain.state import RunOrigin, RunPhase, RunState
 from engine.domain.workflow import (
     AgentStep,
+    HumanReviewNotification,
     HumanReviewStep,
     OutcomeTransition,
     StepOutput,
@@ -80,199 +83,7 @@ class SQLiteStateStore:
         self._connection.row_factory = sqlite3.Row
         with self._lock, self._connection:
             self._connection.execute("PRAGMA foreign_keys = ON")
-            self._connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS agent_instances (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    instance_id TEXT NOT NULL UNIQUE,
-                    agent_id TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL UNIQUE,
-                    task_id TEXT,
-                    workspace_id TEXT,
-                    title TEXT NOT NULL DEFAULT 'New chat',
-                    archived INTEGER NOT NULL DEFAULT 0,
-                    runner TEXT NOT NULL DEFAULT '',
-                    auto_approve INTEGER NOT NULL DEFAULT 0,
-                    workflow_run_id TEXT,
-                    workflow_step_id TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS projects (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_id TEXT NOT NULL UNIQUE,
-                    name TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS milestones (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    milestone_id TEXT NOT NULL UNIQUE,
-                    project_id TEXT NOT NULL REFERENCES projects(project_id),
-                    name TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS milestones_by_project
-                    ON milestones (project_id);
-
-                CREATE TABLE IF NOT EXISTS workstreams (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    workstream_id TEXT NOT NULL UNIQUE,
-                    milestone_id TEXT NOT NULL REFERENCES milestones(milestone_id),
-                    name TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS workstreams_by_milestone
-                    ON workstreams (milestone_id);
-
-                CREATE TABLE IF NOT EXISTS run_states (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL UNIQUE,
-                    state_json TEXT NOT NULL,
-                    workstream_id TEXT REFERENCES workstreams(workstream_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS run_events (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    event_json TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS messages (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id),
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    tool_calls TEXT NOT NULL,
-                    tool_call_id TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS agent_runs (
-                    agent_run_id TEXT PRIMARY KEY,
-                    instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id),
-                    status TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    changed_files TEXT NOT NULL,
-                    runner TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS approvals (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    approval_id TEXT NOT NULL UNIQUE,
-                    agent_run_id TEXT NOT NULL,
-                    instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id),
-                    runner TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    reason TEXT,
-                    command TEXT,
-                    cwd TEXT,
-                    tool_name TEXT,
-                    tool_call_id TEXT,
-                    workspace_id TEXT,
-                    arguments TEXT,
-                    questions TEXT,
-                    answers TEXT,
-                    allowed_decisions TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    decision TEXT,
-                    decision_source TEXT,
-                    requested_at TEXT NOT NULL,
-                    decided_at TEXT
-                );
-
-                CREATE INDEX IF NOT EXISTS approvals_by_run
-                    ON approvals (agent_run_id);
-
-                CREATE TABLE IF NOT EXISTS session_grants (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    grant_id TEXT NOT NULL UNIQUE,
-                    instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id),
-                    runner TEXT NOT NULL,
-                    approval_kind TEXT NOT NULL,
-                    normalized_scope TEXT NOT NULL,
-                    workspace_id TEXT,
-                    created_from_approval_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    revoked_at TEXT
-                );
-
-                CREATE INDEX IF NOT EXISTS session_grants_by_instance
-                    ON session_grants (instance_id);
-                """
-            )
-            columns = {
-                row["name"]
-                for row in self._connection.execute(
-                    "PRAGMA table_info(agent_instances)"
-                )
-            }
-            if "title" not in columns:
-                self._connection.execute(
-                    "ALTER TABLE agent_instances "
-                    "ADD COLUMN title TEXT NOT NULL DEFAULT 'New chat'"
-                )
-            if "archived" not in columns:
-                self._connection.execute(
-                    "ALTER TABLE agent_instances "
-                    "ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
-                )
-            if "runner" not in columns:
-                self._connection.execute(
-                    "ALTER TABLE agent_instances "
-                    "ADD COLUMN runner TEXT NOT NULL DEFAULT ''"
-                )
-            if "auto_approve" not in columns:
-                self._connection.execute(
-                    "ALTER TABLE agent_instances "
-                    "ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0"
-                )
-            if "workflow_run_id" not in columns:
-                self._connection.execute(
-                    "ALTER TABLE agent_instances ADD COLUMN workflow_run_id TEXT"
-                )
-            if "workflow_step_id" not in columns:
-                self._connection.execute(
-                    "ALTER TABLE agent_instances ADD COLUMN workflow_step_id TEXT"
-                )
-            run_columns = {
-                row["name"]
-                for row in self._connection.execute("PRAGMA table_info(run_states)")
-            }
-            if "workstream_id" not in run_columns:
-                self._connection.execute(
-                    "ALTER TABLE run_states ADD COLUMN workstream_id TEXT "
-                    "REFERENCES workstreams(workstream_id)"
-                )
-            self._connection.execute(
-                "CREATE INDEX IF NOT EXISTS runs_by_workstream "
-                "ON run_states (workstream_id)"
-            )
-            approval_columns = {
-                row["name"]
-                for row in self._connection.execute("PRAGMA table_info(approvals)")
-            }
-            if "workspace_id" not in approval_columns:
-                # A database written before grants existed has approvals that
-                # never recorded where they applied. Null is the honest value
-                # for those: unknown, and therefore matching no grant.
-                self._connection.execute(
-                    "ALTER TABLE approvals ADD COLUMN workspace_id TEXT"
-                )
-            if "tool_call_id" not in approval_columns:
-                # Approvals written before the pairing existed name no call, and
-                # nothing can work out afterwards which one they were about.
-                # Null reads as "unknown", which is what a client shows by
-                # putting the request at the end of its turn rather than beside
-                # a command it has guessed at.
-                self._connection.execute(
-                    "ALTER TABLE approvals ADD COLUMN tool_call_id TEXT"
-                )
-            if "questions" not in approval_columns:
-                self._connection.execute(
-                    "ALTER TABLE approvals ADD COLUMN questions TEXT"
-                )
-            if "answers" not in approval_columns:
-                self._connection.execute(
-                    "ALTER TABLE approvals ADD COLUMN answers TEXT"
-                )
+            upgrade_connection(self._connection)
 
     # --- workflow runs ----------------------------------------------------
 
@@ -285,6 +96,8 @@ class SQLiteStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock, self._connection:
+            if state.workstream_id is not None and state.milestone_id is not None:
+                raise ValueError("a run cannot belong to both a workstream and a milestone")
             if state.workstream_id is not None:
                 exists = self._connection.execute(
                     "SELECT 1 FROM workstreams WHERE workstream_id = ?",
@@ -292,18 +105,27 @@ class SQLiteStateStore:
                 ).fetchone()
                 if exists is None:
                     raise KeyError(f"no workstream {state.workstream_id!r}")
+            if state.milestone_id is not None:
+                exists = self._connection.execute(
+                    "SELECT 1 FROM milestones WHERE milestone_id = ?",
+                    (state.milestone_id,),
+                ).fetchone()
+                if exists is None:
+                    raise KeyError(f"no milestone {state.milestone_id!r}")
             self._connection.execute(
                 """
-                INSERT INTO run_states (run_id, state_json, workstream_id)
-                VALUES (?, ?, ?)
+                INSERT INTO run_states (run_id, state_json, workstream_id, milestone_id)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
-                    workstream_id = excluded.workstream_id
+                    workstream_id = excluded.workstream_id,
+                    milestone_id = excluded.milestone_id
                 """,
                 (
                     state.run_id,
                     json.dumps(_state_to_dict(state)),
                     state.workstream_id,
+                    state.milestone_id,
                 ),
             )
 
@@ -330,6 +152,16 @@ class SQLiteStateStore:
                 )
         return tuple(runs)
 
+    async def delete_run(self, run_id: RunId) -> bool:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM run_events WHERE run_id = ?", (run_id,)
+            )
+            cursor = self._connection.execute(
+                "DELETE FROM run_states WHERE run_id = ?", (run_id,)
+            )
+        return cursor.rowcount > 0
+
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         with self._lock, self._connection:
             self._connection.executemany(
@@ -351,16 +183,18 @@ class SQLiteStateStore:
         with self._lock, self._connection:
             self._connection.execute(
                 """
-                INSERT INTO projects (project_id, name) VALUES (?, ?)
-                ON CONFLICT(project_id) DO UPDATE SET name = excluded.name
+                INSERT INTO projects (project_id, name, archived) VALUES (?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    name = excluded.name,
+                    archived = excluded.archived
                 """,
-                (project.project_id, project.name),
+                (project.project_id, project.name, int(project.archived)),
             )
 
     async def load_project(self, project_id: ProjectId) -> Project | None:
         with self._lock:
             row = self._connection.execute(
-                "SELECT project_id, name FROM projects WHERE project_id = ?",
+                "SELECT project_id, name, archived FROM projects WHERE project_id = ?",
                 (project_id,),
             ).fetchone()
         return _project_from_row(row) if row is not None else None
@@ -368,7 +202,7 @@ class SQLiteStateStore:
     async def list_projects(self) -> Sequence[Project]:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT project_id, name FROM projects ORDER BY sequence DESC"
+                "SELECT project_id, name, archived FROM projects ORDER BY sequence DESC"
             ).fetchall()
         return tuple(_project_from_row(row) for row in rows)
 
@@ -382,20 +216,30 @@ class SQLiteStateStore:
                 raise KeyError(f"no project {milestone.project_id!r}")
             self._connection.execute(
                 """
-                INSERT INTO milestones (milestone_id, project_id, name)
-                VALUES (?, ?, ?)
+                INSERT INTO milestones (
+                    milestone_id, project_id, name, description, dependencies
+                )
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(milestone_id) DO UPDATE SET
                     project_id = excluded.project_id,
-                    name = excluded.name
+                    name = excluded.name,
+                    description = excluded.description,
+                    dependencies = excluded.dependencies
                 """,
-                (milestone.milestone_id, milestone.project_id, milestone.name),
+                (
+                    milestone.milestone_id,
+                    milestone.project_id,
+                    milestone.name,
+                    milestone.description,
+                    json.dumps(milestone.dependencies),
+                ),
             )
 
     async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT milestone_id, project_id, name
+                SELECT milestone_id, project_id, name, description, dependencies
                 FROM milestones WHERE milestone_id = ?
                 """,
                 (milestone_id,),
@@ -405,7 +249,10 @@ class SQLiteStateStore:
     async def list_milestones(
         self, project_id: ProjectId | None = None
     ) -> Sequence[Milestone]:
-        query = "SELECT milestone_id, project_id, name FROM milestones"
+        query = (
+            "SELECT milestone_id, project_id, name, description, dependencies "
+            "FROM milestones"
+        )
         parameters: tuple[object, ...] = ()
         if project_id is not None:
             query += " WHERE project_id = ?"
@@ -414,6 +261,33 @@ class SQLiteStateStore:
         with self._lock:
             rows = self._connection.execute(query, parameters).fetchall()
         return tuple(_milestone_from_row(row) for row in rows)
+
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
+        # One row per project rather than one per milestone, and no column the
+        # answer does not need: the caller is a poll that wants integers.
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT project_id, COUNT(*) FROM milestones GROUP BY project_id"
+            ).fetchall()
+        return {ProjectId(row[0]): int(row[1]) for row in rows}
+
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        with self._lock, self._connection:
+            has_direct_runs = self._connection.execute(
+                "SELECT 1 FROM run_states WHERE milestone_id = ? LIMIT 1",
+                (milestone_id,),
+            ).fetchone()
+            if has_direct_runs is not None:
+                raise ValueError(f"milestone {milestone_id!r} still has runs")
+            try:
+                cursor = self._connection.execute(
+                    "DELETE FROM milestones WHERE milestone_id = ?", (milestone_id,)
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"milestone {milestone_id!r} still has workstreams or runs"
+                ) from error
+        return cursor.rowcount > 0
 
     async def save_workstream(self, workstream: Workstream) -> None:
         with self._lock, self._connection:
@@ -425,20 +299,26 @@ class SQLiteStateStore:
                 raise KeyError(f"no milestone {workstream.milestone_id!r}")
             self._connection.execute(
                 """
-                INSERT INTO workstreams (workstream_id, milestone_id, name)
-                VALUES (?, ?, ?)
+                INSERT INTO workstreams (workstream_id, milestone_id, name, scope)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(workstream_id) DO UPDATE SET
                     milestone_id = excluded.milestone_id,
-                    name = excluded.name
+                    name = excluded.name,
+                    scope = excluded.scope
                 """,
-                (workstream.workstream_id, workstream.milestone_id, workstream.name),
+                (
+                    workstream.workstream_id,
+                    workstream.milestone_id,
+                    workstream.name,
+                    workstream.scope,
+                ),
             )
 
     async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT workstream_id, milestone_id, name
+                SELECT workstream_id, milestone_id, name, scope
                 FROM workstreams WHERE workstream_id = ?
                 """,
                 (workstream_id,),
@@ -448,7 +328,7 @@ class SQLiteStateStore:
     async def list_workstreams(
         self, milestone_id: MilestoneId | None = None
     ) -> Sequence[Workstream]:
-        query = "SELECT workstream_id, milestone_id, name FROM workstreams"
+        query = "SELECT workstream_id, milestone_id, name, scope FROM workstreams"
         parameters: tuple[object, ...] = ()
         if milestone_id is not None:
             query += " WHERE milestone_id = ?"
@@ -457,6 +337,18 @@ class SQLiteStateStore:
         with self._lock:
             rows = self._connection.execute(query, parameters).fetchall()
         return tuple(_workstream_from_row(row) for row in rows)
+
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
+        with self._lock, self._connection:
+            try:
+                cursor = self._connection.execute(
+                    "DELETE FROM workstreams WHERE workstream_id = ?", (workstream_id,)
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"workstream {workstream_id!r} still has runs"
+                ) from error
+        return cursor.rowcount > 0
 
     async def create_instance(
         self,
@@ -607,6 +499,41 @@ class SQLiteStateStore:
             instance_id=instance_id,
             messages=tuple(_message_from_row(row) for row in rows),
         )
+
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
+        if not instance_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in instance_ids)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT i.instance_id, i.conversation_id,
+                       m.sequence, m.role, m.content, m.tool_calls, m.tool_call_id
+                FROM agent_instances AS i
+                LEFT JOIN messages AS m ON m.instance_id = i.instance_id
+                WHERE i.instance_id IN ({placeholders})
+                ORDER BY i.sequence, m.sequence
+                """,
+                tuple(instance_ids),
+            ).fetchall()
+        messages: dict[AgentInstanceId, list[Message]] = {}
+        conversation_ids: dict[AgentInstanceId, ConversationId] = {}
+        for row in rows:
+            instance_id = AgentInstanceId(row["instance_id"])
+            conversation_ids[instance_id] = ConversationId(row["conversation_id"])
+            instance_messages = messages.setdefault(instance_id, [])
+            if row["sequence"] is not None:
+                instance_messages.append(_message_from_row(row))
+        return {
+            instance_id: Conversation(
+                conversation_id=conversation_id,
+                instance_id=instance_id,
+                messages=tuple(messages[instance_id]),
+            )
+            for instance_id, conversation_id in conversation_ids.items()
+        }
 
     async def append_messages(
         self, instance_id: AgentInstanceId, messages: Sequence[Message]
@@ -834,7 +761,11 @@ class SQLiteStateStore:
 
 
 def _project_from_row(row: sqlite3.Row) -> Project:
-    return Project(project_id=ProjectId(row["project_id"]), name=row["name"])
+    return Project(
+        project_id=ProjectId(row["project_id"]),
+        name=row["name"],
+        archived=bool(row["archived"]),
+    )
 
 
 def _milestone_from_row(row: sqlite3.Row) -> Milestone:
@@ -842,6 +773,10 @@ def _milestone_from_row(row: sqlite3.Row) -> Milestone:
         milestone_id=MilestoneId(row["milestone_id"]),
         project_id=ProjectId(row["project_id"]),
         name=row["name"],
+        description=row["description"],
+        dependencies=tuple(
+            MilestoneId(dependency) for dependency in json.loads(row["dependencies"])
+        ),
     )
 
 
@@ -850,6 +785,7 @@ def _workstream_from_row(row: sqlite3.Row) -> Workstream:
         workstream_id=WorkstreamId(row["workstream_id"]),
         milestone_id=MilestoneId(row["milestone_id"]),
         name=row["name"],
+        scope=row["scope"],
     )
 
 
@@ -1017,6 +953,7 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "task_id": state.task_id,
         "workflow_id": state.workflow_id,
         "workstream_id": state.workstream_id,
+        "milestone_id": state.milestone_id,
         "phase": state.phase.value,
         "repository": state.repository,
         "prompt": state.prompt,
@@ -1039,6 +976,15 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "workflow_definition": (
             _workflow_to_dict(state.workflow_definition)
             if state.workflow_definition is not None
+            else None
+        ),
+        "origin": (
+            {
+                "channel": state.origin.channel,
+                "thread_id": state.origin.thread_id,
+                "author": state.origin.author,
+            }
+            if state.origin is not None
             else None
         ),
     }
@@ -1065,6 +1011,11 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         workstream_id=(
             WorkstreamId(str(value["workstream_id"]))
             if value.get("workstream_id") is not None
+            else None
+        ),
+        milestone_id=(
+            MilestoneId(str(value["milestone_id"]))
+            if value.get("milestone_id") is not None
             else None
         ),
         phase=RunPhase(str(value["phase"])),
@@ -1108,6 +1059,17 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
             if isinstance(value.get("workflow_definition"), dict)
             else None
         ),
+        origin=_origin_from_dict(value.get("origin")),
+    )
+
+
+def _origin_from_dict(value: object) -> RunOrigin | None:
+    if not isinstance(value, dict):
+        return None
+    return RunOrigin(
+        channel=str(value.get("channel", "")),
+        thread_id=str(value.get("thread_id", "")),
+        author=str(value.get("author", "")),
     )
 
 
@@ -1118,6 +1080,7 @@ def _profile_to_dict(profile: AgentProfile) -> dict[str, object]:
         "capabilities": list(profile.capabilities),
         "model": profile.model,
         "description": profile.description,
+        "read_only": profile.read_only,
     }
 
 
@@ -1128,6 +1091,7 @@ def _profile_from_dict(value: dict[str, object]) -> AgentProfile:
         capabilities=tuple(str(item) for item in value.get("capabilities", [])),
         model=str(value.get("model", "")),
         description=str(value.get("description", "")),
+        read_only=bool(value.get("read_only", False)),
     )
 
 
@@ -1219,6 +1183,14 @@ def _workflow_to_dict(definition: WorkflowDefinition) -> dict[str, object]:
                     "summary": _template_to_dict(step.summary),
                     "approved": _transition_to_dict(step.approved),
                     "rejected": _transition_to_dict(step.rejected),
+                    "notification": (
+                        {
+                            "channel": step.notification.channel,
+                            "public_url": step.notification.public_url,
+                        }
+                        if step.notification is not None
+                        else None
+                    ),
                 }
             )
     return {
@@ -1266,6 +1238,7 @@ def _workflow_from_dict(value: dict[str, object]) -> WorkflowDefinition:
                 )
             )
         else:
+            notification = raw.get("notification")
             steps.append(
                 HumanReviewStep(
                     step_id=StepId(str(raw["step_id"])),
@@ -1274,6 +1247,14 @@ def _workflow_from_dict(value: dict[str, object]) -> WorkflowDefinition:
                     summary=_template_from_dict(raw["summary"]),
                     approved=_transition_from_dict(raw["approved"]),
                     rejected=_transition_from_dict(raw["rejected"]),
+                    notification=(
+                        HumanReviewNotification(
+                            channel=str(notification["channel"]),
+                            public_url=str(notification["public_url"]),
+                        )
+                        if isinstance(notification, dict)
+                        else None
+                    ),
                 )
             )
     workspace = value.get("workspace", {})
@@ -1322,6 +1303,7 @@ def _event_to_dict(event: Event) -> dict[str, object]:
             "repository": event.repository,
             "workflow_id": event.workflow_id,
             "workstream_id": event.workstream_id,
+            "milestone_id": event.milestone_id,
         }
     if isinstance(event, RunNamed):
         return {
@@ -1389,6 +1371,11 @@ def _event_from_dict(value: dict[str, object]) -> Event:
             workstream_id=(
                 WorkstreamId(str(value["workstream_id"]))
                 if value.get("workstream_id") is not None
+                else None
+            ),
+            milestone_id=(
+                MilestoneId(str(value["milestone_id"]))
+                if value.get("milestone_id") is not None
                 else None
             ),
         )

@@ -1,5 +1,6 @@
 """Catalog-driven run read model."""
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from engine.core.workflow_interpreter import render_template
@@ -9,9 +10,11 @@ from engine.domain import (
     AgentInstanceId,
     AgentRunId,
     AgentStep,
+    Conversation,
     ConversationId,
     HumanReviewCompleted,
     HumanReviewStep,
+    MilestoneId,
     RunId,
     RunPhase,
     RunState,
@@ -50,6 +53,7 @@ class PendingHumanReviewView:
     step_id: StepId
     title: str
     summary: str
+    pull_request_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +73,7 @@ class WorkflowRunView:
     workflow_version: str
     task_id: str
     workstream_id: WorkstreamId | None
+    milestone_id: MilestoneId | None
     task_prompt: str
     repository: str
     phase: str
@@ -90,24 +95,61 @@ class RunReader:
             if catalog is not None
             else WorkflowCatalog.from_definitions(())
         )
+        # A run of a graph workflow has no step definition to take a name from,
+        # because a graph is not made of steps. Without this its rows would be
+        # labelled with its id, which is the sort of thing that makes a list
+        # look broken.
+        self._graph_names = {
+            str(graph.graph_id): graph.name for graph in self._catalog.graphs
+        }
 
     async def list(self) -> tuple[WorkflowRunView, ...]:
-        return tuple([await self._view(state) for state in await self._store.list_runs()])
+        states = tuple(await self._store.list_runs())
+        instances = tuple(await self._store.list_instances())
+        instances_by_run: dict[RunId, list[AgentInstance]] = {}
+        for instance in instances:
+            if instance.workflow_run_id is not None:
+                instances_by_run.setdefault(instance.workflow_run_id, []).append(instance)
+        candidates = {
+            instance.instance_id
+            for state in states
+            if state.current_step_id is not None and not state.agent_paused
+            for instance in instances_by_run.get(state.run_id, ())
+            if instance.workflow_step_id == state.current_step_id
+        }
+        conversations = await self._store.load_conversations(tuple(candidates))
+        return tuple(
+            [
+                await self._view(
+                    state,
+                    instances=instances_by_run.get(state.run_id, ()),
+                    conversations=conversations,
+                )
+                for state in states
+            ]
+        )
 
     async def get(self, run_id: RunId) -> WorkflowRunView | None:
         state = await self._store.load(run_id)
         return await self._view(state) if state is not None else None
 
-    async def _view(self, state: RunState) -> WorkflowRunView:
+    async def _view(
+        self,
+        state: RunState,
+        *,
+        instances: Sequence[AgentInstance] | None = None,
+        conversations: Mapping[AgentInstanceId, Conversation] | None = None,
+    ) -> WorkflowRunView:
         definition = state.workflow_definition or self._catalog.get(state.workflow_id)
-        instances = await self._store.list_instances(workflow_run_id=state.run_id)
+        if instances is None:
+            instances = await self._store.list_instances(workflow_run_id=state.run_id)
         by_step = {
             instance.workflow_step_id: instance
             for instance in instances
             if instance.workflow_step_id is not None
         }
         results = {result.step_id: result for result in state.step_results}
-        waiting_step = await self._waiting_step(state, by_step)
+        waiting_step = await self._waiting_step(state, by_step, conversations)
         steps = (
             tuple(
                 _step_view(
@@ -136,11 +178,16 @@ class RunReader:
             name=state.name or state.prompt or str(state.run_id),
             workflow_id=str(state.workflow_id),
             workflow_name=(
-                definition.name if definition is not None else str(state.workflow_id)
+                definition.name
+                if definition is not None
+                else self._graph_names.get(
+                    str(state.workflow_id), str(state.workflow_id)
+                )
             ),
             workflow_version=definition.version if definition is not None else "",
             task_id=str(state.task_id),
             workstream_id=state.workstream_id,
+            milestone_id=state.milestone_id,
             task_prompt=state.prompt,
             repository=state.repository,
             phase=state.phase.value,
@@ -156,6 +203,7 @@ class RunReader:
         self,
         state: RunState,
         instances: dict[StepId, AgentInstance],
+        conversations: Mapping[AgentInstanceId, Conversation] | None = None,
     ) -> StepId | None:
         step_id = state.current_step_id
         if step_id is None:
@@ -172,7 +220,11 @@ class RunReader:
             )
             if approvals:
                 return step_id
-        conversation = await self._store.load_conversation(instance.instance_id)
+        conversation = (
+            conversations.get(instance.instance_id)
+            if conversations is not None
+            else await self._store.load_conversation(instance.instance_id)
+        )
         if conversation is not None and latest_turn_requests_clarification_or_escalation(
             conversation.messages
         ):
@@ -248,7 +300,23 @@ def _pending_human_review(
         step_id=step.step_id,
         title=render_template(step.title, state),
         summary=render_template(step.summary, state),
+        pull_request_url=_pull_request_url(state),
     )
+
+
+def _pull_request_url(state: RunState) -> str | None:
+    """The most recent `pr_url` output any prior step reported, if any.
+
+    A review step judges an implementation already made, so a run reaching it
+    with a published change has the PR link sitting in an earlier step's
+    outputs -- pulling it forward here is what lets the reviewer jump straight
+    to the PR instead of hunting through step summaries for it."""
+
+    for result in reversed(state.step_results):
+        for output in result.outputs:
+            if output.name == "pr_url" and output.value:
+                return output.value
+    return None
 
 
 def _step_status(state: RunState, step_id: StepId, completed: bool) -> str:

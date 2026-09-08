@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from engine.domain.ids import (
     AgentRunId,
+    MilestoneId,
     RunId,
     StepId,
     TaskId,
@@ -37,6 +38,7 @@ class RunRequested(Event):
     repository: str
     workflow_id: WorkflowId
     workstream_id: WorkstreamId | None = None
+    milestone_id: MilestoneId | None = None
 
 
 @dataclass(frozen=True, slots=True)

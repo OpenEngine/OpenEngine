@@ -31,6 +31,7 @@ WORKFLOW = oe.workflow(
     id=str(WORKFLOW_ID),
     name="Command test",
     version="v1",
+    workspace=oe.workspace(base_ref="origin/main"),
     steps=[
         oe.agent_step(
             id="work",

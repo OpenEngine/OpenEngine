@@ -4,42 +4,69 @@ import { createRoot } from "react-dom/client";
 
 import {
   api,
+  newChatAgent,
+  setProjectArchived,
   setThreadAutoApprove,
   setThreadRunner,
   type ApiThread,
+  type ApiProject,
   type EngineConfig,
   type RunnerOption,
 } from "./api";
 import { ChatThread, ConversationStats } from "./chat";
+import { GraphConversationPage } from "./graph-conversation";
+import { MilestoneDetailsPage } from "./milestone-details";
+import { MilestoneScopePage } from "./milestone-scope";
+import { MilestoneTimeline } from "./milestone-timeline";
+import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
-import { NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
+import {
+  NewTaskPage,
+  NewWorkflowPage,
+  RunDetailPage,
+  RunsPage,
+  useGraphNodes,
+  useRuns,
+} from "./runs";
+import { routeForPath, type Route } from "./routes";
 import { Sidebar, type RailSection } from "./sidebar";
+import { UtilizationPage } from "./utilization";
 import "./styles.css";
 
 function ChatPanel({
   config,
   agentId,
   runner,
+  planning,
+  newProject,
+  project,
   onAgentChange,
   onRunnerChange,
 }: {
   config: EngineConfig;
   agentId: string;
   runner: string;
+  planning: boolean;
+  newProject: boolean;
+  project?: ApiProject;
   onAgentChange: (agentId: string) => void;
   onRunnerChange: (runner: string) => void;
 }) {
   return (
-    <main className="panel">
+    <main className={`panel ${planning ? "panel-project" : ""}`}>
       <ChatHeader
         config={config}
         agentId={agentId}
         runner={runner}
+        compact={planning}
         onAgentChange={onAgentChange}
         onRunnerChange={onRunnerChange}
       />
-      <ConversationStats />
-      <ChatThread />
+      {!planning && <ConversationStats />}
+      <ChatThread project={planning} />
+      {planning && (
+        <MilestoneTimeline project={project} collapsedUntilMilestone={newProject} />
+      )}
     </main>
   );
 }
@@ -58,12 +85,14 @@ function ChatHeader({
   config,
   agentId,
   runner,
+  compact,
   onAgentChange,
   onRunnerChange,
 }: {
   config: EngineConfig;
   agentId: string;
   runner: string;
+  compact: boolean;
   onAgentChange: (agentId: string) => void;
   onRunnerChange: (runner: string) => void;
 }) {
@@ -81,16 +110,20 @@ function ChatHeader({
         threadId={remoteId}
         listed={custom}
         runners={config.runners}
+        workflowRunners={config.workflowRunners}
         fallbackRunner={runner}
+        compact={compact}
       />
     );
 
   return (
-    <header className="panel-head">
+    <header className={`panel-head ${compact ? "panel-head-compact" : ""}`}>
       <div className="panel-head-copy">
-        <p className="eyebrow">New chat defaults</p>
-        <h1>New conversation</h1>
-        <p className="lede">Choose what starts the next conversation and which runner answers.</p>
+        <p className="eyebrow">{compact ? "New project" : "New chat defaults"}</p>
+        <h1>{compact ? "Define a new project with milestones" : "New conversation"}</h1>
+        {!compact && (
+          <p className="lede">Choose what starts the next conversation and which runner answers.</p>
+        )}
       </div>
       <label className="field">
         <span>Agent</span>
@@ -131,12 +164,16 @@ function ConversationHeader({
   threadId,
   listed,
   runners,
+  workflowRunners,
   fallbackRunner,
+  compact,
 }: {
   threadId: string;
   listed?: ThreadCustom;
   runners: RunnerOption[];
+  workflowRunners: string[];
   fallbackRunner: string;
+  compact: boolean;
 }) {
   const aui = useAui();
   const listedTitle = useAuiState((state) => state.threadListItem.title);
@@ -153,9 +190,14 @@ function ConversationHeader({
   // the truthful thing to show while it is being read.
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
   const workflowConversation = Boolean(thread?.workflowRunId);
-  const implementationConversation = workflowConversation && Boolean(thread?.editable);
+  const availableRunners = workflowConversation
+    ? workflowRunners.map((id) => ({ id, implementation: id }))
+    : runners;
   const autoApprove = chosenAutoApprove ?? thread?.autoApprove ?? false;
-  const title = fetched?.title || listedTitle || "New chat";
+  // Title generation refreshes the thread list after the first message. That
+  // refreshed value can be newer than the conversation snapshot fetched when
+  // this header first mounted.
+  const title = listedTitle || fetched?.title || "New chat";
 
   useEffect(() => {
     let current = true;
@@ -198,45 +240,38 @@ function ConversationHeader({
 
   return (
     <header
-      className={`panel-head ${implementationConversation ? "panel-head-implementation" : ""}`}
+      className={`panel-head ${workflowConversation ? "panel-head-workflow" : ""} ${compact ? "panel-head-compact" : ""}`}
     >
       <div className="panel-head-copy">
-        <p className="eyebrow">This conversation</p>
+        <p className="eyebrow">{compact ? "This project" : "This conversation"}</p>
         <h1>{title}</h1>
-        <p className="lede">
-          {workflowConversation
-            ? thread?.editable
-              ? "A workflow step owns this transcript; sending guidance reactivates it if it has closed."
-              : "A workflow step owns this transcript; its run chose the runner."
-            : "This runner answers here until you pick another."}
-        </p>
+        {workflowConversation && (
+          <p className="lede">
+            {thread?.editable
+              ? "A WorkOrder step owns this transcript; sending guidance reactivates it if it has closed."
+              : "A WorkOrder step owns this read-only transcript."}
+          </p>
+        )}
       </div>
       <div className="field">
         <span>Agent</span>
         <span className="field-box">{thread?.agentId ?? "…"}</span>
       </div>
-      {workflowConversation ? (
-        <div className="field">
-          <span>Runner</span>
-          <span className="field-box">{runner}</span>
-        </div>
-      ) : (
-        <label className="field">
-          <span>Runner</span>
-          <select
-            className="field-box"
-            value={runner}
-            onChange={(event) => void choose(event.target.value)}
-          >
-            {runners.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.id}
-              </option>
-            ))}
-          </select>
-          {error && <span className="field-error">{error}</span>}
-        </label>
-      )}
+      <label className="field">
+        <span>Runner</span>
+        <select
+          className="field-box"
+          value={runner}
+          onChange={(event) => void choose(event.target.value)}
+        >
+          {availableRunners.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.id}
+            </option>
+          ))}
+        </select>
+        {error && <span className="field-error">{error}</span>}
+      </label>
       {workflowConversation && (
         <label className="field">
           <span>Approvals</span>
@@ -256,60 +291,103 @@ function ConversationHeader({
   );
 }
 
-type Route =
-  | { kind: "runs" }
-  | { kind: "new-run" }
-  | { kind: "run"; runId: string }
-  | { kind: "chat"; threadId?: string; runId?: string };
-
 function currentRoute(): Route {
-  const path = window.location.pathname.replace(/\/$/, "") || "/";
-  if (path === "/" || path === "/runs") return { kind: "runs" };
-  if (path === "/runs/new") return { kind: "new-run" };
-  const workflowConversation = path.match(
-    /^\/runs\/([^/]+)\/conversations\/([^/]+)$/,
-  );
-  if (workflowConversation)
-    return {
-      kind: "chat",
-      runId: decodeURIComponent(workflowConversation[1]),
-      threadId: decodeURIComponent(workflowConversation[2]),
-    };
-  if (path.startsWith("/runs/"))
-    return { kind: "run", runId: decodeURIComponent(path.slice("/runs/".length)) };
-  if (path.startsWith("/conversations/"))
-    return { kind: "chat", threadId: decodeURIComponent(path.slice("/conversations/".length)) };
-  return { kind: "chat" };
+  return routeForPath(window.location.pathname);
 }
 
 /** Which section of the rail the page on screen came from, so the rail opens
- *  showing where you are. A workflow's own conversation belongs to its run. */
+ *  showing where you are. A workflow's own conversation belongs to its run;
+ *  other conversations open alongside projects. */
 function sectionFor(route: Route): RailSection {
-  if (route.kind === "chat") return route.runId ? "workflows" : "chats";
-  return "workflows";
+  if (route.kind === "graph-conversation") return "workflows";
+  if (route.kind === "chat")
+    return route.runId ? "workflows" : "projects";
+  return route.kind === "project" ||
+    route.kind === "milestone" ||
+    route.kind === "milestone-scope"
+    ? "projects"
+    : "workflows";
+}
+
+/** `/plan` is where a plan starts, not where it lives.
+ *
+ *  Once the conversation exists it has a URL of its own, and taking it means a
+ *  refresh reopens the plan being written rather than starting a second empty
+ *  one. Replaced rather than pushed: Back belongs to whatever page sent you
+ *  here, and there is nothing at `/plan` to return to. */
+function PlanPermalink() {
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  useEffect(() => {
+    if (remoteId) window.history.replaceState(null, "", `/conversations/${remoteId}`);
+  }, [remoteId]);
+  return null;
+}
+
+function useProjects() {
+  const [projects, setProjects] = useState<ApiProject[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      api<{ projects: ApiProject[] }>("/api/projects")
+        .then((value) => {
+          if (!cancelled) setProjects(value.projects);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) timer = window.setTimeout(load, 1000);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+  // The row moves on the click rather than a second later, when the poll next
+  // reads the list -- and that same poll is what puts it back if the write
+  // failed, so a click that did not take undoes itself.
+  const archive = (project: ApiProject, archived: boolean) => {
+    setProjects((current) =>
+      current.map((item) =>
+        item.projectId === project.projectId ? { ...item, archived } : item,
+      ),
+    );
+    void setProjectArchived(project.projectId, archived).catch(() => {});
+  };
+  return { projects, archive };
 }
 
 /** One shell for every screen: the rail, and the page beside it.
  *
- *  The rail lists chats wherever it is drawn, so the chat runtime is mounted
- *  around the workflow pages too -- reading the list is all they ask of it. */
+ *  The chat runtime is mounted around every page so conversation routes can
+ *  render their thread while workflow pages keep their own run UI. */
 function App() {
   const route = useMemo(currentRoute, []);
   const [config, setConfig] = useState<EngineConfig | null>(null);
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
-  const { runs, error: runsError } = useRuns();
+  const { runs, error: runsError, loaded: runsLoaded, remove: deleteRun } = useRuns();
+  // What a [BETA] WorkOrder offers in the rail: its graph's nodes, since a
+  // graph run has no steps for the list to carry.
+  const graphNodes = useGraphNodes(runs);
+  const { projects, archive: archiveProject } = useProjects();
+
+  // Settled for this mount: the route is read once, and every move between
+  // pages here is a full page load.
+  const plan = route.kind === "chat" && Boolean(route.plan);
 
   useEffect(() => {
     api<EngineConfig>("/api/config")
       .then((value) => {
         setConfig(value);
-        setAgentId(value.defaultAgent);
+        // The plan page is the new chat page with its agent already chosen.
+        setAgentId(newChatAgent(value, plan));
         setRunner(value.defaultRunner);
       })
       .catch((reason: Error) => setError(reason.message));
-  }, []);
+  }, [plan]);
 
   if (error)
     return <main className="state state-fatal">Could not connect to openengine: {error}</main>;
@@ -317,39 +395,112 @@ function App() {
     return <main className="state">Starting openengine…</main>;
 
   const chat = route.kind === "chat";
-  // Switching the open conversation in place is for the rail beside a chat of
-  // its own. A workflow step's transcript is reached through its run, so
-  // leaving one is a move to another page rather than a swap under the URL.
-  const standaloneChat = chat && !route.runId;
-  const activeRunId = route.kind === "run" || route.kind === "chat" ? route.runId : undefined;
+  const activeRunId = route.kind === "run" || route.kind === "chat" || route.kind === "graph-conversation" ? route.runId : undefined;
+  // The conversation on screen, and the only thing that says whether it is a
+  // project's: a plan's URL is an ordinary chat's, so the projects list is what
+  // tells them apart. It arrives after the first paint, and the rail follows.
+  // A graph node's conversation is one of these too -- it is not a thread, but
+  // it is a page the rail links to, and the link it marks is its own.
+  const conversationUrl =
+    chat || route.kind === "graph-conversation"
+      ? window.location.pathname.replace(/\/$/, "")
+      : undefined;
+  const activeProject = projects.find((project) => project.conversationUrl === conversationUrl);
+  const projectPage = activeProject !== undefined;
+  const sidebar = () => (
+    <Sidebar
+      projects={projects}
+      runs={runs}
+      graphNodes={graphNodes}
+      initialSection={sectionFor(route)}
+      activeRunId={activeRunId}
+      activeConversationUrl={conversationUrl}
+      activeProjectId={
+        route.kind === "project" ||
+        route.kind === "milestone" ||
+        route.kind === "milestone-scope" ||
+        route.kind === "new-task"
+          ? route.projectId
+          : undefined
+      }
+      activeMilestonesPage={route.kind === "project"}
+      activeView={
+        route.kind === "runs"
+          ? "runs"
+          : route.kind === "new-run"
+            ? "new"
+            : route.kind === "utilization"
+              ? "utilization"
+              : undefined
+      }
+      onArchiveProject={archiveProject}
+      onDeleteRun={deleteRun}
+    />
+  );
   return (
     <EngineRuntimeProvider
-      defaults={{ agentId, runner }}
+      defaults={{ agentId, runner, createProject: plan }}
       initialThreadId={chat ? route.threadId : undefined}
       rememberActiveThread={chat}
+      // The plan page opens on a new conversation rather than the last one:
+      // a New Project button that handed you back the chat you were in would not be
+      // a plan. What it starts is still an ordinary chat to come back to.
+      restoreActiveThread={chat && !plan}
+      deferMount={chat}
+      fallback={
+        <div className="app-shell">
+          {sidebar()}
+          <main className="loading">Restoring chat…</main>
+        </div>
+      }
     >
       <div className="app-shell">
-        <Sidebar
-          runs={runs}
-          initialSection={sectionFor(route)}
-          linkChats={!standaloneChat}
-          activeRunId={activeRunId}
-          activeConversationUrl={
-            chat && route.runId ? window.location.pathname.replace(/\/$/, "") : undefined
-          }
-          activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
-        />
+        {plan && <PlanPermalink />}
+        {/* Every conversation page, not just a workflow's, marks its owning
+            project or WorkOrder in the rail. */}
+        {sidebar()}
         {route.kind === "runs" ? (
           <RunsPage runs={runs} error={runsError} />
         ) : route.kind === "new-run" ? (
           <NewWorkflowPage config={config} />
+        ) : route.kind === "new-task" ? (
+          <NewTaskPage
+            config={config}
+            projectId={route.projectId}
+            milestoneId={route.milestoneId}
+          />
         ) : route.kind === "run" ? (
           <RunDetailPage runId={route.runId} />
+        ) : route.kind === "graph-conversation" ? (
+          <GraphConversationPage runId={route.runId} nodeId={route.nodeId} />
+        ) : route.kind === "utilization" ? (
+          <UtilizationPage />
+        ) : route.kind === "project" ? (
+          <ProjectMilestonesPage projectId={route.projectId} />
+        ) : route.kind === "milestone" ? (
+          <MilestoneDetailsPage
+            projectId={route.projectId}
+            milestoneId={route.milestoneId}
+            // The list the shell already follows for the rail and the runs
+            // page: a task is a run started in a workstream, so this page reads
+            // the same poll rather than opening one of its own.
+            runs={runs}
+            runsError={runsError}
+            runsLoaded={runsLoaded}
+          />
+        ) : route.kind === "milestone-scope" ? (
+          <MilestoneScopePage
+            projectId={route.projectId}
+            milestoneId={route.milestoneId}
+          />
         ) : (
           <ChatPanel
             config={config}
             agentId={agentId}
             runner={runner}
+            planning={plan || projectPage}
+            newProject={plan}
+            project={activeProject}
             onAgentChange={setAgentId}
             onRunnerChange={setRunner}
           />

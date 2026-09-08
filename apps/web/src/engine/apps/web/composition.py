@@ -19,7 +19,9 @@ The state store is SQLite rather than Postgres: conversations survive a process
 restart without requiring an external database service.
 """
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,13 +32,48 @@ from engine.adapters.agent_runner.claude_code import (
     allowed_tools_for,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
-from engine.adapters.communications.buzz import BuzzCommunications
+from engine.adapters.communications.slack import SlackCommunications, SlackCredentialStore
 from engine.adapters.source_control.github import GitHubSourceControl
+from engine.adapters.source_control.github.transports import (
+    GitHubCliTransport,
+    GitHubOAuthTransport,
+)
+from engine.adapters.source_control.gitlab import GitLabSourceControl
+from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
-from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
-from engine.ports import AgentRunner
-from engine.runtime import AgentSession, Capabilities, EngineConfig
+from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_ROOT_DIRECTORY,
+    GitWorktreeWorkspaceProvider,
+)
+from engine.apps.web.github_auth import (
+    GitHubAuthError,
+    GitHubCredentialStore,
+    GitHubRefreshTokenInvalidError,
+    refresh_access_token,
+)
+from engine.apps.web.gitlab_auth import (
+    GitLabAuthError,
+    GitLabCredentialStore,
+    GitLabRefreshTokenInvalidError,
+    refresh_access_token as refresh_gitlab_access_token,
+)
+from engine.graph_runtime import GraphRuntime, GraphWorkflow
+from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+from engine.scoper import MilestoneScoper, codex_milestone_scoper
+from engine.apps.web.source_control import (
+    RoutingSourceControl,
+    SourceControlPreferences,
+)
+from engine.ports import AgentRunner, Communications, SourceControl
+from engine.runtime import (
+    PLANNING_TOOL_NAMES,
+    AgentSession,
+    Capabilities,
+    EngineConfig,
+    PlanningMcpBroker,
+    project_chat_capabilities,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,19 +124,19 @@ class Settings:
     """Claude workflows may read and edit files, but not run unrestricted Bash."""
     temporal_host: str = "localhost:7233"
     github_token: str = ""
-    github_binary: str = "gh"
-    """The GitHub CLI review comments are left with.
-
-    A field for the same reason `codex_binary` and `claude_binary` are: which
-    executable a capability shells out to is the deployment's to state, and
-    stating it here keeps it readable in the one file allowed to name adapters.
-    A `PATH` shim would do the same job invisibly, and would take the next thing
-    in the process that wanted the real `gh` with it.
-    """
-    buzz_base_url: str = ""
-    buzz_api_token: str = ""
-    workspace_root: str = "/tmp/engine-workspaces"
+    github_client_id: str = ""
+    source_control_preferences: SourceControlPreferences | None = None
+    workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"
+    graph_state_directory: str = "graph-state"
+    """Where a graph workflow's saved progress is kept.
+
+    Plain English: the new graph workflows remember where they got to by
+    writing two small database files. This is the folder those files go in, so
+    a run that was half finished when the process stopped is still there when
+    it starts again. A folder rather than a file because there are two of them,
+    and the graph engine names them itself.
+    """
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.
 
@@ -111,14 +148,157 @@ class Settings:
     """The single TOML source, or ``None`` when built-in defaults are active."""
 
 
-def build_capabilities(settings: Settings) -> Capabilities:
+def build_capabilities(
+    settings: Settings,
+    credential_store: GitHubCredentialStore | None = None,
+    slack_credential_store: SlackCredentialStore | None = None,
+    gitlab_credential_store: GitLabCredentialStore | None = None,
+) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
+    _store = credential_store
+    _refresh_lock: asyncio.Lock | None = None
+    _refresh_persistence_failed = False
+
+    def _token() -> str:
+        if _store is not None:
+            stored = _store.get()
+            if stored:
+                return stored
+        return settings.github_token
+
+    async def _refresh_after_unauthorized(failed_token: str) -> bool:
+        """Refresh once for a 401, safely sharing a rotated token pair.
+
+        Several source-control calls can fail together when a token expires.
+        Serialising refresh avoids racing GitHub's single-use refresh tokens;
+        a waiter retries with credentials written by the first caller.
+        """
+        nonlocal _refresh_lock, _refresh_persistence_failed
+        if _store is None:
+            return False
+        # GitHub rotates refresh tokens.  If we receive a fresh pair but cannot
+        # durably save it, retrying with the stale stored token would consume
+        # another one and eventually strand the user.  Stop retrying until a
+        # new connection is established or this process is restarted.
+        if _refresh_persistence_failed:
+            return False
+        client_id = settings.github_client_id or _store.get_client_id()
+        if not client_id:
+            return False
+        if _refresh_lock is None:
+            _refresh_lock = asyncio.Lock()
+        async with _refresh_lock:
+            credentials = _store.get_credentials()
+            if credentials is None:
+                return False
+            if credentials.access_token != failed_token:
+                return True
+            if not credentials.refresh_token:
+                # Legacy bare tokens and manually saved PATs are not
+                # refreshable.  A 401 alone is not sufficient reason to erase
+                # a user credential that this process did not issue.
+                return False
+            try:
+                refreshed = await refresh_access_token(
+                    client_id, credentials.refresh_token
+                )
+            except GitHubRefreshTokenInvalidError:
+                _store.delete()
+                return False
+            except GitHubAuthError:
+                # A network or GitHub-service failure is temporary; retain the
+                # token pair for the next request.
+                return False
+            try:
+                _store.set_credentials(refreshed)
+            except GitHubAuthError:
+                _refresh_persistence_failed = True
+                return False
+            return True
+
+    oauth = GitHubSourceControl(
+        _token,
+        workspace_provider=workspace_provider,
+        transport=GitHubOAuthTransport(
+            _token, on_token_unauthorized=_refresh_after_unauthorized
+        ),
+    )
+    def _gitlab_origin() -> str:
+        return (
+            settings.source_control_preferences.gitlab_origin()
+            if settings.source_control_preferences is not None
+            and settings.source_control_preferences.gitlab_origin()
+            else "https://gitlab.com"
+        )
+
+    _gitlab_stores: dict[str, GitLabCredentialStore] = {}
+    _gitlab_refresh_persistence_failed: set[str] = set()
+
+    def _gitlab_store() -> GitLabCredentialStore:
+        origin = _gitlab_origin()
+        if gitlab_credential_store is not None:
+            return gitlab_credential_store
+        return _gitlab_stores.setdefault(origin, GitLabCredentialStore(origin))
+
+    def _gitlab_token() -> str:
+        store = _gitlab_store()
+        credentials = store.get_credentials()
+        return credentials.access_token if credentials else ""
+
+    async def _refresh_gitlab_after_unauthorized(failed_token: str) -> bool:
+        store = _gitlab_store()
+        if store.origin in _gitlab_refresh_persistence_failed:
+            return False
+        async with store.refresh_lock():
+            credentials = store.get_credentials()
+            if credentials is None or not credentials.refresh_token:
+                return False
+            if credentials.access_token != failed_token:
+                return True
+            client_id = store.get_client_id()
+            if not client_id:
+                return False
+            try:
+                refreshed = await refresh_gitlab_access_token(
+                    store.origin, client_id, credentials.refresh_token
+                )
+            except GitLabRefreshTokenInvalidError:
+                store.delete()
+                return False
+            except GitLabAuthError:
+                return False
+            try:
+                store.set_credentials(refreshed)
+            except GitLabAuthError:
+                _gitlab_refresh_persistence_failed.add(store.origin)
+                return False
+            return True
+
+    gitlab = GitLabSourceControl(
+        _gitlab_token,
+        origin=_gitlab_origin,
+        workspace_provider=workspace_provider,
+        transport=GitLabOAuthTransport(
+            _gitlab_token, _gitlab_origin, _refresh_gitlab_after_unauthorized
+        ),
+    )
+    if settings.source_control_preferences is None:
+        source_control = oauth
+    else:
+        source_control = RoutingSourceControl(
+            settings.source_control_preferences,
+            GitHubSourceControl(
+                _token,
+                workspace_provider=workspace_provider,
+                transport=GitHubCliTransport(),
+            ),
+            oauth,
+            gitlab,
+        )
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
-        source_control=GitHubSourceControl(
-            settings.github_token, binary_path=settings.github_binary
-        ),
+        source_control=source_control,
         agent_runner=CodexAgentRunner(
             binary_path=settings.codex_binary,
             timeout_seconds=settings.codex_timeout_seconds,
@@ -128,9 +308,64 @@ def build_capabilities(settings: Settings) -> Capabilities:
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
-        communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
+        communications=build_communications(settings, slack_credential_store),
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
+    )
+
+
+def build_communications(
+    settings: Settings,
+    slack_credential_store: SlackCredentialStore | None = None,
+) -> Communications:
+    """Build the configured communications provider."""
+    provider = settings.engine_config.communications.provider
+    if provider == "buzz":
+        raise RuntimeError(
+            "communications provider 'buzz' is not available yet; "
+            "configure communications.provider = 'slack'"
+        )
+    return SlackCommunications(slack_credential_store or SlackCredentialStore())
+
+
+def build_graph_runtime(
+    settings: Settings,
+    graphs: Sequence[GraphWorkflow],
+    source_control: SourceControl | None = None,
+) -> AbstractAsyncContextManager[GraphRuntime] | None:
+    """The engine that runs graph workflows, or nothing when there are none.
+
+    Two kinds of workflow live in the `workflows` directory. The older kind is
+    a list of steps, and the executor wired above runs those. The newer kind --
+    the ones the interface marks `[BETA]` -- is a graph, and LangGraph runs
+    those. This builds the second engine.
+
+    It hands back an *unopened* context manager rather than a running engine,
+    because starting one opens database files that somebody then has to close.
+    The web application opens it when the server starts and closes it when the
+    server stops, which is the only lifetime that gets that right.
+
+    `None` when this deployment's workflow directory holds no graphs: there is
+    nothing to run, so there is no reason to open the files. The interface then
+    offers no `[BETA]` entries, which is what keeps a person from picking one
+    that nothing here could start.
+    """
+    if not graphs:
+        return None
+    return sqlite_runtime(
+        tuple(graphs),
+        settings.graph_state_directory,
+        source_control=source_control,
+    )
+
+
+def build_milestone_scoper(settings: Settings) -> MilestoneScoper:
+    """Build scoping from the configured Codex executable and workspace."""
+    return codex_milestone_scoper(
+        binary_path=settings.codex_binary,
+        working_directory=settings.codex_working_directory,
+        timeout_seconds=settings.codex_timeout_seconds,
+        model=settings.codex_model,
     )
 
 
@@ -174,18 +409,28 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,
+            output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
     }
 
 
-def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
-    """Read-only runners used only for workflow review steps.
+def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
+    """The runners without the tools to change anything, by provider name.
 
-    Not built from `approvals.allow`, and deliberately: a reviewer that cannot
-    write is a property of the step rather than a permission the deployment gets
-    to widen. A policy granting `edit` is a statement about what an agent may do
+    Two callers, one property: a workflow review step, and any profile that says
+    it only reads. Named for what the runners are rather than for the first
+    thing that wanted them, because the planner wants them for the same reason
+    the reviewer does.
+
+    Not built from `approvals.allow`, and deliberately: being unable to write is
+    a property of the work rather than a permission the deployment gets to
+    widen. A policy granting `edit` is a statement about what an agent may do
     when somebody asks it to change something, not about the one asked to read.
+
+    Withholding the tools is half of it. The other half is that a `read_only`
+    profile's approvals are refused by the broker, so a policy cannot hand back
+    at the pause what this withheld before the turn.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
@@ -205,6 +450,7 @@ def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,
+            output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
     }
@@ -213,7 +459,7 @@ def build_review_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     """Write-enabled runners used only for workflow implementation steps.
 
-    Named to match `build_review_runners` on purpose, and a subset of it: a run
+    Named to match `build_read_only_runners` on purpose, and a subset of it: a run
     implements with the write-enabled runner of the provider it picked, and is
     then reviewed by the read-only runner of that same name. The reviewer is
     told not to modify the workspace, but what actually stops it is being run
@@ -242,6 +488,7 @@ def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,
+            output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
     }
@@ -251,6 +498,7 @@ def build_session(
     capabilities: Capabilities,
     runners: Mapping[str, AgentRunner],
     repository: str = ".",
+    read_only_runners: Mapping[str, AgentRunner] | None = None,
 ) -> AgentSession:
     """Conversations, over the capabilities this process composed.
 
@@ -261,19 +509,26 @@ def build_session(
     A conversation may be continued by any of `runners`, including one that did
     not start it: we hold the transcript, so whichever answers next is handed
     everything the other one said and did.
+
+    `read_only_runners` answers the agents that only read, by the same provider
+    names -- so a planning conversation is the CLI the user picked, without the
+    tools to change the tree it is reading.
     """
     return AgentSession(
         capabilities,
         runners=runners,
         workspace_repository=repository,
+        read_only_runners=read_only_runners,
+        mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
+        capability_resolver=project_chat_capabilities,
     )
 
 
 __all__ = [
     "Settings",
     "build_capabilities",
-    "build_review_runners",
+    "build_read_only_runners",
     "build_runners",
-    "build_workflow_runners",
     "build_session",
+    "build_workflow_runners",
 ]

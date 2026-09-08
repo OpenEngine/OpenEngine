@@ -113,6 +113,37 @@ def test_auto_approve_allows_everything_a_pattern_has_not_ruled_on() -> None:
     assert policy_decision_for(policy, _bash("sudo id")) is PolicyDecision.DENY
 
 
+def test_an_agent_that_only_reads_is_refused_what_the_policy_allows() -> None:
+    """The configuration is about work, and this agent was not given any.
+
+    `allow = ["read", "edit"]` beside a bash pattern is what this repository
+    ships, and every part of it grants a coder something. None of it reaches a
+    role that never changes anything -- otherwise the whole enforcement would be
+    a runner withholding tools before the turn and a policy handing them back
+    during it.
+    """
+    policy = ApprovalConfig(
+        allow=(ApprovalCapability.READ, ApprovalCapability.EDIT),
+        bash=BashApprovalConfig(allow=("git add **",)),
+    )
+
+    assert policy_decision_for(policy, READ, read_only=True) is PolicyDecision.ALLOW
+    assert policy_decision_for(policy, EDIT, read_only=True) is PolicyDecision.DENY
+    assert policy_decision_for(
+        policy, _bash("git add -A"), read_only=True
+    ) is PolicyDecision.DENY
+
+
+def test_a_read_only_turn_refuses_what_auto_approve_would_wave_through() -> None:
+    """Including the unclassifiable, which is the direction it has to fail:
+    a request no runner could name cannot be shown to be a read."""
+    policy = ApprovalConfig(auto_approve=True, allow=tuple(ApprovalCapability))
+
+    assert policy_decision_for(policy, EDIT, read_only=True) is PolicyDecision.DENY
+    assert policy_decision_for(policy, None, read_only=True) is PolicyDecision.DENY
+    assert policy_decision_for(policy, READ, read_only=True) is PolicyDecision.ALLOW
+
+
 def test_a_shell_request_without_a_command_falls_back_to_the_capability() -> None:
     """No pattern can name a command we were not told, so none does."""
     policy = ApprovalConfig(

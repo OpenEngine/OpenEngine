@@ -77,6 +77,7 @@ and do not read the growing transcript as the reason.
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 from collections.abc import AsyncIterator, Iterable, Sequence
@@ -105,8 +106,14 @@ from engine.ports.agent_runner import (
     UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.protocol_diagnostics import (
+    AgentProtocolDiagnostics,
+    interaction_rejection_message,
+)
 from engine.runtime.streams import read_lines
 from engine.runtime.transcript import flatten
+
+LOGGER = logging.getLogger(__name__)
 
 #: Sandbox policies the CLI accepts. Chat defaults to the read-only one: an
 #: agent you are talking to should not be able to edit the tree as a side
@@ -136,6 +143,7 @@ APP_SERVER_ITEM_TYPES = {
     "agentMessage": "agent_message",
     "commandExecution": "command_execution",
     "fileChange": "file_change",
+    "mcpToolCall": "mcp_tool_call",
 }
 
 APP_SERVER_ITEM_FIELDS = {
@@ -181,6 +189,15 @@ class CodexExecutionError(RuntimeError):
     """Codex ran and failed, timed out, or produced no answer."""
 
 
+class InvalidAppServerInteractionError(ValueError):
+    """A known app-server interaction carried an unsupported payload shape."""
+
+    def __init__(self, method: str, reason: str) -> None:
+        super().__init__(f"invalid {method} payload: {reason}")
+        self.method = method
+        self.reason = reason
+
+
 class CodexToolsUnsupportedError(NotImplementedError):
     """A profile granted tools that Codex cannot be offered.
 
@@ -200,9 +217,12 @@ def render_prompt(profile: AgentProfile, messages: Sequence[Message]) -> str:
     """Flatten a profile and a conversation into one prompt.
 
     `codex exec` has no channel for a system prompt, so the instructions go in
-    ahead of the conversation. They are first and never change, which keeps the
-    whole prompt append-only -- see `engine.runtime.transcript`, which owns that
-    invariant and the rendering that maintains it.
+    ahead of the conversation. They are first, which keeps the whole prompt
+    append-only for as long as they are the same on every turn -- see
+    `engine.runtime.transcript`, which owns that invariant and the rendering
+    that maintains it. Holding to that is the caller's, not this function's: a
+    caller that varies what it puts here between turns of one conversation
+    breaks the shared prefix at the first line.
     """
     if not messages:
         raise ValueError("cannot run a turn with no messages")
@@ -234,17 +254,22 @@ def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
     return tuple(events)
 
 
-def app_server_sandbox_policy(sandbox: str) -> dict[str, Any]:
+def app_server_sandbox_policy(
+    sandbox: str, *, network_access: bool = False
+) -> dict[str, Any]:
     """Translate the stable CLI sandbox names to app-server's v2 schema."""
     match sandbox:
         case "read-only":
-            return {"type": "readOnly"}
+            policy: dict[str, Any] = {"type": "readOnly"}
         case "workspace-write":
-            return {"type": "workspaceWrite"}
+            policy = {"type": "workspaceWrite"}
         case "danger-full-access":
-            return {"type": "dangerFullAccess"}
+            policy = {"type": "dangerFullAccess"}
         case _:  # Construction validates this; keep the helper safe on its own.
             raise ValueError(f"sandbox must be one of {SANDBOX_MODES}, got {sandbox!r}")
+    if network_access and sandbox != "danger-full-access":
+        policy["networkAccess"] = True
+    return policy
 
 
 def _app_server_thread_params(
@@ -388,6 +413,202 @@ def user_input_request_from_app_server(
     )
 
 
+def _elicitation_rejection_reason(message: dict[str, Any]) -> str | None:
+    """Why a named MCP elicitation cannot be normalized, without its values."""
+    if message.get("method") != "mcpServer/elicitation/request":
+        return "not_mcp_elicitation"
+    if "id" not in message:
+        return "missing_request_id"
+    params = message.get("params")
+    if not isinstance(params, dict):
+        return "params_not_object"
+    if params.get("mode") not in {"form", "openai/form"}:
+        return "unsupported_mode"
+    schema = params.get("requestedSchema")
+    if not isinstance(schema, dict):
+        return "requested_schema_not_object"
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return "schema_properties_not_object"
+    if properties and not any(
+        isinstance(definition, dict) for definition in properties.values()
+    ):
+        return "schema_has_no_supported_properties"
+    return None
+
+
+def mcp_elicitation_request_from_app_server(
+    message: dict[str, Any],
+) -> ApprovalRequest | None:
+    """Normalize an MCP server's app-server form elicitation."""
+    reason = _elicitation_rejection_reason(message)
+    if reason == "not_mcp_elicitation":
+        return None
+    if reason is not None:
+        raise InvalidAppServerInteractionError(
+            "mcpServer/elicitation/request", reason
+        )
+    params = message["params"]
+    assert isinstance(params, dict)
+    approval_id = ":".join(
+        part
+        for part in (
+            str(params.get("threadId", "")),
+            str(params.get("turnId", "")),
+            str(message["id"]),
+        )
+        if part
+    )
+    schema = params["requestedSchema"]
+    assert isinstance(schema, dict)
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    questions: list[UserInputQuestion] = []
+    for name, definition in properties.items():
+        if not isinstance(definition, dict):
+            continue
+        choices = definition.get("enum")
+        choice_names = definition.get("enumNames")
+        titled_choices = definition.get("oneOf")
+        if definition.get("type") == "array":
+            items = definition.get("items") or {}
+            if isinstance(items, dict):
+                choices = items.get("enum")
+                titled_choices = items.get("anyOf")
+        if isinstance(titled_choices, list):
+            choices = [
+                choice.get("const")
+                for choice in titled_choices
+                if isinstance(choice, dict) and "const" in choice
+            ]
+            choice_names = [
+                choice.get("title", choice.get("const"))
+                for choice in titled_choices
+                if isinstance(choice, dict) and "const" in choice
+            ]
+        questions.append(
+            UserInputQuestion(
+                question_id=str(name),
+                header=str(definition.get("title") or name),
+                question=str(definition.get("description") or params.get("message") or name),
+                options=(
+                    tuple(
+                        UserInputOption(
+                            label=str(choice),
+                            description=(
+                                str(choice_names[index])
+                                if isinstance(choice_names, list)
+                                and index < len(choice_names)
+                                and choice_names[index] != choice
+                                else ""
+                            ),
+                        )
+                        for index, choice in enumerate(choices)
+                    )
+                    if isinstance(choices, list)
+                    else ()
+                ),
+                multi_select=definition.get("type") == "array",
+                allows_other=not isinstance(choices, list),
+            )
+        )
+    if not questions:
+        return ApprovalRequest(
+            approval_id=approval_id,
+            kind=ApprovalKind.TOOL_USE,
+            reason=str(params.get("message") or "Approve the MCP server request."),
+            tool_name=str(params.get("serverName") or "mcp_elicitation"),
+            arguments=json.dumps(params, sort_keys=True),
+            allowed_decisions=(
+                ApprovalDecision.ACCEPT,
+                ApprovalDecision.CANCEL,
+            ),
+        )
+    return ApprovalRequest(
+        approval_id=approval_id,
+        kind=ApprovalKind.USER_INPUT,
+        reason=str(params.get("message", questions[0].question)),
+        tool_name=str(params.get("serverName") or "mcp_elicitation"),
+        arguments=json.dumps(params, sort_keys=True),
+        allowed_decisions=(ApprovalDecision.CANCEL,),
+        questions=tuple(questions),
+        requires_human=True,
+    )
+
+
+def app_server_response_for(
+    message: dict[str, Any], decision: ApprovalDecision | UserInputResponse
+) -> dict[str, Any]:
+    """Build the result payload for a supported app-server interaction."""
+    if message.get("method") != "mcpServer/elicitation/request":
+        if isinstance(decision, UserInputResponse):
+            return {
+                "answers": {
+                    answer.question_id: {"answers": list(answer.answers)}
+                    for answer in decision.answers
+                }
+            }
+        return {"decision": APP_SERVER_DECISIONS[decision]}
+
+    if isinstance(decision, UserInputResponse):
+        params = message.get("params") or {}
+        schema = params.get("requestedSchema") or {}
+        properties = schema.get("properties") if isinstance(schema, dict) else {}
+        content: dict[str, Any] = {}
+        for answer in decision.answers:
+            definition = properties.get(answer.question_id, {}) if isinstance(properties, dict) else {}
+            content[answer.question_id] = (
+                list(answer.answers)
+                if isinstance(definition, dict) and definition.get("type") == "array"
+                else (answer.answers[0] if answer.answers else "")
+            )
+        return {"action": "accept", "content": content}
+    if decision is ApprovalDecision.CANCEL:
+        return {"action": "cancel", "content": None}
+    return {"action": "accept", "content": {}}
+
+
+def _diagnostic_shape(message: dict[str, Any]) -> dict[str, Any]:
+    """Describe a protocol message without retaining user or tool content."""
+    params = message.get("params")
+    shaped: dict[str, Any] = {
+        "method": str(message.get("method", "")),
+        "request_id": str(message["id"]) if "id" in message else None,
+        "params_type": type(params).__name__,
+    }
+    if not isinstance(params, dict):
+        return shaped
+    shaped.update(
+        {
+            "params_keys": sorted(str(key) for key in params),
+            "mode": str(params["mode"]) if "mode" in params else None,
+            "server_name": str(params["serverName"])
+            if "serverName" in params
+            else None,
+            "thread_id": str(params["threadId"]) if "threadId" in params else None,
+            "turn_id": str(params["turnId"]) if params.get("turnId") else None,
+        }
+    )
+    schema = params.get("requestedSchema")
+    shaped["requested_schema_type"] = type(schema).__name__
+    if isinstance(schema, dict):
+        shaped["requested_schema_keys"] = sorted(str(key) for key in schema)
+        properties = schema.get("properties")
+        shaped["property_count"] = len(properties) if isinstance(properties, dict) else None
+        shaped["property_schema_types"] = (
+            sorted(
+                {
+                    str(definition.get("type", "unspecified"))
+                    for definition in properties.values()
+                    if isinstance(definition, dict)
+                }
+            )
+            if isinstance(properties, dict)
+            else []
+        )
+    return shaped
+
+
 def _legacy_app_server_item(item: dict[str, Any]) -> dict[str, Any]:
     """Convert a v2 app-server item to the existing audit-event vocabulary."""
     converted: dict[str, Any] = {}
@@ -463,10 +684,24 @@ def action_messages(item: dict[str, Any], call_id: str) -> tuple[Message, Messag
     fields, so an item type this adapter has never heard of still records what
     the agent did with it.
     """
+    name = str(item.get("type", "action"))
     arguments = {k: v for k, v in item.items() if k not in NON_ARGUMENT_FIELDS}
+    if name == "mcp_tool_call" and item.get("server") and item.get("tool"):
+        name = f"mcp__{item['server']}__{item['tool']}"
+        raw_arguments = item.get("arguments")
+        if isinstance(raw_arguments, str):
+            try:
+                raw_arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError:
+                pass
+        arguments = (
+            raw_arguments
+            if isinstance(raw_arguments, dict)
+            else {"value": raw_arguments}
+        )
     call = ToolCall(
         call_id=call_id,
-        name=str(item.get("type", "action")),
+        name=name,
         arguments=json.dumps(arguments, sort_keys=True),
     )
     output = next(
@@ -870,6 +1105,7 @@ class CodexAgentRunner:
             events, stderr = await asyncio.wait_for(
                 self._read_app_server(
                     process,
+                    agent_run_id,
                     render_prompt(profile, messages),
                     profile.model or self._model,
                     working_directory,
@@ -927,6 +1163,7 @@ class CodexAgentRunner:
     async def _read_app_server(
         self,
         process: asyncio.subprocess.Process,
+        agent_run_id: AgentRunId,
         prompt: str,
         model: str,
         working_directory: str,
@@ -944,6 +1181,13 @@ class CodexAgentRunner:
         events: list[dict[str, Any]] = []
         observed: list[Message] = []
         started_actions: set[str] = set()
+        diagnostics = AgentProtocolDiagnostics.for_run(
+            "codex",
+            agent_run_id,
+            shutil.which(self._binary_path) or self._binary_path,
+            working_directory,
+        )
+        diagnostics.record("session_started", adapter_file=__file__)
         try:
             await _write_json(
                 process.stdin,
@@ -960,7 +1204,7 @@ class CodexAgentRunner:
                 },
             )
             try:
-                await asyncio.wait_for(
+                initialized = await asyncio.wait_for(
                     _read_rpc_response(lines, 0),
                     timeout=self._protocol_timeout_seconds,
                 )
@@ -969,6 +1213,16 @@ class CodexAgentRunner:
                     "codex app-server did not complete initialization within "
                     f"{self._protocol_timeout_seconds:g}s"
                 ) from error
+            diagnostics.record(
+                "session_initialized",
+                adapter_file=__file__,
+                response_keys=sorted(str(key) for key in initialized),
+                user_agent=(
+                    str(initialized["userAgent"])
+                    if initialized.get("userAgent") is not None
+                    else None
+                ),
+            )
             await _write_json(process.stdin, {"method": "initialized", "params": {}})
 
             thread_params = _app_server_thread_params(
@@ -998,7 +1252,14 @@ class CodexAgentRunner:
                 "input": [{"type": "text", "text": prompt}],
                 "cwd": working_directory,
                 "approvalPolicy": INTERACTIVE_APPROVAL_POLICY,
-                "sandboxPolicy": app_server_sandbox_policy(self._sandbox),
+                "sandboxPolicy": app_server_sandbox_policy(
+                    self._sandbox,
+                    network_access=(
+                        mcp_server.requires_network_access
+                        if mcp_server is not None
+                        else False
+                    ),
+                ),
             }
             if model:
                 turn_params["model"] = model
@@ -1020,10 +1281,66 @@ class CodexAgentRunner:
                     turn_response_seen = True
                     continue
 
+                is_server_request = "id" in message and bool(message.get("method"))
+                if is_server_request:
+                    diagnostics.record(
+                        "interaction_received",
+                        adapter_file=__file__,
+                        **_diagnostic_shape(message),
+                    )
+
                 request = approval_request_from_app_server(message)
                 if request is None:
                     request = user_input_request_from_app_server(message)
+                if request is None:
+                    try:
+                        request = mcp_elicitation_request_from_app_server(message)
+                    except InvalidAppServerInteractionError as error:
+                        rejection_message = interaction_rejection_message(
+                            error.method, error.reason
+                        )
+                        LOGGER.error(
+                            "rejecting Codex app-server request method=%s reason=%s "
+                            "agent_run_id=%s",
+                            error.method,
+                            error.reason,
+                            agent_run_id,
+                        )
+                        diagnostics.record(
+                            "interaction_rejected",
+                            adapter_file=__file__,
+                            **_diagnostic_shape(message),
+                            rejection_reason=error.reason,
+                        )
+                        if "id" in message:
+                            await _write_json(
+                                process.stdin,
+                                {
+                                    "id": message["id"],
+                                    "error": {
+                                        "code": -32602,
+                                        "message": rejection_message,
+                                        "data": {"reason": error.reason},
+                                    },
+                                },
+                            )
+                            diagnostics.record(
+                                "interaction_response_sent",
+                                adapter_file=__file__,
+                                method=error.method,
+                                request_id=str(message["id"]),
+                                response_error_code=-32602,
+                            )
+                        continue
                 if request is not None:
+                    diagnostics.record(
+                        "interaction_normalized",
+                        adapter_file=__file__,
+                        method=str(message.get("method", "")),
+                        request_id=str(message["id"]),
+                        approval_kind=request.kind.value,
+                        question_count=len(request.questions),
+                    )
                     decision = await on_approval(request)
                     if (
                         isinstance(decision, ApprovalDecision)
@@ -1033,15 +1350,23 @@ class CodexAgentRunner:
                             f"approval decision {decision.value!r} is not allowed for "
                             f"{request.approval_id}"
                         )
-                    result = (
-                        {
-                            "answers": {
-                                answer.question_id: {"answers": list(answer.answers)}
-                                for answer in decision.answers
-                            }
-                        }
-                        if isinstance(decision, UserInputResponse)
-                        else {"decision": APP_SERVER_DECISIONS[decision]}
+                    result = app_server_response_for(message, decision)
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        method=str(message.get("method", "")),
+                        request_id=str(message["id"]),
+                        decision=(
+                            "user_input"
+                            if isinstance(decision, UserInputResponse)
+                            else decision.value
+                        ),
+                        response_action=result.get("action"),
+                        response_content_count=(
+                            len(result["content"])
+                            if isinstance(result.get("content"), dict)
+                            else 0
+                        ),
                     )
                     await _write_json(
                         process.stdin,
@@ -1049,21 +1374,43 @@ class CodexAgentRunner:
                     )
                     continue
 
-                if "id" in message and message.get("method"):
+                if is_server_request:
                     method = str(message["method"])
+                    rejection_reason = "unsupported_method"
+                    rejection_message = interaction_rejection_message(
+                        method, rejection_reason
+                    )
+                    LOGGER.error(
+                        "rejecting Codex app-server request method=%s reason=%s "
+                        "agent_run_id=%s",
+                        method,
+                        rejection_reason,
+                        agent_run_id,
+                    )
+                    diagnostics.record(
+                        "interaction_rejected",
+                        adapter_file=__file__,
+                        **_diagnostic_shape(message),
+                        rejection_reason=rejection_reason,
+                    )
                     await _write_json(
                         process.stdin,
                         {
                             "id": message["id"],
                             "error": {
                                 "code": -32601,
-                                "message": f"unsupported server request {method}",
+                                "message": rejection_message,
                             },
                         },
                     )
-                    raise CodexExecutionError(
-                        f"codex app-server requested unsupported interaction {method!r}"
+                    diagnostics.record(
+                        "interaction_response_sent",
+                        adapter_file=__file__,
+                        method=method,
+                        request_id=str(message["id"]),
+                        response_error_code=-32601,
                     )
+                    continue
 
                 method = message.get("method")
                 if method:
@@ -1208,6 +1555,11 @@ class CodexAgentRunner:
         if process is None or process.returncode is not None:
             return
         process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
 
 
 def _tail(text: str, lines: int = 5) -> str:
@@ -1230,12 +1582,15 @@ __all__ = [
     "CodexPermissionTranslator",
     "CodexToolsUnsupportedError",
     "CodexUnavailableError",
+    "InvalidAppServerInteractionError",
     "action_messages",
+    "app_server_response_for",
     "app_server_sandbox_policy",
     "approval_request_from_app_server",
     "user_input_request_from_app_server",
     "failure_message_of",
     "messages_from_app_server_event",
+    "mcp_elicitation_request_from_app_server",
     "messages_from_event",
     "parse_events",
     "render_prompt",

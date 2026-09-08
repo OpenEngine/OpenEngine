@@ -2,27 +2,41 @@
 
 import asyncio
 import json
+import logging
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import openengine as oe
 import pytest
 
-import github_fakes
 from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
 from engine.adapters.agent_runner.codex import (
     INTERACTIVE_APPROVAL_POLICY,
     CodexAgentRunner,
 )
+from engine.adapters.communications.slack import SlackCommunications
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
+from engine.apps.web.__main__ import build_app
 from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
+from engine.apps.web.utilization import (
+    RunnerUtilization,
+    UtilizationService,
+    UtilizationWindow,
+)
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_communications,
+    build_milestone_scoper,
+    build_read_only_runners,
     build_runners,
+    build_session,
     build_workflow_runners,
 )
 from engine.domain import (
@@ -38,6 +52,10 @@ from engine.domain import (
     ConversationId,
     HumanReviewCompleted,
     Message,
+    Milestone,
+    MilestoneId,
+    Project,
+    ProjectId,
     Role,
     RunFailed,
     RunId,
@@ -45,21 +63,31 @@ from engine.domain import (
     RunPhase,
     RunRequested,
     RunState,
+    ScopingPlan,
     StepCompleted,
     StepId,
     StepReactivated,
     StepOutput,
     TaskId,
     ToolCall,
+    WorkflowDefinition,
     WorkflowId,
     WorkspaceId,
     WorkspaceProvisioned,
+    Workstream,
+    WorkstreamId,
+    WorkOrderId,
+    WorkOrderSpec,
+    WorkOrderStatus,
+    project_id_for_instance,
 )
 from engine.ports import (
     AgentTurn,
     ApprovalRequest,
     InteractiveAgentRunner,
     McpServerConfig,
+    Message as CommunicationMessage,
+    MessageLink,
     UserInputAnswer,
     UserInputOption,
     UserInputQuestion,
@@ -68,16 +96,38 @@ from engine.ports import (
     WorkspaceState,
 )
 from engine.runtime import (
+    BUILT_IN,
     INVALID_COMPLETION_ERROR,
+    PLANNER,
     AgentSession,
     ApprovalBroker,
     ApprovalCapability,
     ApprovalConfig,
     Capabilities,
+    ClaudeConfig,
+    CommunicationsConfig,
     EngineConfig,
+    ResponseStyle,
     WorkflowCatalog,
 )
+from engine.graph_runtime import (
+    CANCELLED,
+    CheckpointId,
+    GraphCompilationError,
+    GraphId,
+    NodeId,
+    RunSnapshot,
+    RunStatus,
+)
 from engine.runtime.terminal_mcp import _mcp_response
+from graph_runtime_fakes import (
+    AwaitSteering,
+    Fail,
+    Say,
+    ScriptedGraph,
+    ScriptedGraphRuntime,
+    ScriptedNode,
+)
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
@@ -102,6 +152,69 @@ def test_web_composes_the_sqlite_conversation_store(tmp_path) -> None:
     assert isinstance(capabilities.state_store, SQLiteStateStore)
     assert database.exists()
     capabilities.state_store.close()
+
+
+def test_web_selects_the_configured_communications_provider() -> None:
+    slack = build_communications(Settings())
+
+    assert isinstance(slack, SlackCommunications)
+
+    with pytest.raises(RuntimeError, match="provider 'buzz' is not available yet"):
+        build_communications(
+            Settings(
+                engine_config=EngineConfig(
+                    communications=CommunicationsConfig(provider="buzz")
+                )
+            )
+        )
+
+
+def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeypatch) -> None:
+    """The contract the development server's reloader depends on.
+
+    It constructs the application again in every child process it starts, with
+    no command line and nothing handed to it, so a composition that only works
+    when `main` assembles it would leave `engine-dev` reloading into nothing.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    app = build_app()
+
+    async def ask() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get("/api/config")
+
+    answered = asyncio.run(ask())
+    assert answered.status_code == 200
+    assert answered.json()["runners"] == [
+        {"id": "codex", "implementation": "CodexAgentRunner"},
+        {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
+    ]
+    # Composed from the working directory, exactly as `engine-web` composes it.
+    assert (tmp_path / "conversations.sqlite3").exists()
+    assert app.state.milestone_scoper is not None
+
+
+def test_milestone_scoper_uses_the_configured_codex_provider() -> None:
+    settings = Settings(
+        codex_binary="/opt/openengine/codex",
+        codex_working_directory="/srv/openengine/repository",
+        codex_timeout_seconds=42,
+        codex_model="gpt-scoper",
+    )
+
+    milestone_scoper = build_milestone_scoper(settings)
+    provider = milestone_scoper.scoper.registry.resolve("codex")
+
+    assert provider.env == {
+        "CODEX_PATH": "/opt/openengine/codex",
+        "CODEX_CONFIG": '{"model": "gpt-scoper"}',
+    }
+    assert provider.cwd == "/srv/openengine/repository"
+    assert milestone_scoper.scoper.working_directory == "/srv/openengine/repository"
+    assert milestone_scoper.scoper.timeout_seconds == 42
 
 
 def test_web_offers_one_interactive_runner_per_cli() -> None:
@@ -202,6 +315,19 @@ def test_engine_config_disables_attribution_for_every_workflow_runner() -> None:
     ]["commit"] == ""
 
 
+def test_engine_config_styles_every_claude_runner_this_process_offers() -> None:
+    """Chat, review, and workflow alike: a style is a property of the runner
+    rather than of the errand it is sent on."""
+    settings = Settings(
+        engine_config=EngineConfig(claude=ClaudeConfig(output_style=ResponseStyle.CONCISE))
+    )
+
+    for build in (build_runners, build_read_only_runners, build_workflow_runners):
+        argv = build(settings)["claude"].command_line(PROFILES[CODER])
+        settings_document = json.loads(argv[argv.index("--settings") + 1])
+        assert settings_document["outputStyle"] == "Concise"
+
+
 def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:
     runners = build_workflow_runners(Settings())
 
@@ -218,7 +344,7 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
     """What keeps a review read-only is the runner it gets, not its prompt."""
     settings = Settings()
     workflow_runners = build_workflow_runners(settings)
-    reviewers = build_review_runners(settings)
+    reviewers = build_read_only_runners(settings)
 
     assert set(workflow_runners) <= set(reviewers)
     codex_argv = reviewers["codex"].command_line(PROFILES[CODER])
@@ -232,33 +358,161 @@ def test_every_workflow_runner_is_reviewed_by_a_read_only_runner_of_its_name() -
     ]
 
 
-def test_review_comments_are_left_with_the_gh_the_composition_names(tmp_path) -> None:
-    """Which `gh` runs is the composition's to say, as the two CLIs are.
+def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -> None:
+    """Half of the Plan button's difference from New chat: the argv.
 
-    Proved by leaving a comment rather than by reading the constructor argument
-    back, because what matters is the executable the adapter actually spawns:
-    an unwired `github_binary` spawns whatever `gh` is on PATH, which for a
-    reviewer means somebody's real repository.
+    Same provider the user picked, same conversation machinery, and a command
+    line without the tools to change the checkout it is reading -- a property of
+    what the composition hands the planner rather than of its instructions.
+
+    Only half, and the docstring says so deliberately: this proves the planner
+    is *handed* less, not that it is *held* to less. A provider asking anyway
+    reaches the approval broker, where a policy granting `edit` would allow it;
+    what refuses it there is `read_only` on the profile, covered by
+    `test_approvals.py`. Either half alone reads like the whole thing, which is
+    how a claim like this one comes to be believed without being true.
     """
-    log = tmp_path / "gh.jsonl"
-    capabilities = build_capabilities(
-        Settings(
-            github_binary=github_fakes.install(tmp_path, log),
-            sqlite_path=str(tmp_path / "c.sqlite3"),
-        )
-    )
-    try:
-        asyncio.run(
-            capabilities.source_control.add_comment(
-                "https://github.com/acme/api/pull/7", "Looks right."
+    settings = Settings(
+        engine_config=EngineConfig(
+            approvals=ApprovalConfig(
+                allow=(ApprovalCapability.READ, ApprovalCapability.EDIT)
             )
+        ),
+        sqlite_path=str(tmp_path / "conversations.sqlite3"),
+    )
+    capabilities = build_capabilities(settings)
+    try:
+        session = build_session(
+            capabilities,
+            build_runners(settings),
+            read_only_runners=build_read_only_runners(settings),
         )
+        planner = session.runner_for(PLANNER.agent_id, "claude")
+        coder = session.runner_for(CODER, "claude")
     finally:
         capabilities.state_store.close()
 
-    assert [call["argv"] for call in github_fakes.calls(log)] == [
-        ["pr", "comment", "https://github.com/acme/api/pull/7", "--body", "Looks right."]
+    planner_argv = planner.command_line(PLANNER)
+    coder_argv = coder.command_line(PROFILES[CODER])
+
+    assert planner_argv[planner_argv.index("--allowedTools") + 1 :] == [
+        "Read",
+        "Glob",
+        "Grep",
     ]
+    assert "Edit" in coder_argv[coder_argv.index("--allowedTools") + 1 :]
+    codex_argv = session.runner_for(PLANNER.agent_id, "codex").command_line(PLANNER)
+    assert codex_argv[codex_argv.index("--sandbox") + 1] == "read-only"
+
+
+def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:
+    class CapturingRunner:
+        permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+        def __init__(self) -> None:
+            self.mcp_servers: list[McpServerConfig] = []
+            self.direct_turns = 0
+
+        async def run_turn(
+            self, agent_run_id, profile, messages, tools=(), workspace_id=None
+        ):
+            self.direct_turns += 1
+            return AgentTurn(Message.assistant("ordinary chat"))
+
+        async def run_turn_with_mcp(
+            self,
+            agent_run_id,
+            profile,
+            messages,
+            mcp_server,
+            workspace_id=None,
+        ):
+            self.mcp_servers.append(mcp_server)
+            return AgentTurn(Message.assistant("project chat"))
+
+        async def cancel(self, agent_run_id) -> None:
+            pass
+
+    async def scenario() -> tuple[CapturingRunner, AgentProfile]:
+        store = InMemoryStateStore()
+        runner = CapturingRunner()
+        session = build_session(
+            Capabilities(
+                workflow_runtime=None,
+                source_control=None,
+                agent_runner=runner,
+                communications=None,
+                workspace_provider=ConversationWorkspaces(),
+                state_store=store,
+            ),
+            {"test": runner},
+        )
+        project_chat = await session.start(CODER, runner="test")
+        await store.save_project(
+            Project(project_id_for_instance(project_chat.instance_id), "OpenEngine")
+        )
+        await session.say(project_chat.instance_id, "Plan this.", runner="test")
+
+        ordinary_planner = await session.start(PLANNER.agent_id, runner="test")
+        await session.say(ordinary_planner.instance_id, "Plan this.", runner="test")
+        return runner, session.profiles[PLANNER.agent_id]
+
+    runner, planner_profile = asyncio.run(scenario())
+    config = runner.mcp_servers[0]
+    advertised = tuple(
+        config.args[index + 1]
+        for index, argument in enumerate(config.args)
+        if argument == "--capability"
+    )
+
+    assert advertised == (
+        "add_milestone",
+        "list_milestones",
+        "update_milestone",
+        "delete_milestone",
+        "add_workstream",
+        "update_workstream",
+        "delete_workstream",
+    )
+    assert runner.direct_turns == 1
+    assert planner_profile.capabilities == ()
+
+
+def test_review_comments_reach_the_github_api(tmp_path) -> None:
+    """Comments are posted via the GitHub API, not via the gh CLI.
+
+    Proved by intercepting the HTTP request rather than by reading constructor
+    arguments back: what matters is that the adapter actually calls the right
+    endpoint with the right payload.
+    """
+    recorded: list[httpx.Request] = []
+
+    async def fake_api(
+        self,
+        method: str,
+        path: str,
+        **kwargs: object,
+    ) -> dict:
+        recorded.append(httpx.Request(method, f"https://api.github.com{path}"))
+        return {}
+
+    from engine.adapters.source_control.github import GitHubSourceControl
+    from unittest.mock import patch
+
+    capabilities = build_capabilities(Settings(sqlite_path=str(tmp_path / "c.sqlite3")))
+    try:
+        with patch.object(GitHubSourceControl, "_api", fake_api):
+            asyncio.run(
+                capabilities.source_control.add_comment(
+                    "https://github.com/acme/api/pull/7", "Looks right."
+                )
+            )
+    finally:
+        capabilities.state_store.close()
+
+    assert len(recorded) == 1
+    assert recorded[0].method == "POST"
+    assert "/repos/acme/api/issues/7/comments" in str(recorded[0].url)
 
 
 def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
@@ -417,6 +671,64 @@ class BlockingWorkflowRunner(ConcurrentRunner):
         raise AssertionError("the workflow turn should be interrupted")
 
 
+class SlowCancellingWorkflowRunner(BlockingWorkflowRunner):
+    """Hold cancellation open so overlapping workflow mutations can race."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancellation_started = asyncio.Event()
+        self.release_cancellation = asyncio.Event()
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        if str(agent_run_id).endswith(":name:run"):
+            return AgentTurn(Message.assistant("Blocked workflow"))
+        self.workflow_attempts += 1
+        self.seen.append(tuple(messages))
+        self.started.set()
+        try:
+            await self.never.wait()
+        except asyncio.CancelledError:
+            self.cancellation_started.set()
+            await self.release_cancellation.wait()
+            raise
+        raise AssertionError("the workflow turn should be interrupted")
+
+
+class ActiveBlockingWorkflowRunner(BlockingWorkflowRunner):
+    """Record concurrent workflow attempts while holding each one open."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = 0
+        self.most_active = 0
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools=(),
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.workflow_attempts += 1
+        self.seen.append(tuple(messages))
+        self.active += 1
+        self.most_active = max(self.most_active, self.active)
+        self.started.set()
+        try:
+            await self.never.wait()
+        finally:
+            self.active -= 1
+        raise AssertionError("the workflow turn should be interrupted")
+
+
 def _rejected(acknowledgement: dict[str, object] | None) -> bool:
     """Whether the broker refused a terminal tool call instead of accepting it."""
     result = (acknowledgement or {}).get("result")
@@ -520,6 +832,51 @@ class WorkflowProgressRunner(TerminalToolRunner):
         )
         on_message(turn.message)
         return AgentTurn(turn.message, steps=(progress, *turn.steps))
+
+
+class WorkflowToolCallReplayRunner(TerminalToolRunner):
+    """Replay one provider call id after an interrupted workflow is resumed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "complete_step",
+            {
+                "outcome": "success",
+                "summary": "Replay handled.",
+                "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+            },
+        )
+        self.call = ToolCall("provider-call-1", "Read", '{"path":"README.md"}')
+        self.attempts = 0
+        self.first_started = asyncio.Event()
+        self.resumed_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run_turn_with_mcp_streamed(
+        self,
+        agent_run_id,
+        profile,
+        messages,
+        mcp_server,
+        on_message,
+        workspace_id=None,
+    ) -> AgentTurn:
+        self.attempts += 1
+        replay = Message.assistant(tool_calls=(self.call,))
+        on_message(replay)
+        if self.attempts == 1:
+            self.first_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("the first workflow attempt should be interrupted")
+
+        self.cancelled.clear()
+        self.resumed_started.set()
+        await self.release.wait()
+        turn = await super().run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+        on_message(turn.message)
+        return AgentTurn(turn.message, steps=(replay, *turn.steps))
 
 
 class InterruptibleImplementationRunner(TerminalToolRunner):
@@ -738,7 +1095,13 @@ class ClarificationToolRunner(ConcurrentRunner):
         question = ToolCall(
             "question-1",
             "AskUserQuestion",
-            json.dumps({"question": "Which behavior should remain compatible?"}),
+            json.dumps(
+                {
+                    "questions": [
+                        {"question": "Which behavior should remain compatible?"}
+                    ]
+                }
+            ),
         )
         return AgentTurn(
             Message.assistant("Waiting for clarification."),
@@ -750,7 +1113,11 @@ def _session(runner: ConcurrentRunner) -> AgentSession:
     return _session_with({"test": runner})
 
 
-def _session_with(runners: Mapping[str, ConcurrentRunner]) -> AgentSession:
+def _session_with(
+    runners: Mapping[str, ConcurrentRunner],
+    profiles: Mapping[AgentId, AgentProfile] = PROFILES,
+    state_store: InMemoryStateStore | None = None,
+) -> AgentSession:
     unused = object()
     return AgentSession(
         Capabilities(
@@ -759,9 +1126,9 @@ def _session_with(runners: Mapping[str, ConcurrentRunner]) -> AgentSession:
             agent_runner=next(iter(runners.values())),
             communications=unused,
             workspace_provider=unused,
-            state_store=InMemoryStateStore(),
+            state_store=state_store or InMemoryStateStore(),
         ),
-        profiles=PROFILES,
+        profiles=profiles,
         runners=dict(runners),
     )
 
@@ -865,10 +1232,15 @@ def _workflow_app(
     store: InMemoryStateStore,
     runner: ConcurrentRunner,
     workspaces: object | None = None,
+    communications: object | None = None,
     workflow_runners: dict[str, ConcurrentRunner] | None = None,
     reviewers: dict[str, ConcurrentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
     workspace_repository: str | None = None,
+    graph_runtime=None,
+    communications_channel: str = "",
+    public_url: str = "",
+    utilization: UtilizationService | None = None,
 ):
     """Wire the app the way the composition root does.
 
@@ -885,7 +1257,7 @@ def _workflow_app(
             workflow_runtime=unused,
             source_control=unused,
             agent_runner=runner,
-            communications=unused,
+            communications=communications if communications is not None else unused,
             workspace_provider=workspaces or ConversationWorkspaces(),
             state_store=store,
         ),
@@ -899,6 +1271,10 @@ def _workflow_app(
         workflow_runners=implementers,
         review_runners=chat_runners,
         workflow_catalog=workflow_catalog,
+        graph_runtime=graph_runtime,
+        communications_channel=communications_channel,
+        public_url=public_url,
+        utilization=utilization,
     )
 
 
@@ -929,6 +1305,38 @@ def _human_then_agent_catalog() -> WorkflowCatalog:
         ],
     )
     return WorkflowCatalog.from_definitions((definition,))
+
+
+def _agent_human_loop_catalog() -> WorkflowCatalog:
+    worker = oe.agent(id="loop-agent", instructions="Continue after approval.")
+    definition = WorkflowDefinition(
+        workflow_id=WorkflowId("agent-human-loop-v1"),
+        name="Agent human loop",
+        version="v1",
+        steps=(
+            oe.agent_step(
+                id="work",
+                name="Work",
+                agent=worker,
+                prompt=oe.template("Continue the task"),
+                editable=True,
+                workspace_access="write",
+                transitions={"success": oe.goto("approval"), "*": oe.fail()},
+            ),
+            oe.human_review_step(
+                id="approval",
+                name="Approval",
+                title=oe.template("Approve another attempt"),
+                summary=oe.template("Choose whether to continue"),
+                approved=oe.goto("work"),
+                rejected=oe.fail(),
+            ),
+        ),
+    )
+    # The public v1 DSL rejects cycles, but the executor accepts embedded
+    # definitions from durable state. Model the future looping workflow here so
+    # resume behavior stays correct when catalog validation permits them.
+    return WorkflowCatalog({definition.workflow_id: definition})
 
 
 async def _await_phase(
@@ -989,6 +1397,7 @@ def test_run_api_covers_workflow_lifecycle_phases(
     if phase is RunPhase.AWAITING_HUMAN_REVIEW:
         assert body["pendingHumanReview"] is not None
         assert "Implemented the lock" in body["pendingHumanReview"]["summary"]
+        assert body["pendingHumanReview"]["prUrl"] == "https://github.com/acme/api/pull/42"
         assert body["steps"][1]["changesRequested"] is True
         assert body["humanDecision"] is None
     if phase is RunPhase.SUCCEEDED:
@@ -1001,8 +1410,192 @@ def test_run_api_covers_workflow_lifecycle_phases(
         assert body["steps"][1]["outcome"] == "changes_requested"
 
 
+def test_deleting_a_run_forgets_it_along_with_its_history() -> None:
+    """The rail's × on a WorkOrder is not the project row's archive.
+
+    Nothing lists or restores what it removes, so the row and the events behind
+    it go together: a run kept without its history would still answer its own
+    page, with a WorkOrder that cannot say how it got anywhere.
+    """
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.SUCCEEDED, HUMAN_REVIEW_STEP)
+    asyncio.run(store.save(state))
+    asyncio.run(
+        store.append_events(
+            state.run_id,
+            (
+                RunRequested(
+                    run_id=state.run_id,
+                    task_id=state.task_id,
+                    prompt=state.prompt,
+                    repository=state.repository,
+                    workflow_id=state.workflow_id,
+                ),
+            ),
+        )
+    )
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            deleted = await client.delete(f"/api/runs/{state.run_id}")
+            listed = await client.get("/api/runs")
+            detail = await client.get(f"/api/runs/{state.run_id}")
+            again = await client.delete(f"/api/runs/{state.run_id}")
+            return deleted, listed, detail, again
+
+    deleted, listed, detail, again = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert listed.json()["runs"] == []
+    assert detail.status_code == 404
+    # A second × on a row the poll has not cleared yet says the same thing the
+    # page does, rather than pretending to delete it twice.
+    assert again.status_code == 404
+    assert asyncio.run(store.load(state.run_id)) is None
+    assert asyncio.run(store.history(state.run_id)) == ()
+
+
+def test_utilization_is_served_from_the_cache_and_then_scraped(tmp_path) -> None:
+    """The two calls the page makes, and why there are two of them.
+
+    Opening it must draw something before either provider answers, so the cache
+    is a read of its own that touches no network; the scrape that follows is
+    what replaces the figures with today's.
+    """
+    reading = RunnerUtilization(
+        runner="claude",
+        plan="max",
+        windows=(
+            UtilizationWindow("five_hour", "5-hour", 12.0, "2026-09-08T20:10:00+00:00"),
+            UtilizationWindow("seven_day", "Weekly", 41.0, "2026-09-10T02:00:00+00:00"),
+        ),
+    )
+
+    async def read_claude(_client) -> RunnerUtilization:
+        return reading
+
+    utilization = UtilizationService(
+        cache_path=tmp_path / "utilization.json", readers={"claude": read_claude}
+    )
+    app = _workflow_app(
+        InMemoryStateStore(),
+        ConcurrentRunner(),
+        reviewers={"claude": _reviewer(), "codex": _reviewer()},
+        workflow_runners={"claude": ConcurrentRunner(), "codex": ConcurrentRunner()},
+        utilization=utilization,
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            empty = await client.get("/api/utilization")
+            scraped = await client.post("/api/utilization/refresh")
+            cached = await client.get("/api/utilization")
+            return empty, scraped, cached
+
+    empty, scraped, cached = asyncio.run(scenario())
+
+    # Nothing has been read yet, which is a page with no meters rather than an
+    # error: the scrape is what fills it.
+    assert empty.status_code == 200
+    assert empty.json() == {"runners": []}
+    assert scraped.status_code == 200
+    listed = scraped.json()["runners"]
+    # Only the runner something knows how to read, even though the deployment
+    # offers two.
+    assert [entry["runner"] for entry in listed] == ["claude"]
+    assert listed[0]["plan"] == "max"
+    assert [window["label"] for window in listed[0]["windows"]] == ["5-hour", "Weekly"]
+    assert [window["usedPercent"] for window in listed[0]["windows"]] == [12.0, 41.0]
+    # And the next open starts from what the scrape found, without asking again.
+    assert cached.json() == scraped.json()
+
+
+def test_utilization_refresh_refuses_a_cross_origin_page(tmp_path) -> None:
+    """It reads the tokens the runners signed in with, so it is guarded like
+    every other endpoint that touches a stored credential."""
+    asked = False
+
+    async def read_claude(_client) -> RunnerUtilization:
+        nonlocal asked
+        asked = True
+        return RunnerUtilization(runner="claude")
+
+    app = _workflow_app(
+        InMemoryStateStore(),
+        ConcurrentRunner(),
+        reviewers={"claude": _reviewer()},
+        workflow_runners={"claude": ConcurrentRunner()},
+        utilization=UtilizationService(
+            cache_path=tmp_path / "utilization.json", readers={"claude": read_claude}
+        ),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                "/api/utilization/refresh", headers={"origin": "https://elsewhere.example"}
+            )
+
+    refused = asyncio.run(scenario())
+
+    assert refused.status_code == 403
+    assert not asked
+
+
+def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
+    """Every screen polls `/api/runs` once a second to keep its rail current.
+
+    What that list carries is what every screen pays for, on a payload that
+    grows with the transcript of every run ever started -- so the words an
+    agent wrote stay with the single run the page showing them asks for, and
+    the list keeps what a rail, a card and a milestone's task list read.
+    """
+    store = InMemoryStateStore()
+    state = _workflow_state(RunPhase.AWAITING_HUMAN_REVIEW, HUMAN_REVIEW_STEP)
+    asyncio.run(store.save(state))
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                await client.get("/api/runs"),
+                await client.get(f"/api/runs/{state.run_id}"),
+            )
+
+    listed, detail = asyncio.run(scenario())
+    (run,) = listed.json()["runs"]
+    body = detail.json()
+
+    prose = {"taskPrompt", "failureReason", "pendingHumanReview", "humanDecision"}
+    assert prose.isdisjoint(run)
+    assert prose <= set(body)
+    assert all({"summary", "outputs"}.isdisjoint(step) for step in run["steps"])
+    assert all({"summary", "outputs"} <= set(step) for step in body["steps"])
+
+    # What the rail and the WorkOrder cards do read of a step, which is how far
+    # the listing can be trimmed before a screen loses something it draws.
+    assert [step["stepId"] for step in run["steps"]] == [
+        step["stepId"] for step in body["steps"]
+    ]
+    assert run["steps"][1] == {
+        key: value
+        for key, value in body["steps"][1].items()
+        if key not in {"summary", "outputs"}
+    }
+    assert run["phase"] == body["phase"]
+    assert run["currentStepId"] == body["currentStepId"]
+    assert run["name"] == body["name"]
+
+
 def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     store = InMemoryStateStore()
+    communications = MagicMock()
+    communications.post = AsyncMock(return_value="123.456")
     implementer = TerminalToolRunner(
         "complete_step",
         {
@@ -1015,7 +1608,14 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
         summary="The handling is correct.",
         findings="worker.py cancels the task, and the new test covers it.",
     )
-    app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+    app = _workflow_app(
+        store,
+        implementer,
+        communications=communications,
+        reviewers={"test": reviewer},
+        communications_channel="OpenEngine",
+        public_url="https://sheas-mac-mini.taileb7fdb.ts.net",
+    )
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1038,9 +1638,43 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
                 )
                 for instance in instances
             }
-            return created, reopened, listed, await store.history(run_id), conversations
+            threads = {
+                step["stepId"]: (
+                    await client.get(f"/api/threads/{step['agentInstanceId']}")
+                ).json()
+                for step in reopened.json()["steps"]
+                if step["agentInstanceId"]
+            }
+            titled_instance = instances[0]
+            await store.update_instance_metadata(
+                titled_instance.instance_id,
+                "Custom conversation title",
+                titled_instance.archived,
+                titled_instance.runner,
+            )
+            return (
+                created,
+                reopened,
+                listed,
+                await store.history(run_id),
+                conversations,
+                threads,
+                titled_instance.instance_id,
+            )
 
-    created, reopened, listed, history, conversations = asyncio.run(scenario())
+    created, reopened, listed, history, conversations, threads, titled_instance_id = (
+        asyncio.run(scenario())
+    )
+
+    async def reopen_titled_thread():
+        reopened_app = _workflow_app(store, implementer, reviewers={"test": reviewer})
+        transport = httpx.ASGITransport(app=reopened_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/threads/{titled_instance_id}")
+
+    titled_thread = asyncio.run(reopen_titled_thread())
     body = reopened.json()
 
     assert created.status_code == 201
@@ -1060,6 +1694,24 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     assert body["steps"][1]["conversationUrl"]
     assert body["steps"][2]["status"] == "action_required"
     assert "worker.py cancels the task" in body["pendingHumanReview"]["summary"]
+    communications.post.assert_awaited_once()
+    channel, notification, notified_run_id = communications.post.await_args.args
+    assert channel == "OpenEngine"
+    assert isinstance(notification, CommunicationMessage)
+    assert notification.text.startswith(
+        "Ready for human review: Review implementation for task-"
+    )
+    assert "\nOutcome: success" in notification.text
+    assert "The handling is correct." not in notification.text
+    assert "worker.py cancels the task" not in notification.text
+    assert notification.links == (
+        MessageLink("Open pull request", "https://github.com/acme/api/pull/42"),
+        MessageLink(
+            "Open human review task",
+            f"https://sheas-mac-mini.taileb7fdb.ts.net/runs/{body['runId']}",
+        ),
+    )
+    assert notified_run_id == RunId(body["runId"])
     assert [run["runId"] for run in listed.json()["runs"]] == [
         created.json()["runId"]
     ]
@@ -1081,6 +1733,8 @@ def test_create_workflow_run_implements_reviews_and_awaits_a_human() -> None:
     # Two conversations, kept apart: the review is its own durable instance.
     assert set(conversations) == {IMPLEMENTATION_STEP, REVIEW_STEP}
     assert all(conversation.messages for conversation in conversations.values())
+    assert {thread["title"] for thread in threads.values()} == {"Named workflow"}
+    assert titled_thread.json()["title"] == "Custom conversation title"
     assert "Name this workflow" in implementer.seen[0][-1].content
     assert "`complete_step`" in implementer.seen[1][0].content
     assert "JSON" not in implementer.seen[1][0].content
@@ -1255,6 +1909,66 @@ def test_implementation_conversation_periodically_streams_durable_progress() -> 
         "Inspecting the implementation.",
         "Terminal result accepted.",
     ]
+
+
+def test_resumed_workflow_stream_deduplicates_a_restored_tool_call_id() -> None:
+    store = InMemoryStateStore()
+    runner = WorkflowToolCallReplayRunner()
+    app = _workflow_app(store, runner)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Resume without duplicating tool calls.",
+                    "repository": "acme/api",
+                },
+            )
+            await asyncio.wait_for(runner.first_started.wait(), timeout=1)
+            run_id = created.json()["runId"]
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            stopped = await client.delete(
+                f"/api/threads/{instance_id}/runs/current"
+            )
+            assert stopped.status_code == 204
+
+            resumed = asyncio.create_task(
+                client.post(
+                    f"/api/threads/{instance_id}/runs",
+                    json={"text": "Continue from the saved progress."},
+                )
+            )
+            await asyncio.wait_for(runner.resumed_started.wait(), timeout=1)
+            loaded = await client.get(f"/api/threads/{instance_id}/messages")
+            runner.release.set()
+            response = await asyncio.wait_for(resumed, timeout=2)
+            events = [json.loads(line) for line in response.text.splitlines()]
+            return loaded.json(), events
+
+    loaded, events = asyncio.run(scenario())
+
+    loaded_ids = [
+        part["toolCallId"]
+        for message in loaded["messages"]
+        for part in message["content"]
+        if part["type"] == "tool-call"
+    ]
+    streamed_ids = [
+        part["toolCallId"]
+        for event in events
+        for part in event.get("content", [])
+        if part["type"] == "tool-call"
+    ]
+    assert loaded["unstable_resume"] is True
+    assert loaded_ids == ["provider-call-1"]
+    assert streamed_ids == []
 
 
 def test_editable_implementation_conversation_can_interrupt_and_continue() -> None:
@@ -1918,15 +2632,21 @@ def test_clarification_call_leaves_the_active_step_implementing() -> None:
                     ):
                         break
                 await asyncio.sleep(0.01)
-            return await client.get(f"/api/runs/{run_id}"), await store.history(run_id)
+            reopened = await client.get(f"/api/runs/{run_id}")
+            instance_id = reopened.json()["steps"][0]["agentInstanceId"]
+            messages = await client.get(f"/api/threads/{instance_id}/messages")
+            return reopened, await store.history(run_id), messages
 
-    reopened, history = asyncio.run(scenario())
+    reopened, history, messages = asyncio.run(scenario())
 
     assert reopened.json()["phase"] == "running_agent"
     assert reopened.json()["currentStepId"] == "implementation"
     assert reopened.json()["steps"][0]["waiting"] is True
     assert runner.attempts == 1
     assert not any(isinstance(event, (StepCompleted, RunFailed)) for event in history)
+    assert {"type": "text", "text": "Which behavior should remain compatible?"} in (
+        messages.json()["messages"][-1]["content"]
+    )
 
 
 def test_clarification_pause_is_not_restarted_after_process_restart() -> None:
@@ -2266,6 +2986,209 @@ def test_create_workflow_run_uses_and_persists_the_selected_runner() -> None:
     assert [instance.runner for instance in instances] == ["claude", "claude"]
 
 
+def test_active_implementation_and_review_conversations_can_switch_runners() -> None:
+    store = InMemoryStateStore()
+    original_implementer = BlockingWorkflowRunner()
+    replacement_implementer = TerminalToolRunner(
+        "complete_step",
+        {
+            "outcome": "success",
+            "summary": "Implemented with the replacement runner.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+        },
+    )
+    original_reviewer = BlockingWorkflowRunner()
+    replacement_reviewer = _reviewer(summary="Reviewed with the replacement runner.")
+    app = _workflow_app(
+        store,
+        original_implementer,
+        workflow_runners={
+            "codex": original_implementer,
+            "claude": replacement_implementer,
+        },
+        reviewers={
+            "codex": original_reviewer,
+            "claude": replacement_reviewer,
+        },
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Switch both workflow conversations.",
+                    "repository": "acme/api",
+                    "runner": "codex",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(original_implementer.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            implementation_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            implementation = await client.patch(
+                f"/api/threads/{implementation_id}", json={"runner": "claude"}
+            )
+            await asyncio.wait_for(original_reviewer.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            review_id = detail.json()["steps"][1]["agentInstanceId"]
+            review = await client.patch(
+                f"/api/threads/{review_id}", json={"runner": "claude"}
+            )
+            completed = await _await_phase(client, run_id, "awaiting_human_review")
+            instances = [
+                await store.load_instance(AgentInstanceId(instance_id))
+                for instance_id in (implementation_id, review_id)
+            ]
+            return implementation, review, completed, instances
+
+    implementation, review, completed, instances = asyncio.run(scenario())
+
+    assert implementation.status_code == 200
+    assert implementation.json()["runner"] == "claude"
+    assert review.status_code == 200
+    assert review.json()["runner"] == "claude"
+    assert completed.json()["steps"][0]["summary"] == (
+        "Implemented with the replacement runner."
+    )
+    assert completed.json()["steps"][1]["summary"] == (
+        "Reviewed with the replacement runner."
+    )
+    assert original_implementer.workflow_attempts == 1
+    assert original_reviewer.workflow_attempts == 1
+    assert len(replacement_implementer.seen) == 1
+    assert len(replacement_reviewer.seen) == 1
+    assert all(
+        instance is not None and instance.runner == "claude"
+        for instance in instances
+    )
+
+
+def test_looping_agent_step_keeps_its_conversation_runner_after_human_review() -> None:
+    store = InMemoryStateStore()
+    original = BlockingWorkflowRunner()
+    replacement = TerminalToolRunner(
+        "complete_step",
+        {"outcome": "success", "summary": "Loop completed.", "outputs": {}},
+    )
+    app = _workflow_app(
+        store,
+        original,
+        workflow_runners={"codex": original, "claude": replacement},
+        reviewers={"codex": original, "claude": replacement},
+        workflow_catalog=_agent_human_loop_catalog(),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "agent-human-loop-v1",
+                    "prompt": "Keep the selected runner through the loop.",
+                    "repository": "acme/api",
+                    "runner": "codex",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(original.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+            switched = await client.patch(
+                f"/api/threads/{instance_id}", json={"runner": "claude"}
+            )
+            await _await_phase(client, run_id, "awaiting_human_review")
+
+            approved = await client.post(
+                f"/api/runs/{run_id}/human-review", json={"approved": True}
+            )
+            looped = await _await_phase(client, run_id, "awaiting_human_review")
+            return switched, approved, looped
+
+    switched, approved, looped = asyncio.run(scenario())
+
+    assert switched.status_code == 200
+    assert approved.status_code == 200
+    assert looped.json()["phase"] == "awaiting_human_review"
+    assert original.workflow_attempts == 1
+    assert len(replacement.seen) == 2
+
+
+def test_overlapping_workflow_runner_swaps_restart_only_one_agent() -> None:
+    store = InMemoryStateStore()
+    original = SlowCancellingWorkflowRunner()
+    replacement = ActiveBlockingWorkflowRunner()
+    app = _workflow_app(
+        store,
+        original,
+        workflow_runners={
+            "codex": original,
+            "claude": replacement,
+            "other": replacement,
+        },
+        reviewers={
+            "codex": original,
+            "claude": replacement,
+            "other": replacement,
+        },
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Serialize overlapping runner swaps.",
+                    "repository": "acme/api",
+                    "runner": "codex",
+                },
+            )
+            run_id = RunId(created.json()["runId"])
+            await asyncio.wait_for(original.started.wait(), timeout=1)
+            detail = await client.get(f"/api/runs/{run_id}")
+            instance_id = detail.json()["steps"][0]["agentInstanceId"]
+
+            first = asyncio.create_task(
+                client.patch(
+                    f"/api/threads/{instance_id}", json={"runner": "claude"}
+                )
+            )
+            await asyncio.wait_for(original.cancellation_started.wait(), timeout=1)
+            second = asyncio.create_task(
+                client.patch(
+                    f"/api/threads/{instance_id}", json={"runner": "other"}
+                )
+            )
+            await asyncio.sleep(0)
+            original.release_cancellation.set()
+            responses = await asyncio.gather(first, second)
+            await asyncio.wait_for(replacement.started.wait(), timeout=1)
+            await asyncio.sleep(0)
+            most_active = replacement.most_active
+            stopped = await client.delete(
+                f"/api/threads/{instance_id}/runs/current"
+            )
+            return responses, most_active, stopped
+
+    responses, most_active, stopped = asyncio.run(scenario())
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert most_active == 1
+    assert stopped.status_code == 204
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -2299,6 +3222,59 @@ def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> N
 
     assert response.status_code == 400
     assert asyncio.run(store.list_runs()) == ()
+
+
+def test_create_workflow_run_uses_workstream_or_milestone_relationship() -> None:
+    store = InMemoryStateStore()
+    project = Project(ProjectId("project-engine"), "Engine")
+    milestone = Milestone(
+        MilestoneId("milestone-foundation"), project.project_id, "Foundation"
+    )
+    workstream = Workstream(
+        WorkstreamId("workstream-data"), milestone.milestone_id, "Data model"
+    )
+    asyncio.run(store.save_project(project))
+    asyncio.run(store.save_milestone(milestone))
+    asyncio.run(store.save_workstream(workstream))
+    app = _workflow_app(store, ConcurrentRunner())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            direct = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Document the milestone.",
+                    "repository": ".",
+                    "milestoneId": milestone.milestone_id,
+                },
+            )
+            scoped = await client.post(
+                "/api/runs",
+                json={
+                    "workflowId": "implementation-review-v1",
+                    "prompt": "Persist the model.",
+                    "repository": ".",
+                    "milestoneId": milestone.milestone_id,
+                    "workstreamId": workstream.workstream_id,
+                },
+            )
+            return direct, scoped
+
+    direct, scoped = asyncio.run(scenario())
+
+    assert (direct.status_code, scoped.status_code) == (201, 201)
+    assert (direct.json()["milestoneId"], direct.json()["workstreamId"]) == (
+        milestone.milestone_id,
+        None,
+    )
+    assert (scoped.json()["milestoneId"], scoped.json()["workstreamId"]) == (
+        None,
+        workstream.workstream_id,
+    )
 
 
 def test_workflow_conversation_is_nested_under_its_run_not_standalone() -> None:
@@ -2373,6 +3349,55 @@ def test_run_api_presents_human_rejection_as_the_final_decision() -> None:
     assert body["steps"][1]["outcome"] == "changes_requested"
 
 
+#: The dev server's proxy table. TypeScript because Vite is what reads it, so
+#: this is the one list about this application that cannot be imported.
+PROXY_SOURCE = Path(__file__).resolve().parent.parent / "apps/web/src/api-proxy.ts"
+
+
+def _proxied_prefixes() -> set[str]:
+    """`PROXIED_PREFIXES`, read out of the source rather than restated here.
+
+    Read the way `layout.py` reads `capabilities.py`: a second copy of a list
+    that must not drift is the thing that drifts.
+    """
+    source = PROXY_SOURCE.read_text()
+    listing = re.search(r"PROXIED_PREFIXES\s*=\s*\[(.*?)\]", source, re.DOTALL)
+    assert listing is not None, f"no PROXIED_PREFIXES in {PROXY_SOURCE}"
+    return set(re.findall(r'"([^"]+)"', listing.group(1)))
+
+
+def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards() -> None:
+    """The failure this is here for is silent, and only in development.
+
+    `apps/web/vite.config.ts` forwards the prefixes it was told about and
+    answers everything else with `index.html` and a 200, so a prefix this
+    application serves and the proxy has not heard of does not arrive as a 404
+    -- the client gets a page where it asked for JSON, and reports a parse
+    error. Every other test in this file talks to the application directly and
+    cannot see it. That is how `/graph` was served, read by the client, and
+    unproxied for two releases.
+
+    Composed without a static directory, so what is left is the surface that is
+    not the client's own: the SPA's pages are Vite's to answer and must not be
+    forwarded.
+    """
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()})
+
+    served = {
+        "/" + route.path.lstrip("/").split("/")[0]
+        for route in app.routes
+        # The placeholder page for a checkout with no build, which is the
+        # client's address rather than this application's.
+        if route.path != "/"
+    }
+
+    # Containment rather than equality in both directions: adding a prefix to
+    # both sides is the correct change and must stay green, and a test that
+    # went red for it would be edited into agreement without being read.
+    assert {"/api", "/graph"} <= served
+    assert served <= _proxied_prefixes()
+
+
 def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
     static = tmp_path / "dist"
     static.mkdir()
@@ -2424,6 +3449,34 @@ def test_new_workflow_frontend_route_serves_the_application(tmp_path) -> None:
 
     assert response.status_code == 200
     assert "workflow application" in response.text
+
+
+def test_milestone_frontend_routes_serve_the_application(tmp_path) -> None:
+    """A plan's pages are reached by URL as well as by click.
+
+    Both are deep links the client routes itself: the plan, and one goal off it
+    opened from a workstream on the timeline. Without a route apiece, a refresh
+    or a pasted link falls through to the static mount and 404s.
+    """
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<main>workflow application</main>")
+    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                await client.get("/projects/project-42/milestones"),
+                await client.get("/projects/project-42/milestones/milestone-7"),
+            )
+
+    plan, milestone = asyncio.run(scenario())
+
+    assert plan.status_code == 200
+    assert "workflow application" in plan.text
+    assert milestone.status_code == 200
+    assert "workflow application" in milestone.text
 
 
 class ConversationWorkspaces:
@@ -2836,6 +3889,29 @@ def test_a_chat_that_never_had_a_workspace_can_be_given_one() -> None:
     assert stored.workspace_id == "ws-1"
 
 
+def test_a_workorder_conversation_reports_a_missing_workorder() -> None:
+    runner = ConcurrentRunner()
+    workspaces = ConversationWorkspaces()
+    store = InMemoryStateStore()
+    session = _workspace_session(runner, workspaces, store)
+    app = create_app(session, {"test": runner})
+
+    async def scenario():
+        instance = await store.create_instance(
+            CODER,
+            workflow_run_id=RunId("missing-workorder"),
+            workflow_step_id=IMPLEMENTATION_STEP,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(f"/api/threads/{instance.instance_id}/workspace")
+
+    refused = asyncio.run(scenario())
+
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "WorkOrder not found"
+
+
 def test_a_process_without_a_workspace_repository_says_so() -> None:
     runner = ConcurrentRunner()
     app = create_app(_session(runner), {"test": runner})
@@ -2932,6 +4008,26 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
     ]
 
 
+def test_the_config_names_the_agent_the_plan_button_talks_to() -> None:
+    """The client asks which agent plans rather than knowing an id of its own,
+    and is told nothing when a composition has no planner to offer."""
+    runner = ConcurrentRunner()
+    shipped = create_app(_session_with({"test": runner}, BUILT_IN), {"test": runner})
+    coders_only = create_app(_session(runner), {"test": runner})
+
+    async def config(app) -> dict:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (await client.get("/api/config")).json()
+
+    shipped_config, narrow_config = asyncio.run(config(shipped)), asyncio.run(config(coders_only))
+
+    assert shipped_config["planAgent"] == "planner"
+    assert "planner" in [agent["id"] for agent in shipped_config["agents"]]
+    assert shipped_config["defaultAgent"] == "coder"
+    assert narrow_config["planAgent"] == ""
+
+
 def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None:
     """The conversation remembers its runner; a turn need not repeat it.
 
@@ -3017,6 +4113,520 @@ def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
     ] == [
         ("user", "Why are chats missing after restart?"),
         ("assistant", "The answer."),
+    ]
+
+
+def test_projects_api_creates_and_lists_projects_newest_first() -> None:
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            missing = await client.post("/api/projects", json={})
+            first = await client.post(
+                "/api/projects", json={"name": "First project"}
+            )
+            second = await client.post(
+                "/api/projects", json={"name": "Second project"}
+            )
+            listed = await client.get("/api/projects")
+            return missing, first, second, listed
+
+    missing, first, second, listed = asyncio.run(scenario())
+
+    assert missing.status_code == 400
+    assert first.status_code == 201
+    assert first.json()["projectId"].startswith("project-")
+    assert first.json()["name"] == "First project"
+    assert second.status_code == 201
+    assert [project["name"] for project in listed.json()["projects"]] == [
+        "Second project",
+        "First project",
+    ]
+    # Recorded directly rather than by planning, so there is no conversation to
+    # open and the rail has nowhere to send a click.
+    assert all(
+        "conversationUrl" not in project
+        for project in listed.json()["projects"]
+    )
+
+
+def test_a_project_is_archived_and_restored_the_way_a_chat_is() -> None:
+    """Archiving puts a project away rather than deleting it: it stays listed,
+    marked so the rail can file it under its own heading, and restoring is the
+    same click back. The plan it was named after is untouched by either."""
+
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test", "createProject": True},
+            )
+            project_id = f"project-{created.json()['id']}"
+            archived = await client.post(f"/api/projects/{project_id}/archive")
+            listed = await client.get("/api/projects")
+            restored = await client.post(f"/api/projects/{project_id}/unarchive")
+            missing = await client.post("/api/projects/project-missing/archive")
+            return created, archived, listed, restored, missing
+
+    created, archived, listed, restored, missing = asyncio.run(scenario())
+
+    thread_id = created.json()["id"]
+    assert archived.status_code == 200
+    assert archived.json() == {
+        "projectId": f"project-{thread_id}",
+        "name": "New project",
+        "archived": True,
+        "milestoneCount": 0,
+        # The plan is still open, and restoring has to give the link back.
+        "conversationUrl": f"/conversations/{thread_id}",
+    }
+    assert listed.json()["projects"] == [archived.json()]
+    assert restored.json()["archived"] is False
+    assert missing.status_code == 404
+
+
+def test_project_milestones_api_lists_the_active_projects_dependency_data() -> None:
+    runner = ConcurrentRunner()
+    session = _session(runner)
+    project = Project(project_id_for_instance(AgentInstanceId("agi-plan")), "Engine")
+    foundation = Milestone(
+        MilestoneId("milestone-foundation"),
+        project.project_id,
+        "Foundation",
+        "Build the shared planning model.",
+    )
+    launch = Milestone(
+        MilestoneId("milestone-launch"),
+        project.project_id,
+        "Launch",
+        "Put the project in users' hands.",
+        (foundation.milestone_id,),
+    )
+    data_model = Workstream(
+        WorkstreamId("workstream-data"),
+        foundation.milestone_id,
+        "Data model",
+        "The store, its ports, and its migrations.",
+    )
+
+    async def scenario():
+        await session.state_store.save_project(project)
+        await session.state_store.save_milestone(foundation)
+        await session.state_store.save_milestone(launch)
+        await session.state_store.save_workstream(data_model)
+        app = create_app(session, {"test": runner})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            listed = await client.get(
+                f"/api/projects/{project.project_id}/milestones"
+            )
+            missing = await client.get("/api/projects/project-missing/milestones")
+            return listed, missing
+
+    listed, missing = asyncio.run(scenario())
+
+    assert listed.json() == {
+        "project": {
+            "projectId": project.project_id,
+            "name": "Engine",
+            "archived": False,
+        },
+        "milestones": [
+            {
+                "milestoneId": "milestone-launch",
+                "name": "Launch",
+                "description": "Put the project in users' hands.",
+                "dependencies": ["milestone-foundation"],
+                "workstreams": [],
+            },
+            {
+                "milestoneId": "milestone-foundation",
+                "name": "Foundation",
+                "description": "Build the shared planning model.",
+                "dependencies": [],
+                "workstreams": [
+                    {
+                        "workstreamId": "workstream-data",
+                        "name": "Data model",
+                        "scope": "The store, its ports, and its migrations.",
+                    }
+                ],
+            },
+        ],
+    }
+    assert missing.status_code == 404
+
+
+def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
+    """The milestones page is reached from the rail rather than from the plan,
+    so the way back to the conversation has to come with the answer."""
+
+    runner = ConcurrentRunner()
+    session = _session(runner)
+    app = create_app(session, {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test", "createProject": True},
+            )
+            thread_id = created.json()["id"]
+            project_id = ProjectId(f"project-{thread_id}")
+            await session.state_store.save_milestone(
+                Milestone(MilestoneId("milestone-1"), project_id, "Foundation")
+            )
+            listed = await client.get(f"/api/projects/{project_id}/milestones")
+            return thread_id, listed
+
+    thread_id, listed = asyncio.run(scenario())
+
+    assert listed.json()["project"]["conversationUrl"] == f"/conversations/{thread_id}"
+    assert [milestone["name"] for milestone in listed.json()["milestones"]] == [
+        "Foundation"
+    ]
+
+
+def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_work() -> None:
+    class RecordingMilestoneScoper:
+        request = None
+
+        async def run(self, **request):
+            self.request = request
+            milestone_id = request["milestone"].milestone_id
+            return ScopingPlan(
+                create=(
+                    WorkOrderSpec(
+                        milestone_id,
+                        "Render the plan",
+                        "Draw the proposed work orders.",
+                    ),
+                ),
+                cancel=(WorkOrderId("run-obsolete"),),
+                reasons=("The milestone needs a dedicated scoping view.",),
+            )
+
+    store = InMemoryStateStore()
+    session = _session_with({"test": ConcurrentRunner()}, state_store=store)
+    scoper = RecordingMilestoneScoper()
+    project = Project(ProjectId("project-engine"), "Engine")
+    milestone = Milestone(
+        MilestoneId("milestone-scoping"),
+        project.project_id,
+        "Milestone scoping",
+        "Break milestone requirements into reviewable work orders.",
+    )
+    existing = RunState(
+        run_id=RunId("run-existing"),
+        task_id=TaskId("task-existing"),
+        workflow_id=WORKFLOW_ID,
+        milestone_id=milestone.milestone_id,
+        phase=RunPhase.RUNNING_AGENT,
+        name="Existing implementation",
+        prompt="Implement the existing portion.",
+    )
+
+    async def scenario():
+        await store.save_project(project)
+        await store.save_milestone(milestone)
+        await store.save(existing)
+        app = create_app(
+            session,
+            {"test": ConcurrentRunner()},
+            milestone_scoper=scoper,  # type: ignore[arg-type]
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.post(
+                f"/api/projects/{project.project_id}/milestones/"
+                f"{milestone.milestone_id}/scope",
+                json={"message": "Prefer changes under 1,000 lines."},
+            )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "create": [
+            {
+                "milestoneId": "milestone-scoping",
+                "name": "Render the plan",
+                "objective": "Draw the proposed work orders.",
+                "evidenceRequirements": [],
+                "dependencies": [],
+            }
+        ],
+        "cancel": ["run-obsolete"],
+        "supersede": [],
+        "reasons": ["The milestone needs a dedicated scoping view."],
+    }
+    assert scoper.request["milestone"].name == "Milestone scoping"
+    assert scoper.request["milestone"].requirements == (
+        "Break milestone requirements into reviewable work orders.",
+    )
+    assert scoper.request["policy"].rules == (
+        "Prefer changes under 1,000 lines.",
+    )
+    assert scoper.request["workorders"][0].status is WorkOrderStatus.IN_PROGRESS
+    assert scoper.request["workorders"][0].spec.objective == (
+        "Implement the existing portion."
+    )
+
+
+def test_projects_api_says_how_many_milestones_each_project_has() -> None:
+    """The rail offers a project's plan only where there is one to offer.
+
+    Counted by the store rather than in the handler: the shell polls this route
+    every second, so neither a query per project nor a read of every milestone
+    row will do -- one grows with the list, the other with the total size of
+    every plan in the store. Reading a milestone at all is the failure, which is
+    why the double refuses rather than counts.
+    """
+
+    class ForbidsMilestoneReads(InMemoryStateStore):
+        async def list_milestones(self, project_id=None):
+            raise AssertionError("counting must not hydrate milestone rows")
+
+    runner = ConcurrentRunner()
+    store = ForbidsMilestoneReads()
+    session = _session_with({"test": runner}, state_store=store)
+    planned = Project(ProjectId("project-planned"), "Engine roadmap")
+    empty = Project(ProjectId("project-empty"), "Nothing planned yet")
+
+    async def scenario():
+        await store.save_project(planned)
+        await store.save_project(empty)
+        for index in range(3):
+            await store.save_milestone(
+                Milestone(
+                    MilestoneId(f"milestone-{index}"),
+                    planned.project_id,
+                    f"Goal {index}",
+                )
+            )
+        app = create_app(session, {"test": runner})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.get("/api/projects")
+
+    listed = asyncio.run(scenario())
+
+    assert {
+        project["name"]: project["milestoneCount"]
+        for project in listed.json()["projects"]
+    } == {"Engine roadmap": 3, "Nothing planned yet": 0}
+
+
+def test_archiving_a_project_answers_with_the_plan_it_keeps() -> None:
+    """Archiving is not deleting, and the answer has to say so.
+
+    The route sends the whole row the list would, so a client that redraws from
+    it is not left with a project missing half itself -- and restoring gives the
+    milestones back rather than reporting a plan of none.
+    """
+
+    runner = ConcurrentRunner()
+    store = InMemoryStateStore()
+    session = _session_with({"test": runner}, state_store=store)
+    app = create_app(session, {"test": runner})
+    project = Project(ProjectId("project-planned"), "Engine roadmap")
+
+    async def scenario():
+        await store.save_project(project)
+        for index in range(2):
+            await store.save_milestone(
+                Milestone(
+                    MilestoneId(f"milestone-{index}"),
+                    project.project_id,
+                    f"Goal {index}",
+                )
+            )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            archived = await client.post("/api/projects/project-planned/archive")
+            restored = await client.post("/api/projects/project-planned/unarchive")
+            return archived, restored
+
+    archived, restored = asyncio.run(scenario())
+
+    assert archived.json() == {
+        "projectId": "project-planned",
+        "name": "Engine roadmap",
+        "archived": True,
+        "milestoneCount": 2,
+    }
+    assert restored.json() == {**archived.json(), "archived": False}
+
+
+def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() -> None:
+    """The timeline polls this route every second, per open project.
+
+    A read per milestone would make each poll cost the length of the plan, and
+    the SQLite store serializes every query behind one connection, so the plan
+    is read whole and grouped in the handler instead.
+    """
+
+    class CountingStore(InMemoryStateStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.workstream_reads = 0
+
+        async def list_workstreams(self, milestone_id=None):
+            self.workstream_reads += 1
+            return await super().list_workstreams(milestone_id)
+
+    runner = ConcurrentRunner()
+    store = CountingStore()
+    session = _session_with({"test": runner}, state_store=store)
+    project = Project(project_id_for_instance(AgentInstanceId("agi-long")), "Engine")
+
+    async def scenario():
+        await store.save_project(project)
+        for index in range(12):
+            milestone = Milestone(
+                MilestoneId(f"milestone-{index}"), project.project_id, f"Goal {index}"
+            )
+            await store.save_milestone(milestone)
+            await store.save_workstream(
+                Workstream(
+                    WorkstreamId(f"workstream-{index}"),
+                    milestone.milestone_id,
+                    f"Work {index}",
+                    "One workstream per goal.",
+                )
+            )
+        store.workstream_reads = 0
+        app = create_app(session, {"test": runner})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/projects/{project.project_id}/milestones")
+
+    listed = asyncio.run(scenario())
+
+    assert store.workstream_reads == 1
+    milestones = listed.json()["milestones"]
+    assert len(milestones) == 12
+    assert [milestone["workstreams"][0]["name"] for milestone in milestones] == [
+        f"Work {index}" for index in reversed(range(12))
+    ]
+
+
+def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
+    runner = ConcurrentRunner(('"Durable project intent"',))
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={
+                    "agentId": "coder",
+                    "runner": "test",
+                    "createProject": True,
+                },
+            )
+            before_title = await client.get("/api/projects")
+            titled = await client.post(
+                f"/api/threads/{created.json()['id']}/title",
+                json={"text": "Keep this intent across a reload"},
+            )
+            after_title = await client.get("/api/projects")
+            return created, before_title, titled, after_title
+
+    created, before_title, titled, after_title = asyncio.run(scenario())
+
+    assert created.status_code == 201
+    assert created.json()["title"] == "New project"
+    assert before_title.json()["projects"] == [
+        {
+            "projectId": f"project-{created.json()['id']}",
+            "name": "New project",
+            "archived": False,
+            "milestoneCount": 0,
+            "conversationUrl": f"/conversations/{created.json()['id']}",
+        }
+    ]
+    assert titled.json() == {"title": "Durable project intent"}
+    assert after_title.json()["projects"] == [
+        {
+            "projectId": f"project-{created.json()['id']}",
+            "name": "Durable project intent",
+            "archived": False,
+            "milestoneCount": 0,
+            "conversationUrl": f"/conversations/{created.json()['id']}",
+        }
+    ]
+
+
+def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
+    """Archiving is one click away in the rail, and the archived conversation
+    opens as a blank new chat. The project is still listed -- it exists -- but
+    without a link, which is the row a project with no conversation already
+    gets. Restoring the chat gives the link back."""
+
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test", "createProject": True},
+            )
+            thread_id = created.json()["id"]
+            await client.post(f"/api/threads/{thread_id}/archive")
+            archived = await client.get("/api/projects")
+            await client.post(f"/api/threads/{thread_id}/unarchive")
+            restored = await client.get("/api/projects")
+            return thread_id, archived, restored
+
+    thread_id, archived, restored = asyncio.run(scenario())
+
+    assert archived.json()["projects"] == [
+        {
+            "projectId": f"project-{thread_id}",
+            "name": "New project",
+            "archived": False,
+            "milestoneCount": 0,
+        }
+    ]
+    assert restored.json()["projects"] == [
+        {
+            "projectId": f"project-{thread_id}",
+            "name": "New project",
+            "archived": False,
+            "milestoneCount": 0,
+            "conversationUrl": f"/conversations/{thread_id}",
+        }
     ]
 
 
@@ -3122,6 +4732,63 @@ def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
         },
         {"type": "text", "text": "Found it."},
     ]
+
+
+def test_replayed_tool_call_id_is_only_exposed_once() -> None:
+    """Provider reconnects may repeat a completed item with its original id.
+
+    assistant-ui treats the id as a resource key across the whole thread, so a
+    replay must remain one displayed call rather than crashing the chat view.
+    """
+    call = ToolCall(
+        call_id="call-replayed",
+        name="Read",
+        arguments='{"path":"README.md"}',
+    )
+
+    class ReplayRunner(ConcurrentRunner):
+        async def run_turn(self, *args, **kwargs) -> AgentTurn:
+            return AgentTurn(
+                Message.assistant("Found it."),
+                steps=(
+                    Message.assistant(tool_calls=(call,)),
+                    Message.tool_result(call.call_id, "engine"),
+                ),
+            )
+
+    runner = ReplayRunner()
+    app = create_app(_session(runner), {"test": runner})
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/threads",
+                json={"agentId": "coder", "runner": "test"},
+            )
+            thread_id = created.json()["id"]
+            await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "inspect"}
+            )
+            replayed = await client.post(
+                f"/api/threads/{thread_id}/runs", json={"text": "inspect again"}
+            )
+            history = await client.get(f"/api/threads/{thread_id}/messages")
+            return replayed, history
+
+    replayed, history = asyncio.run(scenario())
+
+    assert "call-replayed" not in replayed.text
+    parts = [
+        part
+        for message in history.json()["messages"]
+        for part in message["content"]
+        if part["type"] == "tool-call"
+    ]
+    assert [part["toolCallId"] for part in parts] == ["call-replayed"]
+    assert parts[0]["result"] == "engine"
 
 
 def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript() -> None:
@@ -3280,3 +4947,711 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path)
     assert page.headers["cache-control"] == "no-cache"
     assert asset.status_code == 200
     assert "immutable" in asset.headers["cache-control"]
+
+
+# --- graph WorkOrders (the [BETA] entries in the dropdown) ---------------------
+#
+# A second kind of workflow can be picked from the same dropdown. It is run by
+# the graph engine rather than by the step executor, and these are the three
+# things that has to mean: it is offered, picking it starts a graph run, and
+# what this app keeps for it is a row rather than a driver.
+
+
+def _graph_app(store: InMemoryStateStore, *graphs: ScriptedGraph):
+    """The web app with a scripted graph engine wired in.
+
+    A real `GraphRuntime` with real tasks, exactly as the graph package's own
+    tests use it -- what it does not have is LangGraph, so no agent is started
+    and no repository is checked out.
+    """
+    runtime = ScriptedGraphRuntime(*graphs)
+
+    @asynccontextmanager
+    async def running(_app=None):
+        yield runtime
+
+    app = _workflow_app(
+        store,
+        ConcurrentRunner(),
+        # The catalog a repository holding both kinds produces: one startable
+        # step workflow, and the graphs beside it.
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), graphs
+        ),
+        graph_runtime=running(),
+    )
+    return app, runtime
+
+
+def _catalog_definition() -> WorkflowDefinition:
+    worker = oe.agent(id="coder", instructions="Change the code.")
+    return oe.workflow(
+        id="steps-v1",
+        name="Steps",
+        version="v1",
+        steps=[
+            oe.agent_step(
+                id="work",
+                name="Work",
+                agent=worker,
+                prompt=oe.template("Do the task"),
+                transitions={"*": oe.succeed()},
+            )
+        ],
+    )
+
+
+def _review_graph() -> ScriptedGraph:
+    return ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Changed it."),)),),
+    )
+
+
+def test_a_graph_workflow_is_offered_as_a_beta_choice() -> None:
+    """The dropdown, which is where a person meets this at all.
+
+    Both kinds in one list -- steps first, then the graphs wearing `[BETA]` --
+    because a person choosing what to run is choosing what should happen, not
+    which engine should do it.
+
+    Asked of a started server, because that is when a graph is offerable: the
+    engine that would run one is opened on startup.
+    """
+    app, _ = _graph_app(InMemoryStateStore(), _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return (await client.get("/api/config")).json()["workflows"]
+
+    offered = asyncio.run(scenario())
+
+    assert offered == [
+        {"id": "steps-v1", "name": "Steps", "version": "v1", "kind": "steps"},
+        {
+            "id": "implementation-review-codex",
+            "name": "[BETA] Implementation review (codex)",
+            "version": "",
+            # Said rather than left to be guessed: the form reads this to
+            # decide whether to ask which runner to use.
+            "kind": "graph",
+        },
+    ]
+
+
+def test_a_graph_workflow_is_not_offered_without_an_engine_to_run_it() -> None:
+    """No graph engine composed, no `[BETA]` entries.
+
+    The alternative is a choice that fails after somebody made it, which is
+    worse than a choice that was never there.
+    """
+    app = _workflow_app(
+        InMemoryStateStore(),
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return (
+                (await client.get("/api/config")).json()["workflows"],
+                await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                ),
+            )
+
+    offered, refused = asyncio.run(scenario())
+
+    assert [one["id"] for one in offered] == ["steps-v1"]
+    assert refused.status_code == 400
+
+
+def test_creating_a_beta_work_order_starts_the_graph() -> None:
+    """The whole point: picking one runs it on the graph engine.
+
+    Checked on the engine rather than only on the answer, because a WorkOrder
+    that was recorded and never started would look identical from here.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _graph_app(store, _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                        "runner": "test",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                listed = await client.get("/api/runs")
+                return created, listed, run_id, await runtime.snapshot(run_id)
+
+    created, listed, run_id, snapshot = asyncio.run(scenario())
+
+    assert created.status_code == 201
+    # One run, on the graph engine, carrying the task and the repository the
+    # WorkOrder was created with -- which is everything these graphs need.
+    assert snapshot is not None
+    assert str(snapshot.graph_id) == "implementation-review-codex"
+    assert snapshot.values == {
+        "task": "Add cancellation handling.",
+        "repository": "acme/api",
+    }
+    # And a row for it here, under the graph engine's own run id, named after
+    # the graph rather than after an id nobody chose.
+    assert created.json()["workflowName"] == "Implementation review (codex)"
+    assert created.json()["workflowVersion"] == ""
+    assert created.json()["steps"] == []
+    assert [one["runId"] for one in listed.json()["runs"]] == [str(run_id)]
+
+
+def test_a_graph_naming_node_names_its_work_order() -> None:
+    store = InMemoryStateStore()
+    graph = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (
+            ScriptedNode(
+                NodeId("naming"),
+                (Say('"Cancellation handling."'),),
+                next_nodes=(NodeId("implementation"),),
+                output_key="name",
+            ),
+            ScriptedNode(NodeId("implementation"), (AwaitSteering(),)),
+        ),
+    )
+    app, _ = _graph_app(store, graph)
+
+    async def scenario() -> dict[str, object]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = created.json()["runId"]
+                for _ in range(100):
+                    named = (await client.get(f"/api/runs/{run_id}")).json()
+                    if named["name"] == "Cancellation handling":
+                        return named
+                    await asyncio.sleep(0)
+                return named
+
+    named = asyncio.run(scenario())
+
+    assert named["name"] == "Cancellation handling"
+
+
+def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
+    """The row follows the graph to its ending.
+
+    Nothing else would move it: the step executor is not driving this run, so
+    without the engine's own report the WorkOrder would claim to be working
+    forever.
+    """
+    store = InMemoryStateStore()
+    app, _ = _graph_app(store, _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                return created.json()["phase"], (
+                    await _await_phase(client, run_id, "succeeded")
+                ).json()["phase"]
+
+    started, ended = asyncio.run(scenario())
+
+    assert started == "running_agent"
+    assert ended == "succeeded"
+
+
+def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
+    """The rail's x on a `[BETA]` row has to reach the other engine.
+
+    None of what stops a step WorkOrder touches a graph one: its driver is a
+    task inside the graph engine rather than in this app's `workflow_tasks`,
+    and the agent it has open is not an agent run this app started. So a delete
+    that only forgot the row would take the WorkOrder off the rail and leave
+    the run working -- agents still going in the repository, and nothing left
+    on screen to stop them by.
+
+    Scripted on a node that waits, so there is something still in flight at the
+    moment the row is deleted; a graph that had already finished would pass
+    this whatever the handler did.
+    """
+    store = InMemoryStateStore()
+    waiting = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
+    )
+    app, runtime = _graph_app(store, waiting)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                # The node is scripted to wait, so this is a run with something
+                # genuinely in flight rather than one that raced to its end.
+                while not runtime.running():
+                    await asyncio.sleep(0)
+                deleted = await client.delete(f"/api/runs/{run_id}")
+                listed = await client.get("/api/runs")
+                # Read here rather than after the loop is closed, which would
+                # cancel the driver itself and pass whether or not the delete
+                # had.
+                driving = [str(one) for one in runtime.running()]
+                return deleted, listed, run_id, driving, await runtime.snapshot(run_id)
+
+    deleted, listed, run_id, driving, snapshot = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert listed.json()["runs"] == []
+    assert asyncio.run(store.load(run_id)) is None
+    # Nothing left driving it, and the engine says the run is over rather than
+    # reporting one that is working with no row and nobody watching.
+    assert driving == []
+    assert snapshot is not None
+    assert snapshot.status is RunStatus.FAILED
+    assert snapshot.error == CANCELLED
+
+
+def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> None:
+    """A row whose graph state is gone is still the reader's to throw away.
+
+    The case `restore_graph_runs` fails a run for: the engine has no record of
+    it, so there is nothing to cancel. Refusing the delete would leave a
+    WorkOrder that cannot be removed and that nothing is working on.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _graph_app(store, _review_graph())
+    stranded = RunState(
+        run_id=RunId("run-stranded"),
+        task_id=TaskId("task-stranded"),
+        workflow_id=WorkflowId("implementation-review-codex"),
+        phase=RunPhase.RUNNING_AGENT,
+        prompt="Add cancellation handling.",
+        repository="acme/api",
+    )
+
+    async def scenario():
+        await store.save(stranded)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                deleted = await client.delete(f"/api/runs/{stranded.run_id}")
+                return deleted, [str(one) for one in runtime.running()]
+
+    deleted, driving = asyncio.run(scenario())
+
+    assert deleted.status_code == 204
+    assert asyncio.run(store.load(stranded.run_id)) is None
+    assert driving == []
+
+
+def test_the_graph_engine_answers_under_its_own_prefix() -> None:
+    """Where a `[BETA]` run is watched and approved today.
+
+    This app's pages cannot do either yet, and the graph engine's own API can,
+    so it is served from here rather than left unreachable. Behind `/graph`
+    because both call their runs `/api/runs`.
+    """
+    app, _ = _graph_app(InMemoryStateStore(), _review_graph())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return await client.get("/graph/api/graphs")
+
+    described = asyncio.run(scenario())
+
+    assert described.status_code == 200
+    assert [one["graphId"] for one in described.json()["graphs"]] == [
+        "implementation-review-codex"
+    ]
+
+
+def test_a_failed_graph_run_says_why_on_its_row() -> None:
+    """The other ending, and the reason that comes with it.
+
+    The reason is read out of the event the engine publishes, so the row and
+    the graph engine's own API give the same answer to "why did this stop?".
+    A renamed key on that event would leave a failed WorkOrder with nothing to
+    show, which is what this is here to catch.
+    """
+    store = InMemoryStateStore()
+    broken = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Fail("codex is out of quota"),)),),
+    )
+    app, _ = _graph_app(store, broken)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                return (await _await_phase(client, run_id, "failed")).json()
+
+    ended = asyncio.run(scenario())
+
+    assert ended["phase"] == "failed"
+    assert ended["failureReason"] == "codex is out of quota"
+
+
+def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded() -> None:
+    """The narrowest bit of ordering in the whole change.
+
+    A graph short enough to be over before `start` answers announces its ending
+    to nobody: there is no row yet for the announcement to land on. So the
+    engine is asked once more after the row is saved, and this is the case that
+    exists for -- a graph with no work in it at all.
+    """
+    store = InMemoryStateStore()
+    instant = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation")),),
+    )
+    app, _ = _graph_app(store, instant)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+
+    created = asyncio.run(scenario())
+
+    # Whether the ending arrived before or after the row was saved, the answer
+    # a person is handed is never "an agent is working" on a run that is over.
+    assert created.json()["phase"] in {"succeeded", "running_agent"}
+    assert created.status_code == 201
+
+
+# --- a `[BETA]` WorkOrder across a restart -------------------------------------
+#
+# What a graph run keeps in the engine's files is where it got to. What it does
+# not keep is the *driver* -- the task working through the graph -- because that
+# lives in a process, and a process that stops takes its drivers with it.
+#
+# Driven against a double rather than the scripted engine, because the thing
+# under test is a second process finding runs a first one left behind, and the
+# scripted engine keeps everything in the process that started it: a run it
+# knows about is, by construction, one it is still driving.
+
+
+@dataclass
+class _EngineAfterARestart:
+    """A graph engine that remembers runs but is driving none of them.
+
+    Everything the recovery pass calls, and nothing else. `resumed` is what a
+    test asserts on: relaunching a stranded run is invisible in this app's own
+    state, because the run carries on being a run that is working.
+    """
+
+    answers: dict[RunId, RunSnapshot | None]
+    resumed: list[tuple[RunId, CheckpointId]] = field(default_factory=list)
+
+    def observe(self, observer) -> None:
+        self._observer = observer
+
+    async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
+        return self.answers.get(run_id)
+
+    async def resume_from(self, run_id: RunId, checkpoint_id: CheckpointId):
+        self.resumed.append((run_id, checkpoint_id))
+        return self.answers[run_id]
+
+    def graphs(self) -> tuple:
+        return ()
+
+
+def _restarted(
+    store: InMemoryStateStore, answers: dict[RunId, RunSnapshot | None]
+) -> tuple[object, _EngineAfterARestart]:
+    runtime = _EngineAfterARestart(answers)
+
+    @asynccontextmanager
+    async def running(_app=None):
+        yield runtime
+
+    app = _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+        graph_runtime=running(),
+    )
+    return app, runtime
+
+
+def _interrupted_run() -> RunState:
+    return RunState(
+        run_id=RunId("run-graph"),
+        task_id=TaskId("task-graph"),
+        workflow_id=WorkflowId("implementation-review-codex"),
+        phase=RunPhase.RUNNING_AGENT,
+        prompt="Add cancellation handling.",
+        repository="acme/api",
+    )
+
+
+def _graph_snapshot(status: RunStatus, error: str = "") -> RunSnapshot:
+    return RunSnapshot(
+        run_id=RunId("run-graph"),
+        graph_id=GraphId("implementation-review-codex"),
+        status=status,
+        checkpoint_id=CheckpointId("checkpoint-3"),
+        error=error,
+    )
+
+
+def _after_a_restart(app, store: InMemoryStateStore, run: RunState) -> RunState:
+    async def scenario():
+        await store.save(run)
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+        restored = await store.load(run.run_id)
+        assert restored is not None
+        return restored
+
+    return asyncio.run(scenario())
+
+
+def test_a_graph_run_interrupted_mid_execution_is_picked_back_up() -> None:
+    """The reason this pass exists at all.
+
+    A run that was working when the process died has no driver in the process
+    that replaces it, and nothing else would build one: the step executor
+    cannot -- a graph has no steps -- and the engine only builds one when a run
+    is started or a decision arrives. So the run is sent back to the last
+    position it saved and carried on from there.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(store, {RunId("run-graph"): _graph_snapshot(RunStatus.RUNNING)})
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == [(RunId("run-graph"), CheckpointId("checkpoint-3"))]
+    # Still working, and still not the step executor's: a resumed graph run is
+    # a graph run, and nothing here started a step for it.
+    assert restored.phase is RunPhase.RUNNING_AGENT
+    assert restored.failure_reason == ""
+
+
+def test_a_graph_run_waiting_on_a_person_is_left_where_it_is() -> None:
+    """The case that already worked, and must not be disturbed.
+
+    A run parked on a question is picked back up by the answer, not by the
+    restart. Resuming it here would throw the question away -- the execution
+    that asked it is gone, so the person's answer would have nowhere to go.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(
+        store, {RunId("run-graph"): _graph_snapshot(RunStatus.AWAITING_APPROVAL)}
+    )
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == []
+    assert restored.phase is RunPhase.RUNNING_AGENT
+
+
+def test_a_graph_run_that_ended_while_the_server_was_down_catches_up() -> None:
+    """An ending announced to a process that was not there to hear it.
+
+    `graph_event` only moves a row while this process is running. A run that
+    finished during a restart would otherwise be a row that says "working"
+    about a run the engine considers over.
+    """
+    store = InMemoryStateStore()
+    app, runtime = _restarted(
+        store,
+        {RunId("run-graph"): _graph_snapshot(RunStatus.FAILED, "the checkout vanished")},
+    )
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert runtime.resumed == []
+    assert restored.phase is RunPhase.FAILED
+    assert restored.failure_reason == "the checkout vanished"
+
+
+def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working() -> None:
+    """State deleted from under a row -- `graph-state/` thrown away, say.
+
+    Nothing can recover it and nobody will ever answer it, so it is failed with
+    a reason. The alternative is a WorkOrder that claims to be working for as
+    long as the database survives.
+    """
+    store = InMemoryStateStore()
+    app, _ = _restarted(store, {})
+
+    restored = _after_a_restart(app, store, _interrupted_run())
+
+    assert restored.phase is RunPhase.FAILED
+    assert "no record" in restored.failure_reason
+
+
+def _app_over(store: InMemoryStateStore, engine):
+    """The web app with a graph engine that behaves however a test needs."""
+    return _workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_definitions(
+            (_catalog_definition(),), (_review_graph(),)
+        ),
+        graph_runtime=engine,
+    )
+
+
+def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A broken definition is not something to carry on without.
+
+    A graph that does not compile means a file in this deployment's workflow
+    directory says something that is not a graph. Starting anyway would serve a
+    deployment nobody configured, and the person who could fix it would find out
+    the first time somebody picked the workflow. So startup fails.
+
+    What is logged is the only way anybody learns which one: the graph's id and
+    the reason it would not compile. "a graph failed to compile" is not
+    actionable in a directory holding several.
+    """
+    store = InMemoryStateStore()
+
+    @asynccontextmanager
+    async def broken(_app=None):
+        raise GraphCompilationError(
+            GraphId("implementation-review-codex"),
+            ValueError("node 'review' is not reachable from '__start__'"),
+        )
+        yield  # pragma: no cover -- unreachable, and required to make this a CM
+
+    app = _app_over(store, broken())
+
+    async def scenario():
+        async with app.router.lifespan_context(app):  # pragma: no cover -- raises
+            pass
+
+    with caplog.at_level(logging.ERROR, logger="engine.apps.web.api"):
+        with pytest.raises(GraphCompilationError):
+            asyncio.run(scenario())
+
+    assert "implementation-review-codex" in caplog.text
+    assert "not reachable" in caplog.text
+
+
+def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Everything else that can go wrong stays inside the `[BETA]` feature.
+
+    Opening the engine also creates a directory and opens two SQLite files, and
+    those fail for reasons that are about this machine rather than about any
+    graph: a state directory it cannot write, a checkpoint file another process
+    is holding. None of them is a reason for chats, projects and the step
+    WorkOrders to go down, so the engine simply does not run here.
+
+    The failure is logged, because it is the only place anybody could find out.
+    """
+    store = InMemoryStateStore()
+
+    @asynccontextmanager
+    async def refusing(_app=None):
+        raise PermissionError("graph-state/: read-only file system")
+        yield  # pragma: no cover -- unreachable, and required to make this a CM
+
+    app = _app_over(store, refusing())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                return (
+                    await client.get("/api/config"),
+                    await client.post(
+                        "/api/runs",
+                        json={
+                            "workflowId": "implementation-review-codex",
+                            "prompt": "Add cancellation handling.",
+                            "repository": "acme/api",
+                        },
+                    ),
+                    await client.get("/graph/api/graphs"),
+                )
+
+    with caplog.at_level(logging.ERROR, logger="engine.apps.web.api"):
+        config, refused, graph = asyncio.run(scenario())
+
+    # The application is up, and answering about everything it can still do.
+    assert config.status_code == 200
+    assert [one["id"] for one in config.json()["workflows"]] == ["steps-v1"]
+    # Nothing offers the graph, so picking one is picking something that does
+    # not exist rather than something that cannot be started.
+    assert refused.status_code == 400
+    assert graph.status_code == 503
+    assert "read-only file system" in caplog.text

@@ -8,13 +8,13 @@ approval policy plumbing -- and changes only what a test must own:
     where it works        a fixture repository, so worktrees are disposable
     what it remembers     a SQLite file under the test's own directory
     which CLI it runs     `tests/provider_fakes.py`, scripted per test
-    which `gh` it runs    `tests/github_fakes.py`, recording into the state
-                          directory instead of commenting on somebody's
-                          pull request
+    which agent ACP finds the same fakes, for the `[BETA]` graph workflows
+    GitHub API calls      stubbed so tests run without a real token or network
 
 Everything else is production wiring, including the parts that are easy to get
 wrong: the interactive runners, the write-enabled workflow runners, and the
-read-only reviewers that go with them.
+read-only runners that answer both a workflow's reviews and the agents that
+never change anything.
 
 Run by `apps/web/e2e/harness.ts`, one process per test, on a port the test
 picked. It is not a fixture generator: it starts a server and serves until it
@@ -24,23 +24,27 @@ is killed.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 #: apps/web/e2e/harness/server.py -> the repository root.
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
-# The fake CLIs are shared with the pytest tier, where they live.
+# The fakes are shared with the pytest tier, where they live: the provider CLIs,
+# and the graph workflows rebuilt around a scripted ACP agent.
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import uvicorn  # noqa: E402
+from langgraph_acp import ACPAgentRegistry, StdioACPProvider  # noqa: E402
 
 from engine.apps.web.__main__ import STATIC_DIRECTORY  # noqa: E402
 from engine.apps.web.api import create_app  # noqa: E402
 from engine.apps.web.composition import (  # noqa: E402
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_graph_runtime,
+    build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
@@ -51,7 +55,9 @@ from engine.runtime import (  # noqa: E402
     describe_loaded_config,
     load_engine_config,
 )
-import github_fakes  # noqa: E402
+from engine.scoper import MilestoneScoper, Scoper  # noqa: E402
+from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
+from graph_workflow_fakes import scripted_catalog  # noqa: E402
 from provider_fakes import fake_claude, fake_codex  # noqa: E402
 
 
@@ -99,24 +105,71 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         codex_binary=fake_codex(binaries),
         claude_binary=fake_claude(binaries),
-        github_binary=github_fakes.install(binaries, state / "gh.jsonl"),
         codex_working_directory=args.repository,
         claude_working_directory=args.repository,
         workspace_root=str(state / "workspaces"),
         sqlite_path=str(state / "conversations.sqlite3"),
+        graph_state_directory=str(state / "graph-state"),
         engine_config=loaded.config,
         config_path=loaded.path,
     )
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
+    read_only_runners = build_read_only_runners(settings)
+    catalog = scripted_catalog(settings.workspace_root, binaries)
+    scoper_registry = ACPAgentRegistry(
+        (
+            StdioACPProvider(
+                name="codex",
+                command=(
+                    sys.executable,
+                    str(REPO_ROOT / "langgraph-acp" / "tests" / "fake_agent.py"),
+                ),
+                env={
+                    "FAKE_AGENT_LOG": str(state / "scoper-acp.jsonl"),
+                    "FAKE_AGENT_RESPONSE_FILE": str(
+                        Path(os.environ["ENGINE_FAKE_SCOPER_RESPONSE"])
+                    ),
+                },
+            ),
+        )
+    )
     app = create_app(
-        build_session(capabilities, runners, args.repository),
+        build_session(
+            capabilities, runners, args.repository, read_only_runners=read_only_runners
+        ),
         runners,
         STATIC_DIRECTORY,
         workflow_runners=build_workflow_runners(settings),
-        review_runners=build_review_runners(settings),
+        review_runners=read_only_runners,
+        workflow_catalog=catalog,
+        graph_runtime=build_graph_runtime(
+            settings,
+            catalog.graphs,
+            source_control=capabilities.source_control,
+        ),
         approval_policy=loaded.config.approvals,
+        default_branch=loaded.config.default_branch,
+        milestone_scoper=MilestoneScoper(
+            Scoper(agent="codex", registry=scoper_registry)
+        ),
     )
+    # Stub out real GitHub API calls so e2e tests work without a token.
+    # Comment POSTs are recorded to gh.jsonl so tests can assert on them.
+    gh_log = state / "gh.jsonl"
+
+    async def _fake_api(self, method: str, path: str, **kwargs: object) -> dict:
+        if method == "GET" and "/pulls/" in path:
+            return {"head": {"sha": "abc1234"}}
+        if method == "POST" and "/comments" in path:
+            import json as _json
+            body = (kwargs.get("json") or {}).get("body", "")
+            with gh_log.open("a", encoding="utf-8") as f:
+                f.write(_json.dumps({"path": path, "body": body}) + "\n")
+        return {}
+
+    GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]
+
     print(describe_loaded_config(loaded), flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
     return 0

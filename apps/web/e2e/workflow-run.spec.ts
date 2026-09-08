@@ -50,7 +50,6 @@ const SCRIPT: Script = {
             outputs: { findings: FINDING },
           },
         },
-        { type: "say", text: "Left the finding on the pull request." },
       ],
     },
     {
@@ -67,13 +66,6 @@ const SCRIPT: Script = {
             outputs: { pr_url: PULL_REQUEST },
           },
         },
-        // Every scenario ends in something said, because a turn ends in the
-        // agent's answer. The runtime usually cancels the CLI the moment it
-        // accepts a terminal result, so this is often never reached -- but a
-        // turn that does finish first is only assembled in the order it was
-        // streamed when its last item is a message. Workaround for #105; see
-        // `e2e/README.md` before removing it.
-        { type: "say", text: "Wrote greeting.txt." },
       ],
     },
   ],
@@ -99,7 +91,7 @@ for (const runner of ["codex", "claude"]) {
     await page.getByLabel("Repository").fill(engine.repository);
     await page.getByLabel("Implementation runner").selectOption(runner);
     await page.getByLabel("Task prompt").fill(TASK);
-    await page.getByRole("button", { name: "Create workflow run" }).click();
+    await page.getByRole("button", { name: "Create WorkOrder" }).click();
 
     await expect(page).toHaveURL(/\/runs\/run-/);
     const runUrl = new URL(page.url()).pathname;

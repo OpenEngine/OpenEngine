@@ -3,6 +3,8 @@
 
 import type { PropsWithChildren, ReactNode } from "react";
 
+import { UTILIZATION_URL } from "./api";
+
 /** The openengine V, traced from the mark. Inherits `currentColor` so it can be
  *  laid on the flame tile in the rail and on anything else that needs it. */
 export function Mark({ title }: { title?: string }) {
@@ -32,12 +34,61 @@ export function RailBrand({ href = "/" }: { href?: string }) {
   );
 }
 
-export function RailFoot() {
+/** Three bars on a baseline: what a runner has spent of its limits.
+ *
+ *  Amber rather than flame, which is the distinction the stylesheet draws
+ *  between the two: flame is for the thing on a screen that wants acting on,
+ *  and this opens a page that only reads. */
+function GraphIcon() {
   return (
-    <p className="rail-foot">
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M1 13.5h14V15H1z" />
+      <path d="M2 8h3v5.5H2zM6.5 4.5h3v9h-3zM11 1h3v12.5h-3z" />
+    </svg>
+  );
+}
+
+export function RailFoot({
+  onSettings,
+  utilizationActive = false,
+}: {
+  onSettings?: () => void;
+  /** Whether the utilization page is the one on screen. */
+  utilizationActive?: boolean;
+}) {
+  return (
+    <div className="rail-foot">
       <span className="rail-pip" aria-hidden="true" />
-      Local openengine
-    </p>
+      <span className="rail-foot-label">Local openengine</span>
+      {/* Named for the page rather than for what is on it, and deliberately
+          without the word "runner" in it: the rail is on screen beside the
+          composer's runner picker, and a label containing that word is a
+          second match for anything looking the picker up by its own. */}
+      <a
+        aria-current={utilizationActive ? "page" : undefined}
+        aria-label="Open utilization"
+        className="rail-graph"
+        data-active={utilizationActive || undefined}
+        href={UTILIZATION_URL}
+        title="Utilization"
+      >
+        <GraphIcon />
+      </a>
+      {onSettings && (
+        <button
+          aria-label="Open settings"
+          className="rail-gear"
+          onClick={onSettings}
+          title="Settings"
+          type="button"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" />
+            <path fillRule="evenodd" d="M8 0a1 1 0 0 1 .98.804l.32 1.603a5.5 5.5 0 0 1 1.092.637l1.538-.614a1 1 0 0 1 1.225.447l.944 1.636a1 1 0 0 1-.217 1.255l-1.26 1.022a5.54 5.54 0 0 1 0 1.42l1.26 1.022a1 1 0 0 1 .217 1.255l-.944 1.636a1 1 0 0 1-1.225.447l-1.538-.614a5.5 5.5 0 0 1-1.093.637l-.319 1.603A1 1 0 0 1 8 16a1 1 0 0 1-.98-.804l-.32-1.603a5.5 5.5 0 0 1-1.092-.637l-1.538.614a1 1 0 0 1-1.225-.447l-.944-1.636a1 1 0 0 1 .217-1.255l1.26-1.022a5.54 5.54 0 0 1 0-1.42L2.118 6.769a1 1 0 0 1-.217-1.255l.944-1.636a1 1 0 0 1 1.225-.447l1.538.614A5.5 5.5 0 0 1 6.7 2.407L7.02.804A1 1 0 0 1 8 0Zm0 2.06-.25 1.247a1 1 0 0 1-.722.768 3.5 3.5 0 0 0-1.508.884 1 1 0 0 1-1.036.204L3.28 4.55l-.472.818 1.015.824a1 1 0 0 1 .332 1.04 3.54 3.54 0 0 0 0 1.536 1 1 0 0 1-.332 1.04l-1.015.824.472.818 1.204-.481a1 1 0 0 1 1.036.204 3.5 3.5 0 0 0 1.508.884 1 1 0 0 1 .722.768L8 13.94l.25-1.247a1 1 0 0 1 .722-.768 3.5 3.5 0 0 0 1.508-.884 1 1 0 0 1 1.036-.204l1.204.481.472-.818-1.015-.824a1 1 0 0 1-.332-1.04 3.54 3.54 0 0 0 0-1.536 1 1 0 0 1 .332-1.04l1.015-.824-.472-.818-1.204.481a1 1 0 0 1-1.036-.204 3.5 3.5 0 0 0-1.508-.884 1 1 0 0 1-.722-.768L8 2.06Z" />
+          </svg>
+        </button>
+      )}
+    </div>
   );
 }
 

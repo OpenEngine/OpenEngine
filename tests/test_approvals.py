@@ -67,8 +67,20 @@ from permission_fakes import (
 )
 
 CODER = AgentId("coder")
+PLANNER = AgentId("planner")
 PROFILES = {
     CODER: AgentProfile(agent_id=CODER, instructions="Be terse.", description="Codes.")
+}
+#: The same two roles a deployment offers: one asked to change things, one that
+#: never is. Everything else about their conversations is identical.
+READING_PROFILES = {
+    **PROFILES,
+    PLANNER: AgentProfile(
+        agent_id=PLANNER,
+        instructions="Say what you would change.",
+        description="Plans.",
+        read_only=True,
+    ),
 }
 
 RUN_TESTS = ApprovalRequest(
@@ -178,6 +190,17 @@ class DyingApprovalRunner(ApprovalRunner):
             await asyncio.gather(asking, return_exceptions=True)
 
 
+class ClassifyingApprovalRunner(ApprovalRunner):
+    """An interactive runner whose requests read as Engine capabilities.
+
+    What both real adapters do, and what a policy test needs: an unclassified
+    request is put to a person whatever the configuration says, so a runner that
+    reads nothing cannot show a policy being applied.
+    """
+
+    permission_translator = KIND_PERMISSION_TRANSLATOR
+
+
 class PlainRunner:
     """A runner with no interactive method at all, like `codex exec`."""
 
@@ -196,7 +219,11 @@ class PlainRunner:
         pass
 
 
-def _session(store: StateStore, runner: object) -> AgentSession:
+def _session(
+    store: StateStore,
+    runner: object,
+    reader: object | None = None,
+) -> AgentSession:
     unused = object()
     return AgentSession(
         Capabilities(
@@ -207,13 +234,21 @@ def _session(store: StateStore, runner: object) -> AgentSession:
             workspace_provider=unused,
             state_store=store,
         ),
-        profiles=PROFILES,
+        profiles=PROFILES if reader is None else READING_PROFILES,
         runners={"test": runner},
+        read_only_runners=None if reader is None else {"test": reader},
     )
 
 
-def _app(store: StateStore, runner: object):
-    return create_app(_session(store, runner), {"test": runner})
+def _app(
+    store: StateStore,
+    runner: object,
+    reader: object | None = None,
+    policy: ApprovalConfig = ApprovalConfig(),
+):
+    return create_app(
+        _session(store, runner, reader), {"test": runner}, approval_policy=policy
+    )
 
 
 async def _thread(client: httpx.AsyncClient) -> str:
@@ -251,6 +286,7 @@ async def _ask(
     workspace_id: WorkspaceId | None = None,
     answer: ApprovalDecision | None = None,
     translator: object = UNCLASSIFIED_PERMISSION_TRANSLATOR,
+    read_only: bool = False,
 ) -> tuple[ApprovalDecision, list[ApprovalRecord]]:
     """Put one request to the broker as a turn would, and see what happened.
 
@@ -280,8 +316,142 @@ async def _ask(
         present=present,
         workspace_id=workspace_id,
         translator=translator,
+        read_only=read_only,
     )
     return await handler(request), presented
+
+
+def test_an_agent_that_only_reads_is_refused_the_edit_the_policy_allows() -> None:
+    """Where the read-only runner stops being a suggestion.
+
+    Withholding the tools before the turn only preapproves less; a provider
+    that asks anyway reaches this, and a deployment allowing `edit` would
+    otherwise hand back exactly what was withheld -- with nobody asked, because
+    the policy is a standing yes. Refused here instead, and refused rather than
+    put to a person: this one was settled by what the agent is.
+    """
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(
+        store,
+        ApprovalConfig(allow=(ApprovalCapability.READ, ApprovalCapability.EDIT)),
+    )
+
+    async def scenario():
+        instance = await store.create_instance(AgentId("planner"), runner="test")
+        decision, presented = await _ask(
+            broker,
+            instance.instance_id,
+            WRITE_FILE,
+            agent_run_id=AgentRunId("ar-1"),
+            translator=KIND_PERMISSION_TRANSLATOR,
+            read_only=True,
+        )
+        return decision, presented
+
+    decision, presented = asyncio.run(scenario())
+
+    assert decision is ApprovalDecision.CANCEL
+    # Recorded, and recorded as settled: "what was this agent allowed to do, and
+    # on whose say-so" stays answerable for a refusal too.
+    assert [record.status for record in presented] == [ApprovalStatus.DECIDED]
+    assert presented[0].decision_source is ApprovalDecisionSource.POLICY
+
+
+def test_the_same_edit_is_allowed_for_an_agent_that_is_not_read_only() -> None:
+    """The other half of the pair: nothing about the policy changed."""
+    store = InMemoryStateStore()
+    broker = ApprovalBroker(
+        store,
+        ApprovalConfig(allow=(ApprovalCapability.READ, ApprovalCapability.EDIT)),
+    )
+
+    async def scenario():
+        instance = await store.create_instance(CODER, runner="test")
+        return await _ask(
+            broker,
+            instance.instance_id,
+            WRITE_FILE,
+            agent_run_id=AgentRunId("ar-1"),
+            translator=KIND_PERMISSION_TRANSLATOR,
+        )
+
+    decision, presented = asyncio.run(scenario())
+
+    assert decision is ApprovalDecision.ACCEPT
+    assert presented[0].decision_source is ApprovalDecisionSource.POLICY
+
+
+def test_a_planning_chat_refuses_the_edit_its_deployment_allows() -> None:
+    """The same refusal, down the path a real chat takes.
+
+    `ThreadService.start_run` is what installs the handler, so a property proved
+    against the broker alone is a property of the broker. Here the policy is the
+    one this repository ships, the conversation is an ordinary chat, and the
+    only thing that differs is the agent it was started with.
+    """
+    store = InMemoryStateStore()
+    writer = ClassifyingApprovalRunner((WRITE_FILE,))
+    reader = ClassifyingApprovalRunner((WRITE_FILE,))
+    app = _app(
+        store,
+        writer,
+        reader,
+        ApprovalConfig(allow=(ApprovalCapability.READ, ApprovalCapability.EDIT)),
+    )
+    service = app.state.thread_service
+
+    async def scenario():
+        planning = await service.create(PLANNER, "test")
+        run = await service.start_run(planning.instance_id, "how would you", None)
+        async for _line in run.stream():
+            pass
+        coding = await service.create(CODER, "test")
+        second = await service.start_run(coding.instance_id, "do it", None)
+        async for _line in second.stream():
+            pass
+        return await store.list_approvals()
+
+    approvals = asyncio.run(scenario())
+
+    # The planner's request was refused by the configuration; the coder's, in
+    # the same process under the same policy, was allowed by it.
+    assert reader.decisions == [ApprovalDecision.CANCEL]
+    assert writer.decisions == [ApprovalDecision.ACCEPT]
+    assert reader.executed == []
+    assert [
+        (record.decision, record.decision_source) for record in approvals
+    ] == [
+        (ApprovalDecision.CANCEL, ApprovalDecisionSource.POLICY),
+        (ApprovalDecision.ACCEPT, ApprovalDecisionSource.POLICY),
+    ]
+
+
+def test_a_chat_asks_the_runner_that_answers_it_whether_it_can_pause() -> None:
+    """Both halves of the handler are read off the runner that runs the turn.
+
+    A read-only runner need not be the same kind of object as the write-enabled
+    one it stands in for -- `codex exec` cannot pause at all. Installing a
+    handler because the *other* one could would fail every planning turn.
+    """
+    store = InMemoryStateStore()
+    writer = ApprovalRunner()
+    reader = PlainRunner()
+    service = _app(store, writer, reader).state.thread_service
+
+    async def scenario():
+        thread = await service.create(PLANNER, "test")
+        run = await service.start_run(thread.instance_id, "how would you", None)
+        async for _line in run.stream():
+            pass
+        return await service.history(thread.instance_id)
+
+    history = asyncio.run(scenario())
+
+    assert [message.content for message in history] == [
+        "how would you",
+        "Answered without asking.",
+    ]
+    assert writer.runs == []
 
 
 def test_plan_approval_ignores_system_and_conversation_auto_approve() -> None:

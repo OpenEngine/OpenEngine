@@ -1,8 +1,9 @@
 """Planning hierarchy that groups workflow runs into product delivery work."""
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 
-from engine.domain.ids import MilestoneId, ProjectId, WorkstreamId
+from engine.domain.ids import AgentInstanceId, MilestoneId, ProjectId, WorkstreamId
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,6 +12,31 @@ class Project:
 
     project_id: ProjectId
     name: str
+    archived: bool = False
+    """Put away rather than deleted: still listed, under its own heading, and
+    restored by the same click that put it there."""
+
+
+_INSTANCE_PROJECT_PREFIX = "project-"
+
+
+def project_id_for_instance(instance_id: AgentInstanceId) -> ProjectId:
+    """Return the durable project owned by a New Project conversation."""
+    return ProjectId(f"{_INSTANCE_PROJECT_PREFIX}{instance_id}")
+
+
+def instance_id_for_project(project_id: ProjectId) -> AgentInstanceId | None:
+    """Return the conversation `project_id` was named after, if it was.
+
+    The inverse of `project_id_for_instance`, and a guess rather than a lookup:
+    a project recorded some other way can share the shape without owning a
+    conversation, so callers must confirm the instance exists before trusting
+    it.
+    """
+    if not project_id.startswith(_INSTANCE_PROJECT_PREFIX):
+        return None
+    instance_id = project_id[len(_INSTANCE_PROJECT_PREFIX) :]
+    return AgentInstanceId(instance_id) if instance_id else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +46,8 @@ class Milestone:
     milestone_id: MilestoneId
     project_id: ProjectId
     name: str
+    description: str = ""
+    dependencies: tuple[MilestoneId, ...] = field(default=())
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +57,32 @@ class Workstream:
     workstream_id: WorkstreamId
     milestone_id: MilestoneId
     name: str
+    scope: str = ""
+    """What the work covers and, by omission, what it leaves to the sibling
+    workstreams: the boundary a run started here is expected to stay inside."""
 
 
-__all__ = ["Milestone", "Project", "Workstream"]
+def workstreams_by_milestone(
+    workstreams: Iterable[Workstream],
+) -> dict[MilestoneId, tuple[Workstream, ...]]:
+    """Group workstreams under the milestone each hangs from, order preserved.
+
+    Anything showing a whole plan wants every milestone's workstreams at once,
+    which is one store read and this grouping rather than a read per milestone:
+    the plan is displayed far more often than it is written, and the per-
+    milestone form charges a round trip for every goal on it.
+    """
+    grouped: dict[MilestoneId, list[Workstream]] = {}
+    for workstream in workstreams:
+        grouped.setdefault(workstream.milestone_id, []).append(workstream)
+    return {milestone_id: tuple(items) for milestone_id, items in grouped.items()}
+
+
+__all__ = [
+    "Milestone",
+    "Project",
+    "Workstream",
+    "instance_id_for_project",
+    "project_id_for_instance",
+    "workstreams_by_milestone",
+]

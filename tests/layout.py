@@ -45,9 +45,34 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
     DOMAIN: ("engine.domain",),
     ENGINE: ("engine.domain", "engine.core"),
     PORTS: ("engine.domain", "engine.ports"),
-    RUNTIME: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
+    # `engine.graph_runtime` is here because it is a contract rather than an
+    # implementation: a runtime-layer package may be written against it, which
+    # is what `engine.graph_runtime_langgraph` is. Nothing in it names a vendor,
+    # so depending on it is not depending on a concrete anything.
+    RUNTIME: (
+        "engine.domain",
+        "engine.core",
+        "engine.ports",
+        "engine.runtime",
+        "engine.graph_runtime",
+        "engine.orchestrator",
+    ),
     ADAPTER: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
-    APP: ("engine.domain", "engine.core", "engine.ports", "engine.runtime", "engine.adapters"),
+    # The graph packages are here for the same reason `engine.adapters` is: an
+    # app is where the pieces are wired together, and one of the pieces it can
+    # wire now is the engine that runs graph workflows. The contract and its
+    # LangGraph binding are both named, because a composition root is the one
+    # place allowed to name a concrete implementation.
+    APP: (
+        "engine.domain",
+        "engine.core",
+        "engine.ports",
+        "engine.runtime",
+        "engine.adapters",
+        "engine.graph_runtime",
+        "engine.graph_runtime_langgraph",
+        "engine.scoper",
+    ),
 }
 
 
@@ -87,6 +112,14 @@ def _layer_for(root: Path) -> str:
             return DOMAIN
         case ("packages", "engine"):
             return ENGINE
+        case ("packages", "scoper"):
+            return RUNTIME
+        case ("packages", "graph_runtime"):
+            return RUNTIME
+        case ("packages", "graph_runtime_langgraph"):
+            return RUNTIME
+        case ("packages", "orchestrator"):
+            return RUNTIME
         case ("packages", "ports"):
             return PORTS
         case ("packages", "runtime"):

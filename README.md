@@ -6,106 +6,153 @@ Changes -> Pool of Reviewers -> Reranking -> Impact Radius Analysis -> System Di
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
-This is currently a source installation; the agreed path to Homebrew and a
-verified shell installer is tracked in the
-[portable distribution plan](docs/portability.md).
 
+OpenEngine uses your locally installed codex and claude CLI. This means that it can utilize your subscription limits instead of being provided an API key. Make sure your claude or codex CLI are installed and authenticated. 
+
+First, clone the repo:
 ```bash
-uv sync            # install all 16 workspace packages, editable
+uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
-uv run pytest      # run the suite, including the boundary checks
+```
+Then, run it by pointing it at your project:
+```bash
+uv run \
+  --project /path/to/your/project \
+  --all-packages \
+  engine-web
 ```
 
-All three entrypoints run today and report their wiring:
+`engine-web` serves the client built into `apps/web/dist` and reads its
+configuration once, so a source edit needs a rebuild, a Ctrl-C, or both. While
+working on OpenEngine itself, run the development server instead:
 
 ```bash
-uv run engine-web
+uv run engine-dev
 ```
 
-## Configuration
+## Engine.toml
+The main configuration file for OpenEngine. It's defined [here](./engine.toml).
+While we use sensible defaults, if you need to configure engine, point it at a new 
+`engine.toml` file.
+```
+uv run \
+  --project /path/to/your/project \
+  --all-packages \
+  engine-web
+  --config /path/to/engine.toml
+```
 
-Each entrypoint accepts one provider-neutral TOML configuration file:
+SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
+history is currently a placeholder; the SQLite state store upgrades its
+database on startup and can also be upgraded explicitly:
 
 ```bash
-uv run engine-web --config ./engine.toml
-uv run engine-worker --config ./engine.toml
-uv run engine-control-server --config ./engine.toml
+DATABASE_URL=sqlite:///conversations.sqlite3 uv run engine-migrate ## you shouldn't have to run this, happens automatically on startup
 ```
 
-`--config` takes precedence over the `ENGINE_CONFIG` environment variable. If
-neither is set, Engine reads `./engine.toml` when it exists, otherwise it uses
-built-in defaults. Configurations are not merged.
+## GitHub connection
 
-Repository-owned workflows are selected with a directory relative to the
-configuration file:
+OpenEngine connects to GitHub to open pull requests and post review comments.
+The connection is set up once per machine through the Settings panel (gear icon
+at the bottom of the sidebar).
+
+### One-time setup: register an OAuth App
+
+You need to create one GitHub OAuth App for your team. Each colleague then
+pastes the client ID into their own Settings panel — no secrets are shared and
+no server configuration is required beyond the step below.
+
+1. Go to **github.com → Settings → Developer settings → OAuth Apps → New OAuth App**
+2. Fill in the form (device flow does not use the callback URL, but GitHub
+   requires one):
+   - **Application name:** `OpenEngine`
+   - **Homepage URL:** `http://localhost:8000`
+   - **Authorization callback URL:** `http://localhost:8000`
+3. Click **Register application**
+4. On the app page, check **Enable Device Flow** and click **Update application**
+5. Copy the **Client ID** (looks like `Ov23liXXXXXXXXXX`)
+
+### Connecting
+
+1. Open the Settings panel (gear icon in the sidebar)
+2. Paste the Client ID into the field and click **Save**
+3. Click **Connect GitHub**
+4. The panel shows a short code and a link to **github.com/login/device**
+5. Open that link, enter the code, click **Authorize**
+6. The panel switches to **Connected** automatically
+
+The OAuth token set is stored in the OS keychain (macOS Keychain, Secret
+Service on Linux, Windows Credential Manager). When GitHub issues expiring
+tokens, OpenEngine refreshes them automatically after an authorization failure
+and retries the interrupted GitHub request once. Each colleague repeats steps
+1–6 once with the same client ID.
+
+## GitLab connection
+
+OpenEngine can also connect to GitLab through OAuth. GitLab.com and each
+self-managed instance have separate OAuth applications and credentials, so
+create an application on the instance you intend to use.
+
+### One-time setup: register an OAuth application
+
+1. In GitLab, open **Avatar → Edit profile → Access → Applications**, then
+   select **Add new application**.
+2. Fill in the application:
+   - **Name:** `OpenEngine`
+   - **Redirect URI:** `http://localhost:7171/auth/redirect` (the device flow
+     does not use it, but GitLab may require a value when registering the app)
+   - **Scopes:** `api`
+   - **Confidential:** leave unchecked
+   - **Allowed grant types:** enable `device_code`
+3. Save the application and copy its **Application ID**. Do not put the Client
+   Secret into OpenEngine; the device flow uses only the Application ID.
+
+### Connecting
+
+1. Open the Settings panel and select **GitLab OAuth**.
+2. Enter the instance URL. For GitLab.com, use `https://gitlab.com` — not a
+   group or project URL.
+3. Paste the Application ID and select **Save GitLab client ID**.
+4. Select **Connect GitLab**. Open the displayed GitLab link and enter the
+   device code displayed in OpenEngine. A phone is not required; the browser
+   can be on the same computer.
+5. GitLab confirms authorization and OpenEngine switches to **Connected**
+   after its next poll.
+
+The token pair is stored in the OS keychain per GitLab instance. OpenEngine
+refreshes an expired access token once after an authorization failure, persists
+the rotated credential pair, and retries the interrupted API request once.
+
+For self-managed GitLab, device authorization requires GitLab 17.9 or later
+and a public OAuth application with the `device_code` grant enabled. See
+[GitLab's OAuth documentation](https://docs.gitlab.com/api/oauth2/) for
+instance-specific configuration.
+
+### Environment variable fallback
+
+If you deploy OpenEngine on a server where no keychain is available, set the
+client ID and a pre-generated token as environment variables instead:
 
 ```toml
-[workflows]
-directory = "workflows"
+# engine.toml
+github_client_id = "Ov23liXXXXXXXXXX"
+github_token     = "ghp_XXXXXXXXXXXX"
 ```
 
-Each non-private Python file in that directory imports `openengine` and exports
-one immutable value named `workflow`. Definitions may form finite sequential or
-branching graphs; cycles and parallel steps are intentionally unsupported in
-the v1 DSL. Workflow files are trusted configuration and execute once during
-startup. A compiled definition is snapshotted onto every run so editing or
-removing a file does not change an in-flight run.
+Or via environment variables:
 
-A proposed migration to repository-owned LangGraph graphs, including the local
-SQLite and scaled Temporal persistence boundaries, is documented in the
-[LangGraph workflow migration plan](docs/langgraph-workflow-migration.md).
-
-Engine also supports agent attribution and provider-neutral approval policy:
-
-```toml
-attribution = false
-
-[approvals]
-auto_approve = false
-allow = ["read"]
-
-[approvals.bash]
-allow = [
-  "uv run pytest **",
-  "git status **",
-]
-ask = ["git push **"]
-deny = ["sudo **"]
+```bash
+GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-web
 ```
 
-Set `attribution = false` to keep both Codex and Claude Code from adding agent
-attribution to commits and pull requests. Attribution is enabled by default.
-
-Capabilities are `read`, `edit`, `bash`, `web`, and `mcp`. Configuration is
-strict: unknown keys, unknown capabilities, duplicate entries, and incorrectly
-typed values stop startup with an error instead of silently weakening a policy.
-
-The policy is enforced in two places, and each runner's adapter owns the
-translation between Engine's vocabulary and its provider's:
-
-* **Before the turn**, `approvals.allow` builds the interactive Claude Code
-  runner's `--allowedTools`: a preapproved tool never raises a request at all.
-  Codex has no equivalent, because its pre-turn knob is a sandbox — a ceiling
-  rather than a preapproval, and one narrowed from the policy would refuse a
-  write that a person had just approved.
-* **During the turn**, every approval request a provider raises is classified
-  back into a capability and answered from the same policy. Allowed and denied
-  requests are recorded with a `policy` decision source and nobody is shown
-  them; anything the policy has not ruled on is put to a person, including any
-  request no runner could classify.
-
-Shell is deliberately never preapproved to the provider, because a shell policy
-is written per command rather than per capability: `Bash` reaches the approval
-callback on both runners, and `approvals.bash` is applied there. Patterns are
-globs over the command line, where a trailing `**` also matches no arguments at
-all, and the most restrictive matching rule wins -- `deny`, then `ask`, then
-`allow`. An explicit `deny` also outranks `auto_approve`.
-
-Workflow implementation and review runners are not built from the policy: what
-they may do is a property of the step, and a reviewer that cannot write should
-not become one that can because a chat was granted `edit`. The approvals they
-raise mid-run are governed like any other.
+To diagnose interactive runner protocol incompatibilities, set
+`ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and
+Claude Code record normalized session and interaction events alongside their
+runner-specific request shapes, parser outcomes, response actions, executable,
+and hashed working-directory identity. The trace does not record prompts,
+commands, approval wording, answers, schema property names, or property values.
+The file is created with mode `0600` and rotates at 1 MB with three backups.
 
 ## What is it.
 
@@ -115,8 +162,8 @@ OpenEngine is fundamentally this: A planning agent which projects the timeline a
 
 The key concepts are:
 - A "Project". An end-to-end product that the operator is working on. Timelines and milestones are associated with this.
-- A "Workflow". Workflow runs belong to a Project. The orchestrator is able to kick off workflows which bake in the operators SDLC+SOP.
-- A "Conversation". Workflows are comprised of these individual agent interactions. Some Conversations may be implementation. Some may be review. 
+- A "Milestone". Some measurable outcome that you want to reach using code. Must come with acceptance criteria.
+- A "WorkOrder". WorkOrders belong to a project+milestone. They are the tasks necessary to complete a milestone.
 
 Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine uses claude and codex CLI under the hood. 
 

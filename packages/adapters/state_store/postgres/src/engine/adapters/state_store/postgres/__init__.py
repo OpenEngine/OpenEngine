@@ -1,10 +1,10 @@
 """State Store capability, backed by Postgres.
 
-Placeholder for Ticket 1. Satisfies `engine.ports.StateStore` structurally; no
-driver, connection pool, schema, or migrations yet.
+The adapter satisfies `engine.ports.StateStore` structurally, but its behavior
+and Alembic schema are placeholders until PostgreSQL support is needed.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
@@ -35,6 +35,7 @@ class PostgresStateStore:
     """
 
     def __init__(self, dsn: str, schema: str = "engine") -> None:
+        # TODO: Implement PostgreSQL storage when OpenEngine has a need for it.
         self._dsn = dsn
         self._schema = schema
 
@@ -48,6 +49,9 @@ class PostgresStateStore:
         self, workstream_id: WorkstreamId | None = None
     ) -> Sequence[RunState]:
         raise NotImplementedError("Postgres reads land with the state-store ticket")
+
+    async def delete_run(self, run_id: RunId) -> bool:
+        raise NotImplementedError("Postgres writes land with the state-store ticket")
 
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         raise NotImplementedError("Event append lands with the state-store ticket")
@@ -75,6 +79,12 @@ class PostgresStateStore:
     ) -> Sequence[Milestone]:
         raise NotImplementedError("Milestone reads land with the state-store ticket")
 
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
+        raise NotImplementedError("Milestone reads land with the state-store ticket")
+
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        raise NotImplementedError("Milestone writes land with the state-store ticket")
+
     async def save_workstream(self, workstream: Workstream) -> None:
         raise NotImplementedError("Workstream writes land with the state-store ticket")
 
@@ -85,6 +95,9 @@ class PostgresStateStore:
         self, milestone_id: MilestoneId | None = None
     ) -> Sequence[Workstream]:
         raise NotImplementedError("Workstream reads land with the state-store ticket")
+
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
+        raise NotImplementedError("Workstream writes land with the state-store ticket")
 
     async def create_instance(
         self,
@@ -129,6 +142,11 @@ class PostgresStateStore:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
+        raise NotImplementedError("Conversation reads land with the state-store ticket")
+
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
         raise NotImplementedError("Conversation reads land with the state-store ticket")
 
     async def append_messages(

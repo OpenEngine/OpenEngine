@@ -13,7 +13,8 @@ things Postgres will do.
 Implements `engine.ports.StateStore`.
 """
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from itertools import count
 from threading import Lock
@@ -74,11 +75,18 @@ class InMemoryStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock:
+            if state.workstream_id is not None and state.milestone_id is not None:
+                raise ValueError("a run cannot belong to both a workstream and a milestone")
             if (
                 state.workstream_id is not None
                 and state.workstream_id not in self._workstreams
             ):
                 raise KeyError(f"no workstream {state.workstream_id!r}")
+            if (
+                state.milestone_id is not None
+                and state.milestone_id not in self._milestones
+            ):
+                raise KeyError(f"no milestone {state.milestone_id!r}")
             self._states[state.run_id] = state
 
     async def list_runs(
@@ -89,6 +97,11 @@ class InMemoryStateStore:
         if workstream_id is not None:
             states = [state for state in states if state.workstream_id == workstream_id]
         return tuple(reversed(states))
+
+    async def delete_run(self, run_id: RunId) -> bool:
+        with self._lock:
+            self._events.pop(run_id, None)
+            return self._states.pop(run_id, None) is not None
 
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         with self._lock:
@@ -131,6 +144,25 @@ class InMemoryStateStore:
             milestones = [item for item in milestones if item.project_id == project_id]
         return tuple(reversed(milestones))
 
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
+        with self._lock:
+            return Counter(
+                milestone.project_id for milestone in self._milestones.values()
+            )
+
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        with self._lock:
+            if any(
+                workstream.milestone_id == milestone_id
+                for workstream in self._workstreams.values()
+            ):
+                raise ValueError(f"milestone {milestone_id!r} still has workstreams")
+            if any(
+                state.milestone_id == milestone_id for state in self._states.values()
+            ):
+                raise ValueError(f"milestone {milestone_id!r} still has runs")
+            return self._milestones.pop(milestone_id, None) is not None
+
     async def save_workstream(self, workstream: Workstream) -> None:
         with self._lock:
             if workstream.milestone_id not in self._milestones:
@@ -151,6 +183,14 @@ class InMemoryStateStore:
                 item for item in workstreams if item.milestone_id == milestone_id
             ]
         return tuple(reversed(workstreams))
+
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
+        with self._lock:
+            if any(
+                state.workstream_id == workstream_id for state in self._states.values()
+            ):
+                raise ValueError(f"workstream {workstream_id!r} still has runs")
+            return self._workstreams.pop(workstream_id, None) is not None
 
     # --- agent identity and conversation ---------------------------------
 
@@ -244,6 +284,16 @@ class InMemoryStateStore:
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:
         with self._lock:
             return self._conversations.get(instance_id)
+
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
+        with self._lock:
+            return {
+                instance_id: self._conversations[instance_id]
+                for instance_id in instance_ids
+                if instance_id in self._conversations
+            }
 
     async def append_messages(
         self, instance_id: AgentInstanceId, messages: Sequence[Message]

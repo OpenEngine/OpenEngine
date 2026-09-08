@@ -5,6 +5,7 @@ a Temporal task queue lands with the workflow ticket.
 """
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 
@@ -29,7 +30,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
-    settings = Settings(engine_config=loaded.config, config_path=loaded.path)
+    settings = Settings(
+        engine_config=loaded.config,
+        config_path=loaded.path,
+        github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+    )
     capabilities = build_capabilities(settings)
     build_dispatcher(settings)
     print(describe_loaded_config(loaded))

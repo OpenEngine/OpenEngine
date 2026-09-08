@@ -8,6 +8,14 @@ requires-python = ">=3.11"
 # dependencies live in this directory's package.json.
 dependencies = [
     "engine-runtime",
+    "engine-scoper",
+    # The engine that runs the `[BETA]` graph workflows, and the contract it
+    # implements. Startup reads every file in the workflow directory and a
+    # workflow file imports the binding, so it would have to be installed even
+    # if this app started none of them. (The worker and control server list it
+    # for that reason alone.)
+    "engine-graph-runtime",
+    "engine-graph-runtime-langgraph",
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second. SQLite gives chat durable conversations
     # without requiring an external database service.
@@ -16,16 +24,24 @@ dependencies = [
     "engine-adapter-agent-runner-codex",
     "engine-adapter-agent-runner-claude-code",
     "engine-adapter-communications-buzz",
+    "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
+    "engine-adapter-source-control-gitlab",
     "engine-adapter-state-store-sqlite",
     "engine-adapter-workflow-runtime-temporal",
     "engine-adapter-workspace-provider-git-worktree",
     "starlette>=0.52",
     "uvicorn>=0.35",
+    "keyring>=25",
+    "platformdirs>=4",
 ]
 
 [project.scripts]
 engine-web = "engine.apps.web.__main__:main"
+# The source checkout's edit-reload loop. A developer convenience rather than a
+# capability, so it ships from the app it reloads instead of from a package of
+# its own.
+engine-dev = "engine.apps.web.dev:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -36,10 +52,15 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-runtime = { workspace = true }
+engine-scoper = { workspace = true }
+engine-graph-runtime = { workspace = true }
+engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }
 engine-adapter-agent-runner-claude-code = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
+engine-adapter-communications-slack = { workspace = true }
 engine-adapter-source-control-github = { workspace = true }
+engine-adapter-source-control-gitlab = { workspace = true }
 engine-adapter-state-store-sqlite = { workspace = true }
 engine-adapter-workflow-runtime-temporal = { workspace = true }
 engine-adapter-workspace-provider-git-worktree = { workspace = true }

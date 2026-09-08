@@ -13,7 +13,7 @@ source of truth then history cannot be resumed after a restart, inspected by a
 human, or moved to a different provider.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
 from engine.domain.agents import AgentInstance, AgentRun
@@ -55,6 +55,15 @@ class StateStore(Protocol):
         """Return persisted workflow runs, newest first, optionally by workstream."""
         ...
 
+    async def delete_run(self, run_id: RunId) -> bool:
+        """Forget one run and its events, returning whether it existed.
+
+        The run is the record, so removing it removes the whole record: a row
+        left without its history would still be listed, and would answer its
+        own page with a run that cannot say how it got anywhere.
+        """
+        ...
+
     async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
         ...
 
@@ -85,6 +94,24 @@ class StateStore(Protocol):
         """Return milestones newest first, optionally for one project."""
         ...
 
+    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
+        """Return how many milestones each project has, projects with none omitted.
+
+        Separate from `list_milestones` because the caller that wants this wants
+        integers: a projects list says which rows have a plan to offer, and it
+        is polled. Reading every milestone to count them would make that poll
+        cost the total size of every plan in the store, forever, to produce a
+        handful of numbers.
+        """
+        ...
+
+    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
+        """Delete one milestone, returning whether it existed.
+
+        Refused while workstreams or runs still point at it.
+        """
+        ...
+
     async def save_workstream(self, workstream: Workstream) -> None:
         ...
 
@@ -95,6 +122,16 @@ class StateStore(Protocol):
         self, milestone_id: MilestoneId | None = None
     ) -> Sequence[Workstream]:
         """Return workstreams newest first, optionally for one milestone."""
+        ...
+
+    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
+        """Delete one workstream, returning whether it existed.
+
+        Refused while runs still point at it, for the reason deleting a
+        milestone with workstreams is: the run is the record of work done under
+        this heading, and a run whose workstream is gone cannot say what it was
+        part of.
+        """
         ...
 
     # --- agent identity and conversation ---------------------------------
@@ -159,6 +196,12 @@ class StateStore(Protocol):
         Keyed by instance rather than conversation id: an instance owns exactly
         one conversation, and callers hold the instance.
         """
+        ...
+
+    async def load_conversations(
+        self, instance_ids: Sequence[AgentInstanceId]
+    ) -> Mapping[AgentInstanceId, Conversation]:
+        """Load the known conversations for several instances in one store read."""
         ...
 
     async def append_messages(

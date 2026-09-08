@@ -75,18 +75,20 @@ Codex -- spawn it as given, and make a real JSON-RPC `tools/call`. A completion
 missing a declared output is refused by the runtime and the turn is corrected,
 which `tests/test_workflow_integration.py` covers at the faster tier.
 
-**End a workflow scenario with a `say`.** The runtime cancels the CLI as soon as
-it accepts a terminal result, so the step usually ends mid-turn -- but when the
-CLI finishes first, both adapters assemble the turn with its *last spoken text*
-as the answer, which moves narration to the end. A turn whose last item is a
-tool call therefore no longer matches what was streamed, and the runtime refuses
-it (`streamed workflow transcript does not match completed turn`) even though
-the result was accepted. A closing message is what a real CLI sends anyway, and
-it keeps that race off these tests.
+**End a workflow scenario on its terminal call.** That is the shape the step
+instructions ask for, and it used to be the one that broke: the runtime cancels
+the CLI as soon as it accepts a terminal result, but when the CLI finishes first
+both adapters assemble the turn with its *last spoken text* as the answer, which
+moves narration to the end. The runtime compared that against what it had
+streamed by position and refused a step it had already accepted
+(`streamed workflow transcript does not match completed turn`). It now matches
+streamed messages by identity, so reassembly order is not load-bearing -- see
+`test_a_turn_ending_in_its_terminal_call_is_kept_in_streamed_order` in
+`tests/test_workflow_mcp_execution.py`, which covers it without the race.
 
-That is a workaround, and it is only here until #105 is fixed -- which is also
-where the deterministic reproduction lives, since the race itself has never been
-observed end to end. Take the closing `say` out with that ticket, not before.
+Scenarios here used to carry a closing `say` to keep that race out of the tests.
+They no longer do, and adding one back would hide the shape this tier is best
+placed to exercise.
 
 A failing test keeps its directory and prints the path, and attaches whatever
 the server said to the report. `npx playwright show-trace test-results/…` opens
@@ -120,6 +122,15 @@ unzip it, and point `show-report` at the directory.
   it is still running, the approval it pauses on reaches the browser, approving
   it is recorded as an approval, the turn carries on, and the file the command
   was allowed to write exists in that chat's worktree.
+* `approval-placement.spec.ts` -- *where* a request is shown, on each runner: a
+  step runs three `git_subcommand` calls through the run-bound MCP server -- two
+  different commands and then a repeat of the first -- and each pause has to
+  render beside the call that raised it, with nothing collecting in the
+  end-of-turn slot, before the decision, after it, and after a reload. The
+  pairing is the provider's own id for the call, which that server is the one
+  place that has to look up rather than know; the lookup itself is pinned at
+  speed in `tests/test_workflow_mcp_execution.py`, and what only a browser can
+  say is that the pairing survives everything between the broker and the page.
 * `workflow-run.spec.ts` -- a workflow run on each runner, end to end: the run
   is created from the form, provisions a checkout that exists on disk, streams
   the implementation's first message and its command into the step's
@@ -127,6 +138,64 @@ unzip it, and point `show-report` at the directory.
   carries the declared `pr_url` -- advances through a review that leaves its
   finding on `gh` to "Action required". Approving there ends it, and a reload
   shows the same finished run: `succeeded`, `approved`, every stage behind it.
+* `graph-workflow.spec.ts` -- the same journey as `workflow-run.spec.ts`, for a
+  `[BETA]` graph WorkOrder, and **expected to fail in places**. See below.
+* `dev-server.spec.ts` -- the interface as `engine-dev` serves it, with Vite in
+  front of the API instead of the API serving `dist/`. Every other spec here
+  opens one origin that answers for everything, so none of them can reach a
+  client request the dev proxy does not forward -- and Vite answers an
+  unforwarded path with `index.html` and a 200, which arrives as a JSON parse
+  error rather than as a 404. Creating a `[BETA]` WorkOrder is what found it:
+  its page reads the graph engine under `/graph`, and only `/api` was proxied.
+  The forwarded prefixes live in `src/api-proxy.ts` so a component test can read
+  them too; this is the one that proves they reach the server.
+* `persisted-navigation.spec.ts` -- cold starts over both a SQLite file populated
+  through the current production state-store adapter and the frozen
+  `fixtures/v0.0.0.sqlite3` artifact. The run list, run detail, implementation
+  and review transcripts, and a multi-turn standalone chat are followed through
+  their browser links. Each case then starts another chat and another workflow
+  in the same database and confirms the older history remains listed. The frozen
+  artifact makes opening the database exercise migrations added after v0.0.0.
+
+## The `[BETA]` graph WorkOrder, and what it cannot do yet
+
+`graph-workflow.spec.ts` is `workflow-run.spec.ts` walked again, on the other
+engine: the same task, with an explicit naming stage before implementation, but
+started from a `[BETA]` entry and run by LangGraph. It is split into one test per
+state a run passes through,
+because a graph WorkOrder does not reach all of them yet and one long test
+would report only the first gap.
+
+```
+npm --prefix apps/web run test:e2e:beta     # only these
+npm --prefix apps/web run test:e2e          # everything else
+```
+
+They are tagged `@beta` and run by their own CI job, which is allowed to fail.
+Each red test names one thing the interface cannot do for a graph run that it
+already does for a step run. As of this writing:
+
+| state | passes? |
+| --- | --- |
+| the graph is offered, and the form does not ask for a runner | yes |
+| the run provisions a checkout and both agents work in it | yes |
+| the WorkOrder page shows the run's stages | no |
+| the checkout is named on the WorkOrder page | no |
+| an agent's conversation is readable from the page | no |
+| the page says a person is being waited for, and can answer | no |
+
+The last one is the important one: the run *does* reach its human-review node
+and *does* raise an approval — the test polls the graph engine's own API to
+prove it — and there is simply nothing on the page to answer it with.
+
+The agents are scripted the same way as everywhere else here, but over a third
+protocol. `ACPNode` talks ACP to an adapter that wraps a CLI, not to the CLI, so
+`provider_fakes.fake_acp` is an ACP agent reading the same script. A graph node
+ends by finishing its turn rather than by calling `complete_step`, so a `tool`
+step is refused in an ACP scenario rather than ignored. `harness/server.py`
+rebuilds the repository's graphs through `graph_for(runner, ...)` to point them
+at that agent and at the test's own worktree root; the ids, names, stages and
+prompts are the shipped ones.
 
 ## What the rest needs
 Everything else -- workflow runs, review, reactivation, auto-approve, failure,

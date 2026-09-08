@@ -26,9 +26,9 @@ def _git(repository: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
-def _repository(path: Path) -> None:
+def _repository(path: Path, branch: str = "main") -> None:
     path.mkdir()
-    _git(path, "init", "-b", "main")
+    _git(path, "init", "-b", branch)
     (path / "README.md").write_text("engine\n")
     _git(path, "add", "README.md")
     _git(path, *_IDENTITY, "commit", "-m", "initial")
@@ -66,6 +66,68 @@ def test_origin_main_is_refreshed_without_moving_local_main(tmp_path: Path) -> N
     assert _git(Path(workspace.root_path), "rev-parse", "HEAD") == remote_main
     assert Path(workspace.root_path, "latest.txt").read_text() == "from remote main\n"
     assert not _git(repository, "for-each-ref", "refs/engine/provisioning")
+
+
+def test_origin_branch_is_refreshed_without_moving_the_local_branch(tmp_path: Path) -> None:
+    upstream = tmp_path / "upstream"
+    remote = tmp_path / "remote.git"
+    repository = tmp_path / "repository"
+    _repository(upstream, "master")
+    subprocess.run(
+        ["git", "clone", "--bare", str(upstream), str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "clone", str(remote), str(repository)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    local_master = _git(repository, "rev-parse", "master")
+    _git(upstream, "remote", "add", "origin", str(remote))
+    (upstream / "latest.txt").write_text("from remote master\n")
+    _git(upstream, "add", "latest.txt")
+    _git(upstream, *_IDENTITY, "commit", "-m", "remote update")
+    _git(upstream, "push", "origin", "master")
+    remote_master = _git(upstream, "rev-parse", "master")
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+
+    workspace = asyncio.run(provider.provision(str(repository), "origin/master"))
+
+    assert _git(repository, "rev-parse", "master") == local_master
+    assert _git(Path(workspace.root_path), "rev-parse", "HEAD") == remote_master
+    assert Path(workspace.root_path, "latest.txt").read_text() == "from remote master\n"
+
+
+def test_missing_origin_branch_explains_how_to_fix_configuration(tmp_path: Path) -> None:
+    upstream = tmp_path / "upstream"
+    remote = tmp_path / "remote.git"
+    repository = tmp_path / "repository"
+    _repository(upstream)
+    subprocess.run(
+        ["git", "clone", "--bare", str(upstream), str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "clone", str(remote), str(repository)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+
+    with pytest.raises(
+        GitWorktreeError,
+        match=(
+            "Configured default branch 'master' does not exist on remote 'origin'. "
+            "Create that branch, or set default_branch in engine.toml"
+        ),
+    ):
+        asyncio.run(provider.provision(str(repository), "origin/master"))
 
 
 def test_each_workspace_is_a_distinct_worktree(tmp_path: Path) -> None:

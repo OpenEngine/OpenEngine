@@ -26,10 +26,12 @@ from engine.ports import (
     ApprovalDecision,
     ApprovalKind,
     ApprovalRequest,
+    McpServerConfig,
     StateStore,
 )
 from engine.runtime import (
     DEFAULT_RUNNER,
+    GRANTED_TOOLS_NOTE,
     INTERRUPTED_TOOL_RESULT,
     INTERRUPTED_TURN_NOTE,
     AgentSession,
@@ -38,6 +40,7 @@ from engine.runtime import (
     UnknownInstanceError,
     UnknownRunnerError,
     UnknownToolGrantError,
+    with_granted_tools,
 )
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
@@ -625,6 +628,243 @@ def test_a_resolvable_grant_reaches_the_runner() -> None:
     assert captured == [(dispatch,)]
 
 
+def test_the_instructions_name_every_tool_the_turn_serves() -> None:
+    """Handing the tools over is not the same as saying so.
+
+    A conversation that receives tools from its durable context has to be told
+    about those too, or the agent answers from its role description alone and
+    describes work it could have done.
+    """
+    store = InMemoryStateStore()
+    planner = AgentId("planner")
+
+    async def contextual_grants(_store, _instance):
+        return ("add_milestone",)
+
+    class Broker:
+        config = McpServerConfig("planning", "python", ("planning-server",))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+    runner = ScriptedRunner()
+
+    class McpRunner(ScriptedRunner):
+        async def run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+        ):
+            return await runner.run_turn(agent_run_id, profile, messages)
+
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=McpRunner(),
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles={
+            planner: AgentProfile(
+                planner, "Plan it.", capabilities=("list_milestones",)
+            )
+        },
+        mcp_brokers=dict.fromkeys(
+            ("list_milestones", "add_milestone"), lambda *_args: Broker()
+        ),
+        capability_resolver=contextual_grants,
+    )
+    instance = asyncio.run(session.start(planner))
+
+    asyncio.run(session.say(instance.instance_id, "What is the plan?"))
+
+    _, profile, _ = runner.seen[0]
+    assert profile.instructions.startswith("Plan it.")
+    assert GRANTED_TOOLS_NOTE in profile.instructions
+    assert "- list_milestones" in profile.instructions
+    assert "- add_milestone" in profile.instructions
+    assert "mcp__" not in profile.instructions, "provider spelling is the adapter's"
+
+
+def test_a_profile_granted_nothing_is_told_about_nothing() -> None:
+    store = InMemoryStateStore()
+    runner = ScriptedRunner()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=runner,
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles=PROFILES,
+    )
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "Read it."))
+
+    _, profile, _ = runner.seen[0]
+    assert profile.instructions == "Be terse."
+
+
+def test_announcing_twice_says_it_once() -> None:
+    """No path applies this twice today -- `say` and the dispatcher are
+    disjoint, and both rebuild from an unmodified source profile each turn -- but
+    the function is exported, so the next caller has only this stopping it."""
+    profile = AgentProfile(CODER, "Be terse.", capabilities=("add_milestone",))
+
+    once = with_granted_tools(profile, ("add_milestone",))
+    twice = with_granted_tools(once, ("add_milestone",))
+
+    assert twice is once
+    assert once.instructions.count(GRANTED_TOOLS_NOTE) == 1
+
+
+def test_a_grant_is_announced_only_once_it_resolves() -> None:
+    """The list is what the caller serves, not what the profile declares.
+
+    They coincide on the `say` path -- `_tools_for` raises rather than let an
+    unresolvable grant through -- so the distinction is only visible here, and
+    it is the one that keeps the dispatcher's paths honest.
+    """
+    profile = AgentProfile(CODER, "Be terse.", capabilities=("dispatch",))
+
+    assert with_granted_tools(profile, ()) is profile
+    assert "- dispatch" not in with_granted_tools(profile, ("clarify",)).instructions
+
+
+def test_an_mcp_backed_profile_runs_with_its_broker_instead_of_tool_specs() -> None:
+    store = InMemoryStateStore()
+    planner = AgentId("planner")
+    seen: list[McpServerConfig] = []
+    granted: list[tuple[str, ...]] = []
+
+    class Broker:
+        config = McpServerConfig("planning", "python", ("planning-server",))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+    class McpRunner(ScriptedRunner):
+        async def run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+        ):
+            seen.append(mcp_server)
+            return await super().run_turn(agent_run_id, profile, messages)
+
+    runner = McpRunner()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=runner,
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles={
+            planner: AgentProfile(
+                planner, "Plan it.", capabilities=("add_milestone",)
+            )
+        },
+        mcp_brokers={
+            "add_milestone": lambda _store, capabilities, _instance: (
+                granted.append(tuple(capabilities)) or Broker()
+            )
+        },
+    )
+    instance = asyncio.run(session.start(planner))
+
+    asyncio.run(session.say(instance.instance_id, "Add the foundation."))
+
+    assert seen == [Broker.config]
+    assert granted == [("add_milestone",)]
+
+
+def test_conversation_context_can_grant_an_mcp_tool() -> None:
+    store = InMemoryStateStore()
+    seen: list[McpServerConfig] = []
+
+    class Broker:
+        config = McpServerConfig("planning", "python", ("planning-server",))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+    class McpRunner(ScriptedRunner):
+        async def run_turn_with_mcp(
+            self, agent_run_id, profile, messages, mcp_server, workspace_id=None
+        ):
+            seen.append(mcp_server)
+            assert profile.capabilities == ("add_milestone",)
+            return await super().run_turn(agent_run_id, profile, messages)
+
+    async def contextual_grants(_store, _instance):
+        return ("add_milestone",)
+
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=McpRunner(),
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles=PROFILES,
+        mcp_brokers={"add_milestone": lambda *_args: Broker()},
+        capability_resolver=contextual_grants,
+    )
+    instance = asyncio.run(session.start(CODER))
+
+    asyncio.run(session.say(instance.instance_id, "Add the foundation."))
+
+    assert seen == [Broker.config]
+
+
+def test_an_unknown_mcp_grant_is_rejected_before_the_runner_starts() -> None:
+    store = InMemoryStateStore()
+    planner = AgentId("planner")
+    runner = ScriptedRunner()
+
+    def broker_must_not_start(_store, _capabilities, _instance):
+        raise AssertionError("an unresolved grant must fail before broker creation")
+
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=None,
+            source_control=None,
+            agent_runner=runner,
+            communications=None,
+            workspace_provider=None,
+            state_store=store,
+        ),
+        profiles={
+            planner: AgentProfile(
+                planner, "Plan it.", capabilities=("add_milestone_typo",)
+            )
+        },
+        mcp_brokers={"add_milestone": broker_must_not_start},
+    )
+    instance = asyncio.run(session.start(planner))
+
+    with pytest.raises(UnknownToolGrantError) as raised:
+        asyncio.run(session.say(instance.instance_id, "Add the foundation."))
+
+    assert raised.value.missing == ("add_milestone_typo",)
+    assert runner.seen == []
+
+
 # --- choosing a runner -------------------------------------------------------
 
 
@@ -702,6 +942,66 @@ def test_which_runner_answered_is_recorded() -> None:
     assert asyncio.run(store.agent_run(agent_run_id)).runner == "second"
 
 
+def _reading_session(
+    store: InMemoryStateStore, writer, reader=None
+) -> tuple[AgentSession, AgentId]:
+    """A session offering one provider name, wired twice: with and without
+    the tools to change anything."""
+    missing = object()
+    planner = AgentId("planner")
+    return (
+        AgentSession(
+            Capabilities(
+                workflow_runtime=missing,
+                source_control=missing,
+                agent_runner=writer,
+                communications=missing,
+                workspace_provider=missing,
+                state_store=store,
+            ),
+            profiles={
+                **PROFILES,
+                planner: AgentProfile(
+                    agent_id=planner, instructions="Plan it.", read_only=True
+                ),
+            },
+            runners={"cli": writer},
+            read_only_runners={"cli": reader} if reader is not None else None,
+        ),
+        planner,
+    )
+
+
+def test_an_agent_that_only_reads_is_answered_by_the_runner_that_cannot_write() -> None:
+    """The whole difference between a planner and a coder: same provider, same
+    conversation, and only one of them holding the tools to change the tree."""
+    store = InMemoryStateStore()
+    writer, reader = ScriptedRunner(["written"]), ScriptedRunner(["read"])
+    session, planner = _reading_session(store, writer, reader)
+    planning = asyncio.run(session.start(planner))
+    coding = asyncio.run(session.start(CODER))
+
+    plan = asyncio.run(session.say(planning.instance_id, "how would you", runner="cli"))
+    code = asyncio.run(session.say(coding.instance_id, "do it", runner="cli"))
+
+    assert (plan.message.content, code.message.content) == ("read", "written")
+    assert session.runner_for(planner, "cli") is reader
+    assert session.runner_for(CODER, "cli") is writer
+
+
+def test_a_session_composed_without_read_only_runners_still_answers() -> None:
+    """The restriction is the composition root's to wire. A process that has
+    not is not thereby a process where planning conversations fail."""
+    store = InMemoryStateStore()
+    writer = ScriptedRunner(["written"])
+    session, planner = _reading_session(store, writer)
+    instance = asyncio.run(session.start(planner))
+
+    turn = asyncio.run(session.say(instance.instance_id, "how would you", runner="cli"))
+
+    assert turn.message.content == "written"
+
+
 def test_an_unknown_runner_stops_before_anything_is_stored() -> None:
     store = InMemoryStateStore()
     session = _session(ScriptedRunner(), store)
@@ -717,10 +1017,21 @@ def test_an_unknown_runner_stops_before_anything_is_stored() -> None:
 
 
 def test_shipped_profiles_grant_nothing_they_cannot_honour() -> None:
-    """The foreman's dispatch and workflow-authoring grants go in when the tools
-    do; declaring them now would make every conversation raise."""
+    """Every shipped grant is backed by a tool in the web composition."""
     from engine.runtime import BUILT_IN
 
-    assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder")}
-    assert all(profile.capabilities == () for profile in BUILT_IN.values())
+    assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder"), AgentId("planner")}
+    assert BUILT_IN[AgentId("foreman")].capabilities == ()
+    assert BUILT_IN[AgentId("coder")].capabilities == ()
+    assert BUILT_IN[AgentId("planner")].capabilities == ()
     assert all(profile.instructions.strip() for profile in BUILT_IN.values())
+
+
+def test_only_the_planner_ships_unable_to_change_anything() -> None:
+    """What the plan agent is for is stated where the runtime can act on it,
+    not only in the words it is given."""
+    from engine.runtime import BUILT_IN
+
+    assert [
+        agent_id for agent_id, profile in BUILT_IN.items() if profile.read_only
+    ] == [AgentId("planner")]

@@ -9,8 +9,6 @@ import {
   useToolCallElapsed,
 } from "@assistant-ui/react";
 import {
-  createContext,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -20,22 +18,37 @@ import {
 } from "react";
 
 import {
-  api,
-  answerQuestion,
-  decideApproval,
   messageText,
   RUN_NOT_STARTED_ERROR_CODE,
   stopRun,
   type ApiApproval,
-  type ApiThread,
   type ApprovalDecision,
 } from "./api";
-import { useApprovals, type InlineApproval } from "./approvals";
+import { approvalActions, useApprovals, type InlineApproval } from "./approvals";
 import { Stat, StatStrip } from "./brand";
 import { WorkspaceControl } from "./workspace";
 
+/** Shared so an omitted list is the same list every render, and the memo that
+ *  reads it is not invalidated by a fresh `[]`. */
+const NO_ENTRIES: readonly InlineApproval[] = [];
+
 const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
+const COMPOSER_QUEUE_KEY_PREFIX = "engine.composerQueue.";
 const NEW_CHAT_DRAFT_ID = "new";
+
+function readQueuedMessages(key: string): string[] {
+  const saved = window.localStorage.getItem(key);
+  if (!saved) return [];
+  try {
+    const messages = JSON.parse(saved) as unknown;
+    if (!Array.isArray(messages)) return [];
+    return messages.filter(
+      (message): message is string => typeof message === "string" && message.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
 
 export function toolResultText(result: unknown): string {
   if (typeof result === "string") return result;
@@ -176,9 +189,6 @@ export function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="message message-assistant">
       <TextParts />
-      {/* Only what could not be placed beside a call: a request that named no
-          call, or one whose call is not in the transcript. The end of the turn
-          is where a request with nothing to sit beside belongs. */}
       <TurnApprovals />
       <MessagePrimitive.Error>
         <p className="notice message-error">
@@ -189,7 +199,74 @@ export function AssistantMessage() {
   );
 }
 
-function Composer() {
+/** Keep pending follow-ups through the full page loads used for navigation.
+ *
+ *  The queue belongs to assistant-ui's in-memory runtime. Wait for history to
+ *  settle before putting saved messages back: at that point an active run has
+ *  resumed and they queue behind it, or a run that finished while this page
+ *  was away accepts the first follow-up immediately. */
+export function QueuedMessagePersistence({ draftRestored }: { draftRestored: boolean }) {
+  const aui = useAui();
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const historyLoading = useAuiState((state) => state.thread.isLoading);
+  const canSend = useAuiState((state) => state.composer.canSend);
+  const queue = useAuiState((state) => state.composer.queue);
+  const queueKey = remoteId ? `${COMPOSER_QUEUE_KEY_PREFIX}${remoteId}` : undefined;
+  const [restoredQueueKey, setRestoredQueueKey] = useState<string>();
+  const [restoringQueue, setRestoringQueue] = useState<{
+    key: string;
+    messages: string[];
+    index: number;
+    draft: string;
+  }>();
+
+  useEffect(() => {
+    if (!queueKey || historyLoading || !draftRestored) return;
+
+    const saved = readQueuedMessages(queueKey);
+    if (saved.length && aui.composer.getState().queue.length === 0) {
+      const draft = aui.composer.getState().text;
+      aui.composer.setText(saved[0]!);
+      setRestoringQueue({ key: queueKey, messages: saved, index: 0, draft });
+      return;
+    }
+    setRestoringQueue(undefined);
+    setRestoredQueueKey(queueKey);
+  }, [aui, draftRestored, historyLoading, queueKey]);
+
+  useEffect(() => {
+    if (!restoringQueue || restoringQueue.key !== queueKey || !canSend) return;
+    aui.composer.send();
+    const index = restoringQueue.index + 1;
+    const next = restoringQueue.messages[index];
+    if (next !== undefined) {
+      aui.composer.setText(next);
+      setRestoringQueue({ ...restoringQueue, index });
+      return;
+    }
+    aui.composer.setText(restoringQueue.draft);
+    setRestoringQueue(undefined);
+    setRestoredQueueKey(restoringQueue.key);
+  }, [aui, canSend, queueKey, restoringQueue]);
+
+  useEffect(() => {
+    if (!queueKey || restoredQueueKey !== queueKey) return;
+    const messages = queue
+      .map((item) =>
+        item.parts
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n\n"),
+      )
+      .filter((message) => message.length > 0);
+    if (messages.length) window.localStorage.setItem(queueKey, JSON.stringify(messages));
+    else window.localStorage.removeItem(queueKey);
+  }, [queue, queueKey, restoredQueueKey]);
+
+  return null;
+}
+
+export function Composer({ project = false }: { project?: boolean } = {}) {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const canSend = useAuiState((state) => state.composer.canSend);
@@ -263,6 +340,7 @@ function Composer() {
 
   return (
     <>
+      <QueuedMessagePersistence draftRestored={restoredDraftKey === draftKey} />
       <div className="queue" aria-live="polite">
         <ComposerPrimitive.Queue>
           {() => (
@@ -289,7 +367,9 @@ function Composer() {
           placeholder={
             isRunning
               ? "Queue a message for when the agent is done…"
-              : "Ask the agent about this repository…"
+              : project
+                ? "Tell the agent about the project you're working on.."
+                : "Ask the agent about this repository…"
           }
           aria-label="Message the agent"
           rows={1}
@@ -350,7 +430,7 @@ function WorkflowBacklink() {
   if (!custom?.workflowRunId) return null;
   return (
     <a className="backlink" href={`/runs/${custom.workflowRunId}`}>
-      ← Back to run {custom.workflowRunId}
+      ← Back to WorkOrder {custom.workflowRunId}
       {custom.workflowStepId && <> · {custom.workflowStepId} step</>}
     </a>
   );
@@ -392,6 +472,18 @@ const KIND_LABELS: Record<ApiApproval["kind"], string> = {
   user_input: "Has a question",
 };
 
+/** Whether this request is a form to fill in rather than a yes or no.
+ *
+ *  The questions decide, not the kind. A provider states what it wants an
+ *  answer to; a runtime may raise a request for a person under the same kind
+ *  and put no questions on it -- a graph's human-review node asks for a verdict
+ *  that way. Rendering a question form for one would present an empty dialog
+ *  with nothing to submit, in front of the only control that would move the run
+ *  on. */
+function asksQuestions(approval: ApiApproval): boolean {
+  return approval.kind === "user_input" && Boolean(approval.questions?.length);
+}
+
 /** What became of a request that is no longer open, and on whose say-so. */
 export function outcomeText(approval: ApiApproval): string {
   if (approval.status === "interrupted")
@@ -402,9 +494,8 @@ export function outcomeText(approval: ApiApproval): string {
     return approval.decision === "cancel"
       ? "Refused by the configured policy — the action did not run."
       : "Allowed by the configured policy, without asking.";
-  if (approval.kind === "user_input" && approval.answers)
-    return "Answered.";
-  if (approval.kind === "user_input" && approval.decision === "cancel")
+  if (asksQuestions(approval) && approval.answers) return "Answered.";
+  if (asksQuestions(approval) && approval.decision === "cancel")
     return "Cancelled — no answer was sent.";
   switch (approval.decision) {
     case "accept":
@@ -458,7 +549,7 @@ function ApprovalArguments({ approval }: { approval: ApiApproval }) {
 
 /** The one line a folded approval is worth: what happened, and to what. */
 export function summaryText(approval: ApiApproval): string {
-  if (approval.kind === "user_input") {
+  if (asksQuestions(approval)) {
     const question = approval.questions?.[0]?.question ?? "Question";
     if (approval.status === "pending") return `Answer needed · ${question}`;
     return approval.decision === "cancel"
@@ -532,7 +623,7 @@ function QuestionForm({
     setBusy(true);
     setError(undefined);
     try {
-      await answerQuestion(threadId, approval.id, answers);
+      await approvalActions(threadId).answer(approval.id, answers);
     } catch (failure) {
       setBusy(false);
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -543,7 +634,7 @@ function QuestionForm({
     setBusy(true);
     setError(undefined);
     try {
-      await decideApproval(threadId, approval.id, "cancel");
+      await approvalActions(threadId).decide(approval.id, "cancel");
     } catch (failure) {
       setBusy(false);
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -666,7 +757,7 @@ export function ApprovalEntry({
     setSubmitted(decision);
     setError(undefined);
     try {
-      await decideApproval(threadId, approval.id, decision);
+      await approvalActions(threadId).decide(approval.id, decision);
     } catch (failure) {
       // Stale, already answered, or a provider that has since died. The
       // decision did not land, so the controls come back with the reason.
@@ -706,10 +797,10 @@ export function ApprovalEntry({
           </dl>
         )}
         <ApprovalArguments approval={approval} />
-        {pending && approval.kind === "user_input" && (
+        {pending && asksQuestions(approval) && (
           <QuestionForm threadId={threadId} approval={approval} />
         )}
-        {pending && approval.kind !== "user_input" ? (
+        {pending && !asksQuestions(approval) ? (
           <div className="approval-actions">
             {approval.allowedDecisions.map((decision) => (
               <button
@@ -739,53 +830,7 @@ export function ApprovalEntry({
   );
 }
 
-/** Every tool call the transcript holds, by id.
- *
- *  What decides where a request is shown: an approval naming a call in here has
- *  somewhere of its own to sit, and is therefore not part of any turn's
- *  leftovers. The whole thread rather than one message, because a restored
- *  transcript anchors its requests to the end while the calls they name are
- *  spread across the turns that made them.
- *
- *  A fact about the thread, so it is derived once above the turns rather than
- *  by each of them. The thread store hands out a new `messages` array on every
- *  streamed chunk, and a turn that read it would rescan every part in the
- *  conversation each time a token landed -- once per turn on screen, over
- *  transcripts that routinely carry hundreds of calls. */
-const ToolCallIds = createContext<ReadonlySet<string>>(new Set<string>());
-
-export function useToolCallIds(): ReadonlySet<string> {
-  return useContext(ToolCallIds);
-}
-
-/** Derive it, and keep the same set while the ids in it are the same.
- *
- *  Identity is the whole point: a new set on every chunk would re-render every
- *  turn that reads one, which is the cost this exists to avoid. Tokens arrive
- *  far more often than tool calls do, so most rescans find nothing new. */
-export function ToolCallIndex({ children }: { children: ReactNode }) {
-  const messages = useAuiState((state) => state.thread.messages);
-  const held = useRef<ReadonlySet<string>>(new Set<string>());
-  const ids = useMemo(() => {
-    const found = new Set<string>();
-    for (const message of messages) {
-      if (!Array.isArray(message.content)) continue;
-      for (const part of message.content) {
-        if (part.type === "tool-call") found.add(part.toolCallId);
-      }
-    }
-    const previous = held.current;
-    if (previous.size === found.size && [...found].every((id) => previous.has(id))) {
-      return previous;
-    }
-    held.current = found;
-    return found;
-  }, [messages]);
-
-  return <ToolCallIds.Provider value={ids}>{children}</ToolCallIds.Provider>;
-}
-
-function ApprovalList({
+export function ApprovalList({
   threadId,
   entries,
   className,
@@ -827,73 +872,66 @@ function CallApprovals({ toolCallId }: { toolCallId: string }) {
   );
 }
 
-/** What this assistant turn stopped to ask about and nothing else can hold.
+/** What this turn is still waiting on that names no call at all.
  *
- *  A request that named no call, or that named one this transcript does not
- *  contain -- a provider that paused over something other than a tool call, or
- *  a record written before the pairing existed. Anchored by index rather than
- *  pinned to the newest turn, so it stays with the turn that raised it once the
- *  conversation has moved on. Requests anchored past the mounted transcript
- *  belong exclusively to `UnanchoredApprovals` until their turn appears. */
+ *  A provider may pause over something that is not a tool call -- a question
+ *  put to the reader, a request the record carries no call id for. There is no
+ *  call for those to sit beside, and leaving them unrendered would leave the
+ *  run waiting on an answer nobody can see to give. So while one is pending it
+ *  is shown at the end of the turn that raised it, anchored by index so it
+ *  stays with that turn once the conversation has moved on.
+ *
+ *  Only while it is pending. Answered, it is a result with nothing to sit
+ *  beside, and a result stacked at the end of the page is the thing this slot
+ *  exists not to be: it reads as a comment on whatever the turn did last. The
+ *  card disappears when the run stops needing it.
+ *
+ *  Only the ones naming no call, too. A request that names one belongs beside
+ *  that call and nowhere else: if the transcript does not hold the call, the
+ *  request is not shown. */
 function TurnApprovals() {
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
   const index = useAuiState((state) => state.message.index);
   const approvals = useApprovals(remoteId);
-  const placed = useToolCallIds();
   const mine = useMemo(
     () =>
       approvals.filter(
         (entry) =>
           entry.messageIndex === index &&
-          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
+          !entry.approval.toolCallId &&
+          entry.approval.status === "pending",
       ),
-    [approvals, index, placed],
+    [approvals, index],
   );
 
   if (!remoteId) return null;
   return <ApprovalList threadId={remoteId} entries={mine} className="approvals" />;
 }
 
-/** Requests for a reply assistant-ui has not mounted yet.
- *
- *  Workflow runs can begin outside this browser. Their approval feed must be
- *  visible immediately, before transcript streaming creates the assistant
- *  message that will ultimately own the card. Once that message appears the
- *  normal turn placement takes over and this slot empties itself. */
-export function UnanchoredApprovals() {
-  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const total = useAuiState((state) => state.thread.messages.length);
-  const approvals = useApprovals(remoteId);
-  const placed = useToolCallIds();
-  const unanchored = useMemo(
-    () =>
-      approvals.filter(
-        (entry) =>
-          entry.messageIndex >= total &&
-          !(entry.approval.toolCallId && placed.has(entry.approval.toolCallId)),
-      ),
-    [approvals, placed, total],
-  );
-
-  if (!remoteId) return null;
-  return (
-    <ApprovalList
-      threadId={remoteId}
-      entries={unanchored}
-      className="approvals approvals-live"
-    />
-  );
-}
-
 /** The line of figures under the conversation heading.
  *
  *  Every cell is counted from the transcript this browser is holding, so each
  *  one is a fact about what is on screen rather than an estimate of anything. */
-export function ConversationStats() {
+export function ConversationStats({
+  held = NO_ENTRIES,
+}: {
+  /** Requests this conversation holds itself rather than publishing.
+   *
+   *  A request that no turn and no call can place is drawn from the state that
+   *  reports it, and is gone from that state the moment it is answered. Counted
+   *  from the same place for the same reason: published, it would outlive the
+   *  card and leave the strip saying one is open with nothing on screen to
+   *  answer. */
+  held?: readonly InlineApproval[];
+} = {}) {
   const messages = useAuiState((state) => state.thread.messages);
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
-  const approvals = useApprovals(remoteId);
+  const published = useApprovals(remoteId);
+  const approvals = useMemo(
+    () => (held.length ? [...published, ...held] : published),
+    [published, held],
+  );
 
   const toolCalls = useMemo(
     () =>
@@ -927,38 +965,54 @@ export function ConversationStats() {
   );
 }
 
-export function ChatThread() {
+/** The transcript, and the controls under it.
+ *
+ *  `empty` and `dock` are what a conversation that is not a chat replaces. Both
+ *  halves of the difference are there: what an empty one says, and what sending
+ *  means. Everything between them -- the turns, the folded calls, the approval
+ *  cards -- is the same view whichever engine is answering, which is the point:
+ *  a WorkOrder's agent reads as the conversation it is rather than as a second
+ *  rendering of one. */
+export function ChatThread({
+  project = false,
+  empty,
+  dock,
+}: {
+  project?: boolean;
+  empty?: ReactNode;
+  dock?: ReactNode;
+}) {
   return (
     <ThreadPrimitive.Root className="thread">
       <ThreadPrimitive.Viewport className="stream">
         <WorkflowBacklink />
         <ThreadPrimitive.Empty>
-          <div className="welcome">
-            <div className="welcome-copy">
-              <p className="eyebrow">OpenEngine / Chat</p>
-              <h1>Start a conversation.</h1>
-              <p className="lede">Each chat has its own agent history and Git worktree.</p>
-            </div>
-          </div>
+          {empty ??
+            (!project && (
+              <div className="welcome">
+                <div className="welcome-copy">
+                  <p className="eyebrow">OpenEngine / Chat</p>
+                  <h1>Start a conversation.</h1>
+                  <p className="lede">Each chat has its own agent history and Git worktree.</p>
+                </div>
+              </div>
+            ))}
         </ThreadPrimitive.Empty>
-        {/* Renders no element of its own, so the viewport's children are still
-            the messages. Held above them so the rescan happens once per chunk
-            rather than once per turn per chunk. */}
-        <ToolCallIndex>
-          <ThreadPrimitive.Messages>
-            {({ message }) =>
-              message.role === "user" ? <UserMessage /> : <AssistantMessage />
-            }
-          </ThreadPrimitive.Messages>
-          <UnanchoredApprovals />
-        </ToolCallIndex>
-        <Dock />
+        <ThreadPrimitive.Messages>
+          {({ message }) =>
+            message.role === "user" ? <UserMessage /> : <AssistantMessage />
+          }
+        </ThreadPrimitive.Messages>
+        {dock ?? <Dock project={project} />}
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
   );
 }
 
-function Dock() {
+export const READ_ONLY_WORKORDER_NOTE =
+  "This transcript belongs to a WorkOrder step. Return to the WorkOrder for status and actions.";
+
+function Dock({ project }: { project: boolean }) {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
     | undefined;
@@ -970,11 +1024,9 @@ function Dock() {
         Jump to latest
       </ThreadPrimitive.ScrollToBottom>
       {!editable ? (
-        <p className="step-note">
-          This transcript belongs to a workflow step. Return to the run for status and actions.
-        </p>
+        <p className="step-note">{READ_ONLY_WORKORDER_NOTE}</p>
       ) : (
-        <Composer />
+        <Composer project={project} />
       )}
       <div className="dock-foot">
         {/* Under the composer or workflow note rather than in the heading: a

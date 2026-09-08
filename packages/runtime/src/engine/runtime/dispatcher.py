@@ -14,7 +14,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 
-from engine.domain.agents import AgentRun, AgentRunStatus
+from engine.domain.agents import AgentProfile, AgentRun, AgentRunStatus
 from engine.domain.chat import Message
 from engine.domain.commands import (
     Command,
@@ -39,15 +39,20 @@ from engine.ports import (
     TurnObserver,
 )
 from engine.runtime.capabilities import Capabilities
+from engine.runtime.profiles import with_granted_tools
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
     requests_clarification_or_escalation,
     step_result_instructions,
 )
 from engine.runtime.terminal_mcp import (
+    REPOSITORY_TOOL_METHODS,
+    StatusReporter,
     TerminalEvent,
     TerminalMcpBroker,
     TerminalResultRegistry,
+    ToolCallLookup,
+    terminal_tool_names,
 )
 
 
@@ -87,6 +92,13 @@ class Dispatcher:
                 await caps.workspace_provider.provision(command.repository, command.base_ref)
             case StartAgentRun():
                 if command.step is None:
+                    # No `tools=`, so this path turns a profile's grants into
+                    # nothing callable and has nothing to announce.
+                    # `AgentSession` refuses such a profile outright rather than
+                    # run it (`UnknownToolGrantError`); dispatch has no
+                    # equivalent, and until it does, silence is the lesser of
+                    # the two failures -- an agent told it holds a tool nobody
+                    # served reaches for it and gets nowhere.
                     await caps.agent_runner.run_turn(
                         command.agent_run_id,
                         command.profile,
@@ -121,11 +133,32 @@ class Dispatcher:
         on_terminal_result: Callable[[TerminalEvent], Awaitable[None]] | None = None,
         on_approval: ApprovalHandler | None = None,
         continuation: str | None = None,
+        on_status: StatusReporter | None = None,
     ) -> AgentTurn | TerminalEvent:
         """Run or continue a workflow step, preferring a delivered MCP result."""
         caps = self._capabilities
         selected_runner = runner or caps.agent_runner
         assert command.step is not None
+        # What the chosen branch will actually serve, which is what the step is
+        # told it holds. Only the MCP branch serves anything: the other two pass
+        # no `tools=`, so a profile's grants resolve to nothing callable there.
+        #
+        # The terminal tools belong on this list even though no profile grants
+        # them -- the broker is what offers them, and `step_result_instructions`
+        # naming them in the user prompt does not stop a note introduced as an
+        # enumeration from reading as a complete one.
+        served: tuple[str, ...] = ()
+        reports_status = on_status is not None and isinstance(
+            selected_runner, McpAgentRunner
+        )
+        if isinstance(selected_runner, McpAgentRunner):
+            served = terminal_tool_names(
+                self.repository_tools(command.profile),
+                status_updates=reports_status,
+            )
+        command = replace(
+            command, profile=with_granted_tools(command.profile, served)
+        )
         instance = await caps.state_store.create_instance(
             command.profile.agent_id,
             workspace_id=command.workspace_id,
@@ -137,7 +170,8 @@ class Dispatcher:
         )
         conversation = await caps.state_store.load_conversation(instance.instance_id)
         initial_prompt = Message.user(
-            f"{command.prompt}\n\n{step_result_instructions(command.step)}"
+            f"{command.prompt}\n\n"
+            f"{step_result_instructions(command.step, status_updates=reports_status)}"
         )
         if conversation is not None and not conversation.messages:
             await caps.state_store.append_messages(
@@ -169,6 +203,23 @@ class Dispatcher:
             observed.append(message)
             pending.put_nowait(message)
 
+        def observed_tool_call_id(name: str, arguments: str) -> str | None:
+            """The transcript's id for the call a run-bound tool is answering.
+
+            Read off what the provider has already reported rather than passed
+            through the MCP request, because the two are different transports
+            and only this one produces the ids the conversation is written in.
+            Newest first: an agent that runs the same command twice is asking
+            about the second one. Unmatched is `None` rather than a guess -- a
+            request beside the wrong call is worse than one beside no call.
+            """
+
+            for message in reversed(observed):
+                for call in message.tool_calls:
+                    if call.name == name and call.arguments == arguments:
+                        return call.call_id
+            return None
+
         async def persist_progress() -> None:
             while (message := await pending.get()) is not None:
                 await caps.state_store.append_messages(instance.instance_id, (message,))
@@ -184,6 +235,8 @@ class Dispatcher:
                         on_terminal_result,
                         observe,
                         on_approval,
+                        observed_tool_call_id,
+                        on_status if reports_status else None,
                     )
                 elif isinstance(selected_runner, StreamingAgentRunner):
                     result = None
@@ -221,20 +274,26 @@ class Dispatcher:
                 )
             )
             raise
-        # Streaming runners have already persisted the observed prefix. The
+        # Streaming runners have already persisted what they observed. The
         # returned turn remains authoritative for anything only synthesized at
-        # completion, while terminal cancellation may leave a longer observed
-        # prefix than the partial turn returned by the provider.
-        unseen = transcript
-        if observed:
-            if transcript[: len(observed)] == tuple(observed):
-                unseen = transcript[len(observed) :]
-            elif tuple(observed[: len(transcript)]) == transcript:
-                unseen = ()
+        # completion, while terminal cancellation may leave more observed than
+        # the partial turn returned by the provider.
+        #
+        # Matched by identity rather than by position, because a turn is
+        # assembled with its last spoken text as the answer -- so narration that
+        # streamed before a tool call is reordered to the end, and a streamed
+        # message need not sit at the same index in the finished turn. That is
+        # presentation, not divergence: those messages are already stored, in
+        # the order they were really emitted. Comparing positionally instead
+        # read the reorder as a mismatch and failed steps that had completed.
+        already_stored = list(observed)
+        fresh: list[Message] = []
+        for message in transcript:
+            if message in already_stored:
+                already_stored.remove(message)
             else:
-                raise RuntimeError(
-                    "streamed workflow transcript does not match completed turn"
-                )
+                fresh.append(message)
+        unseen = tuple(fresh)
         if unseen:
             await caps.state_store.append_messages(instance.instance_id, unseen)
         if result is not None:
@@ -258,6 +317,30 @@ class Dispatcher:
         )
         return turn
 
+    def repository_tools(self, profile: AgentProfile) -> tuple[str, ...]:
+        """Which repository tools a profile's broker will offer.
+
+        The intersection of two things, because a grant alone is not enough:
+        the profile has to ask for the tool, and the composed source control
+        has to have the method behind it. A grant against a source control
+        that cannot honour it is left off the listing rather than served as
+        something that fails when called.
+
+        Asked twice per step -- once to enable them, once to say so in the
+        system prompt -- which is the reason it is a method rather than a
+        condition written out at each site: the announcement and the listing
+        have to agree, and two copies of this are two things to keep in step.
+        Public because the naming turn asks the same question of the naming
+        profile, and answering it a second way there is the same hazard.
+        """
+        source_control = self._capabilities.source_control
+        return tuple(
+            name
+            for name, method in REPOSITORY_TOOL_METHODS.items()
+            if name in profile.capabilities
+            and callable(getattr(source_control, method, None))
+        )
+
     async def _run_with_terminal_mcp(
         self,
         runner: McpAgentRunner,
@@ -266,6 +349,8 @@ class Dispatcher:
         deliver: Callable[[TerminalEvent], Awaitable[None]] | None,
         on_message: TurnObserver,
         on_approval: ApprovalHandler | None,
+        tool_call_ids: ToolCallLookup | None = None,
+        on_status: StatusReporter | None = None,
     ) -> tuple[TerminalEvent | None, AgentTurn | None, tuple[Message, ...]]:
         """Run until a terminal result or clarification request is produced."""
         assert command.step is not None
@@ -276,18 +361,26 @@ class Dispatcher:
             registry=self._terminal_results,
             deliver=deliver,
         )
-        if (
-            "add_comment" in command.profile.capabilities
-            and callable(
-                getattr(self._capabilities.source_control, "add_comment", None)
-            )
-        ):
+        if on_status is not None:
+            # Same tolerance as the repository hook below: a transport fake
+            # that models only terminal delivery keeps working.
+            enable_status = getattr(broker, "enable_status_updates", None)
+            if enable_status is not None:
+                enable_status(on_status)
+        repository_tools = self.repository_tools(command.profile)
+        if repository_tools:
             # Older transport fakes may model only terminal delivery. The real
             # broker exposes this hook; keeping it optional preserves those
-            # focused tests while granting the reviewer its repository tool.
-            enable_repo_comments = getattr(broker, "enable_repo_comments", None)
-            if enable_repo_comments is not None:
-                enable_repo_comments(self._capabilities.source_control)
+            # focused tests while granting a step its repository tools.
+            enable = getattr(broker, "enable_repository_tools", None)
+            if enable is not None:
+                enable(
+                    self._capabilities.source_control,
+                    repository_tools,
+                    command.workspace_id,
+                    on_approval,
+                    tool_call_ids,
+                )
         async with broker:
             transcript: list[Message] = []
             corrections = 0

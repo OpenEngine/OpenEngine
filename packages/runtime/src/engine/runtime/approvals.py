@@ -149,7 +149,7 @@ class ApprovalBroker:
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalResponse]] = {}
         self._pending_requests: dict[
             ApprovalId,
-            tuple[ApprovalRequest, PermissionTranslator | None, ApprovalPresenter],
+            tuple[ApprovalRequest, PermissionTranslator | None, ApprovalPresenter, bool],
         ] = {}
 
     async def _record(self, approval: ApprovalRecord) -> None:
@@ -168,6 +168,7 @@ class ApprovalBroker:
         workspace_id: WorkspaceId | None = None,
         translator: PermissionTranslator | None = None,
         auto_approve: Callable[[], bool] | None = None,
+        read_only: bool = False,
     ) -> ApprovalHandler:
         """The callback one interactive turn hands to its runner.
 
@@ -181,6 +182,11 @@ class ApprovalBroker:
         `translator` is the runner's own reading of its provider's requests, and
         without one the policy has nothing to evaluate: every request is
         unclassified, and every request is put to a person.
+
+        `read_only` is the agent this turn runs, saying it never changes
+        anything. Everything but a read is refused outright -- not shown to a
+        person, because a request that was always going to be refused is not a
+        question, and this one was refused by what the agent *is*.
         """
 
         async def request_approval(request: ApprovalRequest) -> ApprovalResponse:
@@ -210,6 +216,7 @@ class ApprovalBroker:
                 request,
                 translator,
                 auto_approve=bool(auto_approve and auto_approve()),
+                read_only=read_only,
             )
             if configured is not None:
                 settled = replace(
@@ -255,7 +262,12 @@ class ApprovalBroker:
                 asyncio.get_running_loop().create_future()
             )
             self._waiting[record.approval_id] = waiting
-            self._pending_requests[record.approval_id] = (request, translator, present)
+            self._pending_requests[record.approval_id] = (
+                request,
+                translator,
+                present,
+                read_only,
+            )
             try:
                 # The conversation setting can change while the durable row is
                 # being written. Recheck after the future exists so a toggle in
@@ -265,6 +277,7 @@ class ApprovalBroker:
                     request,
                     translator,
                     auto_approve=bool(auto_approve and auto_approve()),
+                    read_only=read_only,
                 )
                 if configured is not None:
                     settled = await self.decide(
@@ -306,11 +319,11 @@ class ApprovalBroker:
             context = self._pending_requests.get(record.approval_id)
             if context is None:
                 continue
-            request, translator, present = context
+            request, translator, present, read_only = context
             if request.requires_human:
                 continue
             decision = self._policy_decision(
-                request, translator, auto_approve=True
+                request, translator, auto_approve=True, read_only=read_only
             )
             if decision is None:
                 continue
@@ -552,6 +565,7 @@ class ApprovalBroker:
         translator: PermissionTranslator | None,
         *,
         auto_approve: bool = False,
+        read_only: bool = False,
     ) -> ApprovalDecision | None:
         """The answer the configuration already gives, if it gives one.
 
@@ -569,7 +583,7 @@ class ApprovalBroker:
             if auto_approve
             else self._policy
         )
-        match policy_decision_for(policy, scope):
+        match policy_decision_for(policy, scope, read_only=read_only):
             case PolicyDecision.ALLOW:
                 configured = ApprovalDecision.ACCEPT
             case PolicyDecision.DENY:

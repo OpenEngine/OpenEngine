@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { answerQuestion, api, messageText, setThreadAutoApprove } from "./api";
+import {
+  answerQuestion,
+  api,
+  createProject,
+  getProjectMilestones,
+  messageText,
+  newChatAgent,
+  setThreadAutoApprove,
+  type EngineConfig,
+} from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -63,6 +72,30 @@ describe("messageText", () => {
   });
 });
 
+describe("newChatAgent", () => {
+  const config = {
+    agents: [],
+    runners: [],
+    defaultAgent: "coder",
+    planAgent: "planner",
+    defaultRunner: "claude",
+    workflowRunners: [],
+    defaultWorkflowRunner: "claude",
+    workflows: [],
+  } satisfies EngineConfig;
+
+  it("starts a plan on the planning agent and a chat on the default", () => {
+    expect(newChatAgent(config, true)).toBe("planner");
+    expect(newChatAgent(config, false)).toBe("coder");
+  });
+
+  /** The id is the server's to name, so a deployment composing no planner says
+   *  so with an empty one -- and the page still opens on something. */
+  it("falls back to the default agent when no planner is composed", () => {
+    expect(newChatAgent({ ...config, planAgent: "" }, true)).toBe("coder");
+  });
+});
+
 describe("setThreadAutoApprove", () => {
   it("updates the conversation setting", async () => {
     const fetch = vi.fn().mockResolvedValue(
@@ -77,6 +110,48 @@ describe("setThreadAutoApprove", () => {
     expect(fetch).toHaveBeenCalledWith(
       "/api/threads/thread-1",
       expect.objectContaining({ method: "PATCH", body: '{"autoApprove":true}' }),
+    );
+  });
+});
+
+describe("createProject", () => {
+  it("creates a project with the generated name", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ projectId: "project-1", name: "Engine roadmap" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(createProject("Engine roadmap")).resolves.toEqual({
+      projectId: "project-1",
+      name: "Engine roadmap",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects",
+      expect.objectContaining({ method: "POST", body: '{"name":"Engine roadmap"}' }),
+    );
+  });
+});
+
+describe("getProjectMilestones", () => {
+  it("reads the selected project's timeline data", async () => {
+    const response = {
+      project: { projectId: "project/one", name: "Engine roadmap" },
+      milestones: [],
+    };
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(getProjectMilestones("project/one")).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects/project%2Fone/milestones",
+      expect.objectContaining({}),
     );
   });
 });

@@ -1,7 +1,29 @@
 attribution = false
+default_branch = "main"
+public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
+
+[communications]
+provider = "slack"
+# #openengine-bot, by id so the post skips the name lookup.
+channel = "C0BUZP7GR0V"
+
+# What pinging the bot starts. A mention is a sentence, so the answers the web
+# form collects alongside the prompt come from here instead. See
+# docs/work-orders-from-slack.md for the Slack app side of it.
+[work_orders]
+repository = "OpenEngine/OpenEngine"
+workflow = "implementation-review-v1"
+
+[orchestrator]
+host = "127.0.0.1:7233"
+database = ".engine/temporal.sqlite3"
+health_check_interval = 5.0
+
+[claude]
+output_style = "concise"
 
 [approvals]
-auto_approve = false
+auto_approve = true
 allow = ["read", "edit"]
 
 [approvals.bash]
@@ -9,9 +31,20 @@ allow = [
   ".venv/bin/python -m pytest tests/**",
   "uv run pytest **",
   "mkdir **",
+]
+
+# Repository work has tools of its own -- `git_subcommand` and
+# `open_pull_request`, served to the steps granted them -- and these are the
+# shell spellings of the same operations. Denied rather than merely unlisted:
+# an agent holding both a tool and a shell that can do the same thing will use
+# whichever it thought of first, and only one of the two runs in the step's own
+# workspace or refuses to publish an internal branch.
+deny = [
   "git add **",
   "git commit **",
+  "git branch **",
   "git checkout **",
+  "git switch **",
   "git push **",
   "gh pr create **",
 ]

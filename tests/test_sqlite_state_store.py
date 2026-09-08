@@ -79,6 +79,27 @@ def test_conversation_survives_reopening_the_database(tmp_path) -> None:
     assert len({message.message_id for message in conversation.messages}) == 3
 
 
+def test_conversations_are_loaded_in_one_batch() -> None:
+    store = SQLiteStateStore(":memory:")
+    first = asyncio.run(store.create_instance(CODER))
+    second = asyncio.run(store.create_instance(CODER))
+    asyncio.run(store.append_messages(first.instance_id, (Message.user("First"),)))
+    try:
+        conversations = asyncio.run(
+            store.load_conversations(
+                (first.instance_id, second.instance_id, AgentInstanceId("missing"))
+            )
+        )
+    finally:
+        store.close()
+
+    assert set(conversations) == {first.instance_id, second.instance_id}
+    assert [message.content for message in conversations[first.instance_id].messages] == [
+        "First"
+    ]
+    assert conversations[second.instance_id].messages == ()
+
+
 def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
     path = tmp_path / "conversations.sqlite3"
     first = SQLiteStateStore(path)

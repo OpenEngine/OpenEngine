@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "engine-core",
     "engine-runtime",
+    "engine-graph-runtime-langgraph",
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second.
     "engine-adapter-agent-runner-codex",
@@ -30,6 +31,7 @@ packages = ["src/engine"]
 [tool.uv.sources]
 engine-core = { workspace = true }
 engine-runtime = { workspace = true }
+engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
 engine-adapter-source-control-github = { workspace = true }

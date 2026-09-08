@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -12,7 +13,6 @@ import pytest
 from starlette.applications import Starlette
 
 import engine.runtime.dispatcher as dispatcher_module
-import github_fakes
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeWorkspaceProvider,
@@ -21,12 +21,13 @@ from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
-    build_review_runners,
+    build_read_only_runners,
     build_runners,
     build_session,
     build_workflow_runners,
 )
 from engine.domain import (
+    AgentId,
     AgentProfile,
     AgentRunId,
     AgentRunStatus,
@@ -36,14 +37,24 @@ from engine.domain import (
     RunNamed,
     RunPhase,
     RunRequested,
+    RunState,
     StepCompleted,
     StepSpec,
+    TaskId,
     ToolSpec,
+    WorkflowId,
     WorkspaceId,
     WorkspaceProvisioned,
 )
-from engine.ports import AgentTurn, McpServerConfig
-from engine.runtime import AgentSession, Capabilities
+from engine.ports import (
+    AgentTurn,
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalKind,
+    ApprovalRequest,
+    McpServerConfig,
+)
+from engine.runtime import AgentSession, Capabilities, load_workflow_catalog
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
     step_completed_from_arguments,
@@ -53,6 +64,7 @@ from engine.runtime.terminal_mcp import (
     TerminalEvent,
     TerminalResultRegistry,
 )
+from engine.runtime.workflow_execution import WorkflowExecutor, _naming_approvals
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 from provider_fakes import (
     SCRIPT_ENVIRONMENT_VARIABLE,
@@ -62,6 +74,18 @@ from provider_fakes import (
 
 
 _IDENTITY = ("-c", "user.name=Engine Tests", "-c", "user.email=engine@example.test")
+
+#: This checkout's workflows, passed to every app these tests build. Named
+#: rather than left to `create_app`'s fallback, which reads `$ENGINE_CONFIG`
+#: before `./engine.toml`: with that variable pointing at another checkout --
+#: which a worktree setup does readily -- the app would run *those* definitions
+#: while the assertions below describe these ones.
+CATALOG = load_workflow_catalog(Path(__file__).parents[1] / "workflows")
+
+#: Read off the checked-in definition rather than restated here: what these
+#: tests are about is that naming asks the task and this prompt together, not
+#: how the prompt is worded -- `test_workflow_definitions` owns the wording.
+NAMING_PROMPT = CATALOG.require(WorkflowId("implementation-review-v1")).naming_prompt
 
 
 def _git(repository: Path, *arguments: str) -> None:
@@ -73,11 +97,11 @@ def _git(repository: Path, *arguments: str) -> None:
     )
 
 
-def _repository(tmp_path: Path) -> Path:
+def _repository(tmp_path: Path, branch: str = "main") -> Path:
     repository = tmp_path / "repository"
     remote = tmp_path / "remote.git"
     subprocess.run(
-        ["git", "init", "-b", "main", str(repository)],
+        ["git", "init", "-b", branch, str(repository)],
         check=True,
         capture_output=True,
         text=True,
@@ -201,14 +225,17 @@ async def _await_phase(
     return response
 
 
+@pytest.mark.parametrize(("branch", "default_branch"), [("main", "main"), ("master", "master")])
 def test_implementation_review_workflow_completes_end_to_end(
+    branch: str,
+    default_branch: str,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         dispatcher_module, "TerminalMcpBroker", MockTerminalMcpBroker
     )
     database = tmp_path / "workflow.sqlite3"
-    repository = _repository(tmp_path)
+    repository = _repository(tmp_path, branch)
     store = SQLiteStateStore(database)
     workspaces = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
     implementer = CompletingRunner(
@@ -243,6 +270,8 @@ def test_implementation_review_workflow_completes_end_to_end(
         {"test": reviewer},
         workflow_runners={"test": implementer},
         review_runners={"test": reviewer},
+        default_branch=default_branch,
+        workflow_catalog=CATALOG,
     )
 
     async def scenario():
@@ -319,6 +348,8 @@ def test_implementation_review_workflow_completes_end_to_end(
     }
     assert state.phase is RunPhase.SUCCEEDED
     assert state.name == "Exercise complete workflow"
+    assert state.workflow_definition is not None
+    assert state.workflow_definition.workspace.base_ref == f"origin/{default_branch}"
     assert completed.json()["name"] == state.name
     assert reopened_state == state
     assert [type(event) for event in history] == [
@@ -344,15 +375,501 @@ def test_implementation_review_workflow_completes_end_to_end(
     assert implementer.naming_calls == [
         (
             Message.user("Exercise the complete workflow."),
-            Message.user(
-                "Name this workflow based on the task above. Do not perform the task "
-                "or use tools. Reply with only a concise name of at most eight words, "
-                "with no quotes or ending punctuation."
-            ),
+            Message.user(NAMING_PROMPT),
         )
     ]
     assert reviewer.naming_calls == []
     assert asyncio.run(workspaces.state(state.workspace_id)).attached
+
+
+ISSUE_TITLE = "Dependencies can run arbitrary install scripts"
+ISSUE_NAME = f"#270 {ISSUE_TITLE}"
+
+
+class WorkItemSourceControl:
+    """Enough of the port for the naming broker to serve `view_work_item`."""
+
+    def __init__(self) -> None:
+        self.viewed: list[tuple[object, int]] = []
+
+    async def view_work_item(self, workspace_id: WorkspaceId, number: int) -> dict:
+        self.viewed.append((workspace_id, number))
+        return {"number": number, "title": ISSUE_TITLE}
+
+
+async def _call_broker(
+    mcp_server: McpServerConfig, name: str, arguments: dict[str, object]
+) -> dict[str, object]:
+    """Call one tool on a run-bound server, the way its stdio front end does."""
+    host = mcp_server.args[mcp_server.args.index("--host") + 1]
+    port = int(mcp_server.args[mcp_server.args.index("--port") + 1])
+    token = mcp_server.args[mcp_server.args.index("--token") + 1]
+    reader, writer = await asyncio.open_connection(host, port)
+    writer.write(
+        json.dumps(
+            {
+                "token": token,
+                "request_id": "naming-call",
+                "name": name,
+                "arguments": arguments,
+            }
+        ).encode()
+        + b"\n"
+    )
+    await writer.drain()
+    answer = json.loads(await reader.readline())
+    writer.close()
+    await writer.wait_closed()
+    return answer
+
+
+class IssueReadingRunner(CompletingRunner):
+    """Reads the issue a task points at before naming the run after it."""
+
+    def __init__(self, arguments: dict[str, object]) -> None:
+        super().__init__(arguments)
+        self.naming_servers: list[McpServerConfig] = []
+        self.refused: dict[str, object] = {}
+        self.profile = AgentProfile(AgentId("unused"), "unused")
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        raise AssertionError("a naming profile with repository tools should use MCP")
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        if not str(agent_run_id).endswith(":name:run"):
+            return await super().run_turn_with_mcp(
+                agent_run_id, profile, messages, mcp_server, workspace_id
+            )
+        self.naming_servers.append(mcp_server)
+        self.profile = profile
+        read = await _call_broker(mcp_server, "view_work_item", {"number": 270})
+        # Nothing here is a step, so the tools that end one are not served.
+        self.refused = await _call_broker(
+            mcp_server, "complete_step", {"outcome": "success", "summary": "", "outputs": {}}
+        )
+        title = json.loads(str(read["output"]))["title"]
+        return AgentTurn(Message.assistant(f"#270 {title}"))
+
+
+def _tool_request(server_name: str) -> ApprovalRequest:
+    return ApprovalRequest(
+        approval_id="naming-tool",
+        kind=ApprovalKind.TOOL_USE,
+        tool_name=server_name,
+        allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+    )
+
+
+def _command_request() -> ApprovalRequest:
+    return ApprovalRequest(
+        approval_id="naming-command",
+        kind=ApprovalKind.COMMAND_EXECUTION,
+        command="rm -rf .",
+        allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+    )
+
+
+class ApprovalGatedIssueReadingRunner(IssueReadingRunner):
+    """A provider that must be told yes before it may call an attached tool.
+
+    Codex is one: `codex exec` refuses an MCP tool call outright because its
+    approval policy is `never`, so a naming turn driven non-interactively there
+    never reads the issue and names the run off the bare request instead.
+    """
+
+    def __init__(self, arguments: dict[str, object]) -> None:
+        super().__init__(arguments)
+        self.decisions: list[tuple[str, object]] = []
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        raise AssertionError("a naming profile with repository tools should use MCP")
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        if str(agent_run_id).endswith(":name:run"):
+            self.decisions = [
+                ("tool", await on_approval(_tool_request(mcp_server.name))),
+                ("command", await on_approval(_command_request())),
+            ]
+            if self.decisions[0][1] is not ApprovalDecision.ACCEPT:
+                return AgentTurn(Message.assistant("#270 issue details unavailable"))
+        return await self.run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
+@pytest.mark.parametrize(
+    "runner_class", [IssueReadingRunner, ApprovalGatedIssueReadingRunner]
+)
+def test_a_run_is_named_after_the_issue_its_task_points_at(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_class: type[IssueReadingRunner],
+) -> None:
+    """"Resolve issue 270" is worth a name only once somebody has read it.
+
+    The naming turn gets the repository tools its profile is granted, over a
+    server of its own: it is not a step, so `complete_step` is refused rather
+    than offered a run it cannot finish.
+
+    Run for both kinds of provider, because holding the tools is not the same
+    as being allowed to call them: one where attaching a server is enough, and
+    one that asks before every call and is answered by the naming turn itself.
+    """
+
+    monkeypatch.setattr(dispatcher_module, "TerminalMcpBroker", MockTerminalMcpBroker)
+    repository = _repository(tmp_path)
+    store = SQLiteStateStore(tmp_path / "workflow.sqlite3")
+    source_control = WorkItemSourceControl()
+    implementer = runner_class(
+        {
+            "outcome": "success",
+            "summary": "Pinned the dependencies.",
+            "outputs": {"pr_url": "https://github.com/acme/api/pull/271"},
+        }
+    )
+    reviewer = CompletingRunner(
+        {
+            "outcome": "success",
+            "summary": "The implementation satisfies the task.",
+            "outputs": {"findings": "No blocking findings."},
+        }
+    )
+    unused = object()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=unused,
+            source_control=source_control,
+            agent_runner=implementer,
+            communications=unused,
+            workspace_provider=GitWorktreeWorkspaceProvider(str(tmp_path / "trees")),
+            state_store=store,
+        ),
+        profiles={},
+        runners={"test": reviewer},
+    )
+    app = create_app(
+        session,
+        {"test": reviewer},
+        workflow_runners={"test": implementer},
+        review_runners={"test": reviewer},
+        workflow_catalog=CATALOG,
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-v1",
+                        "prompt": "Resolve issue 270.",
+                        "repository": str(repository),
+                        "runner": "test",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                await _await_phase(client, run_id, "awaiting_human_review")
+        return await store.load(run_id)
+
+    state = asyncio.run(scenario())
+    store.close()
+
+    assert state is not None
+    assert state.name == ISSUE_NAME
+    assert source_control.viewed == [(state.workspace_id, 270)]
+    assert implementer.refused["ok"] is False
+    # The refusal above is the broker's; this is what the provider is told to
+    # spawn, and it is the half of the answer the model actually sees.
+    assert "--repository-tools-only" in implementer.naming_servers[0].args
+    # Granted, served, and said so: a tool the agent is not told it holds is one
+    # it reports it would have used.
+    assert "view_work_item" in implementer.profile.instructions
+    assert "complete_step" not in implementer.profile.instructions
+    if isinstance(implementer, ApprovalGatedIssueReadingRunner):
+        # Yes to this turn's own tools, no to anything a person would want to
+        # see: naming a run unattended is not licence to start doing the work.
+        assert implementer.decisions == [
+            ("tool", ApprovalDecision.ACCEPT),
+            ("command", ApprovalDecision.CANCEL),
+        ]
+
+
+# --- what a turn nobody is watching may be served, and may be told yes to ----
+
+
+class CommentingSourceControl(WorkItemSourceControl):
+    """A composition that can write, offered to a profile that asks to."""
+
+    async def add_comment(
+        self,
+        pr_url: str,
+        comment: str,
+        file: str | None = None,
+        line: int | None = None,
+    ) -> None:
+        raise AssertionError("a naming turn must not be able to comment")
+
+    async def request_review(
+        self,
+        workspace_id: WorkspaceId,
+        branch: str,
+        base_ref: str,
+        title: str,
+        body: str,
+    ) -> str:
+        raise AssertionError("a naming turn must not be able to open a pull request")
+
+
+def _served_tools(mcp_server: McpServerConfig) -> tuple[str, ...]:
+    """The repository tools a broker's argv actually offers this turn."""
+    args = list(mcp_server.args)
+    return tuple(
+        args[index + 1]
+        for index, argument in enumerate(args)
+        if argument == "--repository-tool"
+    )
+
+
+class RecordingNamingRunner:
+    """Records which transport named the run, and what it was served on it."""
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+    def __init__(self, interactive_error: Exception | None = None) -> None:
+        self.interactive_error = interactive_error
+        self.served: list[tuple[str, tuple[str, ...]]] = []
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        self.served.append(("none", ()))
+        return AgentTurn(Message.assistant("Named with no server"))
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        raise AssertionError("a naming turn with no server does not need approvals")
+
+    async def cancel(self, agent_run_id: AgentRunId) -> None:
+        return None
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        self.served.append(("plain", _served_tools(mcp_server)))
+        return AgentTurn(Message.assistant("Named plainly"))
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        self.served.append(("interactive", _served_tools(mcp_server)))
+        if self.interactive_error is not None:
+            raise self.interactive_error
+        return AgentTurn(Message.assistant("Named interactively"))
+
+
+def _naming_executor(runner: RecordingNamingRunner) -> WorkflowExecutor:
+    unused = object()
+    return WorkflowExecutor(
+        Capabilities(
+            workflow_runtime=unused,
+            source_control=CommentingSourceControl(),
+            agent_runner=runner,
+            communications=unused,
+            workspace_provider=unused,
+            state_store=unused,
+        ),
+        {"test": runner},
+        review_runners={"test": runner},
+        catalog=CATALOG,
+    )
+
+
+def _naming_state() -> RunState:
+    return RunState(
+        run_id=RunId("run-naming"),
+        task_id=TaskId("task-naming"),
+        workflow_id=WorkflowId("implementation-review-v1"),
+        prompt="Resolve issue 270.",
+        workspace_id=WorkspaceId("ws-naming"),
+    )
+
+
+def _name(runner: RecordingNamingRunner, capabilities: tuple[str, ...]) -> AgentTurn:
+    executor = _naming_executor(runner)
+    profile = AgentProfile(
+        AgentId("namer"), "Name the run.", capabilities=capabilities
+    )
+    return asyncio.run(
+        executor._naming_turn(_naming_state(), profile, "Name this.", "test")
+    )
+
+
+def test_a_naming_turn_is_served_only_the_tools_that_read() -> None:
+    """A grant it should not have been given is one it is not served.
+
+    Nobody is watching this turn, so the guarantee has to hold of the server
+    rather than of whichever profile is pointed at it: granted the tools to
+    comment and to open a pull request, it gets neither.
+    """
+
+    runner = RecordingNamingRunner()
+    turn = _name(runner, ("view_work_item", "add_comment", "open_pull_request"))
+
+    assert runner.served == [("interactive", ("view_work_item",))]
+    assert turn.message.content == "Named interactively"
+
+
+def test_a_naming_profile_granted_only_write_tools_gets_no_server() -> None:
+    runner = RecordingNamingRunner()
+    turn = _name(runner, ("add_comment", "open_pull_request"))
+
+    assert runner.served == [("none", ())]
+    assert turn.message.content == "Named with no server"
+
+
+def test_a_naming_turn_falls_back_when_the_interactive_transport_cannot_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Naming is the only turn on this transport, so it is the only one at risk.
+
+    A deployment whose steps run non-interactively exercises app-server here
+    and nowhere else. If that is missing or misconfigured, the plain transport
+    still names the run rather than the caller dropping the name entirely.
+
+    The warning is asserted because it is the only thing that reports this: a
+    deployment stuck on the fallback still names every run, just off the bare
+    prompt, which is what the run this series started from did.
+    """
+
+    runner = RecordingNamingRunner(RuntimeError("app-server is not available"))
+    with caplog.at_level(logging.WARNING, logger="engine.runtime.workflow_execution"):
+        turn = _name(runner, ("view_work_item",))
+
+    assert [transport for transport, _ in runner.served] == ["interactive", "plain"]
+    assert turn.message.content == "Named plainly"
+    fallen_back = [
+        record
+        for record in caplog.records
+        if "naming fell back to the non-interactive transport" in record.getMessage()
+    ]
+    assert len(fallen_back) == 1
+    assert fallen_back[0].levelno == logging.WARNING
+    assert "run-naming" in fallen_back[0].getMessage()
+    assert fallen_back[0].exc_info is not None
+
+
+def _approval(**overrides: object) -> ApprovalRequest:
+    return ApprovalRequest(
+        **{
+            "approval_id": "naming",
+            "kind": ApprovalKind.TOOL_USE,
+            "tool_name": "workflow",
+            "allowed_decisions": (ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+            **overrides,
+        }  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_", "expected"),
+    [
+        # The three spellings a provider may report the same call under: the
+        # server being asked about, the tool within it, and the prefixed name
+        # the transcript records.
+        (_approval(), ApprovalDecision.ACCEPT),
+        (_approval(tool_name="view_work_item"), ApprovalDecision.ACCEPT),
+        (
+            _approval(tool_name="mcp__workflow__view_work_item"),
+            ApprovalDecision.ACCEPT,
+        ),
+        (_approval(tool_name="mcp__other__view_work_item"), ApprovalDecision.CANCEL),
+        (_approval(tool_name="add_comment"), ApprovalDecision.CANCEL),
+        (_approval(tool_name=None), ApprovalDecision.CANCEL),
+        (
+            _approval(kind=ApprovalKind.COMMAND_EXECUTION, command="rm -rf ."),
+            ApprovalDecision.CANCEL,
+        ),
+        (_approval(requires_human=True), ApprovalDecision.CANCEL),
+        (
+            _approval(allowed_decisions=(ApprovalDecision.CANCEL,)),
+            ApprovalDecision.CANCEL,
+        ),
+    ],
+)
+def test_the_naming_turn_answers_only_its_own_tools(
+    request_: ApprovalRequest, expected: ApprovalDecision
+) -> None:
+    """The accept branch is one f-string wide, and no provider asserts it.
+
+    A typo in the prefixed spelling, or a provider that starts reporting a
+    different one, puts the naming turn back to naming off the bare prompt --
+    with every other test still green, because they raise the spelling they
+    then assert.
+    """
+
+    approve = _naming_approvals("workflow", ("view_work_item",))
+
+    assert asyncio.run(approve(request_)) is expected
 
 
 # --- the same workflow, driven by scripted CLIs over the real MCP bridge -----
@@ -370,6 +887,10 @@ FINDING = "greeting.txt is not covered by a test."
 
 #: The reviewer's prompt quotes the task the implementation was given, so the
 #: scenario only a reviewer can match is listed first: the first match wins.
+#:
+#: Both scenarios end on their terminal tool call, which is what the step
+#: instructions ask for and what a step assembled answer-last used to trip on.
+#: Keep it that way: a closing `say` would hide that shape from this tier again.
 SCRIPTED_RUN = {
     "title": "Adding a greeting",
     "scenarios": [
@@ -396,7 +917,6 @@ SCRIPTED_RUN = {
                         "outputs": {"findings": FINDING},
                     },
                 },
-                {"type": "say", "text": "Left the finding on the pull request."},
             ],
         },
         {
@@ -413,13 +933,24 @@ SCRIPTED_RUN = {
                         "outputs": {"pr_url": PULL_REQUEST},
                     },
                 },
-                # A turn ends in the agent's answer, and a turn that finishes
-                # before the runtime cancels it is only assembled in the order
-                # it was streamed when its last item is a message. Workaround
-                # for #105, which carries the reproduction.
-                {"type": "say", "text": "Wrote greeting.txt."},
             ],
         },
+    ],
+}
+
+CLARIFICATION_RUN = {
+    "title": "Clarifying compatibility",
+    "scenarios": [
+        {
+            "when": "ambiguous",
+            "steps": [
+                {"type": "tool", "name": "clarify", "arguments": {}},
+                {
+                    "type": "say",
+                    "text": "Which behavior should remain compatible?",
+                },
+            ],
+        }
     ],
 }
 
@@ -429,7 +960,7 @@ def _compose(
     repository: Path,
     monkeypatch: pytest.MonkeyPatch,
     script: object,
-) -> tuple[Starlette, Capabilities, Path]:
+) -> tuple[Starlette, Capabilities]:
     """The web application, composed as it is in production over fake CLIs.
 
     The composition root rather than a hand-wired capability set: which runner
@@ -442,12 +973,10 @@ def _compose(
     script_path = tmp_path / "script.json"
     script_path.write_text(json.dumps(script), encoding="utf-8")
     monkeypatch.setenv(SCRIPT_ENVIRONMENT_VARIABLE, str(script_path))
-    gh_log = tmp_path / "gh.jsonl"
 
     settings = Settings(
         codex_binary=fake_codex(binaries),
         claude_binary=fake_claude(binaries),
-        github_binary=github_fakes.install(binaries, gh_log),
         codex_working_directory=str(repository),
         claude_working_directory=str(repository),
         workspace_root=str(tmp_path / "workspaces"),
@@ -459,9 +988,10 @@ def _compose(
         build_session(capabilities, runners, str(repository)),
         runners,
         workflow_runners=build_workflow_runners(settings),
-        review_runners=build_review_runners(settings),
+        review_runners=build_read_only_runners(settings),
+        workflow_catalog=CATALOG,
     )
-    return app, capabilities, gh_log
+    return app, capabilities
 
 
 async def _drive(
@@ -517,15 +1047,28 @@ def test_a_scripted_cli_drives_a_run_over_the_real_mcp_bridge(
     provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Provision, implement, complete the step, review, and stop for a human."""
+    from unittest.mock import patch
+    from engine.adapters.source_control.github import GitHubSourceControl
+
     repository = _repository(tmp_path)
-    app, capabilities, gh_log = _compose(
+    app, capabilities = _compose(
         tmp_path, repository, monkeypatch, SCRIPTED_RUN
     )
 
+    api_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_api(self, method: str, path: str, **kwargs: object) -> dict:
+        api_calls.append((method, path, dict(kwargs)))
+        # GET /repos/.../pulls/N returns the head SHA the inline comment needs.
+        if method == "GET" and "/pulls/" in path:
+            return {"head": {"sha": "abc1234"}}
+        return {}
+
     try:
-        run, threads = asyncio.run(
-            _drive(app, repository, TASK, provider, "awaiting_human_review")
-        )
+        with patch.object(GitHubSourceControl, "_api", fake_api):
+            run, threads = asyncio.run(
+                _drive(app, repository, TASK, provider, "awaiting_human_review")
+            )
     finally:
         capabilities.state_store.close()
 
@@ -547,34 +1090,204 @@ def test_a_scripted_cli_drives_a_run_over_the_real_mcp_bridge(
     checkout = Path(workspaces.pop())
     assert (checkout / "greeting.txt").read_text().strip() == "hello"
 
-    # And the reviewer's inline finding reached `gh` rather than GitHub.
-    recorded = [call["argv"] for call in github_fakes.calls(gh_log)]
-    assert recorded[0] == [
-        "pr",
-        "view",
-        PULL_REQUEST,
-        "--json",
-        "headRefOid",
-        "--jq",
-        ".headRefOid",
-    ]
-    assert recorded[1] == [
-        "api",
-        "--method",
-        "POST",
-        "repos/acme/api/pulls/7/comments",
-        "--raw-field",
-        f"body={FINDING}",
-        "--raw-field",
-        f"commit_id={github_fakes.HEAD_SHA}",
-        "--raw-field",
-        "path=greeting.txt",
-        "--field",
-        "line=1",
-        "--raw-field",
-        "side=RIGHT",
-    ]
-    assert len(recorded) == 2
+    # The reviewer's inline finding reached the GitHub API directly.
+    post_calls = [(m, p, kw) for m, p, kw in api_calls if m == "POST"]
+    assert any("/pulls/7/comments" in p for _, p, _ in post_calls)
+    inline = next((kw for _, p, kw in post_calls if "/pulls/7/comments" in p), None)
+    assert inline is not None
+    assert inline.get("json", {}).get("body") == FINDING
+
+
+#: A script that is about naming. `title` is deliberately not the name this run
+#: should end up with: the fake answers it whenever a script says nothing about
+#: naming, so a passing assertion here means the `naming` steps really ran.
+NAMING_RUN = {
+    "title": "Named off the bare request",
+    "naming": [
+        {"type": "tool", "name": "view_work_item", "arguments": {"number": 270}},
+        {"type": "say", "text": ISSUE_NAME},
+    ],
+    # The steps themselves are beside the point here -- the name lands before
+    # the first one -- but the run is driven to a phase it is meant to sit at
+    # rather than abandoned mid-flight, so both need a scenario.
+    "scenarios": [
+        {
+            "when": "Inspect the workspace",
+            "steps": [
+                {"type": "say", "text": "Read the change."},
+                # The review step refuses a completion with no comment on it.
+                {
+                    "type": "tool",
+                    "name": "add_comment",
+                    "arguments": {"pr_url": PULL_REQUEST, "comment": FINDING},
+                },
+                {
+                    "type": "tool",
+                    "name": "complete_step",
+                    "arguments": {
+                        "outcome": "success",
+                        "summary": "Reviewed the pinning.",
+                        "outputs": {"findings": FINDING},
+                    },
+                },
+            ],
+        },
+        {
+            "steps": [
+                {"type": "say", "text": "Pinning the dependencies."},
+                {
+                    "type": "tool",
+                    "name": "complete_step",
+                    "arguments": {
+                        "outcome": "success",
+                        "summary": "Pinned the dependencies.",
+                        "outputs": {"pr_url": PULL_REQUEST},
+                    },
+                },
+            ],
+        },
+    ],
+}
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_scripted_cli_reads_the_issue_while_naming_a_run(
+    provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real CLI, calling a repository tool over the real bridge, while naming.
+
+    The tier the transport mistake belongs in. A fake that raises an approval
+    and asserts the answer defines the semantics it checks, so it cannot notice
+    a provider that stops honouring them; this spawns the CLI the runtime would
+    spawn, over whichever transport the runtime picks, and asks only whether
+    the issue was read.
+    """
+
+    from unittest.mock import patch
+    from engine.adapters.source_control.github import GitHubSourceControl
+
+    repository = _repository(tmp_path)
+    app, capabilities = _compose(tmp_path, repository, monkeypatch, NAMING_RUN)
+
+    read: list[str] = []
+
+    async def fake_api(self, method: str, path: str, **kwargs: object) -> object:
+        read.append(path)
+        if path.endswith("/comments"):
+            return []
+        return {"number": 270, "title": ISSUE_TITLE, "state": "open"}
+
+    # The fixture's `origin` is a local bare clone, which is no `owner/repo`.
+    async def fake_coords(self, root_path: str) -> tuple[str, str]:
+        return ("acme", "api")
+
+    async def scenario() -> str:
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-v1",
+                        "prompt": "Resolve issue 270.",
+                        "repository": str(repository),
+                        "runner": provider,
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                # From the store rather than the API, which shows the prompt
+                # for a run that has no name yet -- and the prompt is what an
+                # unnamed run would be indistinguishable from here.
+                name = ""
+                for _ in range(6_000):
+                    state = await capabilities.state_store.load(run_id)
+                    if state is not None and state.name:
+                        name = state.name
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    raise AssertionError(f"run {run_id} was never named")
+                # The name lands before the first step, but leaving here would
+                # tear the lifespan down while a CLI, an MCP server and a
+                # worktree are mid-creation. Let the run reach a phase it is
+                # meant to sit at, the way every other test at this tier does.
+                reached = await _await_phase(
+                    client, run_id, "awaiting_human_review", attempts=6_000
+                )
+                assert reached.json()["phase"] == "awaiting_human_review", (
+                    reached.json()["failureReason"]
+                )
+                return name
+
+    try:
+        with (
+            patch.object(GitHubSourceControl, "_api", fake_api),
+            patch.object(GitHubSourceControl, "_repo_coords", fake_coords),
+        ):
+            name = asyncio.run(scenario())
+    finally:
+        capabilities.state_store.close()
+
+    assert name == ISSUE_NAME
+    assert "/repos/acme/api/issues/270" in read
+
+
+def test_codex_clarification_pauses_the_step_and_reaches_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path)
+    app, capabilities = _compose(
+        tmp_path, repository, monkeypatch, CLARIFICATION_RUN
+    )
+
+    async def scenario() -> tuple[dict, dict]:
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-v1",
+                        "prompt": "Resolve an ambiguous compatibility requirement.",
+                        "repository": str(repository),
+                        "runner": "codex",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                for _ in range(6_000):
+                    run = (await client.get(f"/api/runs/{run_id}")).json()
+                    implementation = run["steps"][0]
+                    if implementation["waiting"]:
+                        messages = (
+                            await client.get(
+                                "/api/threads/"
+                                f"{implementation['agentInstanceId']}/messages"
+                            )
+                        ).json()
+                        if not messages["unstable_resume"]:
+                            return run, messages
+                    await asyncio.sleep(0.01)
+                raise AssertionError(f"clarification did not pause the run: {run}")
+
+    try:
+        run, messages = asyncio.run(scenario())
+    finally:
+        capabilities.state_store.close()
+
+    assert run["phase"] == "running_agent", run["failureReason"]
+    assert run["steps"][0]["waiting"] is True
+    clarification = messages["messages"][-1]["content"]
+    assert {"type": "text", "text": "Which behavior should remain compatible?"} in (
+        clarification
+    )
+    assert any(
+        part.get("toolName") == "mcp__workflow__clarify"
+        for part in clarification
+    )
 
 
 #: A completion that leaves out a declared output is not a completion. The
@@ -609,7 +1322,7 @@ def test_a_completion_without_its_declared_output_is_refused(
     provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository = _repository(tmp_path)
-    app, capabilities, _ = _compose(
+    app, capabilities = _compose(
         tmp_path, repository, monkeypatch, INCOMPLETE_RUN
     )
 

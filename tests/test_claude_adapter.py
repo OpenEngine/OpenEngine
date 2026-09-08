@@ -13,6 +13,7 @@ import pytest
 
 from engine.adapters.agent_runner.claude_code import (
     CLAUDE_PERMISSION_TRANSLATOR,
+    OUTPUT_STYLES,
     ClaudeCodeAgentRunner,
     ClaudeExecutionError,
     ClaudeToolsUnsupportedError,
@@ -26,6 +27,11 @@ from engine.adapters.agent_runner.claude_code import (
     turn_from_events,
 )
 from engine.domain import AgentId, AgentProfile, AgentRunId, Message, Role, ToolSpec, WorkspaceId
+from engine.runtime import (
+    AGENT_PROTOCOL_DIAGNOSTIC_LOG,
+    GRANTED_TOOLS_NOTE,
+    with_granted_tools,
+)
 from engine.ports import (
     AgentRunner,
     ApprovalCapability,
@@ -40,6 +46,7 @@ from engine.ports import (
     StreamingMcpAgentRunner,
     PermissionScope,
     PermissionTranslator,
+    ResponseStyle,
     UserInputAnswer,
     UserInputResponse,
 )
@@ -85,6 +92,37 @@ def test_attribution_can_be_disabled_for_commits_and_pull_requests() -> None:
 
     settings = json.loads(argv[argv.index("--settings") + 1])
     assert settings == {"attribution": {"commit": "", "pr": "", "sessionUrl": False}}
+
+
+def test_response_style_selects_claude_s_own_output_style() -> None:
+    argv = ClaudeCodeAgentRunner(output_style=ResponseStyle.CONCISE).command_line(PROFILE)
+
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings == {"outputStyle": "Concise"}
+
+
+def test_every_provider_setting_travels_in_one_settings_document() -> None:
+    """A second `--settings` would replace the first rather than add to it."""
+    argv = ClaudeCodeAgentRunner(
+        attribution=False, output_style=ResponseStyle.LEARNING
+    ).command_line(PROFILE)
+
+    assert argv.count("--settings") == 1
+    assert json.loads(argv[argv.index("--settings") + 1]) == {
+        "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+        "outputStyle": "Learning",
+    }
+
+
+def test_no_configured_style_leaves_claude_s_default_alone() -> None:
+    assert "--settings" not in ClaudeCodeAgentRunner().command_line(PROFILE)
+
+
+def test_every_engine_style_has_an_exactly_spelled_provider_name() -> None:
+    """Claude keeps its default for a style name it does not recognize, so a
+    style Engine accepts must never reach the CLI mistranslated."""
+    assert set(OUTPUT_STYLES) == set(ResponseStyle)
+    assert OUTPUT_STYLES[ResponseStyle.EXPLANATORY] == "Explanatory"
 
 
 @pytest.mark.parametrize(
@@ -294,6 +332,23 @@ def test_instructions_go_to_the_system_prompt_not_the_conversation() -> None:
     argv = ClaudeCodeAgentRunner().command_line(PROFILE)
 
     assert argv[argv.index("--append-system-prompt") + 1] == "You are terse."
+
+
+def test_the_granted_tools_note_reaches_the_system_prompt() -> None:
+    """This flag is the whole reason the runtime appends the note.
+
+    `with_granted_tools` writes into `instructions`, and `instructions` reaching
+    the model through this channel is what turns that into an agent that knows
+    what it holds.
+    """
+    argv = ClaudeCodeAgentRunner().command_line(
+        with_granted_tools(PROFILE, ("add_milestone",))
+    )
+
+    system_prompt = argv[argv.index("--append-system-prompt") + 1]
+    assert system_prompt.startswith("You are terse.")
+    assert GRANTED_TOOLS_NOTE in system_prompt
+    assert "- add_milestone" in system_prompt
 
 
 def test_chat_gets_read_only_tools_by_default() -> None:
@@ -534,6 +589,48 @@ def _fake_interactive_claude(tmp_path) -> str:
     return str(binary)
 
 
+def _fake_unknown_control_request_claude(tmp_path) -> str:
+    binary = tmp_path / "claude-unknown-control"
+    binary.write_text(
+        textwrap.dedent(
+            '''\
+            #!/usr/bin/env python3
+            import json
+            import sys
+
+            def receive():
+                return json.loads(sys.stdin.readline())
+
+            def send(message):
+                print(json.dumps(message), flush=True)
+
+            initialize = receive()
+            send({"type": "control_response", "response": {
+                "subtype": "success", "request_id": initialize["request_id"],
+                "response": {}}})
+            receive()
+            send({"type": "control_request", "request_id": "future-1",
+                  "request": {"subtype": "future_interaction"}})
+            rejection = receive()
+            assert rejection["type"] == "control_response"
+            assert rejection["response"]["subtype"] == "error"
+            assert rejection["response"]["request_id"] == "future-1"
+            error = rejection["response"]["error"]
+            assert "future_interaction" in error
+            assert "unsupported_subtype" in error
+            assert "requested tool did not run" in error
+            assert "do not retry" in error
+            send({"type": "assistant", "message": {"content": [{
+                "type": "text", "text": "recovered"}]}})
+            send({"type": "result", "subtype": "success", "is_error": False,
+                  "result": "recovered", "usage": {}})
+            '''
+        )
+    )
+    binary.chmod(0o755)
+    return str(binary)
+
+
 def test_interactive_turn_round_trips_a_control_approval(tmp_path) -> None:
     runner = ClaudeCodeAgentRunner(binary_path=_fake_interactive_claude(tmp_path))
     observed: list[Message] = []
@@ -562,6 +659,58 @@ def test_interactive_turn_round_trips_a_control_approval(tmp_path) -> None:
     assert argv[argv.index("--permission-prompt-tool") + 1] == "stdio"
 
 
+def test_interactive_diagnostic_uses_shared_redacted_vocabulary(
+    tmp_path, monkeypatch
+) -> None:
+    diagnostic = tmp_path / "agent-protocol.jsonl"
+    monkeypatch.setenv(AGENT_PROTOCOL_DIAGNOSTIC_LOG, str(diagnostic))
+    runner = ClaudeCodeAgentRunner(binary_path=_fake_interactive_claude(tmp_path))
+
+    async def approve(_request):
+        return ApprovalDecision.ACCEPT_FOR_SESSION
+
+    asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-sensitive"),
+            PROFILE,
+            (Message.user("a prompt that must not be logged"),),
+            approve,
+        )
+    )
+
+    text = diagnostic.read_text()
+    records = [json.loads(line) for line in text.splitlines()]
+    assert [record["event"] for record in records] == [
+        "session_started",
+        "session_initialized",
+        "interaction_received",
+        "interaction_normalized",
+        "interaction_response_sent",
+    ]
+    assert all(record["runner"] == "claude_code" for record in records)
+    assert records[2]["subtype"] == "can_use_tool"
+    assert records[2]["tool_name"] == "Bash"
+    assert "touch output.txt" not in text
+    assert "a prompt that must not be logged" not in text
+
+
+def test_unknown_control_request_is_rejected_without_ending_the_turn(tmp_path) -> None:
+    runner = ClaudeCodeAgentRunner(
+        binary_path=_fake_unknown_control_request_claude(tmp_path)
+    )
+
+    turn = asyncio.run(
+        runner.run_turn_interactive(
+            AgentRunId("ar-unknown"),
+            PROFILE,
+            (Message.user("go"),),
+            lambda _request: None,
+        )
+    )
+
+    assert turn.message.content == "recovered"
+
+
 def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     server = McpServerConfig("workflow", "/usr/bin/python3", ("-m", "terminal"))
     runner = ClaudeCodeAgentRunner()
@@ -586,6 +735,8 @@ def test_terminal_mcp_configuration_is_passed_to_claude() -> None:
     assert "mcp__workflow__clarify" in allowed
     assert "mcp__workflow__complete_step" in allowed
     assert "mcp__workflow__fail_step" in allowed
+    # Reporting progress is not an action to be approved one line at a time.
+    assert "mcp__workflow__update_status" in allowed
     interactive = runner.interactive_command_line(PROFILE, server)
     assert json.loads(interactive[interactive.index("--mcp-config") + 1]) == config
 

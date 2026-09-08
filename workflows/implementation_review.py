@@ -9,17 +9,29 @@ implementation_agent = oe.agent(
         "Implement the requested change in the provided workspace. Read the code "
         "before editing. Engine has already based the workspace on the current remote "
         "main commit; do not fetch, pull, or merge main before editing. Make the "
-        "smallest complete change and report the result."
+        "smallest complete change and report the result.\n\n"
+        "Every git operation goes through the git_subcommand tool, which runs git "
+        "in this workspace -- not through the shell, which is not permitted to run "
+        "git here. Any subcommand is available to it. When the change is ready: "
+        "create a descriptive branch such as agent/<description> from the base, "
+        "commit only the work for this change, push the branch, and then call "
+        "open_pull_request and report the URL it returns as the pr_url output. "
+        "The workspace's own engine/ branch is Engine's bookkeeping and cannot be "
+        "pushed."
     ),
+    capabilities=["git_subcommand", "open_pull_request"],
     description="Implements the requested repository change.",
 )
 
 naming_agent = oe.agent(
     id="implementation-agent",
     instructions=(
-        "Give a submitted workflow a concise display name. Do not inspect or change "
-        "the workspace and do not perform the requested task."
+        "Give a submitted workflow a concise display name. When the request points at "
+        "an issue or a pull request instead of describing the work -- \"resolve issue "
+        "270\" -- read that item first and name what it is actually about. Do not "
+        "change the workspace and do not perform the requested task."
     ),
+    capabilities=["view_work_item", "view_change_request", "list_work_items"],
     description="Names a submitted implementation workflow.",
 )
 
@@ -40,7 +52,12 @@ review_agent = oe.agent(
         "be carried out. The human reviewer decides what happens to this run -- you "
         "do not approve or reject it."
     ),
-    capabilities=["add_comment"],
+    capabilities=[
+        "view_change_request",
+        "list_pipeline_status",
+        "get_job_logs",
+        "add_comment",
+    ],
     description="Inspects an implementation without modifying it.",
 )
 
@@ -51,12 +68,14 @@ workflow = oe.workflow(
     id="implementation-review-v1",
     name="Implementation review",
     version="v1",
-    workspace=oe.workspace(base_ref="origin/main"),
+    workspace=oe.workspace(),
     naming_agent=naming_agent,
     naming_prompt=(
-        "Name this workflow based on the task above. Do not perform the task or use "
-        "tools. Reply with only a concise name of at most eight words, with no quotes "
-        "or ending punctuation."
+        "Name this workflow based on the task above. If it names an issue or pull "
+        "request by number, read that item first and lead the name with the number, "
+        "as in \"#270 Dependencies can run arbitrary install scripts\". Do not perform "
+        "the task. Reply with only a concise name of at most twelve words, with no "
+        "quotes or ending punctuation."
     ),
     steps=[
         oe.agent_step(
@@ -113,6 +132,7 @@ workflow = oe.workflow(
             ),
             approved=oe.succeed(),
             rejected=oe.fail(),
+            notification=oe.slack_notification(),
         ),
     ],
 )

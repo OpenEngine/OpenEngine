@@ -21,6 +21,7 @@ from engine.ports.agent_runner import (
     InteractiveMcpAgentRunner,
     McpAgentRunner,
     McpServerConfig,
+    ResponseStyle,
     StreamingAgentRunner,
     StreamingMcpAgentRunner,
     TokenUsage,
@@ -30,13 +31,24 @@ from engine.ports.agent_runner import (
     UserInputQuestion,
     UserInputResponse,
 )
-from engine.ports.communications import Communications
+from engine.ports.communications import Communications, Message, MessageLink
 from engine.ports.permissions import (
     ApprovalCapability,
     PermissionScope,
     PermissionTranslator,
 )
-from engine.ports.source_control import SourceControl
+from engine.ports.source_control import (
+    ChangeRequest,
+    Discussion,
+    GitResult,
+    JobLogs,
+    Pipeline,
+    PipelineRetry,
+    PipelineStatus,
+    SourceControl,
+    StatusCheck,
+    WorkItem,
+)
 from engine.ports.state_store import StateStore
 from engine.ports.workflow_runtime import WorkflowRuntime
 from engine.ports.workspace_provider import Workspace, WorkspaceProvider, WorkspaceState
@@ -50,15 +62,26 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalResponse",
     "ApprovalCapability",
+    "ChangeRequest",
     "Communications",
+    "Message",
+    "MessageLink",
+    "Discussion",
     "FinishReason",
+    "GitResult",
+    "JobLogs",
     "InteractiveAgentRunner",
     "InteractiveMcpAgentRunner",
     "McpAgentRunner",
     "McpServerConfig",
     "PermissionScope",
     "PermissionTranslator",
+    "Pipeline",
+    "PipelineRetry",
+    "PipelineStatus",
+    "ResponseStyle",
     "SourceControl",
+    "StatusCheck",
     "StateStore",
     "StreamingAgentRunner",
     "StreamingMcpAgentRunner",
@@ -69,6 +92,7 @@ __all__ = [
     "UserInputQuestion",
     "UserInputResponse",
     "Workspace",
+    "WorkItem",
     "WorkflowRuntime",
     "WorkspaceProvider",
     "WorkspaceState",

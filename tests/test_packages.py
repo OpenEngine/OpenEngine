@@ -17,6 +17,7 @@ EXPECTED_PACKAGE_ROOTS = [
     "packages/engine",
     "packages/ports",
     "packages/runtime",
+    "packages/orchestrator",
     "packages/adapters/workflow_runtime/temporal",
     "packages/adapters/source_control/github",
     "packages/adapters/agent_runner/codex",

@@ -28,11 +28,27 @@ export type EngineConfig = {
   agents: AgentOption[];
   runners: RunnerOption[];
   defaultAgent: string;
+  /** The agent the New Project button talks to, empty when none is composed. */
+  planAgent: string;
   defaultRunner: string;
   workflowRunners: string[];
   defaultWorkflowRunner: string;
-  workflows: { id: string; name: string; version: string }[];
+  /** What a WorkOrder can be created from.
+   *
+   *  `kind` is which engine runs it. A `"graph"` is the newer, `[BETA]` kind:
+   *  it has no version yet, and it names its own agent, so the form neither
+   *  prints a version for one nor asks which runner to use. */
+  workflows: { id: string; name: string; version: string; kind: "steps" | "graph" }[];
 };
+
+/** Which agent the next conversation starts on, for a plan or an ordinary chat.
+ *
+ *  A deployment that composed no planner says so with an empty `planAgent`, and
+ *  the plan page then opens on the default rather than on nothing: the button
+ *  starting a chat you can retarget is better than one that starts none. */
+export function newChatAgent(config: EngineConfig, plan: boolean): string {
+  return (plan && config.planAgent) || config.defaultAgent;
+}
 
 export type ApiThread = {
   id: string;
@@ -51,14 +67,137 @@ export type ApiThread = {
   autoApprove?: boolean;
 };
 
-export type ApiRunStep = {
+export type ApiProject = {
+  projectId: string;
+  name: string;
+  /** Put away rather than deleted: listed under Archived, and restorable. */
+  archived: boolean;
+  /** The planning conversation this project was named after, when it still has
+   *  one. A project with none is listed but has nothing to open. */
+  conversationUrl?: string;
+  /** How many milestones the plan holds, from the responses that counted them.
+   *  Absent where nothing counted, which is not the same as a plan of none. */
+  milestoneCount?: number;
+};
+
+/** The page listing one project's plan in full. */
+export function projectMilestonesUrl(projectId: string): string {
+  return `/projects/${encodeURIComponent(projectId)}/milestones`;
+}
+
+/** One milestone's own page: the workstreams under it and the tasks in each.
+ *
+ *  Nested under the plan it belongs to rather than named by its id alone: the
+ *  page is read as part of a project, and the way back out is the plan. */
+export function milestoneDetailsUrl(
+  projectId: string,
+  milestoneId: string,
+): string {
+  return `${projectMilestonesUrl(projectId)}/${encodeURIComponent(milestoneId)}`;
+}
+
+export function milestoneNewTaskUrl(
+  projectId: string,
+  milestoneId: string,
+): string {
+  return `${milestoneDetailsUrl(projectId, milestoneId)}/tasks/new`;
+}
+
+export function milestoneScopeUrl(
+  projectId: string,
+  milestoneId: string,
+): string {
+  return `${milestoneDetailsUrl(projectId, milestoneId)}/scope`;
+}
+
+export type ApiWorkstream = {
+  workstreamId: string;
+  name: string;
+  /** The part of the milestone this workstream covers. */
+  scope: string;
+};
+
+export type ApiMilestone = {
+  milestoneId: string;
+  name: string;
+  description: string;
+  dependencies: string[];
+  workstreams: ApiWorkstream[];
+};
+
+export type ApiProjectMilestones = {
+  project: ApiProject;
+  milestones: ApiMilestone[];
+};
+
+export type ApiWorkOrderSpec = {
+  milestoneId: string;
+  name: string;
+  objective: string;
+  evidenceRequirements: string[];
+  dependencies: string[];
+};
+
+export type ApiScopingPlan = {
+  create: ApiWorkOrderSpec[];
+  cancel: string[];
+  supersede: { workorderId: string; replacements: ApiWorkOrderSpec[] }[];
+  reasons: string[];
+};
+
+export function scopeMilestone(
+  projectId: string,
+  milestoneId: string,
+  message: string,
+): Promise<ApiScopingPlan> {
+  return api<ApiScopingPlan>(
+    `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/scope`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
+}
+
+export function getProjectMilestones(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ApiProjectMilestones> {
+  return api<ApiProjectMilestones>(
+    `/api/projects/${encodeURIComponent(projectId)}/milestones`,
+    {
+      signal,
+    },
+  );
+}
+
+export function createProject(
+  name: string,
+  signal?: AbortSignal,
+): Promise<ApiProject> {
+  return api<ApiProject>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+    signal,
+  });
+}
+
+/** Put a project away, or take it back out. */
+export function setProjectArchived(
+  projectId: string,
+  archived: boolean,
+): Promise<ApiProject> {
+  return api<ApiProject>(
+    `/api/projects/${encodeURIComponent(projectId)}/${archived ? "archive" : "unarchive"}`,
+    { method: "POST" },
+  );
+}
+
+/** A step as the runs list carries it: what it is and where it stands, which
+ *  is all the rail and the cards read of one. */
+export type ApiRunStepListing = {
   stepId: string;
   name: string;
   kind: "agent" | "human";
   status: string;
   outcome: string | null;
-  summary: string;
-  outputs: { name: string; value: string }[];
   changesRequested: boolean;
   agentId: string | null;
   agentInstanceId: string | null;
@@ -68,7 +207,19 @@ export type ApiRunStep = {
   waiting: boolean;
 };
 
-export type ApiWorkflowRun = {
+/** A step with the prose the agent wrote, which only its own page draws. */
+export type ApiRunStep = ApiRunStepListing & {
+  summary: string;
+  outputs: { name: string; value: string }[];
+};
+
+/** One WorkOrder as `GET /api/runs` lists it.
+ *
+ *  Every screen polls that list once a second to keep the rail current, so it
+ *  carries what a rail, a card and a milestone's task list read and no more.
+ *  The prose an agent wrote is the WorkOrder page's, and comes with the single
+ *  run it fetches. */
+export type ApiWorkflowRunListing = {
   runId: string;
   name: string;
   workflowId: string;
@@ -76,15 +227,27 @@ export type ApiWorkflowRun = {
   workflowVersion: string;
   taskId: string;
   workstreamId: string | null;
-  taskPrompt: string;
+  milestoneId: string | null;
   repository: string;
   repositoryContext: { repository: string };
   phase: string;
   currentStepId: string | null;
   terminalOutcome: string | null;
+  steps: ApiRunStepListing[];
+};
+
+/** One whole WorkOrder, as `GET /api/runs/{runId}` answers for the page about
+ *  it: the listing, and every word written along the way. */
+export type ApiWorkflowRun = Omit<ApiWorkflowRunListing, "steps"> & {
+  taskPrompt: string;
   failureReason: string;
   steps: ApiRunStep[];
-  pendingHumanReview: { stepId: string; title: string; summary: string } | null;
+  pendingHumanReview: {
+    stepId: string;
+    title: string;
+    summary: string;
+    prUrl: string | null;
+  } | null;
   humanDecision: {
     stepId: string;
     approved: boolean;
@@ -92,6 +255,124 @@ export type ApiWorkflowRun = {
     summary: string;
   } | null;
 };
+
+export type ApiGraphRun = {
+  runId: string;
+  graphId: string;
+  status: "running" | "awaiting_approval" | "completed" | "failed";
+  activeExecutions: { executionId: string; nodeId: string }[];
+  nextNodes: string[];
+  values: Record<string, unknown>;
+  pendingApprovals: {
+    approvalId: string;
+    nodeId: string;
+    reason: string;
+    /** Only a request still open says what may be answered, which is why a
+     *  conversation reads its open questions from here rather than from the
+     *  event that raised them. */
+    allowedDecisions: string[];
+    kind?: string;
+    command?: string;
+    toolName?: string;
+  }[];
+  error: string;
+};
+
+export type ApiGraphTopology = {
+  graphId: string;
+  nodes: {
+    nodeId: string;
+    name: string;
+    kind: string;
+    /** Whether the rail should offer this node's conversation. Absent means
+     *  shown: a node that says nothing is one a person can go and read. */
+    showInSidebar?: boolean;
+  }[];
+};
+
+/** The nodes of one graph, which is the same before a run of it has started.
+ *
+ *  A compiled graph's shape does not change while the server is up, so a client
+ *  reads this once per graph rather than per run. */
+export function getGraphTopology(
+  graphId: string,
+  signal?: AbortSignal,
+): Promise<ApiGraphTopology> {
+  return api<ApiGraphTopology>(
+    `/graph/api/graphs/${encodeURIComponent(graphId)}`,
+    { signal },
+  );
+}
+
+/** Where one graph node's conversation is read and steered.
+ *
+ *  `graph--` rather than a thread id, because nothing about a node's transcript
+ *  is a thread: it is folded from the run's events. See `routeForPath`. */
+export function graphConversationUrl(runId: string, nodeId: string): string {
+  return `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(nodeId)}`;
+}
+
+export type ApiGraphEvent = {
+  sequence: number;
+  type: string;
+  nodeId: string | null;
+  payload: Record<string, unknown>;
+};
+
+/** Everything the graph engine has said about a run so far.
+ *
+ *  A finite snapshot of the same feed `/graph/api/runs/{run}/events` streams,
+ *  because a page that opens after an agent has finished still has to be able
+ *  to read what it did. */
+export function getGraphEvents(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<{ events: ApiGraphEvent[] }> {
+  return api<{ events: ApiGraphEvent[] }>(
+    `/api/runs/${encodeURIComponent(runId)}/graph-events`,
+    { signal },
+  );
+}
+
+export function getGraphRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`, {
+    signal,
+  });
+}
+
+/** Say something to the agent a node is running, while it runs.
+ *
+ *  Addressed to the node rather than to the run: a graph may have several
+ *  agents working at once, and the conversation on screen is one of them. The
+ *  engine refuses this when that node has nothing in flight, because there is
+ *  nobody to say it to -- steering is a message for a live turn, not a queued
+ *  instruction for whatever runs next. */
+export function steerGraphRun(
+  runId: string,
+  nodeId: string,
+  message: string,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/steering`,
+    { method: "POST", body: JSON.stringify({ message, node: nodeId }) },
+  );
+}
+
+/** Answer a request the graph run stopped on, and get the run back as it left
+ *  it: deciding is what releases the execution, so the two change together. */
+export function decideGraphApproval(
+  runId: string,
+  approvalId: string,
+  decision: ApprovalDecision,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
+    { method: "POST", body: JSON.stringify({ decision }) },
+  );
+}
 
 /** Record the decision a run stopped for, and get the finished run back.
  *
@@ -104,14 +385,33 @@ export function completeHumanReview(
   approved: boolean,
   summary: string,
 ): Promise<ApiWorkflowRun> {
-  return api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}/human-review`, {
-    method: "POST",
-    body: JSON.stringify({ approved, summary }),
+  return api<ApiWorkflowRun>(
+    `/api/runs/${encodeURIComponent(runId)}/human-review`,
+    {
+      method: "POST",
+      body: JSON.stringify({ approved, summary }),
+    },
+  );
+}
+
+/** Throw a WorkOrder away for good.
+ *
+ *  Unlike archiving a project there is nothing to restore afterwards: the run,
+ *  its steps and its history go with it, which is why the rail asks first. */
+export function deleteRun(runId: string): Promise<void> {
+  return api<void>(`/api/runs/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
   });
 }
 
-/** Choose the runner that answers this conversation from now on. */
-export function setThreadRunner(threadId: string, runner: string): Promise<ApiThread> {
+/** Choose the runner that answers this conversation from now on.
+ *
+ * Active workflow conversations restart their current turn on the new runner.
+ */
+export function setThreadRunner(
+  threadId: string,
+  runner: string,
+): Promise<ApiThread> {
   return api<ApiThread>(`/api/threads/${threadId}`, {
     method: "PATCH",
     body: JSON.stringify({ runner }),
@@ -129,11 +429,15 @@ export function setThreadAutoApprove(
 }
 
 export function attachWorkspace(threadId: string): Promise<ApiThread> {
-  return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "POST" });
+  return api<ApiThread>(`/api/threads/${threadId}/workspace`, {
+    method: "POST",
+  });
 }
 
 export function detachWorkspace(threadId: string): Promise<ApiThread> {
-  return api<ApiThread>(`/api/threads/${threadId}/workspace`, { method: "DELETE" });
+  return api<ApiThread>(`/api/threads/${threadId}/workspace`, {
+    method: "DELETE",
+  });
 }
 
 /** The three answers the product offers. A request may permit fewer: the
@@ -209,7 +513,9 @@ export function answerQuestion(
 /** Stop the run outright. The server cancels whatever it was waiting on first,
  *  which is the approval card's Cancel by another route. */
 export function stopRun(threadId: string): Promise<void> {
-  return api<void>(`/api/threads/${threadId}/runs/current`, { method: "DELETE" });
+  return api<void>(`/api/threads/${threadId}/runs/current`, {
+    method: "DELETE",
+  });
 }
 
 export type ApiMessage = {
@@ -226,6 +532,248 @@ export type ApiHistory = {
   unstable_resume: boolean;
 };
 
+export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
+
+export type SourceControlStatus = {
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
+  autoSelected: boolean;
+  ghCli: {
+    installed: boolean;
+    authenticated: boolean;
+    account: string;
+    message: string;
+  };
+};
+
+export type SourceControlProviderStatus = {
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
+  autoSelected: boolean;
+};
+
+export type GitHubClientIdInfo =
+  | { source: "environment" | "configuration"; hint: string }
+  | { source: "keychain"; hint: string }
+  | { source: "none"; hint: "" };
+
+export type GitHubConnectResponse = {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type GitHubPollResponse =
+  | { status: "complete" }
+  | {
+      status: "pending";
+      /** Seconds to wait before the next poll. Grows when GitHub returns slow_down. */
+      nextInterval: number;
+    };
+
+export function getGitHubStatus(): Promise<GitHubStatus> {
+  return api<GitHubStatus>("/api/github/status");
+}
+
+export function getSourceControlStatus(): Promise<SourceControlStatus> {
+  return api<SourceControlStatus>("/api/source-control/status");
+}
+
+export function getSourceControlProvider(): Promise<SourceControlProviderStatus> {
+  return api<SourceControlProviderStatus>("/api/source-control/provider");
+}
+
+export function setSourceControlProvider(
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth",
+  origin?: string,
+): Promise<void> {
+  return api<void>("/api/source-control/provider", {
+    method: "POST",
+    body: JSON.stringify({ provider, origin }),
+  });
+}
+
+export function getGitHubClientId(): Promise<GitHubClientIdInfo> {
+  return api<GitHubClientIdInfo>("/api/github/client-id");
+}
+
+export function setGitHubClientId(clientId: string): Promise<void> {
+  return api<void>("/api/github/client-id", {
+    method: "POST",
+    body: JSON.stringify({ clientId }),
+  });
+}
+
+export function connectGitHub(): Promise<GitHubConnectResponse> {
+  return api<GitHubConnectResponse>("/api/github/connect", { method: "POST" });
+}
+
+export function pollGitHubConnect(): Promise<GitHubPollResponse> {
+  return api<GitHubPollResponse>("/api/github/connect/poll", {
+    method: "POST",
+  });
+}
+
+export function disconnectGitHub(): Promise<void> {
+  return api<void>("/api/github/disconnect", { method: "POST" });
+}
+
+export type GitLabStatus = {
+  origin: string;
+  connected: boolean;
+  clientIdConfigured: boolean;
+};
+
+export type GitLabDeviceFlow = {
+  origin: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export function getGitLabStatus(origin = "https://gitlab.com"): Promise<GitLabStatus> {
+  return api<GitLabStatus>(`/api/gitlab/status?origin=${encodeURIComponent(origin)}`);
+}
+
+export function setGitLabClientId(origin: string, clientId: string): Promise<void> {
+  return api<void>("/api/gitlab/client-id", {
+    method: "POST",
+    body: JSON.stringify({ origin, clientId }),
+  });
+}
+
+export function connectGitLab(origin: string): Promise<GitLabDeviceFlow> {
+  return api<GitLabDeviceFlow>("/api/gitlab/connect", {
+    method: "POST",
+    body: JSON.stringify({ origin }),
+  });
+}
+
+export function pollGitLabConnect(origin: string): Promise<{ status: "complete" | "pending"; nextInterval?: number }> {
+  return api("/api/gitlab/connect/poll", {
+    method: "POST",
+    body: JSON.stringify({ origin }),
+  });
+}
+
+export function disconnectGitLab(origin: string): Promise<void> {
+  return api<void>("/api/gitlab/disconnect", {
+    method: "POST",
+    body: JSON.stringify({ origin }),
+  });
+}
+
+/**
+ * `events` is whether a mention could start a work order right now, and
+ * `signingSecret` is which of its two halves this server already has.
+ */
+export type SlackStatus = {
+  configured: boolean;
+  connected: boolean;
+  events?: boolean;
+  signingSecret?: boolean;
+};
+
+export function getSlackStatus(): Promise<SlackStatus> {
+  return api<SlackStatus>("/api/slack/status");
+}
+
+export function setSlackCredentials(
+  clientId: string,
+  clientSecret: string,
+  signingSecret?: string,
+): Promise<void> {
+  return api<void>("/api/slack/credentials", {
+    method: "POST",
+    body: JSON.stringify({ clientId, clientSecret, signingSecret }),
+  });
+}
+
+/**
+ * Save only the signing secret, against the app already configured. Separate
+ * from `setSlackCredentials` because that one revokes the token and starts the
+ * OAuth flow over, which is not a price for enabling mentions.
+ */
+export function setSlackSigningSecret(signingSecret: string): Promise<void> {
+  return api<void>("/api/slack/credentials", {
+    method: "POST",
+    body: JSON.stringify({ signingSecret }),
+  });
+}
+
+export function connectSlack(): Promise<{ authorizationUrl: string }> {
+  return api<{ authorizationUrl: string }>("/api/slack/connect", { method: "POST" });
+}
+
+export function disconnectSlack(): Promise<void> {
+  return api<void>("/api/slack/disconnect", { method: "POST" });
+}
+
+/** Where the utilization page lives, which the rail's graph icon opens. */
+export const UTILIZATION_URL = "/utilization";
+
+/** One limit a provider meters a subscription against.
+ *
+ *  `usedPercent` is the provider's own figure. `resetsAt` is an instant, or
+ *  empty for a window the provider gave no reset for. */
+export type ApiUtilizationWindow = {
+  windowId: string;
+  label: string;
+  usedPercent: number;
+  resetsAt: string;
+};
+
+/** One runner's reading, taken or attempted.
+ *
+ *  `error` and windows can both be set: a scrape that failed keeps the figures
+ *  the last one found, so the page says what it knows and why it is not newer.
+ *  `readAt` is epoch seconds, and zero for a runner never read. */
+export type ApiRunnerUtilization = {
+  runner: string;
+  plan: string;
+  windows: ApiUtilizationWindow[];
+  error: string;
+  /** The command that would fix `error`, where one would. Empty for a failure
+   *  nothing on this machine can do anything about, like an unreachable
+   *  provider. */
+  remedy: string;
+  readAt: number;
+};
+
+/** The last reading, answered from the cache without touching a provider. */
+export function getUtilization(
+  signal?: AbortSignal,
+): Promise<{ runners: ApiRunnerUtilization[] }> {
+  return api<{ runners: ApiRunnerUtilization[] }>("/api/utilization", { signal });
+}
+
+/** Ask every runner's provider again, and remember what came back. */
+export function refreshUtilization(
+  signal?: AbortSignal,
+): Promise<{ runners: ApiRunnerUtilization[] }> {
+  return api<{ runners: ApiRunnerUtilization[] }>("/api/utilization/refresh", {
+    method: "POST",
+    signal,
+  });
+}
+
+/** A refusal, carrying the status it was refused with.
+ *
+ *  The message is what a reader is shown and is unchanged, so nothing that
+ *  catches an `Error` has to know about this. The status is for the callers
+ *  that have to tell "there is no such thing" from "the server could not say
+ *  right now" -- the two are the same sentence and mean opposite things about
+ *  whether the state a page is holding is still good. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -236,7 +784,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? `${response.status} ${response.statusText}`);
+    throw new ApiError(
+      body.error ?? `${response.status} ${response.statusText}`,
+      response.status,
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

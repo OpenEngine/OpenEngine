@@ -1,0 +1,51 @@
+flowchart LR
+
+    subgraph SEP["September"]
+        direction TB
+        Durable["Durable Execution"]
+        Slack["Slack Integration"]
+        SDLC["SDLC as LangGraph"]
+    end
+
+    subgraph OCT["October"]
+        direction TB
+
+        subgraph Planning["Planning & Pacing"]
+            direction TB
+            Scoper["Engine Scoper<br/>Break down and size work"]
+            Pacer["Engine Pacer<br/>Pace work according to token budgets"]
+            Forecast["Forecast<br/>Estimate time-to-completion"]
+        end
+
+        Tickets["GitHub & JIRA Ticketing"]
+    end
+
+    subgraph NOV["November"]
+        direction TB
+
+        subgraph Evidence["Evidence & Validation"]
+            direction TB
+            Screenshots["Screenshots"]
+            Video["Video Artifacts"]
+            Acceptance["Acceptance-Criteria Verification"]
+        end
+    end
+
+    SEP --> OCT --> NOV
+
+    classDef septemberItem fill:#EAF3FF,stroke:#60A5FA,stroke-width:1.5px,color:#0F172A;
+    classDef octoberItem fill:#FFF1DB,stroke:#F59E0B,stroke-width:1.5px,color:#0F172A;
+    classDef novemberItem fill:#EAFBF1,stroke:#4ADE80,stroke-width:1.5px,color:#0F172A;
+
+    classDef childItem fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px,color:#334155;
+
+    class Durable,Slack,SDLC septemberItem;
+    class Tickets octoberItem;
+    class Scoper,Pacer,Forecast,Screenshots,Video,Acceptance childItem;
+
+    style SEP fill:#F8FBFF,stroke:#BFDBFE,stroke-width:2px,color:#1E3A8A
+    style OCT fill:#FFFBF5,stroke:#FCD34D,stroke-width:2px,color:#92400E
+    style NOV fill:#F7FCF9,stroke:#86EFAC,stroke-width:2px,color:#166534
+
+    style Planning fill:#FDE7C7,stroke:#F59E0B,stroke-width:2.5px,color:#78350F
+    style Evidence fill:#DCFCE7,stroke:#22C55E,stroke-width:2.5px,color:#14532D

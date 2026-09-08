@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+import { apiProxy } from "./src/api-proxy";
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -12,8 +14,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: {
-      "/api": "http://localhost:8000",
-    },
+    // `tailscale serve` reaches this dev server under the machine's tailnet
+    // name, which Vite's host check rejects by default. The leading dot admits
+    // any `*.ts.net` host rather than pinning one machine's.
+    allowedHosts: [".ts.net"],
+    // Which prefixes, and why each is forwarded the way it is, is
+    // `src/api-proxy.ts` -- a module a test can read, unlike this file.
+    proxy: apiProxy(process.env),
   },
 });

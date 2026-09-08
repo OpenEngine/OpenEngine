@@ -95,6 +95,14 @@ class AgentStep:
 
 
 @dataclass(frozen=True, slots=True)
+class HumanReviewNotification:
+    """Marker enabling the configured human-review notification destination."""
+
+    channel: str = ""
+    public_url: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class HumanReviewStep:
     step_id: StepId
     name: str
@@ -102,6 +110,7 @@ class HumanReviewStep:
     summary: WorkflowTemplate
     approved: Transition
     rejected: Transition
+    notification: HumanReviewNotification | None = None
 
 
 WorkflowStep = AgentStep | HumanReviewStep
@@ -109,7 +118,8 @@ WorkflowStep = AgentStep | HumanReviewStep
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceSpec:
-    base_ref: str = "origin/main"
+    base_ref: str = ""
+    """Explicit Git ref, or empty to use the configured default branch."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +145,7 @@ class WorkflowDefinition:
 __all__ = [
     "AgentStep",
     "HumanReviewStep",
+    "HumanReviewNotification",
     "OutcomeTransition",
     "StepOutput",
     "StepSpec",

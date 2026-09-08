@@ -35,7 +35,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Lint PR title against the conventional-commit spec
-        uses: amannn/action-semantic-pull-request@v5
+        uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -57,7 +57,7 @@ jobs:
     name: Validate commit messages
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history + the real PR head (not the synthetic merge commit) so
           # the base..head range below resolves to exactly this PR's commits.

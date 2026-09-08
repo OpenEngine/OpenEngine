@@ -1,3 +1,20 @@
+[project]
+name = "engine-migrations"
+version = "0.0.0"
+description = "Alembic migration histories for OpenEngine state stores."
+requires-python = ">=3.11"
+dependencies = ["alembic>=1.16", "sqlalchemy>=2.0"]
+
+[project.scripts]
+engine-migrate = "migrations.migration:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["migrations"]
+
 [tool.uv.workspace]
 # Adapters are grouped by the capability they implement, so a distribution sits
 # two levels down: packages/adapters/<capability>/<vendor>.
@@ -8,7 +25,19 @@ members = ["packages/*", "packages/adapters/*/*", "apps/*"]
 exclude = ["packages/adapters"]
 
 [dependency-groups]
-dev = ["httpx>=0.28", "pytest>=8.0"]
+# `watchfiles` is what `engine-dev` reloads on: Uvicorn falls back to polling
+# every watched file without it, which is slower and misses nothing only
+# because it looks at everything. A development dependency rather than one of
+# `engine-web`'s, because a served interface never reloads.
+dev = [
+    "httpx>=0.28",
+    # The durable checkpointer the graph-runtime tests use. A test that
+    # destroys a runtime and rebuilds it from a file proves something an
+    # in-memory saver shared between the two would not.
+    "langgraph-checkpoint-sqlite>=2.0",
+    "pytest>=8.0",
+    "watchfiles>=1.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -20,5 +49,6 @@ testpaths = ["tests"]
 addopts = "-q -m 'not compatibility'"
 markers = [
     "compatibility: drives a real provider CLI; scheduled rather than per-PR",
+    "integration: boots a real local dependency and exercises its public interface",
     "workflow_removal_acceptance: acceptance gates and legacy fixtures for removing the hardcoded implementation-review workflow",
 ]

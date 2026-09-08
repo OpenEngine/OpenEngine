@@ -15,7 +15,10 @@ from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.postgres import PostgresStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
-from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_ROOT_DIRECTORY,
+    GitWorktreeWorkspaceProvider,
+)
 from engine.runtime import Capabilities, Dispatcher, EngineConfig
 
 
@@ -28,7 +31,7 @@ class Settings:
     github_token: str = ""
     buzz_base_url: str = ""
     buzz_api_token: str = ""
-    workspace_root: str = "/tmp/engine-workspaces"
+    workspace_root: str = DEFAULT_ROOT_DIRECTORY
     postgres_dsn: str = ""
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.
@@ -43,12 +46,15 @@ class Settings:
 
 def build_capabilities(settings: Settings) -> Capabilities:
     """Wire every port to its concrete implementation."""
+    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host, task_queue=settings.task_queue),
-        source_control=GitHubSourceControl(settings.github_token),
+        source_control=GitHubSourceControl(
+            settings.github_token, workspace_provider=workspace_provider
+        ),
         agent_runner=CodexAgentRunner(attribution=settings.engine_config.attribution),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
-        workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
+        workspace_provider=workspace_provider,
         state_store=PostgresStateStore(settings.postgres_dsn),
     )
 

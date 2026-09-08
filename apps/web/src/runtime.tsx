@@ -20,6 +20,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type PropsWithChildren,
 } from "react";
 
@@ -36,18 +37,24 @@ import { publishApproval } from "./approvals";
 type NewChatDefaults = {
   agentId: string;
   runner: string;
+  /** The first message starts a project named by the same agent-generated title. */
+  createProject?: boolean;
 };
 
 type ThreadInitializer = {
   current: (() => Promise<{ remoteId: string }>) | null;
 };
 
+type ActiveThreadTitleUpdater = {
+  current: ((remoteId: string, title: string) => Promise<void>) | null;
+};
+
 const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
-function useInitialThreadId(forcedThreadId?: string, remember = true) {
+function useInitialThreadId(forcedThreadId?: string, restore = true) {
   const storedThreadId = useRef(
-    forcedThreadId ?? (!remember || typeof window === "undefined"
+    forcedThreadId ?? (!restore || typeof window === "undefined"
       ? undefined
       : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined),
   ).current;
@@ -80,13 +87,19 @@ function useInitialThreadId(forcedThreadId?: string, remember = true) {
 function ThreadInitializationBridge({
   initializer,
   reloadThreads,
+  updateActiveTitle,
 }: {
   initializer: ThreadInitializer;
   reloadThreads: { current: (() => Promise<void>) | null };
+  updateActiveTitle: ActiveThreadTitleUpdater;
 }) {
   const aui = useAui();
   initializer.current = () => aui.threadListItem.initialize();
   reloadThreads.current = () => aui.threads.reload();
+  updateActiveTitle.current = async (remoteId, title) => {
+    if (aui.threadListItem.getState().remoteId === remoteId)
+      await aui.threadListItem.rename(title);
+  };
   return null;
 }
 
@@ -290,20 +303,43 @@ function HistoryProvider({ children }: PropsWithChildren) {
 /** `rememberActiveThread` is what separates the rail's runtime from the chat's.
  *  A workflow page mounts this only so the rail can list and start chats, and a
  *  page with no transcript on it has no business restoring the last chat --
- *  still less naming a different one as the chat to come back to. */
+ *  still less naming a different one as the chat to come back to.
+ *
+ *  `restoreActiveThread` is the reading half of that on its own, for the one
+ *  page that owns a transcript and still opens on a new one: the plan page
+ *  starts a conversation rather than resuming one, but the conversation it
+ *  starts is the chat to come back to like any other. Off for both would freeze
+ *  the memory rather than skip it, and leave whatever you were in before as
+ *  the chat the rail returns you to. */
 export function EngineRuntimeProvider({
   defaults,
   children,
   initialThreadId,
   rememberActiveThread = true,
+  restoreActiveThread = rememberActiveThread,
+  fallback,
+  deferMount = false,
 }: PropsWithChildren<{
   defaults: NewChatDefaults;
   initialThreadId?: string;
   rememberActiveThread?: boolean;
+  restoreActiveThread?: boolean;
+  fallback?: ReactNode;
+  /** Let the surrounding shell paint before a potentially large transcript is
+   *  mounted and parsed. */
+  deferMount?: boolean;
 }>) {
-  const initialThread = useInitialThreadId(initialThreadId, rememberActiveThread);
-  if (initialThread.loading)
-    return <main className="loading">Restoring chats…</main>;
+  const initialThread = useInitialThreadId(initialThreadId, restoreActiveThread);
+  const [mountReady, setMountReady] = useState(!deferMount);
+
+  useEffect(() => {
+    if (!deferMount || initialThread.loading) return;
+    const frame = window.requestAnimationFrame(() => setMountReady(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [deferMount, initialThread.loading]);
+
+  if (initialThread.loading || !mountReady)
+    return fallback ?? <main className="loading">Restoring chats…</main>;
 
   return (
     <EngineRuntime
@@ -329,6 +365,7 @@ function EngineRuntime({
   const defaultsRef = useRef(defaults);
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
+  const updateActiveTitleRef = useRef<ActiveThreadTitleUpdater["current"]>(null);
   defaultsRef.current = defaults;
 
   const modelAdapter = useMemo<ChatModelAdapter>(
@@ -356,13 +393,21 @@ function EngineRuntime({
           // named is still a chat to send to. Anything but an abort is
           // swallowed: the alternative is reporting "the run could not be
           // started" for a run nothing has tried to start yet.
-          await api(`/api/threads/${threadId}/title`, {
-            method: "POST",
-            body: JSON.stringify({ text }),
-            signal: abortSignal,
-          }).catch((failure: unknown) => {
+          const generated = await api<{ title: string }>(
+            `/api/threads/${threadId}/title`,
+            {
+              method: "POST",
+              body: JSON.stringify({ text }),
+              signal: abortSignal,
+            },
+          ).catch((failure: unknown) => {
             if (failure instanceof Error && failure.name === "AbortError") throw failure;
           });
+          // A newly initialized thread remains active under assistant-ui's
+          // optimistic local ID. Updating that item directly makes its title
+          // visible immediately; reloading only adds the remote-ID list item.
+          if (generated)
+            await updateActiveTitleRef.current?.(threadId, generated.title).catch(() => {});
           await reloadThreadsRef.current?.();
 
           response = await fetch(`/api/threads/${threadId}/runs`, {
@@ -457,6 +502,7 @@ function EngineRuntime({
         <ThreadInitializationBridge
           initializer={threadInitializerRef}
           reloadThreads={reloadThreadsRef}
+          updateActiveTitle={updateActiveTitleRef}
         />
         {children}
       </AssistantRuntimeProvider>

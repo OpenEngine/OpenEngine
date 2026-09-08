@@ -23,26 +23,26 @@ jobs:
     name: README fresh install
     runs-on: ubuntu-latest
     env:
-      # Exercise the oldest supported interpreter instead of inheriting the
-      # repository's development version from `.python-version`.
-      UV_PYTHON: "3.11"
+      # Exercise the oldest interpreter in the test matrix instead of inheriting
+      # the repository's development version from `.python-version`.
+      UV_PYTHON: "3.12"
     steps:
       # Hosted runners start empty, so checkout is the fresh clone a new user
       # would begin with. Deliberately do not restore dependency caches here.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20.19"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: false
 
       - name: Install workspace
-        run: uv sync
+        run: uv sync --all-packages
 
       - name: Install web client
         run: npm --prefix apps/web install
@@ -83,9 +83,9 @@ jobs:
     name: web client
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -112,22 +112,22 @@ jobs:
     name: browser end to end
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
 
       - name: Install workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
 
       - name: Install web client
         run: npm --prefix apps/web ci
@@ -146,7 +146,7 @@ jobs:
         # GitHub serves the artifact as a zip and will not render the HTML, so
         # it has to be downloaded and opened locally.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: apps/web/playwright-report
@@ -155,12 +155,75 @@ jobs:
 
       - name: Upload the traces of what failed
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-traces
           path: apps/web/test-results
           if-no-files-found: ignore
           # Diagnostics, not archives.
+          retention-days: 14
+
+  beta-browser:
+    # The same browser tier, pointed at a `[BETA]` graph WorkOrder: the specs
+    # in `e2e/graph-workflow.spec.ts`, which are `workflow-run.spec.ts` split
+    # into the states a run passes through.
+    #
+    # Allowed to fail, and expected to. A graph WorkOrder is started by the
+    # interface and then shown by nothing: no stages, no conversations, no way
+    # to answer the question it stops on. Each red test names one of those, so
+    # this job is the list of what is left to build rather than a gate on
+    # merging -- which is why it is `continue-on-error` and not `required`.
+    #
+    # It goes green one test at a time. When the last one does, fold these
+    # specs into `browser end to end` and delete this job.
+    name: browser end to end (BETA graph WorkOrders, may fail)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --locked --all-packages
+
+      - name: Install web client
+        run: npm --prefix apps/web ci
+
+      - name: Install the browser
+        run: npm --prefix apps/web exec -- playwright install --with-deps chromium
+
+      - name: Drive a BETA graph WorkOrder
+        run: npm --prefix apps/web run test:e2e:beta
+
+      # The point of the job: the report says which states a graph WorkOrder
+      # reaches and which it does not, with a screenshot of each one it does.
+      - name: Upload the report (a static site -- unzip, then `npx playwright show-report <dir>`)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-beta
+          path: apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload the traces of what failed
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces-beta
+          path: apps/web/test-results
+          if-no-files-found: ignore
           retention-days: 14
 
   boundaries:
@@ -171,10 +234,10 @@ jobs:
     name: dependency boundaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -185,7 +248,7 @@ jobs:
         run: uv lock --check
 
       - name: Install workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
 
       - name: Dependency direction holds
         # domain <- engine, ports <- runtime <- adapters, apps compose.
@@ -240,24 +303,23 @@ jobs:
       # the others.
       fail-fast: false
       matrix:
-        # The full range the packages claim to support via requires-python.
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
     env:
       # Set at job level so every uv command in the job agrees on the
-      # interpreter. Without it, `.python-version` (3.14) would win and all four
+      # interpreter. Without it, `.python-version` (3.14) would win and all three
       # matrix legs would quietly test the same thing.
       UV_PYTHON: ${{ matrix.python-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
 
       - name: Install workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
 
       - name: Run tests
         # The blocking tier, and everything in it is deterministic: protocol
