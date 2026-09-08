@@ -84,6 +84,12 @@ class TerminalMcpServer:
                     "name": config.name,
                     "command": config.command,
                     "args": list(config.args),
+                    # Required by ACP even when it is empty, and an agent that
+                    # validates `session/new` against the schema -- claude does
+                    # -- refuses the whole session without it rather than
+                    # defaulting it. The broker's credentials travel in `args`,
+                    # so there is nothing to put here.
+                    "env": [],
                 },
                 result=broker.result,
             )
