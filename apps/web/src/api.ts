@@ -103,6 +103,13 @@ export function milestoneNewTaskUrl(
   return `${milestoneDetailsUrl(projectId, milestoneId)}/tasks/new`;
 }
 
+export function milestoneScopeUrl(
+  projectId: string,
+  milestoneId: string,
+): string {
+  return `${milestoneDetailsUrl(projectId, milestoneId)}/scope`;
+}
+
 export type ApiWorkstream = {
   workstreamId: string;
   name: string;
@@ -122,6 +129,32 @@ export type ApiProjectMilestones = {
   project: ApiProject;
   milestones: ApiMilestone[];
 };
+
+export type ApiWorkOrderSpec = {
+  milestoneId: string;
+  name: string;
+  objective: string;
+  evidenceRequirements: string[];
+  dependencies: string[];
+};
+
+export type ApiScopingPlan = {
+  create: ApiWorkOrderSpec[];
+  cancel: string[];
+  supersede: { workorderId: string; replacements: ApiWorkOrderSpec[] }[];
+  reasons: string[];
+};
+
+export function scopeMilestone(
+  projectId: string,
+  milestoneId: string,
+  message: string,
+): Promise<ApiScopingPlan> {
+  return api<ApiScopingPlan>(
+    `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/scope`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
+}
 
 export function getProjectMilestones(
   projectId: string,

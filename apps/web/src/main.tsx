@@ -16,6 +16,7 @@ import {
 import { ChatThread, ConversationStats } from "./chat";
 import { GraphConversationPage } from "./graph-conversation";
 import { MilestoneDetailsPage } from "./milestone-details";
+import { MilestoneScopePage } from "./milestone-scope";
 import { MilestoneTimeline } from "./milestone-timeline";
 import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
@@ -301,7 +302,11 @@ function sectionFor(route: Route): RailSection {
   if (route.kind === "graph-conversation") return "workflows";
   if (route.kind === "chat")
     return route.runId ? "workflows" : "projects";
-  return route.kind === "project" || route.kind === "milestone" ? "projects" : "workflows";
+  return route.kind === "project" ||
+    route.kind === "milestone" ||
+    route.kind === "milestone-scope"
+    ? "projects"
+    : "workflows";
 }
 
 /** `/plan` is where a plan starts, not where it lives.
@@ -411,7 +416,10 @@ function App() {
       activeRunId={activeRunId}
       activeConversationUrl={conversationUrl}
       activeProjectId={
-        route.kind === "project" || route.kind === "milestone" || route.kind === "new-task"
+        route.kind === "project" ||
+        route.kind === "milestone" ||
+        route.kind === "milestone-scope" ||
+        route.kind === "new-task"
           ? route.projectId
           : undefined
       }
@@ -479,6 +487,11 @@ function App() {
             runs={runs}
             runsError={runsError}
             runsLoaded={runsLoaded}
+          />
+        ) : route.kind === "milestone-scope" ? (
+          <MilestoneScopePage
+            projectId={route.projectId}
+            milestoneId={route.milestoneId}
           />
         ) : (
           <ChatPanel

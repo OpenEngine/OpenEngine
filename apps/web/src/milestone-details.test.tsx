@@ -138,6 +138,11 @@ describe("MilestoneDetailsPage", () => {
       "href",
       "/projects/project-1/milestones/milestone-launch/tasks/new",
     );
+    const scope = screen.getByRole("link", { name: "Scope" });
+    expect(scope).toHaveAttribute(
+      "href",
+      "/projects/project-1/milestones/milestone-launch/scope",
+    );
   });
 
   it("gives a card to every workstream under the milestone, and to no other", async () => {

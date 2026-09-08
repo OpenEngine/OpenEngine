@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -20,6 +21,7 @@ from engine.domain import (
 )
 from langgraph_acp import ACPNode, ACPResult
 from langgraph_acp.agent import ACPAgentRegistry
+from langgraph_acp.providers import CodexACPProvider
 
 ScopingNode = Callable[[str], Awaitable[ACPResult]]
 
@@ -126,6 +128,8 @@ class Scoper:
     agent: str = "codex"
     registry: ACPAgentRegistry | None = None
     node: ScopingNode | None = None
+    working_directory: str | None = None
+    timeout_seconds: float | None = None
 
     async def scope(
         self,
@@ -134,8 +138,64 @@ class Scoper:
         milestones: Sequence[MilestoneScope],
         policy: ScopingPolicy,
     ) -> ScopingPlan:
-        node = self.node or ACPNode(agent=self.agent, registry=self.registry)
-        return _plan((await node(_prompt(workorders, milestones, policy))).message)
+        node = self.node or ACPNode(
+            agent=self.agent,
+            registry=self.registry,
+            working_directory=self.working_directory,
+        )
+        turn = node(_prompt(workorders, milestones, policy))
+        result = (
+            await turn
+            if self.timeout_seconds is None
+            else await asyncio.wait_for(turn, timeout=self.timeout_seconds)
+        )
+        return _plan(result.message)
+
+
+@dataclass(frozen=True, slots=True)
+class MilestoneScoper:
+    """In-process first iteration of milestone work-order scoping."""
+
+    scoper: Scoper
+
+    async def run(
+        self,
+        *,
+        workorders: Sequence[WorkOrder],
+        milestone: MilestoneScope,
+        policy: ScopingPolicy,
+    ) -> ScopingPlan:
+        return await self.scoper.scope(
+            workorders=workorders,
+            milestones=(milestone,),
+            policy=policy,
+        )
+
+
+def codex_milestone_scoper(
+    *,
+    binary_path: str,
+    working_directory: str,
+    timeout_seconds: float | None,
+    model: str = "",
+) -> MilestoneScoper:
+    """Build milestone scoping from the installation's Codex settings."""
+    environment = {"CODEX_PATH": binary_path}
+    if model:
+        environment["CODEX_CONFIG"] = json.dumps({"model": model})
+    registry = ACPAgentRegistry(
+        (
+            CodexACPProvider(env=environment, cwd=working_directory),
+        )
+    )
+    return MilestoneScoper(
+        Scoper(
+            agent="codex",
+            registry=registry,
+            working_directory=working_directory,
+            timeout_seconds=timeout_seconds,
+        )
+    )
 
 
 async def scope(
@@ -150,4 +210,4 @@ async def scope(
     )
 
 
-__all__ = ["Scoper", "scope"]
+__all__ = ["MilestoneScoper", "Scoper", "codex_milestone_scoper", "scope"]
