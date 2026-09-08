@@ -5008,6 +5008,50 @@ def test_creating_a_beta_work_order_starts_the_graph() -> None:
     assert [one["runId"] for one in listed.json()["runs"]] == [str(run_id)]
 
 
+def test_a_graph_naming_node_names_its_work_order() -> None:
+    store = InMemoryStateStore()
+    graph = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (
+            ScriptedNode(
+                NodeId("naming"),
+                (Say('"Cancellation handling."'),),
+                next_nodes=(NodeId("implementation"),),
+                output_key="name",
+            ),
+            ScriptedNode(NodeId("implementation"), (AwaitSteering(),)),
+        ),
+    )
+    app, _ = _graph_app(store, graph)
+
+    async def scenario() -> dict[str, object]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = created.json()["runId"]
+                for _ in range(100):
+                    named = (await client.get(f"/api/runs/{run_id}")).json()
+                    if named["name"] == "Cancellation handling":
+                        return named
+                    await asyncio.sleep(0)
+                return named
+
+    named = asyncio.run(scenario())
+
+    assert named["name"] == "Cancellation handling"
+
+
 def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
     """The row follows the graph to its ending.
 

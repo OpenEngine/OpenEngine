@@ -139,10 +139,28 @@ def test_slack_communications_reports_slack_delivery_errors() -> None:
             )
 
 
+def test_slack_communications_reports_a_disconnected_workspace() -> None:
+    """The likeliest way for a message to reach nobody is not silent.
+
+    Returning an empty id here told every caller above that the message went
+    out -- including `update_status`, which answers the agent that asked.
+    """
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = None
+
+    with pytest.raises(SlackAuthError, match="not connected"):
+        __import__("asyncio").run(
+            SlackCommunications(store).post("C12345678", "Review run-42")
+        )
+
+
 def test_authorization_url_requests_notification_scope_and_state() -> None:
     url = authorization_url("123", "http://localhost/api/slack/callback", "nonce")
     assert url.startswith("https://slack.com/oauth/v2/authorize?")
-    assert "scope=chat%3Awrite%2Cchat%3Awrite.public%2Cchannels%3Aread" in url
+    assert (
+        "scope=app_mentions%3Aread%2Cchat%3Awrite%2Cchat%3Awrite.public"
+        "%2Cchannels%3Aread" in url
+    )
     assert "state=nonce" in url
 
 
@@ -185,6 +203,7 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
     slack_store = MagicMock(spec=SlackCredentialStore)
     slack_store.credentials.return_value = SlackCredentials("client", "secret")
     slack_store.token.side_effect = [None, "xoxb-token"]
+    slack_store.signing_secret.return_value = None
     app = create_app(
         session,
         runners,
@@ -204,11 +223,21 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
         callback = client.get("/api/slack/callback?code=code&state=nonce")
         after = client.get("/api/slack/status")
 
-    assert before.json() == {"configured": True, "connected": False}
+    assert before.json() == {
+        "configured": True,
+        "connected": False,
+        "events": False,
+        "signingSecret": False,
+    }
     assert "client_id=client" in connect.json()["authorizationUrl"]
     assert callback.status_code == 200
     slack_store.set_token.assert_called_once_with("xoxb-token")
-    assert after.json() == {"configured": True, "connected": True}
+    assert after.json() == {
+        "configured": True,
+        "connected": True,
+        "events": False,
+        "signingSecret": False,
+    }
 
 
 def test_slack_callback_rejects_wrong_state(tmp_path) -> None:

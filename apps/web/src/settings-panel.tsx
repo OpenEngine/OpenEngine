@@ -23,20 +23,37 @@ import {
   disconnectSlack,
   getSlackStatus,
   setSlackCredentials,
+  setSlackSigningSecret,
   type GitHubClientIdInfo,
   type GitHubConnectResponse,
   type GitLabDeviceFlow,
+  type SlackStatus,
 } from "./api";
 
 type SlackState = {
   configured: boolean;
   connected: boolean;
+  /** Whether pinging the bot can start a work order. */
+  events: boolean;
+  /** Whether a signing secret is saved -- one of the two halves of `events`. */
+  hasSigningSecret: boolean;
   loading: boolean;
   editing: boolean;
   clientId: string;
   clientSecret: string;
+  signingSecret: string;
   error?: string;
 };
+
+/** What a status response says about the panel's own state, and nothing else. */
+function fromSlackStatus(status: SlackStatus) {
+  return {
+    configured: status.configured,
+    connected: status.connected,
+    events: status.events ?? false,
+    hasSigningSecret: status.signingSecret ?? false,
+  };
+}
 
 type ConnectionState =
   | { phase: "unknown" }
@@ -101,10 +118,13 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [slack, setSlack] = useState<SlackState>({
     configured: false,
     connected: false,
+    events: false,
+    hasSigningSecret: false,
     loading: true,
     editing: false,
     clientId: "",
     clientSecret: "",
+    signingSecret: "",
   });
   // Holds the next-poll timeout ID, not a fixed interval.
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -186,7 +206,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       }
     });
     getSlackStatus()
-      .then((status) => setSlack((value) => ({ ...value, ...status, loading: false })))
+      .then((status) => setSlack((value) => ({ ...value, ...fromSlackStatus(status), loading: false })))
       .catch(() => setSlack((value) => ({ ...value, loading: false })));
     getGitLabStatus()
       .then((status) =>
@@ -406,29 +426,51 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const saveSlackCredentials = useCallback(async () => {
     const clientId = slack.clientId.trim();
     const clientSecret = slack.clientSecret.trim();
+    const signingSecret = slack.signingSecret.trim();
     if (!clientId || !clientSecret) return;
     setSlack((value) => ({ ...value, loading: true, error: undefined }));
     try {
-      await setSlackCredentials(clientId, clientSecret);
+      await setSlackCredentials(clientId, clientSecret, signingSecret || undefined);
       setSlack((value) => ({
         ...value,
         configured: true,
         connected: false,
+        events: false,
         loading: false,
         editing: false,
         clientId: "",
         clientSecret: "",
+        signingSecret: "",
       }));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save Slack credentials.";
       try {
         const status = await getSlackStatus();
-        setSlack((value) => ({ ...value, ...status, loading: false, error: message }));
+        setSlack((value) => ({ ...value, ...fromSlackStatus(status), loading: false, error: message }));
       } catch {
         setSlack((value) => ({ ...value, loading: false, error: message }));
       }
     }
-  }, [slack.clientId, slack.clientSecret]);
+  }, [slack.clientId, slack.clientSecret, slack.signingSecret]);
+
+  const saveSlackSigningSecret = useCallback(async () => {
+    const signingSecret = slack.signingSecret.trim();
+    if (!signingSecret) return;
+    setSlack((value) => ({ ...value, loading: true, error: undefined }));
+    try {
+      await setSlackSigningSecret(signingSecret);
+      const status = await getSlackStatus();
+      setSlack((value) => ({
+        ...value,
+        ...fromSlackStatus(status),
+        loading: false,
+        signingSecret: "",
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not save the signing secret.";
+      setSlack((value) => ({ ...value, loading: false, error: message }));
+    }
+  }, [slack.signingSecret]);
 
   const startSlackConnect = useCallback(async () => {
     try {
@@ -440,7 +482,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         try {
           const status = await getSlackStatus();
           if (status.connected || Date.now() >= deadline) {
-            setSlack((value) => ({ ...value, ...status, loading: false }));
+            setSlack((value) => ({ ...value, ...fromSlackStatus(status), loading: false }));
             return;
           }
           slackPollTimeoutRef.current = setTimeout(() => void poll(), 1000);
@@ -952,6 +994,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               <label className="settings-label" htmlFor="slack-client-secret">Slack OAuth Client Secret</label>
               <input className="settings-input" id="slack-client-secret" autoComplete="off" type="password"
                 value={slack.clientSecret} onChange={(event) => setSlack((value) => ({ ...value, clientSecret: event.target.value }))} />
+              <label className="settings-label" htmlFor="slack-signing-secret">Slack Signing Secret (optional)</label>
+              <input className="settings-input" id="slack-signing-secret" autoComplete="off" type="password"
+                value={slack.signingSecret} onChange={(event) => setSlack((value) => ({ ...value, signingSecret: event.target.value }))} />
               <div className="settings-actions">
                 <button className="settings-button settings-button-primary" type="button"
                   disabled={!slack.clientId.trim() || !slack.clientSecret.trim()} onClick={() => void saveSlackCredentials()}>Save credentials</button>
@@ -973,6 +1018,36 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               </div>
               <p className="settings-status settings-status-muted">
                 Add <code>{`${window.location.origin}/api/slack/callback`}</code> as a redirect URL in your Slack app.
+              </p>
+              {!slack.hasSigningSecret && (
+                // Saved on its own, without re-entering the OAuth pair: doing
+                // that revokes the token and starts the flow over, which is
+                // not a price for turning mentions on.
+                <div className="settings-client-id-form">
+                  <label className="settings-label" htmlFor="slack-signing-secret-only">
+                    Slack Signing Secret
+                  </label>
+                  <input className="settings-input" id="slack-signing-secret-only" autoComplete="off" type="password"
+                    value={slack.signingSecret} onChange={(event) => setSlack((value) => ({ ...value, signingSecret: event.target.value }))} />
+                  <div className="settings-actions">
+                    <button className="settings-button settings-button-primary" type="button"
+                      disabled={!slack.signingSecret.trim()} onClick={() => void saveSlackSigningSecret()}>Save signing secret</button>
+                  </div>
+                </div>
+              )}
+              <p className="settings-status settings-status-muted">
+                {slack.events
+                  ? "Ping the bot in Slack to start a work order; it replies in the thread."
+                  : !slack.connected
+                    ? // Named first: a mention arriving now is ignored rather than
+                      // run in silence, and connecting is what changes that.
+                      "Mentions are ignored until Slack is connected — a work order started now could not reply."
+                    : slack.hasSigningSecret
+                      ? "To start work orders by pinging the bot, set work_orders.repository in engine.toml, and subscribe to app_mention events at "
+                      : "To start work orders by pinging the bot, save the app's signing secret above, set work_orders.repository in engine.toml, and subscribe to app_mention events at "}
+                {!slack.events && slack.connected && (
+                  <code>{`${window.location.origin}/api/slack/events`}</code>
+                )}
               </p>
             </>
           )}

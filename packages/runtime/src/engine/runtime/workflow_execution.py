@@ -41,7 +41,11 @@ from engine.domain import (
 from engine.ports import (
     AgentRunner,
     AgentTurn,
+    ApprovalDecision,
     ApprovalHandler,
+    ApprovalKind,
+    ApprovalRequest,
+    ApprovalResponse,
     InteractiveMcpAgentRunner,
     McpAgentRunner,
     Message as CommunicationMessage,
@@ -49,8 +53,12 @@ from engine.ports import (
 )
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.dispatcher import Dispatcher
+from engine.runtime.notifications import RunNotifier
 from engine.runtime.profiles import with_granted_tools
-from engine.runtime.step_results import requests_clarification_or_escalation
+from engine.runtime.step_results import (
+    awaits_human_answer,
+    requests_clarification_or_escalation,
+)
 from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
 from engine.runtime.workflows import WorkflowCatalog
 
@@ -95,6 +103,7 @@ class WorkflowExecutor:
         self._default_branch = default_branch
         self._communications_channel = communications_channel
         self._public_url = public_url.rstrip("/")
+        self._notifier = RunNotifier(capabilities.communications, public_url)
         unreviewable = sorted(set(self._runners) - set(self._review_runners))
         if unreviewable:
             raise WorkflowExecutionError(
@@ -290,18 +299,22 @@ class WorkflowExecutor:
             selected_name = await self._runner_name_for_step(
                 state, step, runner_name
             )
+            continuation = (
+                command.prompt
+                if command.agent_run_id != agent_run_id(state.run_id, step.step_id)
+                else None
+            )
+            if continuation is None:
+                # Entering the step rather than carrying one on, which is what
+                # makes this the place a run says its review stage has begun.
+                await self._notifier.announce(state, f"*{step.name}* started.")
             outcome = await self._run_step(
                 state,
                 command,
                 definition=definition,
                 runner=self._runner_for(step, selected_name),
                 runner_name=selected_name,
-                continuation=(
-                    command.prompt
-                    if command.agent_run_id
-                    != agent_run_id(state.run_id, step.step_id)
-                    else None
-                ),
+                continuation=continuation,
             )
             if outcome is None:
                 return state
@@ -316,30 +329,45 @@ class WorkflowExecutor:
     ) -> None:
         """Notify operators without making Slack availability block a workflow."""
         step = definition.step(command.step_id)
-        if not isinstance(step, HumanReviewStep) or step.notification is None:
+        if not isinstance(step, HumanReviewStep):
             return
-        if not self._communications_channel or not self._public_url:
-            return
-        pull_request_url = next(
-            (
-                output.value
-                for result in reversed(state.step_results)
-                for output in result.outputs
-                if output.name == "pr_url" and output.value
-            ),
-            None,
-        )
+        pull_request_url = _pull_request_url(state)
         outcome = state.step_results[-1].outcome if state.step_results else "unknown"
-        message_text = f"Ready for human review: {command.title}\nOutcome: {outcome}"
         links = []
         if pull_request_url:
             links.append(MessageLink("Open pull request", pull_request_url))
+        if state.origin is not None:
+            # The run was asked for in a conversation, so the person who asked
+            # is told there, by name: this is the point the work stops needing
+            # an agent and starts needing them.
+            #
+            # Deliberately not gated on `step.notification`, which says whether
+            # to announce in the operators' channel -- a different question with
+            # a different audience. Coupling the two would let a workflow that
+            # omits it leave a thread reporting a review complete and then going
+            # silent forever, with nobody told a decision is waiting on them.
+            work_order = self._notifier.work_order_link(state)
+            if work_order is not None:
+                links.append(work_order)
+            await self._notifier.announce(
+                state,
+                f"Review complete and ready for your decision: {command.title}\n"
+                f"Outcome: {outcome}",
+                links=links,
+                mention=True,
+            )
+            return
+        if step.notification is None:
+            return
+        if not self._communications_channel or not self._public_url:
+            return
         links.append(
             MessageLink(
                 "Open human review task",
                 f"{self._public_url}/runs/{command.run_id}",
             )
         )
+        message_text = f"Ready for human review: {command.title}\nOutcome: {outcome}"
         message = CommunicationMessage(message_text, tuple(links))
         try:
             await self._capabilities.communications.post(
@@ -427,6 +455,13 @@ class WorkflowExecutor:
         is not a step, so there is no step for `complete_step` to complete. A
         profile that is granted nothing servable runs as it always has, with no
         server at all.
+
+        An interactive runner is driven interactively even though nobody is
+        watching, because some providers make calling an attached MCP tool an
+        approval in its own right and refuse it outright when the turn has no
+        way to answer one. There is no conversation to raise that in, so
+        `_naming_approvals` answers it: yes to this broker's own tools, no to
+        anything else.
         """
 
         runner = self._runners[runner_name]
@@ -452,9 +487,19 @@ class WorkflowExecutor:
             broker.enable_repository_tools(
                 self._capabilities.source_control, served, state.workspace_id
             )
+            granted = with_granted_tools(profile, served)
+            if isinstance(runner, InteractiveMcpAgentRunner):
+                return await runner.run_turn_with_mcp_interactive(
+                    agent_run_id,
+                    granted,
+                    messages,
+                    broker.config,
+                    _naming_approvals(broker.config.name, served),
+                    workspace_id=state.workspace_id,
+                )
             return await runner.run_turn_with_mcp(
                 agent_run_id,
-                with_granted_tools(profile, served),
+                granted,
                 messages,
                 broker.config,
                 workspace_id=state.workspace_id,
@@ -473,6 +518,15 @@ class WorkflowExecutor:
     ) -> _StepOutcome | None:
         assert command.step is not None
         folded: _StepOutcome | None = None
+        step = definition.step(command.step.step_id)
+        step_name = step.name if step is not None else str(command.step.step_id)
+
+        async def report_status(status: str) -> None:
+            # `deliver` rather than `announce`: the agent is waiting on the
+            # answer to its own tool call, and is owed a true one. The tool
+            # server turns a failure into an error result, which does not end
+            # the step -- the run carries on either way.
+            await self._notifier.deliver(state, f"*{step_name}*: {status}")
 
         async def fold(event: Event) -> _StepOutcome:
             transition_state = state
@@ -506,12 +560,16 @@ class WorkflowExecutor:
                 else None
             ),
             continuation=continuation,
+            on_status=report_status if state.origin is not None else None,
         )
         if folded is not None:
             assert terminal == folded.event
+            await self._announce_result(folded, step_name)
             return folded
         if isinstance(terminal, (StepCompleted, RunFailed)):
-            return await fold(terminal)
+            outcome = await fold(terminal)
+            await self._announce_result(outcome, step_name)
+            return outcome
         if requests_clarification_or_escalation(terminal):
             if deferred_state is None:
                 await self._transition(
@@ -523,9 +581,49 @@ class WorkflowExecutor:
                     ),
                     definition,
                 )
+            if awaits_human_answer(terminal):
+                # `clarify` is reported by the tool server as it is called, so
+                # only a genuine question is announced here -- otherwise the
+                # same pause would be said twice, and the second time wrongly.
+                await self._notifier.announce(
+                    state,
+                    f"*{step_name}* is waiting for an answer.\n"
+                    f"{terminal.message.content}".strip(),
+                    links=_links(self._notifier.work_order_link(state)),
+                )
             return None
         raise WorkflowExecutionError(
             f"{command.step.step_id} runner exited without a valid completion state"
+        )
+
+    async def _announce_result(self, outcome: _StepOutcome, step_name: str) -> None:
+        """Report a step's ending in the conversation that asked for the run.
+
+        Read off the folded state rather than the event, so the pull request
+        named here is whichever output the step actually declared it under and
+        the message cannot drift from what the run recorded.
+        """
+        state = outcome.state
+        if isinstance(outcome.event, RunFailed):
+            await self._notifier.announce(
+                state,
+                f"*{step_name}* failed.\n{outcome.event.reason}".strip(),
+                links=_links(self._notifier.work_order_link(state)),
+            )
+            return
+        if not isinstance(outcome.event, StepCompleted):
+            return
+        links = []
+        pull_request_url = _pull_request_url(state)
+        if pull_request_url:
+            links.append(MessageLink("Open pull request", pull_request_url))
+        work_order = self._notifier.work_order_link(state)
+        if work_order is not None:
+            links.append(work_order)
+        await self._notifier.announce(
+            state,
+            f"*{step_name}* complete.\n{outcome.event.summary}".strip(),
+            links=links,
         )
 
     async def _transition(
@@ -585,7 +683,32 @@ class WorkflowExecutor:
             return
         definition = self._definition_for(state)
         failure = RunFailed(run_id=run_id, reason=f"{type(error).__name__}: {error}")
-        await self._transition(state, failure, definition)
+        failed, _commands = await self._transition(state, failure, definition)
+        # The run died somewhere other than a step's own ending, so nothing
+        # else will say so -- and a thread that simply goes quiet is the one
+        # outcome a person cannot tell from work still in progress.
+        await self._notifier.announce(
+            failed,
+            f"This work order failed.\n{failure.reason}",
+            links=_links(self._notifier.work_order_link(failed)),
+        )
+
+
+def _pull_request_url(state: RunState) -> str:
+    """The newest `pr_url` any completed step declared, or empty."""
+    return next(
+        (
+            output.value
+            for result in reversed(state.step_results)
+            for output in result.outputs
+            if output.name == "pr_url" and output.value
+        ),
+        "",
+    )
+
+
+def _links(link: MessageLink | None) -> tuple[MessageLink, ...]:
+    return (link,) if link is not None else ()
 
 
 def _only(commands: Sequence[Command], expected: type[Command]) -> Command:
@@ -607,6 +730,38 @@ def resolve_default_branch(
         definition,
         workspace=WorkspaceSpec(base_ref=f"origin/{default_branch}"),
     )
+
+
+def _naming_approvals(server_name: str, served: Sequence[str]) -> ApprovalHandler:
+    """Answer the naming turn's own tool requests, and refuse everything else.
+
+    Automatic because there is nobody to ask: the naming turn is neither a step
+    nor a conversation, so a request raised here has no screen to appear on and
+    waiting on one would hang the run before its first step. Bounded because of
+    what it says yes to -- a call to one of the tools this turn just bound and
+    was told it holds. Everything a person would actually want to see, a
+    command or an edit escaping the sandbox, is refused rather than granted
+    unattended: naming a run is not licence to do the work.
+
+    Both spellings of the tool are accepted because providers differ on which
+    one they report: one names the server it is asking about, another the
+    prefixed tool within it.
+    """
+
+    names = frozenset(
+        (server_name, *served, *(f"mcp__{server_name}__{name}" for name in served))
+    )
+
+    async def approve(request: ApprovalRequest) -> ApprovalResponse:
+        allowed = (
+            request.kind is ApprovalKind.TOOL_USE
+            and request.tool_name in names
+            and not request.requires_human
+            and ApprovalDecision.ACCEPT in request.allowed_decisions
+        )
+        return ApprovalDecision.ACCEPT if allowed else ApprovalDecision.CANCEL
+
+    return approve
 
 
 def _clean_workflow_name(value: str) -> str:

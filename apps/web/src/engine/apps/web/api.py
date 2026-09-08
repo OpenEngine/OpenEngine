@@ -64,9 +64,12 @@ from engine.apps.web.utilization import (
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCredentialStore,
+    SlackMention,
     authorization_url as slack_authorization_url,
     exchange_code as exchange_slack_code,
+    mention_from_event as slack_mention_from_event,
     revoke_token as revoke_slack_token,
+    verify_signature as verify_slack_signature,
 )
 from engine.domain import (
     AgentId,
@@ -86,6 +89,7 @@ from engine.domain import (
     ProjectId,
     Role,
     RunId,
+    RunOrigin,
     RunPhase,
     RunRequested,
     RunState,
@@ -117,6 +121,7 @@ from engine.ports import (
     AgentRunner,
     ApprovalHandler,
     InteractiveAgentRunner,
+    Message as CommunicationsMessage,
     StateStore,
     UserInputAnswer,
     WorkspaceState,
@@ -128,6 +133,7 @@ from engine.runtime import (
     ApprovalConfig,
     ApprovalDecisionNotAllowedError,
     ApprovalNotPendingError,
+    RunNotifier,
     RunReader,
     UnknownApprovalError,
     UserInputNotAllowedError,
@@ -135,6 +141,7 @@ from engine.runtime import (
     WorkflowExecutionError,
     WorkflowExecutor,
     WorkflowRunView,
+    WorkOrdersConfig,
     load_engine_config,
     load_workflow_catalog,
 )
@@ -957,6 +964,17 @@ GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
 }
 
 
+def _graph_workorder_name(values: object) -> str:
+    """The concise name a graph's naming node left in its state."""
+    if not isinstance(values, Mapping):
+        return ""
+    value = values.get("name")
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    first_line = value.strip().splitlines()[0]
+    return first_line.strip(" \t\"'`).:;!?")[:120]
+
+
 #: Where this module says what went wrong with something nobody asked it about
 #: -- a graph engine that would not open, a stranded run it could not pick back
 #: up. Those go to the log rather than to a person, because the person who
@@ -1003,6 +1021,7 @@ def create_app(
     slack_credential_store: SlackCredentialStore | None = None,
     communications_channel: str = "",
     public_url: str = "",
+    work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     utilization: UtilizationService | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
@@ -1167,25 +1186,27 @@ def create_app(
         The WorkOrder row is the other. A graph run keeps its real progress in
         the graph engine's own files, and this app only holds a row for it, so
         without this the row would say "an agent is working" long after the run
-        had finished or fallen over. Only the two endings are copied across;
-        the rest of what a graph says is about positions inside the graph, and
-        a row has nowhere to put them.
+        had finished or fallen over. The two endings and the name produced by
+        a naming node are copied across. The rest of what a graph says is about
+        positions inside the graph, and a row has nowhere to put it.
         """
         await graph_events.append(event)
         phase = GRAPH_ENDINGS.get(event.kind)
-        if phase is None:
+        name = _graph_workorder_name(event.payload.get("values"))
+        if phase is None and not name:
             return
         state = await session.state_store.load(event.run_id)
         if state is None:
             return
-        await session.state_store.save(
-            replace(
-                state,
-                phase=phase,
-                failure_reason=str(event.payload.get("error", ""))
-                or state.failure_reason,
-            )
+        updated = replace(
+            state,
+            name=name or state.name,
+            phase=phase or state.phase,
+            failure_reason=str(event.payload.get("error", ""))
+            or state.failure_reason,
         )
+        if updated != state:
+            await session.state_store.save(updated)
 
     async def restore_graph_runs(runtime: GraphRuntime) -> None:
         """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
@@ -1237,10 +1258,16 @@ def create_app(
                     await runtime.resume_from(state.run_id, snapshot.checkpoint_id)
                     continue
                 phase = GRAPH_PHASES[snapshot.status]
-                if phase is not state.phase or snapshot.error != state.failure_reason:
+                name = _graph_workorder_name(snapshot.values)
+                if (
+                    phase is not state.phase
+                    or snapshot.error != state.failure_reason
+                    or (name and name != state.name)
+                ):
                     await session.state_store.save(
                         replace(
                             state,
+                            name=name or state.name,
                             phase=phase,
                             failure_reason=snapshot.error or state.failure_reason,
                         )
@@ -1677,9 +1704,16 @@ def create_app(
         # a WorkOrder that claims to be working forever. So the engine is asked
         # once more, now that there is a row for its answer.
         latest = await runtime.snapshot(state.run_id)
-        if latest is not None and GRAPH_PHASES[latest.status] is not state.phase:
+        latest_name = (
+            _graph_workorder_name(latest.values) if latest is not None else ""
+        )
+        if latest is not None and (
+            GRAPH_PHASES[latest.status] is not state.phase
+            or (latest_name and latest_name != state.name)
+        ):
             state = replace(
                 state,
+                name=latest_name or state.name,
                 phase=GRAPH_PHASES[latest.status],
                 failure_reason=latest.error,
             )
@@ -1749,6 +1783,37 @@ def create_app(
                 milestone_id=direct_milestone_id,
             )
 
+        state = await start_step_run(
+            prompt=prompt,
+            repository=repository,
+            workflow_id=workflow_id,
+            definition=definition,
+            runner_name=runner_name,
+            workstream_id=workstream_id,
+            milestone_id=direct_milestone_id,
+        )
+        run = await run_reader.get(state.run_id)
+        assert run is not None
+        return JSONResponse(_run_json(run), status_code=201)
+
+    async def start_step_run(
+        *,
+        prompt: str,
+        repository: str,
+        workflow_id: WorkflowId,
+        definition: WorkflowDefinition | None,
+        runner_name: str,
+        workstream_id: WorkstreamId | None = None,
+        milestone_id: MilestoneId | None = None,
+        origin: RunOrigin | None = None,
+    ) -> RunState:
+        """Record a step WorkOrder and start driving it, whoever asked for it.
+
+        The form and a chat mention differ in what they know, not in what they
+        start -- so this is one function rather than two that would drift: an
+        `origin` is the only thing the second one carries that the first does
+        not, and it is what makes the run answerable in the place it came from.
+        """
         run_id = RunId(f"run-{uuid4().hex[:12]}")
         task_id = TaskId(f"task-{uuid4().hex[:12]}")
         event = RunRequested(
@@ -1758,17 +1823,18 @@ def create_app(
             repository=repository,
             workflow_id=workflow_id,
             workstream_id=workstream_id,
-            milestone_id=direct_milestone_id,
+            milestone_id=milestone_id,
         )
         state = RunState(
             run_id=run_id,
             task_id=task_id,
             workflow_id=workflow_id,
             workstream_id=workstream_id,
-            milestone_id=direct_milestone_id,
+            milestone_id=milestone_id,
             prompt=prompt,
             repository=repository,
             workflow_definition=definition,
+            origin=origin,
         )
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
@@ -1776,9 +1842,7 @@ def create_app(
             run_id,
             asyncio.create_task(workflow_executor.start(event, runner_name)),
         )
-        run = await run_reader.get(run_id)
-        assert run is not None
-        return JSONResponse(_run_json(run), status_code=201)
+        return state
 
     async def get_run(request: Request) -> JSONResponse:
         run_id = RunId(request.path_params["run_id"])
@@ -2567,11 +2631,32 @@ def create_app(
     _slack_store = slack_credential_store or SlackCredentialStore()
     _slack_state: str | None = None
     _slack_redirect_uri: str | None = None
+    # The way back into a chat thread, for the one message this app sends
+    # itself: the reply that says a mention became a work order. Everything
+    # after that is the executor's, which builds its own from the same port.
+    run_notifier = RunNotifier(session.capabilities.communications, public_url)
+
+    def _signing_secret() -> str:
+        return _slack_store.signing_secret() or ""
 
     async def slack_status(_request: Request) -> JSONResponse:
         credentials = _slack_store.credentials()
+        signing_secret = bool(_signing_secret())
+        connected = bool(_slack_store.token())
         return JSONResponse(
-            {"configured": credentials is not None, "connected": bool(_slack_store.token())}
+            {
+                "configured": credentials is not None,
+                "connected": connected,
+                # Whether a mention could actually start something, and which
+                # of its parts is missing -- so the settings panel can offer
+                # the one this deployment still needs rather than a paragraph
+                # listing everything it might. Being connected counts: a work
+                # order this server cannot reply to is one nobody would see.
+                "events": (
+                    connected and signing_secret and bool(work_orders.repository)
+                ),
+                "signingSecret": signing_secret,
+            }
         )
 
     async def slack_set_credentials(request: Request) -> Response:
@@ -2581,6 +2666,20 @@ def create_app(
         body = await request.json()
         client_id = (body.get("clientId") or "").strip()
         client_secret = (body.get("clientSecret") or "").strip()
+        signing_secret = (body.get("signingSecret") or "").strip()
+        if signing_secret and not client_id and not client_secret:
+            # Adding only the signing secret, to a deployment that connected
+            # before it was asked for. It belongs to the app already
+            # configured, so this must not walk the path below: revoking the
+            # token and re-saving the same OAuth pair would cost a working
+            # connection to enable mentions on it.
+            if _slack_store.credentials() is None:
+                return _error("Slack OAuth credentials are not configured", 409)
+            try:
+                _slack_store.set_signing_secret(signing_secret)
+            except SlackAuthError as error:
+                return _error(str(error), 500)
+            return Response(status_code=204)
         if not client_id or not client_secret:
             return _error("clientId and clientSecret are required", 400)
         token = _slack_store.token()
@@ -2592,6 +2691,10 @@ def create_app(
             _slack_store.disconnect()
         try:
             _slack_store.set_credentials(client_id, client_secret)
+            if signing_secret:
+                # After the credentials, never before: saving them forgets the
+                # previous app's signing secret, which would take this one too.
+                _slack_store.set_signing_secret(signing_secret)
         except SlackAuthError as error:
             return _error(str(error), 500)
         _slack_state = None
@@ -2648,6 +2751,131 @@ def create_app(
         _slack_redirect_uri = None
         return Response(status_code=204)
 
+    async def slack_events(request: Request) -> Response:
+        """Slack's Events API: the door a mention comes in through.
+
+        Every answer here is a 200 with an empty body once the delivery is
+        established as Slack's, including the ones where nothing happens. Slack
+        reads any other status as "did not arrive" and sends it again, so a
+        work order that failed to start for a reason retrying cannot fix would
+        be attempted three more times -- and one that started successfully but
+        answered slowly would be started twice.
+
+        A signature that does not verify is the exception, and is refused: an
+        unsigned request to this address is not Slack, and starting agents on
+        the say-so of whoever found the URL is the one thing this must not do.
+        """
+        body = await request.body()
+        signing_secret = _signing_secret()
+        if not signing_secret:
+            log.warning(
+                "a Slack event was delivered but no signing secret is saved, "
+                "so it could not be verified and was ignored"
+            )
+            return _error("Slack request signing is not configured", 503)
+        if not verify_slack_signature(
+            signing_secret,
+            request.headers.get("x-slack-request-timestamp", ""),
+            request.headers.get("x-slack-signature", ""),
+            body,
+        ):
+            return _error("invalid Slack signature", 401)
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return _error("invalid Slack event", 400)
+        if not isinstance(payload, dict):
+            return _error("invalid Slack event", 400)
+        if payload.get("type") == "url_verification":
+            # The one-off handshake that makes Slack accept this address.
+            return JSONResponse({"challenge": str(payload.get("challenge", ""))})
+        if request.headers.get("x-slack-retry-num"):
+            # A redelivery of something already accepted. Whatever it was, it
+            # is either running or already failed for a reason nothing about
+            # this attempt changes; acting again would double the work order.
+            return Response(status_code=200)
+        mention = slack_mention_from_event(payload)
+        if mention is not None:
+            await start_mentioned_work_order(mention)
+        return Response(status_code=200)
+
+    async def start_mentioned_work_order(mention: SlackMention) -> None:
+        """Turn somebody pinging the bot into a work order, and say so.
+
+        Only the step workflows are startable this way. A `[BETA]` graph run is
+        driven by the other engine, which has neither the run-bound tools an
+        agent reports status through nor a place to keep where the request came
+        from -- so offering one here would be offering a work order that goes
+        silent the moment it starts.
+        """
+        origin = RunOrigin(
+            channel=mention.channel,
+            thread_id=mention.thread_id,
+            author=mention.author,
+        )
+
+        async def refuse(reason: str) -> None:
+            await run_notifier.post(
+                origin, CommunicationsMessage(reason, mention=origin.author)
+            )
+
+        if not _slack_store.token():
+            # Slack keeps delivering mentions to an app that is installed, so
+            # one can arrive after this server was disconnected. Nothing is
+            # started, because everything the run would say -- including the
+            # refusal below -- goes nowhere: it would provision a workspace and
+            # run a write-access agent to completion in silence. The log is the
+            # only place left to say so.
+            log.warning(
+                "ignoring a Slack mention in %s: this server is not connected "
+                "to Slack, so a work order started from it could not report "
+                "anything back",
+                mention.channel,
+            )
+            return
+        if not work_orders.repository:
+            await refuse(
+                "I cannot start a work order until this deployment configures "
+                "`work_orders.repository`."
+            )
+            return
+        definition = _mentioned_workflow()
+        if definition is None:
+            await refuse(
+                "I cannot start a work order: this deployment has no step "
+                "workflow configured under `work_orders.workflow`."
+            )
+            return
+        runner_name = work_orders.runner or workflow_executor.default_runner
+        if runner_name not in workflow_executor.runners:
+            await refuse(f"I cannot start a work order: unknown runner {runner_name}.")
+            return
+        state = await start_step_run(
+            prompt=mention.text,
+            repository=work_orders.repository,
+            workflow_id=definition.workflow_id,
+            definition=definition,
+            runner_name=runner_name,
+            origin=origin,
+        )
+        link = run_notifier.work_order_link(state)
+        await run_notifier.post(
+            origin,
+            CommunicationsMessage(
+                f"Started a work order on `{work_orders.repository}`. "
+                "I will report progress here.",
+                (link,) if link is not None else (),
+                mention=origin.author,
+            ),
+            state,
+        )
+
+    def _mentioned_workflow() -> WorkflowDefinition | None:
+        """Which workflow a mention runs: the configured one, or the only one."""
+        if work_orders.workflow:
+            return catalog.get(WorkflowId(work_orders.workflow))
+        return next(iter(catalog)) if len(catalog) == 1 else None
+
     # --- runner utilization ---------------------------------------------------
 
     _utilization = utilization or UtilizationService()
@@ -2698,6 +2926,7 @@ def create_app(
         Route("/api/slack/connect", slack_connect, methods=["POST"]),
         Route("/api/slack/callback", slack_callback, name="slack_callback"),
         Route("/api/slack/disconnect", slack_disconnect, methods=["POST"]),
+        Route("/api/slack/events", slack_events, methods=["POST"]),
         Route("/api/utilization", read_utilization),
         Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
         Route("/api/projects", list_projects),

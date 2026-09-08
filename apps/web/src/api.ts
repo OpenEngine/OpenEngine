@@ -630,16 +630,41 @@ export function disconnectGitLab(origin: string): Promise<void> {
   });
 }
 
-export type SlackStatus = { configured: boolean; connected: boolean };
+/**
+ * `events` is whether a mention could start a work order right now, and
+ * `signingSecret` is which of its two halves this server already has.
+ */
+export type SlackStatus = {
+  configured: boolean;
+  connected: boolean;
+  events?: boolean;
+  signingSecret?: boolean;
+};
 
 export function getSlackStatus(): Promise<SlackStatus> {
   return api<SlackStatus>("/api/slack/status");
 }
 
-export function setSlackCredentials(clientId: string, clientSecret: string): Promise<void> {
+export function setSlackCredentials(
+  clientId: string,
+  clientSecret: string,
+  signingSecret?: string,
+): Promise<void> {
   return api<void>("/api/slack/credentials", {
     method: "POST",
-    body: JSON.stringify({ clientId, clientSecret }),
+    body: JSON.stringify({ clientId, clientSecret, signingSecret }),
+  });
+}
+
+/**
+ * Save only the signing secret, against the app already configured. Separate
+ * from `setSlackCredentials` because that one revokes the token and starts the
+ * OAuth flow over, which is not a price for enabling mentions.
+ */
+export function setSlackSigningSecret(signingSecret: string): Promise<void> {
+  return api<void>("/api/slack/credentials", {
+    method: "POST",
+    body: JSON.stringify({ signingSecret }),
   });
 }
 
