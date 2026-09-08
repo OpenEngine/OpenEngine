@@ -41,7 +41,11 @@ from engine.domain import (
 from engine.ports import (
     AgentRunner,
     AgentTurn,
+    ApprovalDecision,
     ApprovalHandler,
+    ApprovalKind,
+    ApprovalRequest,
+    ApprovalResponse,
     InteractiveMcpAgentRunner,
     McpAgentRunner,
     Message as CommunicationMessage,
@@ -427,6 +431,13 @@ class WorkflowExecutor:
         is not a step, so there is no step for `complete_step` to complete. A
         profile that is granted nothing servable runs as it always has, with no
         server at all.
+
+        An interactive runner is driven interactively even though nobody is
+        watching, because some providers make calling an attached MCP tool an
+        approval in its own right and refuse it outright when the turn has no
+        way to answer one. There is no conversation to raise that in, so
+        `_naming_approvals` answers it: yes to this broker's own tools, no to
+        anything else.
         """
 
         runner = self._runners[runner_name]
@@ -452,9 +463,19 @@ class WorkflowExecutor:
             broker.enable_repository_tools(
                 self._capabilities.source_control, served, state.workspace_id
             )
+            granted = with_granted_tools(profile, served)
+            if isinstance(runner, InteractiveMcpAgentRunner):
+                return await runner.run_turn_with_mcp_interactive(
+                    agent_run_id,
+                    granted,
+                    messages,
+                    broker.config,
+                    _naming_approvals(broker.config.name, served),
+                    workspace_id=state.workspace_id,
+                )
             return await runner.run_turn_with_mcp(
                 agent_run_id,
-                with_granted_tools(profile, served),
+                granted,
                 messages,
                 broker.config,
                 workspace_id=state.workspace_id,
@@ -607,6 +628,38 @@ def resolve_default_branch(
         definition,
         workspace=WorkspaceSpec(base_ref=f"origin/{default_branch}"),
     )
+
+
+def _naming_approvals(server_name: str, served: Sequence[str]) -> ApprovalHandler:
+    """Answer the naming turn's own tool requests, and refuse everything else.
+
+    Automatic because there is nobody to ask: the naming turn is neither a step
+    nor a conversation, so a request raised here has no screen to appear on and
+    waiting on one would hang the run before its first step. Bounded because of
+    what it says yes to -- a call to one of the tools this turn just bound and
+    was told it holds. Everything a person would actually want to see, a
+    command or an edit escaping the sandbox, is refused rather than granted
+    unattended: naming a run is not licence to do the work.
+
+    Both spellings of the tool are accepted because providers differ on which
+    one they report: one names the server it is asking about, another the
+    prefixed tool within it.
+    """
+
+    names = frozenset(
+        (server_name, *served, *(f"mcp__{server_name}__{name}" for name in served))
+    )
+
+    async def approve(request: ApprovalRequest) -> ApprovalResponse:
+        allowed = (
+            request.kind is ApprovalKind.TOOL_USE
+            and request.tool_name in names
+            and not request.requires_human
+            and ApprovalDecision.ACCEPT in request.allowed_decisions
+        )
+        return ApprovalDecision.ACCEPT if allowed else ApprovalDecision.CANCEL
+
+    return approve
 
 
 def _clean_workflow_name(value: str) -> str:

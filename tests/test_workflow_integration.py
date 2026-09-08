@@ -43,7 +43,14 @@ from engine.domain import (
     WorkspaceId,
     WorkspaceProvisioned,
 )
-from engine.ports import AgentTurn, McpServerConfig
+from engine.ports import (
+    AgentTurn,
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalKind,
+    ApprovalRequest,
+    McpServerConfig,
+)
 from engine.runtime import AgentSession, Capabilities, load_workflow_catalog
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
@@ -454,21 +461,94 @@ class IssueReadingRunner(CompletingRunner):
         return AgentTurn(Message.assistant(f"#270 {title}"))
 
 
+def _tool_request(server_name: str) -> ApprovalRequest:
+    return ApprovalRequest(
+        approval_id="naming-tool",
+        kind=ApprovalKind.TOOL_USE,
+        tool_name=server_name,
+        allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+    )
+
+
+def _command_request() -> ApprovalRequest:
+    return ApprovalRequest(
+        approval_id="naming-command",
+        kind=ApprovalKind.COMMAND_EXECUTION,
+        command="rm -rf .",
+        allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+    )
+
+
+class ApprovalGatedIssueReadingRunner(IssueReadingRunner):
+    """A provider that must be told yes before it may call an attached tool.
+
+    Codex is one: `codex exec` refuses an MCP tool call outright because its
+    approval policy is `never`, so a naming turn driven non-interactively there
+    never reads the issue and names the run off the bare request instead.
+    """
+
+    def __init__(self, arguments: dict[str, object]) -> None:
+        super().__init__(arguments)
+        self.decisions: list[tuple[str, object]] = []
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        raise AssertionError("a naming profile with repository tools should use MCP")
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        if str(agent_run_id).endswith(":name:run"):
+            self.decisions = [
+                ("tool", await on_approval(_tool_request(mcp_server.name))),
+                ("command", await on_approval(_command_request())),
+            ]
+            if self.decisions[0][1] is not ApprovalDecision.ACCEPT:
+                return AgentTurn(Message.assistant("#270 issue details unavailable"))
+        return await self.run_turn_with_mcp(
+            agent_run_id, profile, messages, mcp_server, workspace_id
+        )
+
+
+@pytest.mark.parametrize(
+    "runner_class", [IssueReadingRunner, ApprovalGatedIssueReadingRunner]
+)
 def test_a_run_is_named_after_the_issue_its_task_points_at(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_class: type[IssueReadingRunner],
 ) -> None:
     """"Resolve issue 270" is worth a name only once somebody has read it.
 
     The naming turn gets the repository tools its profile is granted, over a
     server of its own: it is not a step, so `complete_step` is refused rather
     than offered a run it cannot finish.
+
+    Run for both kinds of provider, because holding the tools is not the same
+    as being allowed to call them: one where attaching a server is enough, and
+    one that asks before every call and is answered by the naming turn itself.
     """
 
     monkeypatch.setattr(dispatcher_module, "TerminalMcpBroker", MockTerminalMcpBroker)
     repository = _repository(tmp_path)
     store = SQLiteStateStore(tmp_path / "workflow.sqlite3")
     source_control = WorkItemSourceControl()
-    implementer = IssueReadingRunner(
+    implementer = runner_class(
         {
             "outcome": "success",
             "summary": "Pinned the dependencies.",
@@ -536,6 +616,13 @@ def test_a_run_is_named_after_the_issue_its_task_points_at(
     # it reports it would have used.
     assert "view_work_item" in implementer.profile.instructions
     assert "complete_step" not in implementer.profile.instructions
+    if isinstance(implementer, ApprovalGatedIssueReadingRunner):
+        # Yes to this turn's own tools, no to anything a person would want to
+        # see: naming a run unattended is not licence to start doing the work.
+        assert implementer.decisions == [
+            ("tool", ApprovalDecision.ACCEPT),
+            ("command", ApprovalDecision.CANCEL),
+        ]
 
 
 # --- the same workflow, driven by scripted CLIs over the real MCP bridge -----
