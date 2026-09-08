@@ -100,7 +100,19 @@ function RunnerCard({ reading }: { reading: ApiRunnerUtilization }) {
       ) : (
         <p className="micro">Nothing has been read from this runner yet.</p>
       )}
-      {reading.error && <p className="notice usage-error">{reading.error}</p>}
+      {reading.error && (
+        <p className="notice usage-error">
+          {reading.error}
+          {/* The command, not a link: both runners are signed in at a terminal
+              on this machine, and neither sign-in is one this page could
+              start on the reader's behalf. */}
+          {reading.remedy && (
+            <>
+              . Run <code className="code-inline">{reading.remedy}</code> to sign in again.
+            </>
+          )}
+        </p>
+      )}
       {read && <span className="micro usage-read-at">Read at {read}</span>}
     </section>
   );

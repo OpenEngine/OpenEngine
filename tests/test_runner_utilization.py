@@ -10,19 +10,24 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 
 import httpx
 import pytest
 
 from engine.apps.web import utilization as utilization_module
 from engine.apps.web.utilization import (
+    CLAUDE_SIGN_IN,
     CLAUDE_USAGE_URL,
+    CODEX_SIGN_IN,
     CODEX_USAGE_URL,
     RunnerUtilization,
+    StoredToken,
     UtilizationError,
     UtilizationService,
     UtilizationWindow,
     claude_access_token,
+    claude_credentials,
     codex_credentials,
     read_claude_utilization,
     read_codex_utilization,
@@ -68,6 +73,29 @@ def _answers(url: str, payload: object, status_code: int = 200):
         return httpx.Response(status_code, json=payload)
 
     return handle
+
+
+def _claude_file(home, token: str, *, expires_at: float):
+    """The credentials file Claude Code writes where there is no keychain.
+
+    `expiresAt` is milliseconds, which is what a JavaScript `Date` gives and
+    what both of Claude Code's stores hold.
+    """
+    root = home / ".claude"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".credentials.json").write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": token,
+                    "refreshToken": "refresh",
+                    "expiresAt": int(expires_at * 1000),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
 
 
 def _codex_home(root, token: str = "token", account: str = "account"):
@@ -217,8 +245,12 @@ def test_a_runner_nobody_has_signed_in_says_so(monkeypatch, tmp_path) -> None:
         async with _client(refuse) as client:
             await read_codex_utilization(client)
 
-    with pytest.raises(UtilizationError, match="not signed in"):
+    with pytest.raises(UtilizationError, match="not signed in") as refused:
         asyncio.run(read())
+
+    # And it says what would fix it, which is the whole of what the reader can
+    # act on -- neither sign-in is one this application could start for them.
+    assert refused.value.remedy == CODEX_SIGN_IN
 
 
 def test_a_refused_credential_is_reported_as_one(monkeypatch, tmp_path) -> None:
@@ -228,8 +260,83 @@ def test_a_refused_credential_is_reported_as_one(monkeypatch, tmp_path) -> None:
         async with _client(_answers(CODEX_USAGE_URL, {}, 401)) as client:
             await read_codex_utilization(client)
 
-    with pytest.raises(UtilizationError, match="sign in again"):
+    with pytest.raises(UtilizationError, match="refused") as refused:
         asyncio.run(read())
+
+    assert refused.value.remedy == CODEX_SIGN_IN
+
+
+def test_the_live_store_is_preferred_to_a_stale_one(monkeypatch, tmp_path) -> None:
+    """The bug this cost a report: two stores, and the wrong one preferred.
+
+    Claude Code keeps the live credential in the macOS keychain and refreshes
+    it in place. `~/.claude/.credentials.json` is what platforms without a
+    keychain use, and on a Mac it is usually a leftover from before there was
+    one -- months stale, and refused the moment it is sent. Reading the file
+    first meant the page reported an expired credential while the CLI beside
+    it worked perfectly.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    now = time.time()
+    _claude_file(tmp_path, "stale-token", expires_at=now - 30 * 24 * 60 * 60)
+    monkeypatch.setattr(
+        utilization_module,
+        "_keychain_token",
+        lambda: StoredToken("live-token", now + 3600),
+    )
+
+    assert [held.access_token for held in claude_credentials(home=tmp_path)] == [
+        "live-token",
+        "stale-token",
+    ]
+    assert claude_access_token(home=tmp_path) == "live-token"
+
+
+def test_a_machine_with_only_a_file_still_reads_it(monkeypatch, tmp_path) -> None:
+    """Preferring the keychain is not the same as requiring one.
+
+    Nothing outside macOS has one, and a token there is the only token there
+    is.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    _claude_file(tmp_path, "file-token", expires_at=time.time() + 3600)
+    monkeypatch.setattr(utilization_module, "_keychain_token", lambda: None)
+
+    assert claude_access_token(home=tmp_path) == "file-token"
+
+
+def test_a_token_given_in_the_environment_wins_outright(monkeypatch, tmp_path) -> None:
+    """`claude setup-token` issues a long-lived token nothing writes an expiry
+    for, so there is nothing to compare it against -- and it is the only one
+    somebody chose deliberately."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "chosen-token")
+    _claude_file(tmp_path, "file-token", expires_at=time.time() + 3600)
+
+    assert claude_access_token(home=tmp_path) == "chosen-token"
+
+
+def test_every_stored_credential_expired_is_not_signed_out(monkeypatch, tmp_path) -> None:
+    """Two different things, and the page has to tell them apart.
+
+    "You are not signed in" is the wrong thing to print at somebody whose CLI
+    is signed in and working; what is true is that what this found is too old
+    to send. Neither is worth spending a request on.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    _claude_file(tmp_path, "stale-token", expires_at=time.time() - 60)
+    monkeypatch.setattr(utilization_module, "_keychain_token", lambda: None)
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("an expired credential must not be sent")
+
+    async def read() -> None:
+        async with _client(refuse) as client:
+            await read_claude_utilization(client, home=tmp_path)
+
+    with pytest.raises(UtilizationError, match="has expired") as expired:
+        asyncio.run(read())
+
+    assert expired.value.remedy == CLAUDE_SIGN_IN
 
 
 def test_only_the_runners_this_deployment_offers_are_scraped(tmp_path) -> None:
