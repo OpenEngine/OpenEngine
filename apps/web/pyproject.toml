@@ -32,6 +32,7 @@ dependencies = [
     "uvicorn>=0.35",
     "keyring>=25",
     "platformdirs>=4",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

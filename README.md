@@ -108,10 +108,27 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 ### GitHub browser login
 
 Register a separate GitHub OAuth App for login and configure its callback as
-`https://your-engine-host/api/auth/github/callback`. Set
-`ENGINE_GITHUB_LOGIN_CLIENT_ID`, `ENGINE_GITHUB_LOGIN_CLIENT_SECRET`, and
-`ENGINE_GITHUB_LOGIN_REDIRECT_URI` on the server. All three are required;
-HTTP callbacks are accepted only for loopback development hosts.
+`https://your-engine-host/api/auth/github/callback`. Set these top-level values
+in `engine.toml`:
+
+```toml
+github_login_client_id = "your-login-client-id"
+github_login_redirect_uri = "https://your-engine-host/api/auth/github/callback"
+```
+
+`ENGINE_GITHUB_LOGIN_CLIENT_ID` and `ENGINE_GITHUB_LOGIN_REDIRECT_URI`
+environment variables override those defaults. HTTP callbacks are accepted only
+for loopback development hosts.
+
+Store `ENGINE_GITHUB_LOGIN_CLIENT_SECRET=your-secret` in a server-local `.env`
+beside the loaded `engine.toml` (or in the working directory if no config file
+is loaded). This file is gitignored; restrict its permissions to the service
+owner (`chmod 600 .env`) and edit it via SSH. The app reads it directly, with
+dotenv interpolation disabled, without sourcing it into a shell. An explicit
+process environment secret takes precedence. Secrets are not accepted in TOML.
+The secret file is reread at each token exchange, so updating it takes effect
+without a restart; changing the client ID or callback URL requires a restart.
+All three values are required when enabling login.
 
 Visit `/api/auth/github/login` to start the browser authorization flow. It
 requests only `read:user`, uses OAuth state and PKCE, and returns the verified
@@ -124,7 +141,7 @@ route protection (#301), and repository permission checks (#302), are separate
 work; this feature alone does not protect app access. Pending logins expire
 after ten minutes and live in one server process, so a restart requires a new
 login and multiple workers would require shared state or sticky routing.
-Without these environment variables the login endpoints return 503.
+Without login configuration the login endpoints return 503.
 
 To diagnose interactive runner protocol incompatibilities, set
 `ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and

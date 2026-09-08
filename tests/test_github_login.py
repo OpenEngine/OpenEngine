@@ -148,3 +148,47 @@ def test_pending_logins_bounded_and_expired_entries_pruned(flow):
     flow._pending = {k: (v[0], v[1], 0) for k, v in flow._pending.items()}
     assert client.get("/api/auth/github/login", follow_redirects=False).status_code == 302
     assert len(flow._pending) == 1
+
+
+def test_stale_callback_preserves_newer_login(flow):
+    client = browser(flow)
+    older = start(client)["state"][0]
+    newer = start(client)["state"][0]
+    response = callback(client, older, code="old")
+    assert response.status_code == 400
+    assert "set-cookie" not in response.headers
+    # Refreshing a consumed callback must also leave the new cookie alone.
+    assert "set-cookie" not in callback(client, older, code="old").headers
+
+    def provider(request):
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "alice"})
+        return httpx.Response(200, json={"access_token": "token"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, newer, code="new")
+    assert response.status_code == 200
+    assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+def test_token_exchange_uses_rotated_file_secret(tmp_path, monkeypatch):
+    monkeypatch.delenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", raising=False)
+    secret_file = tmp_path / ".env"
+    secret_file.write_text("ENGINE_GITHUB_LOGIN_CLIENT_SECRET=initial\n")
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "initial", "https://engine.test/api/auth/github/callback", secret_file
+    ))
+    client = browser(flow)
+    state = start(client)["state"][0]
+    secret_file.write_text("ENGINE_GITHUB_LOGIN_CLIENT_SECRET=rotated\n")
+
+    def provider(request):
+        if request.url.path == "/login/oauth/access_token":
+            assert parse_qs(request.content.decode())["client_secret"] == ["rotated"]
+            return httpx.Response(200, json={"access_token": "token"})
+        return httpx.Response(200, json={"id": 42, "login": "alice"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        assert callback(client, state, code="code").status_code == 200

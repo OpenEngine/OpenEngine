@@ -4,14 +4,17 @@ Session issuance and application access control are follow-up work (#301).
 Pending logins are process-local: a restart requires starting login again.
 """
 
-from dataclasses import dataclass, field
 import base64
 import hashlib
+import os
 import secrets
 import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+from dotenv import dotenv_values
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -27,6 +30,19 @@ class GitHubLoginConfig:
     client_id: str
     client_secret: str = field(repr=False)
     redirect_uri: str
+    secret_file: Path | None = field(default=None, repr=False)
+
+    def current_secret(self) -> str:
+        if self.secret_file is None:
+            return self.client_secret
+        values = dotenv_values(self.secret_file, interpolate=False)
+        secret = os.environ.get(
+            "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
+            values.get("ENGINE_GITHUB_LOGIN_CLIENT_SECRET") or "",
+        )
+        if not secret:
+            raise ValueError("GitHub login secret is not configured")
+        return secret
 
     def __post_init__(self) -> None:
         uri = urlsplit(self.redirect_uri)
@@ -75,10 +91,15 @@ class GitHubLogin:
         return response
 
     async def callback(self, request: Request) -> Response:
+        pending = self._pending.get(request.query_params.get("state", ""))
+        owns_cookie = pending is not None and secrets.compare_digest(
+            request.cookies.get(_COOKIE, "").encode(), pending[0].encode()
+        )
         response = await self._callback(request)
         response.headers.update(_HEADERS)
-        response.delete_cookie(_COOKIE, path=_PATH, httponly=True, samesite="lax",
-                               secure=bool(self.config and self.config.redirect_uri.startswith("https:")))
+        if owns_cookie:
+            response.delete_cookie(_COOKIE, path=_PATH, httponly=True, samesite="lax",
+                                   secure=bool(self.config and self.config.redirect_uri.startswith("https:")))
         return response
 
     async def _callback(self, request: Request) -> Response:
@@ -97,7 +118,7 @@ class GitHubLogin:
                 token_response = await client.post(
                     "https://github.com/login/oauth/access_token",
                     data={"client_id": self.config.client_id,
-                          "client_secret": self.config.client_secret,
+                          "client_secret": self.config.current_secret(),
                           "redirect_uri": self.config.redirect_uri,
                           "code": code, "code_verifier": pending[1]},
                     headers={"Accept": "application/json"},
@@ -120,7 +141,7 @@ class GitHubLogin:
                         or user["id"] <= 0 or not isinstance(user.get("login"), str)
                         or not user["login"]):
                     raise ValueError("Invalid identity")
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError, OSError):
             # Never reflect provider responses: they can contain credentials.
             return JSONResponse({"error": "Could not verify GitHub identity"}, 502)
         # The token is deliberately neither returned nor persisted. #301 can

@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import uvicorn
+from dotenv import dotenv_values
 from starlette.applications import Starlette
 
 from engine.apps.web.api import create_app
@@ -100,6 +101,24 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
     )
 
 
+def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None:
+    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+    values = dotenv_values(secret_file, interpolate=False)
+    client_id = os.environ.get(
+        "ENGINE_GITHUB_LOGIN_CLIENT_ID", loaded.config.github_login_client_id
+    )
+    redirect_uri = os.environ.get(
+        "ENGINE_GITHUB_LOGIN_REDIRECT_URI", loaded.config.github_login_redirect_uri
+    )
+    secret = os.environ.get(
+        "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
+        values.get("ENGINE_GITHUB_LOGIN_CLIENT_SECRET") or "",
+    )
+    if not any((client_id, redirect_uri, secret)):
+        return None
+    return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
+
+
 def _github_client_id_source() -> str:
     return "environment" if "GITHUB_CLIENT_ID" in os.environ else "configuration"
 
@@ -127,15 +146,7 @@ def compose_app(
 ) -> Starlette:
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
-    login_values = [
-        os.environ.get(name, "")
-        for name in (
-            "ENGINE_GITHUB_LOGIN_CLIENT_ID",
-            "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
-            "ENGINE_GITHUB_LOGIN_REDIRECT_URI",
-        )
-    ]
-    github_login_config = GitHubLoginConfig(*login_values) if any(login_values) else None
+    github_login_config = _github_login_config(loaded)
     credential_store = GitHubCredentialStore()
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
