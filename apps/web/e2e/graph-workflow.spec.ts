@@ -15,7 +15,7 @@
  *  agents reached over real ACP -- answered by `tests/provider_fakes.py`
  *  instead of by codex or claude. */
 
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Page } from "@playwright/test";
@@ -31,6 +31,13 @@ const REVIEWED = "Read the change; greeting.txt is not covered by a test.";
 
 const STEER = "Also write a licence file.";
 const STEERED = "Wrote the licence.";
+
+const INTERRUPT_TASK = "Keep working until I send guidance.";
+const INTERRUPT_STEERING = "Interrupt the current work and acknowledge this guidance.";
+const INTERRUPT_WORKING = "I am working on the initial task.";
+const ACKNOWLEDGEMENT = "I received the mid-execution guidance.";
+const RELEASE = "release-initial-turn";
+const BLOCKING_COMMAND = `until [ -f ${RELEASE} ]; do sleep 0.05; done`;
 
 /** The same journey, with the agent stopping to ask before it writes.
  *
@@ -74,12 +81,37 @@ const SCRIPT: Script = {
   ],
 };
 
+const STEERING_SCRIPT: Script = {
+  title: "Waiting for guidance",
+  scenarios: [
+    {
+      when: INTERRUPT_STEERING,
+      steps: [{ type: "say", text: ACKNOWLEDGEMENT }],
+    },
+    {
+      when: "Review the implementation",
+      steps: [{ type: "say", text: "The implementation is ready for review." }],
+    },
+    {
+      when: INTERRUPT_TASK,
+      steps: [
+        { type: "say", text: INTERRUPT_WORKING },
+        { type: "run", command: BLOCKING_COMMAND, approval: false },
+      ],
+    },
+  ],
+};
+
 /** Create one `[BETA]` WorkOrder and land on its page. */
-async function create(page: Page, repository: string): Promise<string> {
+async function create(
+  page: Page,
+  repository: string,
+  prompt: string = TASK,
+): Promise<string> {
   await page.goto("/runs/new");
   await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
   await page.getByLabel("Repository").fill(repository);
-  await page.getByLabel("Task prompt").fill(TASK);
+  await page.getByLabel("Task prompt").fill(prompt);
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
   return new URL(page.url()).pathname;
@@ -247,6 +279,32 @@ test("@beta an agent waiting on permission is answered in its conversation", asy
   await card.getByRole("button", { name: "Approve" }).click();
 
   await expect(page.getByText(STEERED)).toBeVisible({ timeout: 60_000 });
+});
+
+test("@beta a graph agent responds when steered during an executing turn", async ({
+  page,
+  engine,
+}) => {
+  engine.script(STEERING_SCRIPT);
+
+  const runUrl = await create(page, engine.repository, INTERRUPT_TASK);
+  const runId = runUrl.split("/").pop() ?? "";
+  await expect
+    .poll(async () => String((await graphRun(page, runUrl)).values?.workspace ?? ""))
+    .not.toBe("");
+  const workspace = String((await graphRun(page, runUrl)).values.workspace);
+
+  try {
+    await openConversation(page, runUrl);
+    await expect(page.getByText(INTERRUPT_WORKING)).toBeVisible();
+
+    await page.getByLabel("Message the agent").fill(INTERRUPT_STEERING);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByText(INTERRUPT_STEERING)).toBeVisible();
+    await expect(page.getByText(ACKNOWLEDGEMENT)).toBeVisible();
+  } finally {
+    writeFileSync(path.join(workspace, RELEASE), "go", "utf-8");
+  }
 });
 
 test("@beta a graph run waiting on a person says so, and can be answered", async ({

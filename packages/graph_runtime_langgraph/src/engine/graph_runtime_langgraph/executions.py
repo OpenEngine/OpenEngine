@@ -125,6 +125,7 @@ class NodeExecution:
         self.execution_id = execution_id
         self.node_id = node_id
         self._steering: asyncio.Queue[str] = asyncio.Queue()
+        self._steered = asyncio.Event()
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
         self._session: Any | None = None
 
@@ -138,6 +139,7 @@ class NodeExecution:
         that waited for the node to be ready could not.
         """
         self._steering.put_nowait(message)
+        self._steered.set()
 
     async def decide(
         self, approval_id: ApprovalId, decision: ApprovalDecision
@@ -203,11 +205,18 @@ class NodeExecution:
         """Wait for an instruction. The interruption point steering arrives at."""
         return await self._steering.get()
 
+    async def wait_for_message(self) -> None:
+        """Wait until steering is queued without taking it from the node."""
+        await self._steered.wait()
+
     def pending_messages(self) -> tuple[str, ...]:
         """Everything queued right now, taken without waiting for more."""
         taken: list[str] = []
         while not self._steering.empty():
             taken.append(self._steering.get_nowait())
+        self._steered.clear()
+        if not self._steering.empty():
+            self._steered.set()
         return tuple(taken)
 
     async def ask(

@@ -187,6 +187,18 @@ def ask_permission(session_id: str) -> dict[str, Any] | None:
 def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
     session = load(session_id)
     session["turns"].append(prompt_text)
+    if os.environ.get("STUB_ACP_WAIT_FOR_CANCEL") and not session.get("cancelled"):
+        save(session_id, session)
+        while message := receive():
+            params = message.get("params") or {}
+            if (
+                message.get("method") == "session/cancel"
+                and params.get("sessionId") == session_id
+            ):
+                session["cancelled"] = True
+                save(session_id, session)
+                respond(message_id, {"stopReason": "cancelled"})
+                return
     # `STUB_ACP_ASK_EVERY` is what a real agent doing real work looks like: each
     # turn wants to run something of its own, so each turn asks again. It is the
     # only way to hold a *steered* turn open long enough for a test to say

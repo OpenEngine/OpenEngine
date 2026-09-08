@@ -61,6 +61,7 @@ runtime exists.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -132,6 +133,7 @@ class _Turn:
     answer: ApprovalDecision | None = None
     """An answer given before this process existed. Applied once, then cleared."""
     answered: ApprovalId | None = None
+    approval_requested: bool = False
     narrating: Callable[[], Awaitable[None]] | None = None
     """`_speak`'s buffer flush, for as long as a turn is in flight.
 
@@ -150,6 +152,7 @@ class _Turn:
         asking the person twice for one command is exactly what a handoff that
         had not really worked would look like.
         """
+        self.approval_requested = True
         # Whatever the agent said on its way to asking, published before
         # anything about the question is. See `narrating`.
         if self.narrating is not None:
@@ -489,6 +492,10 @@ class ACPNode:
     async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:
         """One ACP turn, with what happens in it republished as runtime events.
 
+        Steering cancels a turn that is doing ordinary work so the instruction
+        can become the next turn immediately. A turn that asked for permission
+        is allowed to finish with its answer before queued steering is sent.
+
         Message deltas are gathered rather than published one by one -- a
         transcript event per token would be unreadable -- but they are gathered
         only as far as the next thing the agent does. An agent narrates what it
@@ -519,7 +526,9 @@ class ACPNode:
                 await execution.say(text)
 
         turn.narrating = flush
-        try:
+        turn.approval_requested = False
+
+        async def consume() -> None:
             async for event in session.prompt(prompt):
                 if event.type in _INTERRUPTS_THE_NARRATION:
                     await flush()
@@ -531,7 +540,31 @@ class ACPNode:
                         if isinstance(text, str):
                             pending.append(text)
             await flush()
+
+        speaking = asyncio.create_task(consume())
+        steering: asyncio.Future[None] = asyncio.create_task(
+            execution.wait_for_message()
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (speaking, steering), return_when=asyncio.FIRST_COMPLETED
+            )
+            if steering in done and not turn.approval_requested:
+                speaking.cancel()
+                await asyncio.gather(speaking, return_exceptions=True)
+                await flush()
+            else:
+                await speaking
         finally:
+            if not speaking.done():
+                speaking.cancel()
+            if not steering.done():
+                steering.cancel()
+            await asyncio.gather(
+                speaking,
+                steering,
+                return_exceptions=True,
+            )
             turn.narrating = None
         # The node's durable output is still the whole turn: what the graph
         # carries forward does not change with where the words were published.
