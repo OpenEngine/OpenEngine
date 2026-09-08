@@ -231,7 +231,11 @@ class StdioACPClient:
                 agent=self._agent,
                 operation="session/new",
             )
-        return StdioACPSession(self, session_id)
+        return StdioACPSession(
+            self,
+            session_id,
+            as_mapping(response, field="session response").get("configOptions", []),
+        )
 
     async def resume_session(
         self,
@@ -248,7 +252,7 @@ class StdioACPClient:
                 session_id=session_id,
                 operation="session/load",
             )
-        await self.call(
+        response = await self.call(
             "session/load",
             {
                 "sessionId": session_id,
@@ -258,7 +262,11 @@ class StdioACPClient:
             session_id=session_id,
             failure=ACPSessionError,
         )
-        return StdioACPSession(self, session_id)
+        return StdioACPSession(
+            self,
+            session_id,
+            as_mapping(response, field="session response").get("configOptions", []),
+        )
 
     async def close(self) -> None:
         if self._closed:
@@ -498,16 +506,56 @@ class StdioACPClient:
                 continue
 
 
+def _config_options(value: object) -> list[JSONObject]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Expected a list of session config options")
+    return [as_mapping(one, field="config option") for one in value]
+
+
 class StdioACPSession:
     """An `ACPSession` on a `StdioACPClient`."""
 
-    def __init__(self, client: StdioACPClient, session_id: str) -> None:
+    def __init__(
+        self, client: StdioACPClient, session_id: str, config_options: object = ()
+    ) -> None:
         self._client = client
         self._session_id = session_id
+        self._config_options = _config_options(config_options)
 
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    async def set_model(self, model: str) -> None:
+        """Select an advertised model, refusing an unavailable or ambiguous size."""
+        option = next(
+            (one for one in self._config_options if one.get("category") == "model"),
+            None,
+        )
+        if option is None:
+            raise ValueError("Agent did not advertise a model config option")
+        choices: list[JSONObject] = []
+        for one in _config_options(option.get("options", [])):
+            choices.extend(
+                _config_options(one["options"]) if "options" in one else [one]
+            )
+        exact = [one for one in choices if one.get("value") == model]
+        matches = exact or [
+            one for one in choices if model.lower() in str(one.get("name", "")).lower()
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"Model {model!r} is unavailable or ambiguous")
+        result = await self._client.call(
+            "session/set_config_option",
+            {
+                "sessionId": self._session_id,
+                "configId": option["id"],
+                "value": matches[0]["value"],
+            },
+        )
+        self._config_options = _config_options(
+            as_mapping(result, field="config response").get("configOptions", [])
+        )
 
     async def prompt(self, prompt: ACPPrompt) -> AsyncGenerator[ACPEvent, None]:
         """Run one turn, yielding its updates and then its completion.

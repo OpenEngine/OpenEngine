@@ -136,33 +136,23 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "workspace",
         "naming",
         "implementation",
-        "review",
+        "review-security",
+        "review-bugs",
+        "review-performance",
+        "review-conciseness",
+        "reranker",
+        "publish",
         "human-review",
     ]
-    assert [node.name for node in codex.nodes] == [
-        "Workspace",
-        "Naming",
-        "Implementation",
-        "Review",
-        "Human review",
-    ]
-    # The kinds a client would draw differently: a checkout, three agents, and
-    # the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
         "workspace",
-        "agent",
-        "agent",
-        "agent",
+        *(["agent"] * 8),
         "human",
     ]
-    # The implementation and review are the two conversations a person reads
-    # and can talk to. The checkout, naming turn, and verdict are stages of the
-    # run rather than conversations in it.
     assert [node.show_in_sidebar for node in codex.nodes] == [
         False,
         False,
-        True,
-        True,
+        *([True] * 7),
         False,
     ]
     assert str(codex.entry_point) == "workspace"
@@ -223,7 +213,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 3
+    assert len(agents) == 8
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
@@ -336,3 +326,23 @@ def test_every_composition_root_still_starts(
     # `engine-web` does before it serves anything, so building it is the test.
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
     assert build_app() is not None
+
+
+@pytest.mark.parametrize(
+    "runner,reviewer,normal,security",
+    [
+        ("codex", "claude", "sonnet", "opus"),
+        ("claude", "codex", "gpt-5.6-terra", "gpt-5.6-sol"),
+    ],
+)
+def test_cross_provider_fanout_models_and_join(runner, reviewer, normal, security):
+    module = definition_module()
+    builder = module.pipeline(runner)
+    nodes = nodes_of(builder)
+    for key in module.REVIEW_KEYS:
+        assert nodes[key].agent == reviewer
+        assert nodes[key].model == (security if key == "review-security" else normal)
+        assert (module.IMPLEMENTATION, key) in builder.edges
+    assert (module.REVIEW_KEYS, module.REVIEW) in builder.waiting_edges
+    assert nodes[module.REVIEW].review_keys == module.REVIEW_KEYS
+    assert (module.REVIEW, module.PUBLISH) in builder.edges

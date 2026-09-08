@@ -113,6 +113,10 @@ class ACPSession(Protocol):
         """Run one turn, streaming what happens in it as it happens."""
         ...
 
+    async def set_model(self, model: str) -> None:
+        """Select a model advertised by this session before prompting."""
+        ...
+
     async def cancel(self) -> None:
         """Stop the turn in flight. The conversation itself survives."""
         ...

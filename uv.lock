@@ -599,6 +599,7 @@ dependencies = [
     { name = "langgraph-acp" },
     { name = "langgraph-checkpoint" },
     { name = "langgraph-checkpoint-sqlite" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
@@ -610,6 +611,7 @@ requires-dist = [
     { name = "langgraph-acp", editable = "langgraph-acp" },
     { name = "langgraph-checkpoint", specifier = ">=2.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ dependencies = [
     # git here would put an implementation in a package that runs graphs.
     "engine-ports",
     "langgraph>=1.0",
+    "pydantic>=2.0",
     "langgraph-acp",
     "langgraph-checkpoint>=2.0",
     # What `workflows.sqlite_runtime` opens. A deployment needs a durable

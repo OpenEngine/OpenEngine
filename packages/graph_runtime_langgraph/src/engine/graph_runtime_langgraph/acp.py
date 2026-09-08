@@ -307,6 +307,8 @@ class ACPNode:
     """What to say, or how to build it from the graph's state."""
     registry: ACPAgentRegistry | None = None
     """Where `agent` resolves. The shared default when omitted."""
+    model: str = ""
+    """Requested model; an unavailable selection fails before prompting."""
     session_key: str = ""
     """Which conversation within the run. The node's own id when empty."""
     output_key: str = ""
@@ -383,6 +385,8 @@ class ACPNode:
         _TURNS[session.session_id] = turn
         execution.attach(session)
         try:
+            if self.model:
+                await session.set_model(self.model)
             if resuming is None:
                 await runtime.store.remember_session(
                     execution.run_id, key, self._binding(execution, session, key)

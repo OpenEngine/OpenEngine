@@ -111,7 +111,7 @@ def install(provider: str, directory: Path) -> str:
     path.write_text(
         "#!/bin/sh\n"
         f"exec {shlex.quote(sys.executable)} "
-        f"{shlex.quote(str(Path(__file__).resolve()))} {provider} \"$@\"\n",
+        f'{shlex.quote(str(Path(__file__).resolve()))} {provider} "$@"\n',
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -415,6 +415,19 @@ def fake_acp(directory: Path) -> str:
     return install("acp", directory)
 
 
+def _acp_models() -> list[dict[str, object]]:
+    return [
+        {
+            "id": "model",
+            "category": "model",
+            "options": [
+                {"value": model, "name": model}
+                for model in ("sonnet", "opus", "gpt-5.6-terra", "gpt-5.6-sol")
+            ],
+        }
+    ]
+
+
 def _acp(arguments: Sequence[str]) -> int:
     """One ACP agent over stdio, for as long as the client keeps it open.
 
@@ -451,11 +464,15 @@ def _acp(arguments: Sequence[str]) -> int:
         elif method == "session/new":
             session_id = f"acp-{len(working_directories) + 1}"
             working_directories[session_id] = str(params.get("cwd") or "")
-            _acp_respond(message_id, {"sessionId": session_id})
+            _acp_respond(
+                message_id, {"sessionId": session_id, "configOptions": _acp_models()}
+            )
         elif method == "session/load":
             session_id = str(params.get("sessionId"))
             working_directories[session_id] = str(params.get("cwd") or "")
-            _acp_respond(message_id, {})
+            _acp_respond(message_id, {"configOptions": _acp_models()})
+        elif method == "session/set_config_option":
+            _acp_respond(message_id, {"configOptions": _acp_models()})
         elif method == "session/prompt":
             session_id = str(params.get("sessionId"))
             _acp_turn(

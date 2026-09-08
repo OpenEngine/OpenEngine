@@ -48,7 +48,7 @@ underneath can do, which is the reason the second one exists:
 ## Following one, and talking to it
 
 The rail lists a `[BETA]` WorkOrder's conversations under its name —
-**Implementation** and **Review** — from the moment the run exists, because
+**Implementation**, four facet reviews, **Reranker**, and **Publish** — from the moment the run exists, because
 those are its graph's nodes rather than something that has to happen first. The
 checkout and the human verdict are stages of the run rather than conversations
 in it, so they are not offered there; a node says which it is with
@@ -171,3 +171,25 @@ run one.
 Then this deployment's `workflows` directory holds no graph workflows, so no
 graph engine was started and there is nothing to offer. That is deliberate: an
 entry nobody could start is worse than no entry at all.
+
+## Reviewer fanout
+
+The Codex implementation graph uses Claude reviewers, and the Claude graph uses
+Codex reviewers. Security uses Opus or gpt-5.6-sol; bugs & task adherence,
+performance, and conciseness use Sonnet or gpt-5.6-terra. Models are selected
+through advertised ACP session config options; missing or ambiguous selections
+fail the node instead of silently using the default model.
+
+The four reviews run in parallel. Each produces a validated findings object,
+including a layman-friendly tagline (1–2 lines), description (1–3 lines), file,
+line, evidence, and reviewer lineage. Invalid output fails the node. The
+reranker waits for all four and retains only evidenced, actionable findings,
+aggressively dropping noise and duplicate issues. It selects existing finding
+IDs and records why each survived; an empty result is valid. Raw and retained
+findings remain in graph state under their respective node keys.
+
+Publish asks the implementation provider to commit and open the task PR, then
+post the retained findings as comments with reviewer and reranker lineage.
+Comment markers let the publishing agent skip already posted findings on retry.
+The PR URL is recorded as `pr_url` before the final human verdict. Publishing
+uses the agent's tools and permissions and requires source-control credentials.

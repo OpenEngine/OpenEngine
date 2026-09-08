@@ -29,7 +29,17 @@ const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";
 const GREETING = "greeting.txt";
 const IMPLEMENTED = "Wrote the greeting.";
-const REVIEWED = "Read the change; greeting.txt is not covered by a test.";
+const REVIEWED = '{"findings":[]}';
+const REVIEW_STEPS: Script["scenarios"] = [
+  { when: "Rerank these findings", steps: [{ type: "say", text: REVIEWED }] },
+  {
+    when: "Publish the implementation",
+    steps: [{
+      type: "say",
+      text: '{"pr_url":"https://github.com/example/repository/pull/1"}',
+    }],
+  },
+];
 
 const STEER = "Also write a licence file.";
 const STEERED = "Wrote the licence.";
@@ -49,6 +59,7 @@ const BLOCKING_COMMAND = `until [ -f ${RELEASE} ]; do sleep 0.05; done`;
 const ASKING_SCRIPT: Script = {
   title: TITLE,
   scenarios: [
+    ...REVIEW_STEPS,
     { when: NAMING_REQUEST, steps: [{ type: "say", text: TITLE }] },
     { when: "Review the implementation", steps: [{ type: "say", text: REVIEWED }] },
     { when: STEER, steps: [{ type: "say", text: STEERED }] },
@@ -66,6 +77,7 @@ const ASKING_SCRIPT: Script = {
 const SCRIPT: Script = {
   title: TITLE,
   scenarios: [
+    ...REVIEW_STEPS,
     { when: NAMING_REQUEST, steps: [{ type: "say", text: TITLE }] },
     // The reviewer is asked about the implementation *and quoted the original
     // task*, so its prompt contains the implementation's own scenario word.
@@ -88,6 +100,7 @@ const SCRIPT: Script = {
 const STEERING_SCRIPT: Script = {
   title: "Waiting for guidance",
   scenarios: [
+    ...REVIEW_STEPS,
     {
       when: NAMING_REQUEST,
       steps: [{ type: "say", text: "Waiting for guidance" }],
@@ -98,7 +111,7 @@ const STEERING_SCRIPT: Script = {
     },
     {
       when: "Review the implementation",
-      steps: [{ type: "say", text: "The implementation is ready for review." }],
+      steps: [{ type: "say", text: REVIEWED }],
     },
     {
       when: INTERRUPT_TASK,
@@ -187,7 +200,12 @@ test("@beta the WorkOrder page shows a graph run's stages", async ({ page, engin
     "Workspace",
     "Naming",
     "Implementation",
-    "Review",
+    "Review: security",
+    "Review: bugs & task adherence",
+    "Review: performance",
+    "Review: conciseness",
+    "Reranker",
+    "Publish",
     "Human review",
   ]);
 });
@@ -220,7 +238,12 @@ test("@beta the rail offers a graph WorkOrder's conversations by node", async ({
   const conversations = page.getByLabel(/^Conversations for /);
   await expect(conversations.getByRole("link")).toHaveText([
     "Implementation",
-    "Review",
+    "Review: security",
+    "Review: bugs & task adherence",
+    "Review: performance",
+    "Review: conciseness",
+    "Reranker",
+    "Publish",
   ]);
 
   await conversations.getByRole("link", { name: "Implementation" }).click();

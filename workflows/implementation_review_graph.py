@@ -1,39 +1,8 @@
-"""Implementation and review, run as a graph.
+"""Beta implementation graphs with cross-provider review fanout.
 
-The same implementation and review stages `implementation_review.py` describes,
-with its naming turn made explicit as a LangGraph node:
-
-    workspace -> naming -> implementation -> review -> human-review
-
-Both files are workflow definitions this repository owns, and a definition is
-classified by which kind it is rather than by a setting. A deployment that wants
-only one of them ships only one of these files.
-
-**This is offered, and it is new.** The web interface lists it in the WorkOrder
-dropdown behind a `[BETA]` label, and creating a WorkOrder with it starts the
-graph below on the graph engine. Its stages, its agents' conversations and the
-questions it stops on are on the WorkOrder page, drawn from the events the run
-publishes. Beta because those events are held in the server's memory, so a
-restart loses the transcript of what was said before it. See
-`docs/graph-workorders-beta.md`.
-
-Three things the graph runtime can do that the step runtime cannot, which is
-what makes this more than a translation:
-
-* the checkout is a **node**, so provisioning is a position a run stands at --
-  and can be reported as having failed at -- rather than something that happens
-  before the run exists;
-* the human decision is an **approval**, so the node that raised it keeps
-  running while somebody thinks. Accepting releases it; refusing ends the run;
-* an agent that stops to ask permission does so **without ending its turn**, so
-  answering carries on the same conversation instead of starting a new one.
-
-One graph per runner, because a node names the agent it runs. Picking a runner
-means starting `implementation-review-codex` or `implementation-review-claude`,
-rather than filling in a field on one graph.
-
-Where the checkouts go is the deployment's business, so it is not named here --
-`pipeline` takes it. See `pipeline`.
+workspace -> naming -> implementation -> four reviewers -> reranker -> publish
+-> human-review. Reviewers inspect independent facets without changing the tree;
+only findings retained by the conservative reranker are posted to the task PR.
 """
 
 from engine.adapters.workspace_provider.git_worktree import (
@@ -50,6 +19,9 @@ from engine.graph_runtime_langgraph.components import (
     ACPNode,
     HumanReviewNode,
     NameNode,
+    ReviewNode,
+    RerankerNode,
+    PublishReviewNode,
     WorkspaceNode,
     checkout,
 )
@@ -64,7 +36,15 @@ BASE_REF = "origin/main"
 WORKSPACE = "workspace"
 NAMING = "naming"
 IMPLEMENTATION = "implementation"
-REVIEW = "review"
+REVIEW = "reranker"
+PUBLISH = "publish"
+FACETS = ("security", "bugs & task adherence", "performance", "conciseness")
+REVIEW_KEYS = (
+    "review-security",
+    "review-bugs",
+    "review-performance",
+    "review-conciseness",
+)
 HUMAN_REVIEW = "human-review"
 
 #: Codex and Claude, reached through their ACP adapters. `agent_registry` is
@@ -79,18 +59,6 @@ IMPLEMENTATION_PROMPT = (
     "The task:\n{task}"
 )
 
-REVIEW_PROMPT = (
-    "Review the implementation already made in the provided workspace. Read "
-    "the changed code and the code around it before judging it, and check "
-    "correctness, regressions the change could cause, and tests that should "
-    "exist but do not. Inspect the workspace only: do not edit, revert, commit, "
-    "or otherwise modify anything, and do not fix what you find. Report every "
-    "finding with the file it is in and why it matters, and say so explicitly "
-    "when you find nothing.\n\n"
-    "Original task:\n{task}\n\n"
-    "What the implementation reported:\n{implementation}"
-)
-
 
 def pipeline(
     runner: str,
@@ -98,24 +66,12 @@ def pipeline(
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
 ) -> StateGraph:
-    """The five stages, with every agent node run by `runner`.
-
-    The two keyword arguments are the only things a deployment or a test has
-    business replacing: where the checkouts are made, and which agents answer.
-    The rest -- the stages, their order, the prompts, which node is a person --
-    is what makes this *the* implementation-review workflow.
-
-    They are arguments so that a variant is a call rather than a second copy of
-    this file with one line changed:
-
-        pipeline("codex", workspace_provider=..., agents=...)
-
-    Nothing passes either one today: a workflow file is read before any
-    composition root has built anything, so what a deployment gets is the
-    default below -- the same worktree root every app here is configured with.
-    A composition root that needs its checkouts somewhere else calls `pipeline`
-    with its own provider rather than copying this file.
-    """
+    """Implement with the selected provider, review with the other provider."""
+    if runner not in ("codex", "claude"):
+        raise ValueError(f"Unsupported implementation runner: {runner}")
+    reviewer = "claude" if runner == "codex" else "codex"
+    regular_model = "sonnet" if reviewer == "claude" else "gpt-5.6-terra"
+    security_model = "opus" if reviewer == "claude" else "gpt-5.6-sol"
     builder: StateGraph = StateGraph(State)
     builder.add_node(
         WORKSPACE,
@@ -149,27 +105,53 @@ def pipeline(
             graph_node_description="Makes the requested change.",
         ),
     )
+    for key, facet in zip(REVIEW_KEYS, FACETS, strict=True):
+        builder.add_node(
+            key,
+            ReviewNode(
+                agent=reviewer,
+                registry=agents,
+                cwd=checkout,
+                model=security_model if facet == "security" else regular_model,
+                output_key=key,
+                facet=facet,
+                graph_node_name=f"Review: {facet}",
+                graph_node_description=f"Inspects {facet} and produces findings.",
+            ),
+        )
+        builder.add_edge(IMPLEMENTATION, key)
     builder.add_node(
         REVIEW,
-        ACPNode(
-            agent=runner,
+        RerankerNode(
+            agent=reviewer,
+            model=regular_model,
             registry=agents,
-            prompt=lambda state: REVIEW_PROMPT.format(
-                task=state.get("task", ""),
-                implementation=state.get(IMPLEMENTATION, ""),
-            ),
             cwd=checkout,
             output_key=REVIEW,
-            graph_node_name="Review",
-            graph_node_description="Inspects the change without modifying it.",
+            review_keys=REVIEW_KEYS,
+            graph_node_name="Reranker",
+            graph_node_description="Verifies findings and aggressively removes noise.",
+        ),
+    )
+    builder.add_node(
+        PUBLISH,
+        PublishReviewNode(
+            agent=runner,
+            registry=agents,
+            cwd=checkout,
+            output_key=PUBLISH,
+            findings_key=REVIEW,
+            graph_node_name="Publish",
+            graph_node_description="Publishes the PR and retained findings with lineage.",
         ),
     )
     builder.add_node(HUMAN_REVIEW, HumanReviewNode())
     builder.add_edge(START, WORKSPACE)
     builder.add_edge(WORKSPACE, NAMING)
     builder.add_edge(NAMING, IMPLEMENTATION)
-    builder.add_edge(IMPLEMENTATION, REVIEW)
-    builder.add_edge(REVIEW, HUMAN_REVIEW)
+    builder.add_edge(list(REVIEW_KEYS), REVIEW)
+    builder.add_edge(REVIEW, PUBLISH)
+    builder.add_edge(PUBLISH, HUMAN_REVIEW)
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
 
