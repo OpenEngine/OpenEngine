@@ -413,6 +413,50 @@ def test_a_mention_with_no_repository_configured_says_so(tmp_path) -> None:
     assert "work_orders.repository" in message.text
 
 
+def test_a_mention_starts_nothing_while_slack_is_disconnected(tmp_path) -> None:
+    """An app stays installed after this server disconnects, so mentions arrive.
+
+    Starting one would provision a workspace and run a write-access agent to
+    completion with every reply -- including a refusal -- dropped on the floor.
+    """
+    from starlette.testclient import TestClient
+
+    communications = RecordingCommunications()
+    app, capabilities, slack_store = _app(
+        tmp_path,
+        communications,
+        WorkOrdersConfig(
+            repository="acme/api",
+            workflow="implementation-review-v1",
+            runner="default",
+        ),
+        _workflow_catalog(),
+    )
+    slack_store.token.return_value = None
+    body = json.dumps(
+        {
+            "type": "event_callback",
+            "event": {
+                "type": "app_mention",
+                "channel": "C123",
+                "user": "U777",
+                "ts": "1700.0001",
+                "text": "<@UBOT> add a health endpoint",
+            },
+        }
+    ).encode()
+    with TestClient(app) as client:
+        response = client.post("/api/slack/events", content=body, headers=_signed(body))
+        # And the panel does not claim otherwise while it is in that state.
+        status = client.get("/api/slack/status").json()
+
+    assert response.status_code == 200
+    assert asyncio.run(capabilities.state_store.list_runs()) == ()
+    assert communications.posts == []
+    assert status["connected"] is False
+    assert status["events"] is False
+
+
 # --- reporting back ----------------------------------------------------------
 
 

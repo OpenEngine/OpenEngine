@@ -746,10 +746,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               <p className="settings-status settings-status-muted">
                 {slack.events
                   ? "Ping the bot in Slack to start a work order; it replies in the thread."
-                  : slack.hasSigningSecret
-                    ? "To start work orders by pinging the bot, set work_orders.repository in engine.toml, and subscribe to app_mention events at "
-                    : "To start work orders by pinging the bot, save the app's signing secret above, set work_orders.repository in engine.toml, and subscribe to app_mention events at "}
-                {!slack.events && <code>{`${window.location.origin}/api/slack/events`}</code>}
+                  : !slack.connected
+                    ? // Named first: a mention arriving now is ignored rather than
+                      // run in silence, and connecting is what changes that.
+                      "Mentions are ignored until Slack is connected — a work order started now could not reply."
+                    : slack.hasSigningSecret
+                      ? "To start work orders by pinging the bot, set work_orders.repository in engine.toml, and subscribe to app_mention events at "
+                      : "To start work orders by pinging the bot, save the app's signing secret above, set work_orders.repository in engine.toml, and subscribe to app_mention events at "}
+                {!slack.events && slack.connected && (
+                  <code>{`${window.location.origin}/api/slack/events`}</code>
+                )}
               </p>
             </>
           )}

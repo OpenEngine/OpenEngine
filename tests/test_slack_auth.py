@@ -139,6 +139,21 @@ def test_slack_communications_reports_slack_delivery_errors() -> None:
             )
 
 
+def test_slack_communications_reports_a_disconnected_workspace() -> None:
+    """The likeliest way for a message to reach nobody is not silent.
+
+    Returning an empty id here told every caller above that the message went
+    out -- including `update_status`, which answers the agent that asked.
+    """
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = None
+
+    with pytest.raises(SlackAuthError, match="not connected"):
+        __import__("asyncio").run(
+            SlackCommunications(store).post("C12345678", "Review run-42")
+        )
+
+
 def test_authorization_url_requests_notification_scope_and_state() -> None:
     url = authorization_url("123", "http://localhost/api/slack/callback", "nonce")
     assert url.startswith("https://slack.com/oauth/v2/authorize?")

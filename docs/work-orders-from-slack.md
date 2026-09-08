@@ -28,6 +28,12 @@ reports whether all three are in place as `events`.
 Reconnect after upgrading: the authorization now also asks for
 `app_mentions:read`, and without it Slack delivers no mentions at all.
 
+Disconnecting does not stop deliveries — the app stays installed, so mentions
+keep arriving. They are ignored while disconnected and the reason is logged,
+because a work order started then would provision a workspace and run an agent
+to completion with every reply, including the one saying it could not reply,
+dropped.
+
 **2. The signing secret is saved.** Settings → Slack → *Slack Signing Secret*,
 from your app's *Basic Information* page. It is how this server tells a real
 delivery from anyone who found the URL, and an unsigned request is refused.
@@ -103,4 +109,5 @@ is what the link in every message is for.
   effort: they are logged and dropped, and the run continues with its record on
   the WorkOrder page unaffected. `update_status` is the exception, because the
   agent is waiting on the answer to its own tool call — it is told the status
-  did not go out, which does not end the step either.
+  did not go out, which does not end the step either. A disconnected workspace
+  counts as down: it is reported, not treated as a message that was sent.

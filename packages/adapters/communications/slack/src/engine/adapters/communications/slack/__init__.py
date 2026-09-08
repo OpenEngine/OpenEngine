@@ -131,7 +131,13 @@ class SlackCommunications:
     ) -> str:
         token = self._credential_store.token()
         if not token:
-            return ""
+            # Raised rather than returned as an empty id: a disconnected
+            # workspace is the likeliest way for a message to reach nobody,
+            # and answering as though it were sent tells every caller above
+            # that it was. The ones that are best effort catch and log it.
+            raise SlackAuthError(
+                "Slack is not connected, so the message was not sent"
+            )
         payload: dict[str, str] = {}
         if thread_id:
             payload["thread_ts"] = thread_id

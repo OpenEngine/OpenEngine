@@ -2500,15 +2500,19 @@ def create_app(
     async def slack_status(_request: Request) -> JSONResponse:
         credentials = _slack_store.credentials()
         signing_secret = bool(_signing_secret())
+        connected = bool(_slack_store.token())
         return JSONResponse(
             {
                 "configured": credentials is not None,
-                "connected": bool(_slack_store.token()),
+                "connected": connected,
                 # Whether a mention could actually start something, and which
-                # of its two independent halves is missing -- so the settings
-                # panel can offer the one this deployment still needs rather
-                # than a paragraph listing everything it might.
-                "events": signing_secret and bool(work_orders.repository),
+                # of its parts is missing -- so the settings panel can offer
+                # the one this deployment still needs rather than a paragraph
+                # listing everything it might. Being connected counts: a work
+                # order this server cannot reply to is one nobody would see.
+                "events": (
+                    connected and signing_secret and bool(work_orders.repository)
+                ),
                 "signingSecret": signing_secret,
             }
         )
@@ -2673,6 +2677,20 @@ def create_app(
                 origin, CommunicationsMessage(reason, mention=origin.author)
             )
 
+        if not _slack_store.token():
+            # Slack keeps delivering mentions to an app that is installed, so
+            # one can arrive after this server was disconnected. Nothing is
+            # started, because everything the run would say -- including the
+            # refusal below -- goes nowhere: it would provision a workspace and
+            # run a write-access agent to completion in silence. The log is the
+            # only place left to say so.
+            log.warning(
+                "ignoring a Slack mention in %s: this server is not connected "
+                "to Slack, so a work order started from it could not report "
+                "anything back",
+                mention.channel,
+            )
+            return
         if not work_orders.repository:
             await refuse(
                 "I cannot start a work order until this deployment configures "
