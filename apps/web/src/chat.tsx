@@ -36,23 +36,6 @@ const COMPOSER_DRAFT_KEY_PREFIX = "engine.composerDraft.";
 const COMPOSER_QUEUE_KEY_PREFIX = "engine.composerQueue.";
 const NEW_CHAT_DRAFT_ID = "new";
 
-/** Put text in an existing conversation's composer before navigating to it.
- *
- *  Milestone actions use the project's existing planning conversation so the
- *  agent keeps the project context and the plan remains beside the transcript.
- *  Saving through the same key as `Composer` makes the handoff survive the
- *  full-page navigation used throughout the interface. */
-export function prefillConversationDraft(
-  conversationUrl: string,
-  text: string,
-): void {
-  const path = new URL(conversationUrl, window.location.href).pathname.replace(/\/$/, "");
-  const prefix = "/conversations/";
-  if (!path.startsWith(prefix)) return;
-  const threadId = decodeURIComponent(path.slice(prefix.length));
-  if (threadId) window.localStorage.setItem(`${COMPOSER_DRAFT_KEY_PREFIX}${threadId}`, text);
-}
-
 function readQueuedMessages(key: string): string[] {
   const saved = window.localStorage.getItem(key);
   if (!saved) return [];

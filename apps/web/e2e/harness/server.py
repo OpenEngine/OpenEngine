@@ -24,6 +24,7 @@ is killed.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -35,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import uvicorn  # noqa: E402
+from langgraph_acp import ACPAgentRegistry, StdioACPProvider  # noqa: E402
 
 from engine.apps.web.__main__ import STATIC_DIRECTORY  # noqa: E402
 from engine.apps.web.api import create_app  # noqa: E402
@@ -53,6 +55,8 @@ from engine.runtime import (  # noqa: E402
     describe_loaded_config,
     load_engine_config,
 )
+from engine.orchestrator import MilestoneWorkflow  # noqa: E402
+from engine.scoper import Scoper  # noqa: E402
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
 from graph_workflow_fakes import scripted_catalog  # noqa: E402
 from provider_fakes import fake_claude, fake_codex  # noqa: E402
@@ -114,6 +118,23 @@ def main(argv: list[str] | None = None) -> int:
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     catalog = scripted_catalog(settings.workspace_root, binaries)
+    scoper_registry = ACPAgentRegistry(
+        (
+            StdioACPProvider(
+                name="codex",
+                command=(
+                    sys.executable,
+                    str(REPO_ROOT / "langgraph-acp" / "tests" / "fake_agent.py"),
+                ),
+                env={
+                    "FAKE_AGENT_LOG": str(state / "scoper-acp.jsonl"),
+                    "FAKE_AGENT_RESPONSE_FILE": str(
+                        Path(os.environ["ENGINE_FAKE_SCOPER_RESPONSE"])
+                    ),
+                },
+            ),
+        )
+    )
     app = create_app(
         build_session(
             capabilities, runners, args.repository, read_only_runners=read_only_runners
@@ -126,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
         graph_runtime=build_graph_runtime(settings, catalog.graphs),
         approval_policy=loaded.config.approvals,
         default_branch=loaded.config.default_branch,
+        milestone_workflow=MilestoneWorkflow(
+            Scoper(agent="codex", registry=scoper_registry)
+        ),
     )
     # Stub out real GitHub API calls so e2e tests work without a token.
     # Comment POSTs are recorded to gh.jsonl so tests can assert on them.

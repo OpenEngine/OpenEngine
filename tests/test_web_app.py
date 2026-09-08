@@ -62,6 +62,7 @@ from engine.domain import (
     RunPhase,
     RunRequested,
     RunState,
+    ScopingPlan,
     StepCompleted,
     StepId,
     StepReactivated,
@@ -74,6 +75,9 @@ from engine.domain import (
     WorkspaceProvisioned,
     Workstream,
     WorkstreamId,
+    WorkOrderId,
+    WorkOrderSpec,
+    WorkOrderStatus,
     project_id_for_instance,
 )
 from engine.ports import (
@@ -4274,6 +4278,94 @@ def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
     assert [milestone["name"] for milestone in listed.json()["milestones"]] == [
         "Foundation"
     ]
+
+
+def test_milestone_scope_api_invokes_workflow_with_milestone_context_and_current_work() -> None:
+    class RecordingMilestoneWorkflow:
+        request = None
+
+        async def run(self, **request):
+            self.request = request
+            milestone_id = request["milestone"].milestone_id
+            return ScopingPlan(
+                create=(
+                    WorkOrderSpec(
+                        milestone_id,
+                        "Render the plan",
+                        "Draw the proposed work orders.",
+                    ),
+                ),
+                cancel=(WorkOrderId("run-obsolete"),),
+                reasons=("The milestone needs a dedicated scoping view.",),
+            )
+
+    store = InMemoryStateStore()
+    session = _session_with({"test": ConcurrentRunner()}, state_store=store)
+    workflow = RecordingMilestoneWorkflow()
+    project = Project(ProjectId("project-engine"), "Engine")
+    milestone = Milestone(
+        MilestoneId("milestone-scoping"),
+        project.project_id,
+        "Milestone scoping",
+        "Break milestone requirements into reviewable work orders.",
+    )
+    existing = RunState(
+        run_id=RunId("run-existing"),
+        task_id=TaskId("task-existing"),
+        workflow_id=WORKFLOW_ID,
+        milestone_id=milestone.milestone_id,
+        phase=RunPhase.RUNNING_AGENT,
+        name="Existing implementation",
+        prompt="Implement the existing portion.",
+    )
+
+    async def scenario():
+        await store.save_project(project)
+        await store.save_milestone(milestone)
+        await store.save(existing)
+        app = create_app(
+            session,
+            {"test": ConcurrentRunner()},
+            milestone_workflow=workflow,  # type: ignore[arg-type]
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.post(
+                f"/api/projects/{project.project_id}/milestones/"
+                f"{milestone.milestone_id}/scope",
+                json={"message": "Prefer changes under 1,000 lines."},
+            )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "create": [
+            {
+                "milestoneId": "milestone-scoping",
+                "name": "Render the plan",
+                "objective": "Draw the proposed work orders.",
+                "evidenceRequirements": [],
+                "dependencies": [],
+            }
+        ],
+        "cancel": ["run-obsolete"],
+        "supersede": [],
+        "reasons": ["The milestone needs a dedicated scoping view."],
+    }
+    assert workflow.request["milestone"].name == "Milestone scoping"
+    assert workflow.request["milestone"].requirements == (
+        "Break milestone requirements into reviewable work orders.",
+    )
+    assert workflow.request["policy"].rules == (
+        "Prefer changes under 1,000 lines.",
+    )
+    assert workflow.request["workorders"][0].status is WorkOrderStatus.IN_PROGRESS
+    assert workflow.request["workorders"][0].spec.objective == (
+        "Implement the existing portion."
+    )
 
 
 def test_projects_api_says_how_many_milestones_each_project_has() -> None:

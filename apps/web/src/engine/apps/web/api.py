@@ -73,6 +73,7 @@ from engine.domain import (
     Message,
     Milestone,
     MilestoneId,
+    MilestoneScope,
     Project,
     ProjectId,
     Role,
@@ -80,6 +81,8 @@ from engine.domain import (
     RunPhase,
     RunRequested,
     RunState,
+    ScopingPlan,
+    ScopingPolicy,
     StartAgentRun,
     StepId,
     TaskId,
@@ -88,10 +91,15 @@ from engine.domain import (
     WorkspaceId,
     Workstream,
     WorkstreamId,
+    WorkOrder,
+    WorkOrderId,
+    WorkOrderSpec,
+    WorkOrderStatus,
     instance_id_for_project,
     project_id_for_instance,
     workstreams_by_milestone,
 )
+from engine.orchestrator import MilestoneWorkflow
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -995,6 +1003,7 @@ def create_app(
     communications_channel: str = "",
     public_url: str = "",
     utilization: UtilizationService | None = None,
+    milestone_workflow: MilestoneWorkflow | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -1047,6 +1056,7 @@ def create_app(
         approval_observer=approval_feed.publish,
     )
     run_reader = RunReader(session.state_store, catalog)
+    milestone_workflow = milestone_workflow or MilestoneWorkflow()
 
     async def approval_presented(_approval: ApprovalRecord) -> None:
         # The broker's observer publishes every persisted transition. This
@@ -1611,6 +1621,43 @@ def create_app(
                 ],
             }
         )
+
+    async def scope_milestone(request: Request) -> JSONResponse:
+        """Run the ACP-backed milestone workflow and return its structured plan."""
+        project_id = ProjectId(request.path_params["project_id"])
+        milestone_id = MilestoneId(request.path_params["milestone_id"])
+        project = await session.state_store.load_project(project_id)
+        milestone = await session.state_store.load_milestone(milestone_id)
+        if project is None:
+            return _error("project not found", 404)
+        if milestone is None or milestone.project_id != project_id:
+            return _error("milestone not found", 404)
+        body = await _json_body(request)
+        try:
+            message = _required_string(body, "message")
+        except ValueError as error:
+            return _error(str(error), 400)
+
+        workstreams = {
+            item.workstream_id
+            for item in await session.state_store.list_workstreams(milestone_id)
+        }
+        current = tuple(
+            _workorder_for_run(run, milestone_id)
+            for run in await session.state_store.list_runs()
+            if run.milestone_id == milestone_id or run.workstream_id in workstreams
+        )
+        plan = await milestone_workflow.run(
+            workorders=current,
+            milestone=MilestoneScope(
+                milestone_id=milestone.milestone_id,
+                requirements=(milestone.description,) if milestone.description else (),
+                dependencies=milestone.dependencies,
+                name=milestone.name,
+            ),
+            policy=ScopingPolicy(rules=(message,)),
+        )
+        return JSONResponse(_scoping_plan_json(plan))
 
     async def start_graph_run(
         runtime: GraphRuntime,
@@ -2594,6 +2641,11 @@ def create_app(
             name="unarchive_project",
         ),
         Route("/api/projects/{project_id}/milestones", list_project_milestones),
+        Route(
+            "/api/projects/{project_id}/milestones/{milestone_id}/scope",
+            scope_milestone,
+            methods=["POST"],
+        ),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
@@ -2666,6 +2718,10 @@ def create_app(
                 Route("/utilization", spa_page),
                 Route("/projects/{project_id}/milestones", spa_page),
                 Route("/projects/{project_id}/milestones/{milestone_id}", spa_page),
+                Route(
+                    "/projects/{project_id}/milestones/{milestone_id}/scope",
+                    spa_page,
+                ),
                 Route(
                     "/projects/{project_id}/milestones/{milestone_id}/tasks/new",
                     spa_page,
@@ -2750,6 +2806,55 @@ def _milestone_json(
         "description": milestone.description,
         "dependencies": [str(dependency) for dependency in milestone.dependencies],
         "workstreams": [_workstream_json(workstream) for workstream in workstreams],
+    }
+
+
+def _workorder_for_run(run: RunState, milestone_id: MilestoneId) -> WorkOrder:
+    """Present work already started under a milestone to the scoper."""
+    if run.phase is RunPhase.SUCCEEDED:
+        status = WorkOrderStatus.COMPLETE
+    elif run.phase is RunPhase.FAILED:
+        status = WorkOrderStatus.CANCELLED
+    elif run.phase is RunPhase.PENDING:
+        status = WorkOrderStatus.PENDING
+    else:
+        status = WorkOrderStatus.IN_PROGRESS
+    return WorkOrder(
+        workorder_id=WorkOrderId(str(run.run_id)),
+        spec=WorkOrderSpec(
+            milestone_id=milestone_id,
+            name=run.name or str(run.task_id),
+            objective=run.prompt,
+        ),
+        status=status,
+    )
+
+
+def _workorder_spec_json(spec: WorkOrderSpec) -> dict[str, object]:
+    return {
+        "milestoneId": spec.milestone_id,
+        "name": spec.name,
+        "objective": spec.objective,
+        "evidenceRequirements": list(spec.evidence_requirements),
+        "dependencies": list(spec.dependencies),
+    }
+
+
+def _scoping_plan_json(plan: ScopingPlan) -> dict[str, object]:
+    """Translate the domain result without flattening its three operations."""
+    return {
+        "create": [_workorder_spec_json(spec) for spec in plan.create],
+        "cancel": list(plan.cancel),
+        "supersede": [
+            {
+                "workorderId": item.workorder_id,
+                "replacements": [
+                    _workorder_spec_json(spec) for spec in item.replacements
+                ],
+            }
+            for item in plan.supersede
+        ],
+        "reasons": list(plan.reasons),
     }
 
 

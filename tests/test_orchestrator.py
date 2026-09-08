@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from engine.domain import MilestoneId, MilestoneScope, ScopingPlan, ScopingPolicy
 from engine.orchestrator import (
     GraphRunWorkflow,
     MilestoneWorkflow,
@@ -76,6 +77,38 @@ def test_orchestrator_delegates_submission_and_shutdown() -> None:
     assert result == "run-id"
     assert temporal.submission == (GraphRunWorkflow, ("graph",), {"run_id": "run-1"})
     assert temporal.stopped
+
+
+def test_milestone_workflow_returns_the_acp_scopers_structured_plan() -> None:
+    plan = ScopingPlan(reasons=("Split the milestone into reviewable changes.",))
+
+    class RecordingScoper:
+        request = None
+
+        async def scope(self, **request):
+            self.request = request
+            return plan
+
+    scoper = RecordingScoper()
+    milestone = MilestoneScope(
+        MilestoneId("milestone-scope"),
+        requirements=("Render a work-order plan",),
+        name="Milestone scoping",
+    )
+    policy = ScopingPolicy(("Keep changes under 1,000 lines",))
+
+    result = asyncio.run(
+        MilestoneWorkflow(scoper).run(
+            workorders=(), milestone=milestone, policy=policy
+        )
+    )
+
+    assert result is plan
+    assert scoper.request == {
+        "workorders": (),
+        "milestones": (milestone,),
+        "policy": policy,
+    }
 
 
 def test_command_loads_orchestrator_settings_from_engine_toml(

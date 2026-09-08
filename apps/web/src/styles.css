@@ -1180,6 +1180,58 @@ select:disabled { cursor: default; }
 .back-link { color: var(--muted); font: 500 12px/1 var(--mono); letter-spacing: .1em; text-decoration: none; text-transform: uppercase; }
 .back-link:hover { color: var(--flame); }
 
+/* --- milestone scoping chat -------------------------------------------- */
+
+.milestone-scope-page { padding-bottom: 48px; }
+.scope-chat {
+  display: grid;
+  gap: 18px;
+  padding: 0 var(--gutter);
+}
+.scope-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+.scope-composer textarea {
+  min-height: 112px;
+  padding: 14px;
+  resize: vertical;
+  background: var(--white);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  font: 400 15px/1.5 var(--sans);
+}
+.scope-composer label { grid-column: 1 / -1; font: 600 12px/1 var(--mono); }
+.scope-composer textarea:focus { border-color: var(--ink); outline: 0; }
+.scope-message {
+  max-width: min(780px, 88%);
+  margin: 0;
+  padding: 14px 16px;
+  line-height: 1.55;
+}
+.scope-message-user { justify-self: end; background: var(--ink); color: var(--white); }
+.scope-message-agent { justify-self: start; background: var(--fill); }
+.scope-plan {
+  display: grid;
+  gap: 20px;
+  padding: 22px;
+  background: var(--fill);
+  border-top: 3px solid var(--flame);
+}
+.scope-plan h2 { font-size: 24px; }
+.scope-plan-lanes { display: grid; grid-template-columns: 2fr 1fr 2fr; gap: 18px; }
+.scope-plan-lanes > section { display: grid; align-content: start; gap: 12px; min-width: 0; }
+.scope-plan-lanes > section > h3 { font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.scope-workorders, .scope-operation-list { display: grid; gap: 10px; }
+.scope-workorder { padding: 15px; background: var(--white); border: 1px solid var(--rule); }
+.scope-workorder h3, .scope-workorder h4 { margin: 7px 0; font-size: 17px; }
+.scope-workorder p:not(.eyebrow, .micro) { color: var(--muted); font-size: 14px; line-height: 1.5; }
+.scope-evidence, .scope-reasons { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.scope-operation-list code { padding: 12px; background: var(--white); border: 1px solid var(--rule); overflow-wrap: anywhere; }
+.scope-supersession { border-left: 3px solid var(--amber); }
+
 .stages {
   display: grid;
   grid-auto-flow: column;
@@ -1613,6 +1665,7 @@ select:disabled { cursor: default; }
   .milestone-tasks-actions { flex-wrap: wrap; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .composer { grid-template-columns: minmax(0, 1fr); }
+  .scope-composer, .scope-plan-lanes { grid-template-columns: minmax(0, 1fr); }
   .card-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stages { grid-auto-flow: row; gap: 12px; }
   .toolbar { flex-direction: column; align-items: stretch; }

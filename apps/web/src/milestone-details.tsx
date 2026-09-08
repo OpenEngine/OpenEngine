@@ -9,17 +9,14 @@ import { useMemo, useState } from "react";
 
 import {
   milestoneNewTaskUrl,
+  milestoneScopeUrl,
   projectMilestonesUrl,
   type ApiWorkflowRunListing,
   type ApiWorkstream,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
-import { prefillConversationDraft } from "./chat";
 import { useProjectMilestones } from "./milestone-timeline";
 import { phaseAccent, runFinished, runStatusLabel } from "./runs";
-
-export const MILESTONE_SCOPING_PROMPT =
-  "Break this milestone down into workorders, each workorder should be low-medium complexity unless a larger workorder is deemed necessary, with each change resulting in roughly a 500-1000 line change.";
 
 /** The tasks under each workstream, in the order the runs list was sent.
  *
@@ -187,7 +184,6 @@ export function MilestoneDetailsPage({
   // The goals this one waits on, read as the names the planner gave them rather
   // than as the ids it recorded -- the same way the milestone's card does.
   const dependencies = (milestone?.dependencies ?? []).map((id) => names.get(id) ?? id);
-  const conversationUrl = project?.conversationUrl;
   // Two polls feed this page and either can fall over on its own. Whichever it
   // is, the page holds what it last read and says so, rather than letting the
   // half still arriving make the other look current.
@@ -216,20 +212,12 @@ export function MilestoneDetailsPage({
             )}
             {milestone && (
               <>
-                {conversationUrl && (
-                  <a
-                    className="btn"
-                    href={conversationUrl}
-                    onClick={() =>
-                      prefillConversationDraft(
-                        conversationUrl,
-                        MILESTONE_SCOPING_PROMPT,
-                      )
-                    }
-                  >
-                    Scope
-                  </a>
-                )}
+                <a
+                  className="btn"
+                  href={milestoneScopeUrl(projectId, milestone.milestoneId)}
+                >
+                  Scope
+                </a>
                 <a
                   className="btn btn-primary"
                   href={milestoneNewTaskUrl(projectId, milestone.milestoneId)}
