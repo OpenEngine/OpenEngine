@@ -13,6 +13,7 @@ members = [
     "engine-adapter-communications-buzz",
     "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
+    "engine-adapter-source-control-gitlab",
     "engine-adapter-state-store-memory",
     "engine-adapter-state-store-postgres",
     "engine-adapter-state-store-sqlite",
@@ -100,7 +101,7 @@ name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
+    { name = "pycparser", marker = "(python_full_version < '3.12' and implementation_name != 'PyPy') or (implementation_name != 'PyPy' and sys_platform != 'emscripten')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be", size = 530807, upload-time = "2026-08-03T21:21:18.939Z" }
 wheels = [
@@ -331,7 +332,7 @@ name = "cryptography"
 version = "50.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
+    { name = "cffi", marker = "(python_full_version < '3.12' and platform_python_implementation != 'PyPy') or (platform_python_implementation != 'PyPy' and sys_platform != 'emscripten')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bb/ad/5d6702db60b1e40b41ef513b6967ff5848f307d50f8449baf1634f5908f1/cryptography-50.0.1.tar.gz", hash = "sha256:5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20", size = 880381, upload-time = "2026-08-25T19:45:45.499Z" }
 wheels = [
@@ -437,6 +438,21 @@ requires-dist = [
 name = "engine-adapter-source-control-github"
 version = "0.0.0"
 source = { editable = "packages/adapters/source_control/github" }
+dependencies = [
+    { name = "engine-runtime" },
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "engine-runtime", editable = "packages/runtime" },
+    { name = "httpx", specifier = ">=0.27" },
+]
+
+[[package]]
+name = "engine-adapter-source-control-gitlab"
+version = "0.0.0"
+source = { editable = "packages/adapters/source_control/gitlab" }
 dependencies = [
     { name = "engine-runtime" },
     { name = "httpx" },
@@ -701,6 +717,7 @@ dependencies = [
     { name = "engine-adapter-communications-buzz" },
     { name = "engine-adapter-communications-slack" },
     { name = "engine-adapter-source-control-github" },
+    { name = "engine-adapter-source-control-gitlab" },
     { name = "engine-adapter-state-store-sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree" },
@@ -720,6 +737,7 @@ requires-dist = [
     { name = "engine-adapter-communications-buzz", editable = "packages/adapters/communications/buzz" },
     { name = "engine-adapter-communications-slack", editable = "packages/adapters/communications/slack" },
     { name = "engine-adapter-source-control-github", editable = "packages/adapters/source_control/github" },
+    { name = "engine-adapter-source-control-gitlab", editable = "packages/adapters/source_control/gitlab" },
     { name = "engine-adapter-state-store-sqlite", editable = "packages/adapters/state_store/sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree", editable = "packages/adapters/workspace_provider/git_worktree" },
@@ -851,8 +869,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
-    { name = "truststore" },
+    { name = "h11", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "truststore", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [
@@ -914,7 +932,7 @@ name = "importlib-metadata"
 version = "9.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp" },
+    { name = "zipp", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6f/7e/1e7e8dc30634b93ebb3d58a3dea569ad146e656218d3960ab04f62047b29/importlib_metadata-9.0.1.tar.gz", hash = "sha256:ab830580bc0ef3db61ce8fae716389e5462b67e033018bab6d8f80ef17172f99", size = 59124, upload-time = "2026-08-28T15:30:34.646Z" }
 wheels = [
@@ -1666,8 +1684,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "jeepney" },
+    { name = "cryptography", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "jeepney", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

@@ -38,6 +38,8 @@ from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
     GitHubOAuthTransport,
 )
+from engine.adapters.source_control.gitlab import GitLabSourceControl
+from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import (
@@ -49,6 +51,12 @@ from engine.apps.web.github_auth import (
     GitHubCredentialStore,
     GitHubRefreshTokenInvalidError,
     refresh_access_token,
+)
+from engine.apps.web.gitlab_auth import (
+    GitLabAuthError,
+    GitLabCredentialStore,
+    GitLabRefreshTokenInvalidError,
+    refresh_access_token as refresh_gitlab_access_token,
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
@@ -143,11 +151,13 @@ def build_capabilities(
     settings: Settings,
     credential_store: GitHubCredentialStore | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
+    gitlab_credential_store: GitLabCredentialStore | None = None,
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     _store = credential_store
     _refresh_lock: asyncio.Lock | None = None
+    _refresh_persistence_failed = False
 
     def _token() -> str:
         if _store is not None:
@@ -163,8 +173,14 @@ def build_capabilities(
         Serialising refresh avoids racing GitHub's single-use refresh tokens;
         a waiter retries with credentials written by the first caller.
         """
-        nonlocal _refresh_lock
+        nonlocal _refresh_lock, _refresh_persistence_failed
         if _store is None:
+            return False
+        # GitHub rotates refresh tokens.  If we receive a fresh pair but cannot
+        # durably save it, retrying with the stale stored token would consume
+        # another one and eventually strand the user.  Stop retrying until a
+        # new connection is established or this process is restarted.
+        if _refresh_persistence_failed:
             return False
         client_id = settings.github_client_id or _store.get_client_id()
         if not client_id:
@@ -186,13 +202,17 @@ def build_capabilities(
                 refreshed = await refresh_access_token(
                     client_id, credentials.refresh_token
                 )
-                _store.set_credentials(refreshed)
             except GitHubRefreshTokenInvalidError:
                 _store.delete()
                 return False
             except GitHubAuthError:
                 # A network or GitHub-service failure is temporary; retain the
                 # token pair for the next request.
+                return False
+            try:
+                _store.set_credentials(refreshed)
+            except GitHubAuthError:
+                _refresh_persistence_failed = True
                 return False
             return True
 
@@ -201,6 +221,65 @@ def build_capabilities(
         workspace_provider=workspace_provider,
         transport=GitHubOAuthTransport(
             _token, on_token_unauthorized=_refresh_after_unauthorized
+        ),
+    )
+    def _gitlab_origin() -> str:
+        return (
+            settings.source_control_preferences.gitlab_origin()
+            if settings.source_control_preferences is not None
+            and settings.source_control_preferences.gitlab_origin()
+            else "https://gitlab.com"
+        )
+
+    _gitlab_stores: dict[str, GitLabCredentialStore] = {}
+    _gitlab_refresh_persistence_failed: set[str] = set()
+
+    def _gitlab_store() -> GitLabCredentialStore:
+        origin = _gitlab_origin()
+        if gitlab_credential_store is not None:
+            return gitlab_credential_store
+        return _gitlab_stores.setdefault(origin, GitLabCredentialStore(origin))
+
+    def _gitlab_token() -> str:
+        store = _gitlab_store()
+        credentials = store.get_credentials()
+        return credentials.access_token if credentials else ""
+
+    async def _refresh_gitlab_after_unauthorized(failed_token: str) -> bool:
+        store = _gitlab_store()
+        if store.origin in _gitlab_refresh_persistence_failed:
+            return False
+        async with store.refresh_lock():
+            credentials = store.get_credentials()
+            if credentials is None or not credentials.refresh_token:
+                return False
+            if credentials.access_token != failed_token:
+                return True
+            client_id = store.get_client_id()
+            if not client_id:
+                return False
+            try:
+                refreshed = await refresh_gitlab_access_token(
+                    store.origin, client_id, credentials.refresh_token
+                )
+            except GitLabRefreshTokenInvalidError:
+                store.delete()
+                return False
+            except GitLabAuthError:
+                return False
+            try:
+                store.set_credentials(refreshed)
+            except GitLabAuthError:
+                _gitlab_refresh_persistence_failed.add(store.origin)
+                return False
+            return True
+
+    gitlab = GitLabSourceControl(
+        _gitlab_token,
+        origin=_gitlab_origin,
+        workspace_provider=workspace_provider,
+        transport=GitLabOAuthTransport(
+            _gitlab_token, _gitlab_origin, _refresh_gitlab_after_unauthorized
         ),
     )
     if settings.source_control_preferences is None:
@@ -214,6 +293,7 @@ def build_capabilities(
                 transport=GitHubCliTransport(),
             ),
             oauth,
+            gitlab,
         )
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),

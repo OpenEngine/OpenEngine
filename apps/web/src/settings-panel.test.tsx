@@ -7,13 +7,18 @@ import { SettingsPanel } from "./settings-panel";
 
 vi.mock("./api", () => ({
   connectGitHub: vi.fn(),
+  connectGitLab: vi.fn(),
   disconnectGitHub: vi.fn(),
+  disconnectGitLab: vi.fn(),
   getGitHubClientId: vi.fn(),
   getGitHubStatus: vi.fn(),
+  getGitLabStatus: vi.fn(),
   getSourceControlProvider: vi.fn(),
   getSourceControlStatus: vi.fn(),
   pollGitHubConnect: vi.fn(),
+  pollGitLabConnect: vi.fn(),
   setGitHubClientId: vi.fn(),
+  setGitLabClientId: vi.fn(),
   setSourceControlProvider: vi.fn(),
   connectSlack: vi.fn(),
   disconnectSlack: vi.fn(),
@@ -30,6 +35,12 @@ describe("SettingsPanel Slack connection", () => {
     });
     vi.mocked(api.getGitHubClientId).mockResolvedValue({ source: "none", hint: "" });
     vi.mocked(api.getGitHubStatus).mockResolvedValue({ connected: false, clientIdConfigured: false });
+    vi.mocked(api.getGitLabStatus).mockResolvedValue({
+      origin: "https://gitlab.com",
+      connected: false,
+      clientIdConfigured: false,
+    });
+    vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: false, connected: false });
     vi.mocked(api.getSourceControlProvider).mockResolvedValue({
       provider: "gh-cli",
       autoSelected: false,
@@ -85,5 +96,37 @@ describe("SettingsPanel Slack connection", () => {
     await waitFor(() => expect(screen.getByText("Could not save credentials")).toBeVisible());
     expect(api.getSlackStatus).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+  });
+
+  it("saves a GitLab OAuth client ID for the selected instance", async () => {
+    vi.mocked(api.setGitLabClientId).mockResolvedValue();
+    vi.mocked(api.getGitLabStatus)
+      .mockResolvedValueOnce({
+        origin: "https://gitlab.com",
+        connected: false,
+        clientIdConfigured: false,
+      })
+      .mockResolvedValueOnce({
+        origin: "https://gitlab.com",
+        connected: false,
+        clientIdConfigured: true,
+      });
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("radio", { name: "GitLab OAuth" }));
+    await user.type(
+      await screen.findByLabelText("GitLab OAuth Client ID"),
+      "gitlab-client-id",
+    );
+    await user.click(screen.getByRole("button", { name: "Save GitLab client ID" }));
+
+    await waitFor(() =>
+      expect(api.setGitLabClientId).toHaveBeenCalledWith(
+        "https://gitlab.com",
+        "gitlab-client-id",
+      ),
+    );
+    expect(await screen.findByText("GitLab OAuth client ID saved")).toBeVisible();
   });
 });

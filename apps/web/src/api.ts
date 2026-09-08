@@ -502,7 +502,7 @@ export type ApiHistory = {
 export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
 
 export type SourceControlStatus = {
-  provider: "gh-cli" | "github-oauth";
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
   autoSelected: boolean;
   ghCli: {
     installed: boolean;
@@ -513,7 +513,7 @@ export type SourceControlStatus = {
 };
 
 export type SourceControlProviderStatus = {
-  provider: "gh-cli" | "github-oauth";
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
   autoSelected: boolean;
 };
 
@@ -550,11 +550,12 @@ export function getSourceControlProvider(): Promise<SourceControlProviderStatus>
 }
 
 export function setSourceControlProvider(
-  provider: "gh-cli" | "github-oauth" | "gitlab",
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth",
+  origin?: string,
 ): Promise<void> {
   return api<void>("/api/source-control/provider", {
     method: "POST",
-    body: JSON.stringify({ provider }),
+    body: JSON.stringify({ provider, origin }),
   });
 }
 
@@ -581,6 +582,52 @@ export function pollGitHubConnect(): Promise<GitHubPollResponse> {
 
 export function disconnectGitHub(): Promise<void> {
   return api<void>("/api/github/disconnect", { method: "POST" });
+}
+
+export type GitLabStatus = {
+  origin: string;
+  connected: boolean;
+  clientIdConfigured: boolean;
+};
+
+export type GitLabDeviceFlow = {
+  origin: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export function getGitLabStatus(origin = "https://gitlab.com"): Promise<GitLabStatus> {
+  return api<GitLabStatus>(`/api/gitlab/status?origin=${encodeURIComponent(origin)}`);
+}
+
+export function setGitLabClientId(origin: string, clientId: string): Promise<void> {
+  return api<void>("/api/gitlab/client-id", {
+    method: "POST",
+    body: JSON.stringify({ origin, clientId }),
+  });
+}
+
+export function connectGitLab(origin: string): Promise<GitLabDeviceFlow> {
+  return api<GitLabDeviceFlow>("/api/gitlab/connect", {
+    method: "POST",
+    body: JSON.stringify({ origin }),
+  });
+}
+
+export function pollGitLabConnect(origin: string): Promise<{ status: "complete" | "pending"; nextInterval?: number }> {
+  return api("/api/gitlab/connect/poll", {
+    method: "POST",
+    body: JSON.stringify({ origin }),
+  });
+}
+
+export function disconnectGitLab(origin: string): Promise<void> {
+  return api<void>("/api/gitlab/disconnect", {
+    method: "POST",
+    body: JSON.stringify({ origin }),
+  });
 }
 
 export type SlackStatus = { configured: boolean; connected: boolean };

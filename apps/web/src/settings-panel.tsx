@@ -6,13 +6,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   connectGitHub,
+  connectGitLab,
   disconnectGitHub,
+  disconnectGitLab,
   getGitHubClientId,
   getGitHubStatus,
+  getGitLabStatus,
   getSourceControlProvider,
   getSourceControlStatus,
   pollGitHubConnect,
+  pollGitLabConnect,
   setGitHubClientId,
+  setGitLabClientId,
   setSourceControlProvider,
   connectSlack,
   disconnectSlack,
@@ -20,6 +25,7 @@ import {
   setSlackCredentials,
   type GitHubClientIdInfo,
   type GitHubConnectResponse,
+  type GitLabDeviceFlow,
 } from "./api";
 
 type SlackState = {
@@ -53,7 +59,7 @@ type SourceControlState =
   | { phase: "loading" }
   | {
       phase: "ready";
-      provider: "gh-cli" | "github-oauth";
+      provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
       autoSelected: boolean;
       ghCli: {
         installed: boolean;
@@ -63,6 +69,18 @@ type SourceControlState =
       } | null;
     };
 
+type GitLabState = {
+  origin: string;
+  clientId: string;
+  configured: boolean;
+  connected: boolean;
+  loading: boolean;
+  editing: boolean;
+  saving: boolean;
+  flow?: GitLabDeviceFlow;
+  error?: string;
+};
+
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [connection, setConnection] = useState<ConnectionState>({
     phase: "unknown",
@@ -70,6 +88,15 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [clientId, setClientId] = useState<ClientIdState>({ phase: "loading" });
   const [sourceControl, setSourceControl] = useState<SourceControlState>({
     phase: "loading",
+  });
+  const [gitLab, setGitLab] = useState<GitLabState>({
+    origin: "https://gitlab.com",
+    clientId: "",
+    configured: false,
+    connected: false,
+    loading: true,
+    editing: false,
+    saving: false,
   });
   const [slack, setSlack] = useState<SlackState>({
     configured: false,
@@ -84,6 +111,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   // Holds the device flow expiry timeout ID.
   const expiryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const slackPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gitLabPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gitLabExpiryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollTimeoutRef.current !== null) {
@@ -97,6 +126,14 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     if (slackPollTimeoutRef.current !== null) {
       clearTimeout(slackPollTimeoutRef.current);
       slackPollTimeoutRef.current = null;
+    }
+    if (gitLabPollTimeoutRef.current !== null) {
+      clearTimeout(gitLabPollTimeoutRef.current);
+      gitLabPollTimeoutRef.current = null;
+    }
+    if (gitLabExpiryTimeoutRef.current !== null) {
+      clearTimeout(gitLabExpiryTimeoutRef.current);
+      gitLabExpiryTimeoutRef.current = null;
     }
   }, []);
 
@@ -151,13 +188,27 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     getSlackStatus()
       .then((status) => setSlack((value) => ({ ...value, ...status, loading: false })))
       .catch(() => setSlack((value) => ({ ...value, loading: false })));
+    getGitLabStatus()
+      .then((status) =>
+        setGitLab((value) => ({
+          ...value,
+          origin: status.origin,
+          configured: status.clientIdConfigured,
+          connected: status.connected,
+          loading: false,
+        })),
+      )
+      .catch(() => setGitLab((value) => ({ ...value, loading: false })));
     return stopPolling;
   }, [stopPolling, loadClientId]);
 
   const chooseProvider = useCallback(
-    async (provider: "gh-cli" | "github-oauth") => {
-      if (provider === "github-oauth") {
-        await setSourceControlProvider(provider);
+    async (provider: "gh-cli" | "github-oauth" | "gitlab-oauth") => {
+      if (provider === "github-oauth" || provider === "gitlab-oauth") {
+        await setSourceControlProvider(
+          provider,
+          provider === "gitlab-oauth" ? gitLab.origin : undefined,
+        );
         setSourceControl({
           phase: "ready",
           provider,
@@ -175,7 +226,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         ghCli: status.ghCli,
       });
     },
-    [sourceControl],
+    [gitLab.origin, sourceControl],
   );
 
   const handleSaveClientId = useCallback(async () => {
@@ -262,6 +313,95 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, [stopPolling]);
 
   const clientIdReady = clientId.phase === "configured";
+
+  const saveGitLabClientId = useCallback(async () => {
+    const origin = gitLab.origin.trim();
+    const clientId = gitLab.clientId.trim();
+    if (!origin || !clientId) return;
+    setGitLab((value) => ({ ...value, saving: true, error: undefined }));
+    try {
+      await setGitLabClientId(origin, clientId);
+      const status = await getGitLabStatus(origin);
+      setGitLab((value) => ({
+        ...value,
+        origin: status.origin,
+        clientId: "",
+        configured: status.clientIdConfigured,
+        connected: status.connected,
+        editing: false,
+        saving: false,
+      }));
+    } catch (err) {
+      setGitLab((value) => ({
+        ...value,
+        saving: false,
+        error: err instanceof Error ? err.message : "Could not save GitLab client ID.",
+      }));
+    }
+  }, [gitLab.clientId, gitLab.origin]);
+
+  const scheduleGitLabPoll = useCallback(
+    (origin: string, intervalSeconds: number) => {
+      gitLabPollTimeoutRef.current = setTimeout(async () => {
+        gitLabPollTimeoutRef.current = null;
+        try {
+          const result = await pollGitLabConnect(origin);
+          if (result.status === "complete") {
+            stopPolling();
+            setGitLab((value) => ({ ...value, connected: true, flow: undefined }));
+          } else {
+            scheduleGitLabPoll(origin, result.nextInterval ?? intervalSeconds);
+          }
+        } catch (err) {
+          stopPolling();
+          setGitLab((value) => ({
+            ...value,
+            flow: undefined,
+            error: err instanceof Error ? err.message : "GitLab connection failed.",
+          }));
+        }
+      }, intervalSeconds * 1000);
+    },
+    [stopPolling],
+  );
+
+  const startGitLabConnect = useCallback(async () => {
+    const origin = gitLab.origin.trim();
+    if (!origin) return;
+    stopPolling();
+    setGitLab((value) => ({ ...value, error: undefined }));
+    try {
+      const flow = await connectGitLab(origin);
+      setGitLab((value) => ({ ...value, origin: flow.origin, flow }));
+      scheduleGitLabPoll(flow.origin, flow.interval);
+      gitLabExpiryTimeoutRef.current = setTimeout(() => {
+        stopPolling();
+        setGitLab((value) => ({
+          ...value,
+          flow: undefined,
+          error: "The authorisation code expired. Click Connect GitLab to start over.",
+        }));
+      }, flow.expiresIn * 1000);
+    } catch (err) {
+      setGitLab((value) => ({
+        ...value,
+        error: err instanceof Error ? err.message : "Could not start GitLab connection.",
+      }));
+    }
+  }, [gitLab.origin, scheduleGitLabPoll, stopPolling]);
+
+  const disconnectGitLabAccount = useCallback(async () => {
+    stopPolling();
+    try {
+      await disconnectGitLab(gitLab.origin);
+      setGitLab((value) => ({ ...value, connected: false, flow: undefined, error: undefined }));
+    } catch (err) {
+      setGitLab((value) => ({
+        ...value,
+        error: err instanceof Error ? err.message : "Could not disconnect GitLab.",
+      }));
+    }
+  }, [gitLab.origin, stopPolling]);
 
   const saveSlackCredentials = useCallback(async () => {
     const clientId = slack.clientId.trim();
@@ -385,9 +525,18 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               />{" "}
               GitHub OAuth
             </label>
-            <label className="settings-status-muted">
-              <input disabled name="source-control-provider" type="radio" />{" "}
-              GitLab (coming soon)
+            <label>
+              <input
+                checked={
+                  sourceControl.phase === "ready" &&
+                  sourceControl.provider === "gitlab-oauth"
+                }
+                disabled={sourceControl.phase !== "ready"}
+                name="source-control-provider"
+                onChange={() => void chooseProvider("gitlab-oauth")}
+                type="radio"
+              />{" "}
+              GitLab OAuth
             </label>
           </fieldset>
 
@@ -644,6 +793,149 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               </>
             )}
         </section>
+        {sourceControl.phase === "ready" &&
+          sourceControl.provider === "gitlab-oauth" && (
+        <section className="settings-section">
+          <h2 className="settings-section-title">GitLab OAuth</h2>
+          <p className="settings-status settings-status-muted">
+            Connect the GitLab account that this source-control provider will use.
+          </p>
+          {gitLab.loading && (
+            <p className="settings-status settings-status-muted">
+              <span aria-hidden="true" className="settings-spinner" /> Checking…
+            </p>
+          )}
+          {!gitLab.loading && (
+            <>
+              <div className="settings-client-id-form">
+                <label className="settings-label" htmlFor="gitlab-origin">
+                  GitLab instance URL
+                </label>
+                <input
+                  autoComplete="url"
+                  className="settings-input"
+                  disabled={gitLab.configured && !gitLab.editing}
+                  id="gitlab-origin"
+                  onChange={(event) =>
+                    setGitLab((value) => ({
+                      ...value,
+                      origin: event.target.value,
+                      configured: false,
+                      connected: false,
+                    }))
+                  }
+                  placeholder="https://gitlab.com"
+                  type="url"
+                  value={gitLab.origin}
+                />
+                {(!gitLab.configured || gitLab.editing) && (
+                  <>
+                    <label className="settings-label" htmlFor="gitlab-client-id">
+                      GitLab OAuth Client ID
+                    </label>
+                    <input
+                      autoComplete="off"
+                      className="settings-input"
+                      id="gitlab-client-id"
+                      onChange={(event) =>
+                        setGitLab((value) => ({ ...value, clientId: event.target.value }))
+                      }
+                      placeholder="Application ID"
+                      type="password"
+                      value={gitLab.clientId}
+                    />
+                    <div className="settings-actions">
+                      <button
+                        className="settings-button settings-button-primary"
+                        disabled={!gitLab.origin.trim() || !gitLab.clientId.trim() || gitLab.saving}
+                        onClick={() => void saveGitLabClientId()}
+                        type="button"
+                      >
+                        {gitLab.saving ? "Saving…" : "Save GitLab client ID"}
+                      </button>
+                      {gitLab.configured && (
+                        <button
+                          className="settings-button"
+                          onClick={() =>
+                            setGitLab((value) => ({ ...value, editing: false, clientId: "" }))
+                          }
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {gitLab.configured && !gitLab.editing && (
+                <>
+                  <p
+                    className={
+                      gitLab.connected
+                        ? "settings-status settings-status-ok"
+                        : "settings-status settings-status-muted"
+                    }
+                  >
+                    {gitLab.connected ? "Connected" : "GitLab OAuth client ID saved"}
+                  </p>
+                  {gitLab.flow && (
+                    <div className="settings-device-flow">
+                      <p className="settings-device-flow-instruction">
+                        Visit{" "}
+                        <a
+                          className="settings-link"
+                          href={gitLab.flow.verificationUri}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          {gitLab.flow.verificationUri}
+                        </a>{" "}
+                        and enter this code:
+                      </p>
+                      <p className="settings-device-code">{gitLab.flow.userCode}</p>
+                    </div>
+                  )}
+                  <div className="settings-actions">
+                    <button
+                      className="settings-button settings-button-primary"
+                      disabled={Boolean(gitLab.flow)}
+                      onClick={() => void startGitLabConnect()}
+                      type="button"
+                    >
+                      {gitLab.flow
+                        ? "Waiting for authorisation…"
+                        : gitLab.connected
+                          ? "Reconnect GitLab"
+                          : "Connect GitLab"}
+                    </button>
+                    <button
+                      className="settings-button"
+                      onClick={() => setGitLab((value) => ({ ...value, editing: true }))}
+                      type="button"
+                    >
+                      Change client ID
+                    </button>
+                    {gitLab.connected && (
+                      <button
+                        className="settings-button settings-button-danger"
+                        onClick={() => void disconnectGitLabAccount()}
+                        type="button"
+                      >
+                        Disconnect GitLab
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+              {gitLab.error && (
+                <p className="settings-status settings-status-error">{gitLab.error}</p>
+              )}
+            </>
+          )}
+        </section>
+          )}
         <section className="settings-section">
           <h2 className="settings-section-title">Slack</h2>
           {slack.loading && (
