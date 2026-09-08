@@ -2,7 +2,10 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiMilestone, ApiProject, ApiWorkflowRun } from "./api";
-import { MilestoneDetailsPage } from "./milestone-details";
+import {
+  MILESTONE_SCOPING_PROMPT,
+  MilestoneDetailsPage,
+} from "./milestone-details";
 
 const foundation: ApiMilestone = {
   milestoneId: "milestone-foundation",
@@ -137,6 +140,12 @@ describe("MilestoneDetailsPage", () => {
     expect(screen.getByRole("link", { name: "New task" })).toHaveAttribute(
       "href",
       "/projects/project-1/milestones/milestone-launch/tasks/new",
+    );
+    const scope = screen.getByRole("link", { name: "Scope" });
+    expect(scope).toHaveAttribute("href", "/conversations/agi-1");
+    fireEvent.click(scope);
+    expect(window.localStorage.getItem("engine.composerDraft.agi-1")).toBe(
+      MILESTONE_SCOPING_PROMPT,
     );
   });
 
