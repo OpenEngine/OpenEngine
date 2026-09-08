@@ -611,7 +611,7 @@ class TestSourceControlProviderEndpoint:
 
         assert response.json() == {"provider": "github-oauth", "autoSelected": False}
 
-    def test_selects_provider_and_rejects_gitlab(self, tmp_path, monkeypatch) -> None:
+    def test_selects_provider_and_rejects_obsolete_gitlab_name(self, tmp_path, monkeypatch) -> None:
         from starlette.testclient import TestClient
 
         from engine.apps.web.source_control import GhCliStatus
@@ -626,6 +626,10 @@ class TestSourceControlProviderEndpoint:
             selected = client.post(
                 "/api/source-control/provider", json={"provider": "github-oauth"}
             )
+            gitlab = client.post(
+                "/api/source-control/provider",
+                json={"provider": "gitlab-oauth", "origin": "https://gitlab.com"},
+            )
             rejected = client.post(
                 "/api/source-control/provider", json={"provider": "gitlab"}
             )
@@ -633,7 +637,8 @@ class TestSourceControlProviderEndpoint:
         assert status.json()["provider"] == "gh-cli"
         assert status.json()["ghCli"]["account"] == "octocat"
         assert selected.status_code == 204
-        assert rejected.status_code == 409
+        assert gitlab.status_code == 204
+        assert rejected.status_code == 400
 
 
 # ---------------------------------------------------------------------------
