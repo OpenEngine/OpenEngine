@@ -162,8 +162,8 @@ OpenEngine is fundamentally this: A planning agent which projects the timeline a
 
 The key concepts are:
 - A "Project". An end-to-end product that the operator is working on. Timelines and milestones are associated with this.
-- A "Workflow". Workflow runs belong to a Project. The orchestrator is able to kick off workflows which bake in the operators SDLC+SOP.
-- A "Conversation". Workflows are comprised of these individual agent interactions. Some Conversations may be implementation. Some may be review. 
+- A "Milestone". Some measurable outcome that you want to reach using code. Must come with acceptance criteria. 
+- A "WorkOrder". WorkOrders belong to a project+milestone. They are the tasks necessary to complete a milestone. 
 
 Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine uses claude and codex CLI under the hood. 
 
