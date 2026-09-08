@@ -234,15 +234,50 @@ export type ApiGraphRun = {
     approvalId: string;
     nodeId: string;
     reason: string;
+    /** Only a request still open says what may be answered, which is why a
+     *  conversation reads its open questions from here rather than from the
+     *  event that raised them. */
     allowedDecisions: string[];
+    kind?: string;
+    command?: string;
+    toolName?: string;
   }[];
   error: string;
 };
 
 export type ApiGraphTopology = {
   graphId: string;
-  nodes: { nodeId: string; name: string; kind: string }[];
+  nodes: {
+    nodeId: string;
+    name: string;
+    kind: string;
+    /** Whether the rail should offer this node's conversation. Absent means
+     *  shown: a node that says nothing is one a person can go and read. */
+    showInSidebar?: boolean;
+  }[];
 };
+
+/** The nodes of one graph, which is the same before a run of it has started.
+ *
+ *  A compiled graph's shape does not change while the server is up, so a client
+ *  reads this once per graph rather than per run. */
+export function getGraphTopology(
+  graphId: string,
+  signal?: AbortSignal,
+): Promise<ApiGraphTopology> {
+  return api<ApiGraphTopology>(
+    `/graph/api/graphs/${encodeURIComponent(graphId)}`,
+    { signal },
+  );
+}
+
+/** Where one graph node's conversation is read and steered.
+ *
+ *  `graph--` rather than a thread id, because nothing about a node's transcript
+ *  is a thread: it is folded from the run's events. See `routeForPath`. */
+export function graphConversationUrl(runId: string, nodeId: string): string {
+  return `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(nodeId)}`;
+}
 
 export type ApiGraphEvent = {
   sequence: number;
@@ -250,6 +285,61 @@ export type ApiGraphEvent = {
   nodeId: string | null;
   payload: Record<string, unknown>;
 };
+
+/** Everything the graph engine has said about a run so far.
+ *
+ *  A finite snapshot of the same feed `/graph/api/runs/{run}/events` streams,
+ *  because a page that opens after an agent has finished still has to be able
+ *  to read what it did. */
+export function getGraphEvents(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<{ events: ApiGraphEvent[] }> {
+  return api<{ events: ApiGraphEvent[] }>(
+    `/api/runs/${encodeURIComponent(runId)}/graph-events`,
+    { signal },
+  );
+}
+
+export function getGraphRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`, {
+    signal,
+  });
+}
+
+/** Say something to the agent a node is running, while it runs.
+ *
+ *  Addressed to the node rather than to the run: a graph may have several
+ *  agents working at once, and the conversation on screen is one of them. The
+ *  engine refuses this when that node has nothing in flight, because there is
+ *  nobody to say it to -- steering is a message for a live turn, not a queued
+ *  instruction for whatever runs next. */
+export function steerGraphRun(
+  runId: string,
+  nodeId: string,
+  message: string,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/steering`,
+    { method: "POST", body: JSON.stringify({ message, node: nodeId }) },
+  );
+}
+
+/** Answer a request the graph run stopped on, and get the run back as it left
+ *  it: deciding is what releases the execution, so the two change together. */
+export function decideGraphApproval(
+  runId: string,
+  approvalId: string,
+  decision: ApprovalDecision,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
+    { method: "POST", body: JSON.stringify({ decision }) },
+  );
+}
 
 /** Record the decision a run stopped for, and get the finished run back.
  *
@@ -539,6 +629,67 @@ export function disconnectSlack(): Promise<void> {
   return api<void>("/api/slack/disconnect", { method: "POST" });
 }
 
+/** Where the utilization page lives, which the rail's graph icon opens. */
+export const UTILIZATION_URL = "/utilization";
+
+/** One limit a provider meters a subscription against.
+ *
+ *  `usedPercent` is the provider's own figure. `resetsAt` is an instant, or
+ *  empty for a window the provider gave no reset for. */
+export type ApiUtilizationWindow = {
+  windowId: string;
+  label: string;
+  usedPercent: number;
+  resetsAt: string;
+};
+
+/** One runner's reading, taken or attempted.
+ *
+ *  `error` and windows can both be set: a scrape that failed keeps the figures
+ *  the last one found, so the page says what it knows and why it is not newer.
+ *  `readAt` is epoch seconds, and zero for a runner never read. */
+export type ApiRunnerUtilization = {
+  runner: string;
+  plan: string;
+  windows: ApiUtilizationWindow[];
+  error: string;
+  readAt: number;
+};
+
+/** The last reading, answered from the cache without touching a provider. */
+export function getUtilization(
+  signal?: AbortSignal,
+): Promise<{ runners: ApiRunnerUtilization[] }> {
+  return api<{ runners: ApiRunnerUtilization[] }>("/api/utilization", { signal });
+}
+
+/** Ask every runner's provider again, and remember what came back. */
+export function refreshUtilization(
+  signal?: AbortSignal,
+): Promise<{ runners: ApiRunnerUtilization[] }> {
+  return api<{ runners: ApiRunnerUtilization[] }>("/api/utilization/refresh", {
+    method: "POST",
+    signal,
+  });
+}
+
+/** A refusal, carrying the status it was refused with.
+ *
+ *  The message is what a reader is shown and is unchanged, so nothing that
+ *  catches an `Error` has to know about this. The status is for the callers
+ *  that have to tell "there is no such thing" from "the server could not say
+ *  right now" -- the two are the same sentence and mean opposite things about
+ *  whether the state a page is holding is still good. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -549,7 +700,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? `${response.status} ${response.statusText}`);
+    throw new ApiError(
+      body.error ?? `${response.status} ${response.statusText}`,
+      response.status,
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

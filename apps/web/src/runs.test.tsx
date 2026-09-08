@@ -5,13 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiMilestone, ApiProject, ApiWorkflowRun, EngineConfig } from "./api";
 import {
   conversationCount,
-  GraphConversationPage,
   NewWorkflowPage,
   phaseAccent,
   phaseLabel,
   RunDetailPage,
   RunsPage,
   runStatusLabel,
+  useGraphNodes,
   useRuns,
 } from "./runs";
 
@@ -391,6 +391,61 @@ describe("useRuns", () => {
   });
 });
 
+describe("useGraphNodes", () => {
+  const graphRun = () =>
+    run({
+      runId: "run-2",
+      workflowId: "implementation-review-codex",
+      workflowVersion: "",
+      steps: [],
+    });
+  const topology = {
+    graphId: "implementation-review-codex",
+    nodes: [
+      { nodeId: "implementation", name: "Implementation", kind: "agent" },
+      { nodeId: "human-review", name: "Human review", kind: "human", showInSidebar: false },
+    ],
+  };
+
+  it("reads the nodes of every graph the WorkOrders on screen run", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === "/graph/api/graphs/implementation-review-codex"
+        ? json(topology)
+        : json({ error: "not found" }, { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const { result, rerender } = renderHook(
+      ({ runs }) => useGraphNodes(runs),
+      { initialProps: { runs: [run(), graphRun()] } },
+    );
+
+    await waitFor(() =>
+      expect(result.current["implementation-review-codex"]).toHaveLength(2),
+    );
+    // The step WorkOrder's definition is not a graph, so nothing asked for it.
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // A poll answering with the same WorkOrders is not news about their graphs,
+    // whose shape does not change while the server is up.
+    rerender({ runs: [run(), graphRun()] });
+    await act(async () => {});
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers nothing when the graph engine will not describe a graph", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(json({ error: "not running graph workflows" }, { status: 502 })),
+    );
+
+    const { result } = renderHook(() => useGraphNodes([graphRun()]));
+
+    await act(async () => {});
+    expect(result.current).toEqual({});
+  });
+});
+
 describe("RunsPage", () => {
   it("renders its empty state", () => {
     render(<RunsPage runs={[]} error="" />);
@@ -525,35 +580,6 @@ describe("RunDetailPage", () => {
       "/runs/run-1/conversations/graph--implementation",
     );
     expect(screen.queryByText("Conversation not started")).not.toBeInTheDocument();
-  });
-
-  it("keeps an opened beta conversation current", async () => {
-    vi.useFakeTimers();
-    let reads = 0;
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      reads += 1;
-      return json({
-        events: reads === 1 ? [{
-          sequence: 4,
-          type: "conversation.started",
-          nodeId: "implementation",
-          payload: {},
-        }] : [{
-          sequence: 5,
-          type: "transcript",
-          nodeId: "implementation",
-          payload: { role: "assistant", text: "Reading the code." },
-        }],
-      });
-    }));
-
-    render(<GraphConversationPage runId="run-1" nodeId="implementation" />);
-    await act(async () => {});
-    expect(screen.getByText("Waiting for agent activity…")).toBeVisible();
-
-    await act(async () => vi.advanceTimersByTimeAsync(1000));
-
-    expect(screen.getByText("Reading the code.")).toBeVisible();
   });
 
   it("renders steps from an arbitrary workflow definition", async () => {

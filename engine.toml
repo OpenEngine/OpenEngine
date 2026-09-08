@@ -4,7 +4,8 @@ public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 
 [communications]
 provider = "slack"
-channel = "OpenEngine"
+# #openengine-bot, by id so the post skips the name lookup.
+channel = "C0BUZP7GR0V"
 
 # What pinging the bot starts. A mention is a sentence, so the answers the web
 # form collects alongside the prompt come from here instead. See

@@ -151,6 +151,15 @@ def test_the_graph_is_the_four_stages_the_step_version_describes(
         "agent",
         "human",
     ]
+    # The two a person reads and can talk to, which is what the rail offers
+    # beneath the WorkOrder's name. The checkout and the verdict are stages of
+    # the run rather than conversations in it.
+    assert [node.show_in_sidebar for node in codex.nodes] == [
+        False,
+        True,
+        True,
+        False,
+    ]
     assert str(codex.entry_point) == "workspace"
 
 

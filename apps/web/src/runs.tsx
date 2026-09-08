@@ -3,7 +3,12 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   api,
   completeHumanReview,
+  decideGraphApproval,
   deleteRun,
+  getGraphEvents,
+  getGraphRun,
+  getGraphTopology,
+  graphConversationUrl,
   milestoneDetailsUrl,
   type ApiMilestone,
   type ApiGraphEvent,
@@ -13,6 +18,7 @@ import {
   type ApiRunStep,
   type ApiWorkflowRun,
   type ApiWorkflowRunListing,
+  type ApprovalDecision,
   type EngineConfig,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
@@ -64,6 +70,56 @@ export function phaseAccent(phase: string): "flame" | "quiet" | undefined {
 
 export function conversationCount(run: ApiWorkflowRunListing) {
   return run.steps.filter((step) => step.conversationUrl).length;
+}
+
+/** Whether the graph engine runs this WorkOrder: the `[BETA]` kind.
+ *
+ *  A graph has no version yet, and that absence is the only tell the runs list
+ *  carries. Written down once so the two readers of it agree. */
+export function isGraphRun(run: Pick<ApiWorkflowRunListing, "workflowVersion">) {
+  return !run.workflowVersion;
+}
+
+/** The nodes of every graph the WorkOrders on screen run.
+ *
+ *  A `[BETA]` WorkOrder keeps no steps in the runs list -- a graph is not made
+ *  of them -- so what it offers instead is its graph's nodes, which exist from
+ *  the moment the run does. Read once per graph rather than per run or per
+ *  poll: a compiled graph's shape does not change while the server is up, and
+ *  the list this follows is re-read every second.
+ *
+ *  A graph the engine will not describe -- it is not running these workflows,
+ *  or it is on its way back up -- contributes nothing, which leaves the rail
+ *  as it reads today rather than putting an error in it. */
+export function useGraphNodes(runs: ApiWorkflowRunListing[]) {
+  const [nodes, setNodes] = useState<Record<string, ApiGraphTopology["nodes"]>>({});
+  // A string rather than the array, so a poll that answers with the same
+  // WorkOrders does not re-run the effect a new array identity would. Encoded
+  // rather than joined, because nothing promises a graph id has no separator
+  // in it.
+  const graphIds = JSON.stringify(
+    [...new Set(runs.filter(isGraphRun).map((run) => run.workflowId))].sort(),
+  );
+  useEffect(() => {
+    const wanted: string[] = JSON.parse(graphIds);
+    if (!wanted.length) return;
+    const controller = new AbortController();
+    void Promise.all(
+      wanted.map(async (graphId) => {
+        try {
+          return [graphId, (await getGraphTopology(graphId, controller.signal)).nodes] as const;
+        } catch {
+          return undefined;
+        }
+      }),
+    ).then((answers) => {
+      if (controller.signal.aborted) return;
+      const found = answers.filter((answer) => answer !== undefined);
+      if (found.length) setNodes((current) => ({ ...current, ...Object.fromEntries(found) }));
+    });
+    return () => controller.abort();
+  }, [graphIds]);
+  return nodes;
 }
 
 /** The runs behind both the workflow pages and the rail's Workflows section,
@@ -582,59 +638,6 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   );
 }
 
-export function GraphConversationPage({ runId, nodeId }: { runId: string; nodeId: string }) {
-  const [events, setEvents] = useState<ApiGraphEvent[]>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-    const load = () => {
-      api<{ events: ApiGraphEvent[] }>(
-        `/api/runs/${encodeURIComponent(runId)}/graph-events`,
-      )
-        .then((value) => {
-          if (cancelled) return;
-          setEvents(value.events.filter((event) => event.nodeId === nodeId));
-          setError("");
-        })
-        .catch((reason: Error) => {
-          if (!cancelled) setError(reason.message);
-        })
-        .finally(() => {
-          if (!cancelled) timer = window.setTimeout(load, 1000);
-        });
-    };
-    load();
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [runId, nodeId]);
-  const transcript = events?.filter((event) => event.type === "transcript");
-  return (
-    <main className="panel-scroll">
-      <header className="hero hero-narrow">
-        <a className="back-link" href={`/runs/${encodeURIComponent(runId)}`}>← WorkOrder</a>
-        <p className="eyebrow">Graph conversation</p>
-        <h1>{phaseLabel(nodeId)}</h1>
-      </header>
-      {error ? <p className="notice notice-block">{error}</p> : !events ? (
-        <p className="state-inline">Loading conversation…</p>
-      ) : transcript?.length === 0 ? (
-        <p className="state-inline">Waiting for agent activity…</p>
-      ) : (
-        <section className="timeline" aria-label="Conversation transcript">
-          {transcript?.map((event) => (
-            <article className="callout" key={event.sequence}>
-              <p>{String(event.payload.text ?? "")}</p>
-            </article>
-          ))}
-        </section>
-      )}
-    </main>
-  );
-}
-
 function GraphApprovalDecision({
   runId,
   approval,
@@ -647,16 +650,11 @@ function GraphApprovalDecision({
   const [submitting, setSubmitting] = useState<string>();
   const [error, setError] = useState("");
 
-  const decide = async (decision: string) => {
+  const decide = async (decision: ApprovalDecision) => {
     setSubmitting(decision);
     setError("");
     try {
-      onDecided(
-        await api<ApiGraphRun>(
-          `/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approval.approvalId)}`,
-          { method: "POST", body: JSON.stringify({ decision }) },
-        ),
-      );
+      onDecided(await decideGraphApproval(runId, approval.approvalId, decision));
     } catch (reason) {
       setError((reason as Error).message);
     } finally {
@@ -725,11 +723,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
         const value = await api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`);
         if (cancelled) return;
         setRun(value);
-        if (!value.workflowVersion) {
+        if (isGraphRun(value)) {
           const [nextGraph, nextTopology, eventLog] = await Promise.all([
-            api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`),
-            api<ApiGraphTopology>(`/graph/api/graphs/${encodeURIComponent(value.workflowId)}`),
-            api<{ events: ApiGraphEvent[] }>(`/api/runs/${encodeURIComponent(runId)}/graph-events`),
+            getGraphRun(runId),
+            getGraphTopology(value.workflowId),
+            getGraphEvents(runId),
           ]);
           if (cancelled) return;
           setGraph(nextGraph);
@@ -775,7 +773,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
           event.type === "conversation.started" || event.type === "transcript"
         ))
-          ? `/runs/${encodeURIComponent(runId)}/conversations/graph--${encodeURIComponent(node.nodeId)}` : null,
+          ? graphConversationUrl(runId, node.nodeId) : null,
         waiting: waiting.has(node.nodeId),
         summary: typeof graph.values[node.nodeId] === "string" ? String(graph.values[node.nodeId]) : "",
         outputs: [],
@@ -841,17 +839,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </section>
           )}
           <StageProgress run={run} />
-          {/* A [BETA] WorkOrder is run by the graph engine, which keeps its own
-              record of where it got to. This page only holds the row, so there
-              are no stage cards to show and nothing here to say yes to yet --
-              which would otherwise look like a WorkOrder that never started. */}
+          {/* A [BETA] WorkOrder's stages are the graph's nodes, so having none
+              means the graph engine could not be read -- not that the run has
+              no stages. Saying so beats a page that looks like a WorkOrder
+              which never started. */}
           {run.steps.length === 0 && !run.workflowVersion && (
             <section className="callout">
               <p className="eyebrow">Beta workflow</p>
               <p>
-                This WorkOrder is running on the new graph engine. Its stages,
-                conversations and approvals are not on this page yet — they are
-                served under <code>/graph/api/runs/{run.runId}</code>.
+                This WorkOrder runs on the graph engine, and its stages could not
+                be read from it. They are served under{" "}
+                <code>/graph/api/runs/{run.runId}</code>.
               </p>
             </section>
           )}

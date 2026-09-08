@@ -14,13 +14,22 @@ import {
   type RunnerOption,
 } from "./api";
 import { ChatThread, ConversationStats } from "./chat";
+import { GraphConversationPage } from "./graph-conversation";
 import { MilestoneDetailsPage } from "./milestone-details";
 import { MilestoneTimeline } from "./milestone-timeline";
 import { ProjectMilestonesPage } from "./project-milestones";
 import { EngineRuntimeProvider } from "./runtime";
-import { GraphConversationPage, NewTaskPage, NewWorkflowPage, RunDetailPage, RunsPage, useRuns } from "./runs";
+import {
+  NewTaskPage,
+  NewWorkflowPage,
+  RunDetailPage,
+  RunsPage,
+  useGraphNodes,
+  useRuns,
+} from "./runs";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar, type RailSection } from "./sidebar";
+import { UtilizationPage } from "./utilization";
 import "./styles.css";
 
 function ChatPanel({
@@ -355,6 +364,9 @@ function App() {
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
   const { runs, error: runsError, loaded: runsLoaded, remove: deleteRun } = useRuns();
+  // What a [BETA] WorkOrder offers in the rail: its graph's nodes, since a
+  // graph run has no steps for the list to carry.
+  const graphNodes = useGraphNodes(runs);
   const { projects, archive: archiveProject } = useProjects();
 
   // Settled for this mount: the route is read once, and every move between
@@ -382,13 +394,19 @@ function App() {
   // The conversation on screen, and the only thing that says whether it is a
   // project's: a plan's URL is an ordinary chat's, so the projects list is what
   // tells them apart. It arrives after the first paint, and the rail follows.
-  const conversationUrl = chat ? window.location.pathname.replace(/\/$/, "") : undefined;
+  // A graph node's conversation is one of these too -- it is not a thread, but
+  // it is a page the rail links to, and the link it marks is its own.
+  const conversationUrl =
+    chat || route.kind === "graph-conversation"
+      ? window.location.pathname.replace(/\/$/, "")
+      : undefined;
   const activeProject = projects.find((project) => project.conversationUrl === conversationUrl);
   const projectPage = activeProject !== undefined;
   const sidebar = () => (
     <Sidebar
       projects={projects}
       runs={runs}
+      graphNodes={graphNodes}
       initialSection={sectionFor(route)}
       activeRunId={activeRunId}
       activeConversationUrl={conversationUrl}
@@ -398,7 +416,15 @@ function App() {
           : undefined
       }
       activeMilestonesPage={route.kind === "project"}
-      activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
+      activeView={
+        route.kind === "runs"
+          ? "runs"
+          : route.kind === "new-run"
+            ? "new"
+            : route.kind === "utilization"
+              ? "utilization"
+              : undefined
+      }
       onArchiveProject={archiveProject}
       onDeleteRun={deleteRun}
     />
@@ -439,6 +465,8 @@ function App() {
           <RunDetailPage runId={route.runId} />
         ) : route.kind === "graph-conversation" ? (
           <GraphConversationPage runId={route.runId} nodeId={route.nodeId} />
+        ) : route.kind === "utilization" ? (
+          <UtilizationPage />
         ) : route.kind === "project" ? (
           <ProjectMilestonesPage projectId={route.projectId} />
         ) : route.kind === "milestone" ? (

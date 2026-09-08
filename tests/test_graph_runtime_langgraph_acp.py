@@ -48,7 +48,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry, StdioACPProvider
 
-from acp_stub_agent import DONE
+from acp_stub_agent import ASK_NARRATION, DONE, NARRATED_TOOL, NARRATION
 from graph_runtime_backends import State
 
 STUB = Path(__file__).parent / "acp_stub_agent.py"
@@ -65,7 +65,12 @@ PATIENCE = 30.0
 
 
 def registry(
-    tmp_path: Path, *, asks: bool = False, response: str = DONE
+    tmp_path: Path,
+    *,
+    asks: bool = False,
+    asks_every: bool = False,
+    response: str = DONE,
+    narrates: bool = False,
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -77,7 +82,9 @@ def registry(
                     "STUB_ACP_STATE": str(tmp_path),
                     "STUB_ACP_LOG": str(tmp_path / "agent.log"),
                     "STUB_ACP_RESPONSE": response,
-                    **({"STUB_ACP_ASK": "1"} if asks else {}),
+                    **({"STUB_ACP_ASK": "1"} if asks or asks_every else {}),
+                    **({"STUB_ACP_ASK_EVERY": "1"} if asks_every else {}),
+                    **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
                 },
                 # The seam the whole design turns on: a permission request comes
                 # in on the ACP connection, and this is what routes it back to
@@ -180,6 +187,24 @@ def transcript(events: Sequence[RuntimeEvent]) -> list[tuple[str, str]]:
     ]
 
 
+#: Which field names the thing each kind of activity is about.
+_NAMED_BY = {
+    "transcript": "text",
+    "tool.call": "name",
+    "tool.result": "name",
+    "approval.requested": "reason",
+}
+
+
+def activity(events: Sequence[RuntimeEvent], node_id: NodeId) -> list[tuple[str, str]]:
+    """What one node did, in order: what it said, called, and asked for."""
+    return [
+        (event.kind.value, str(event.payload[_NAMED_BY[event.kind.value]]))
+        for event in events
+        if event.kind.value in _NAMED_BY and event.node_id == node_id
+    ]
+
+
 def sessions(tmp_path: Path) -> dict[str, dict[str, Any]]:
     """Every conversation the agent kept, as the agent left it on disk."""
     return {
@@ -224,7 +249,10 @@ def test_an_acp_node_runs_a_turn_and_publishes_what_happened(tmp_path: Path) -> 
 
     events, values = asyncio.run(scenario())
 
-    assert transcript(events) == [("assistant", DONE)]
+    # Both halves of the turn: what the node was sent to do, and what it said
+    # about doing it. A transcript holding only the second is not a
+    # conversation, and a reader opening one has to guess what was asked.
+    assert transcript(events) == [("user", PROMPT), ("assistant", DONE)]
     assert values == {str(IMPLEMENTATION): DONE, str(REVIEW): "Looks right."}
     started = [event for event in events if event.kind.value == "conversation.started"]
     assert len(started) == 1
@@ -237,6 +265,73 @@ def test_an_acp_node_runs_a_turn_and_publishes_what_happened(tmp_path: Path) -> 
     # One conversation, started once. The node did not open a second.
     assert len(sent(tmp_path, "session/new")) == 1
     assert prompts(tmp_path) == [PROMPT]
+
+
+def test_what_an_agent_says_is_published_where_it_said_it(tmp_path: Path) -> None:
+    """A line written before a tool call is published before that call.
+
+    An agent narrates as it works -- a sentence, a tool call, the next
+    sentence -- and a reader following along needs the sentence that explains a
+    call to arrive before it. Holding every word until the turn ends would put
+    the whole narration after all of the work it describes, which reads as an
+    agent that did a pile of things silently and then summarized them.
+    """
+
+    async def scenario() -> list[RuntimeEvent]:
+        async with runtime_over(tmp_path, registry(tmp_path, narrates=True)) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            return await until(log, run.run_id, "run.finished")
+
+    events = asyncio.run(scenario())
+
+    assert activity(events, IMPLEMENTATION) == [
+        ("transcript", PROMPT),
+        ("transcript", NARRATION),
+        ("tool.call", NARRATED_TOOL),
+        ("tool.result", NARRATED_TOOL),
+        ("transcript", DONE),
+    ]
+
+
+def test_a_line_explaining_a_request_is_published_before_the_wait(
+    tmp_path: Path,
+) -> None:
+    """And a permission request is where that matters most.
+
+    It is the one point where a turn stops for as long as a person takes to
+    answer, and the sentence saying why the agent is asking is written just
+    before it. Held to the end of the turn, that sentence would be published
+    only once somebody had answered -- so for the whole time the run was
+    genuinely waiting on them, the conversation would be empty.
+    """
+
+    async def scenario() -> list[RuntimeEvent]:
+        async with runtime_over(
+            tmp_path, registry(tmp_path, asks=True, narrates=True)
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            # Everything published up to the question and no further. The
+            # answer is given only after this, so whatever is in here arrived
+            # while the run was still blocked on a person.
+            asked = await until(log, run.run_id, "approval.requested")
+            await runtime.decide(
+                run.run_id,
+                asked[-1].payload["approvalId"],  # type: ignore[arg-type]
+                ApprovalDecision.ACCEPT,
+            )
+            await until(log, run.run_id, "run.finished")
+            return asked
+
+    waiting = asyncio.run(scenario())
+
+    assert activity(waiting, IMPLEMENTATION) == [
+        ("transcript", PROMPT),
+        ("transcript", ASK_NARRATION),
+        ("approval.requested", "run the tests"),
+    ]
 
 
 # --- steering ---------------------------------------------------------------
@@ -283,6 +378,7 @@ def test_steering_an_acp_execution_continues_the_same_session(tmp_path: Path) ->
     ]
     assert outcome["entered"] == 1
     assert transcript(outcome["events"]) == [
+        ("user", PROMPT),
         ("assistant", DONE),
         ("user", "Use the fast suite."),
         ("assistant", DONE),
@@ -294,6 +390,62 @@ def test_steering_an_acp_execution_continues_the_same_session(tmp_path: Path) ->
     assert list(sessions(tmp_path).values())[0]["turns"] == [
         PROMPT,
         "Use the fast suite.",
+    ]
+
+
+def test_steering_sent_during_a_steered_turn_still_reaches_the_agent(
+    tmp_path: Path,
+) -> None:
+    """The second message, said while the agent is answering the first.
+
+    A message is delivered when the turn in flight ends, so the window a person
+    types into is whichever turn that is -- and once one instruction has landed,
+    the turn in flight *is* a steered one. It is also the turn they are most
+    likely to be watching, because they just redirected the agent and are
+    reading what it does about it.
+
+    Draining the queue once would take it as it looked before that reply began
+    and leave everything said during it on an execution the node is about to
+    release. Nothing reports that: the run finishes normally, and the message
+    stays on screen as a turn the agent never answered.
+    """
+
+    async def scenario() -> int:
+        async with runtime_over(tmp_path, registry(tmp_path, asks_every=True)) as (
+            runtime,
+            log,
+        ):
+            run = await runtime.start(GRAPH, {})
+            unsaid = ["Use the fast suite.", "And skip the linter."]
+            async with asyncio.timeout(PATIENCE):
+                async for event in log.stream(run.run_id):
+                    if event.kind.value == "approval.requested":
+                        # Said while the agent is blocked on its own question,
+                        # which is the moment a person reliably has: the first
+                        # into the turn the node was given, the second into the
+                        # turn that is answering the first.
+                        if unsaid:
+                            await runtime.steer(run.run_id, unsaid.pop(0))
+                        await runtime.decide(
+                            run.run_id,
+                            event.payload["approvalId"],  # type: ignore[arg-type]
+                            ApprovalDecision.ACCEPT,
+                        )
+                    elif event.kind.value in ("run.finished", "run.failed"):
+                        break
+            return runtime.entered(IMPLEMENTATION)
+
+    entered = asyncio.run(scenario())
+
+    assert prompts(tmp_path) == [PROMPT, "Use the fast suite.", "And skip the linter."]
+    # Both of them further turns of the one conversation, and the node entered
+    # once: nothing here restarted anything to carry a message.
+    assert len(sent(tmp_path, "session/new")) == 1
+    assert entered == 1
+    assert list(sessions(tmp_path).values())[0]["turns"] == [
+        PROMPT,
+        "Use the fast suite.",
+        "And skip the linter.",
     ]
 
 
@@ -343,7 +495,15 @@ def test_an_acp_permission_request_becomes_an_answerable_approval(
     assert stored.continuation.session_id in sessions(tmp_path)
     assert stored.continuation.thread_id == str(outcome["paused"].run_id)
     assert outcome["released"].pending_approvals == ()
-    assert transcript(outcome["events"]) == [("assistant", DONE)]
+    assert transcript(outcome["events"]) == [("user", PROMPT), ("assistant", DONE)]
+    # The call the question was about, in the agent's own ids, so a client can
+    # draw the question beside the command rather than beside the whole turn.
+    requested = next(
+        event
+        for event in outcome["events"]
+        if event.kind.value == "approval.requested"
+    )
+    assert requested.payload["toolCallId"] == "call_1"
 
 
 def test_refusing_an_acp_approval_stops_the_run_where_it_asked(
@@ -501,6 +661,11 @@ def test_an_approval_survives_the_runtime_that_raised_it(tmp_path: Path) -> None
     assert prompts(tmp_path).count(PROMPT) == 1
     assert len(prompts(tmp_path)) == 2
     assert PROMPT not in prompts(tmp_path)[1]
+    # And it is not published. `role="user"` is the channel a person's own words
+    # arrive on, and the continuation is the runtime telling a resumed session
+    # that its question was answered -- said under that role it would read, to
+    # whoever just answered the question, as something they had typed.
+    assert transcript(outcome["events"]) == [("assistant", DONE)]
 
 
 def test_two_lost_approvals_are_both_answered_before_anything_restarts(

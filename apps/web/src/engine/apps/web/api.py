@@ -48,6 +48,10 @@ from engine.apps.web.github_auth import (
 from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
+from engine.apps.web.utilization import (
+    UtilizationService,
+    utilization_json,
+)
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCredentialStore,
@@ -998,6 +1002,7 @@ def create_app(
     communications_channel: str = "",
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
+    utilization: UtilizationService | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -2734,6 +2739,26 @@ def create_app(
             return catalog.get(WorkflowId(work_orders.workflow))
         return next(iter(catalog)) if len(catalog) == 1 else None
 
+    # --- runner utilization ---------------------------------------------------
+
+    _utilization = utilization or UtilizationService()
+
+    async def read_utilization(_request: Request) -> JSONResponse:
+        """What was true the last time anybody looked, answered without looking.
+
+        Deliberately offline: this is what the page draws while the scrape
+        below is still in flight, so it must not wait on the same providers.
+        """
+        return JSONResponse(utilization_json(_utilization.cached()))
+
+    async def refresh_utilization(request: Request) -> Response:
+        # Reads the tokens the runners signed in with, so it is held to the same
+        # origin check as the other endpoints that touch a stored credential.
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        readings = await _utilization.refresh(tuple(runners))
+        return JSONResponse(utilization_json(readings))
+
     routes = [
         Route("/api/config", config),
         Route("/api/github/status", github_status),
@@ -2755,6 +2780,8 @@ def create_app(
         Route("/api/slack/callback", slack_callback, name="slack_callback"),
         Route("/api/slack/disconnect", slack_disconnect, methods=["POST"]),
         Route("/api/slack/events", slack_events, methods=["POST"]),
+        Route("/api/utilization", read_utilization),
+        Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
         Route("/api/projects", list_projects),
         Route("/api/projects", create_project, methods=["POST"]),
         Route(
@@ -2839,6 +2866,7 @@ def create_app(
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),
                 Route("/plan", spa_page),
+                Route("/utilization", spa_page),
                 Route("/projects/{project_id}/milestones", spa_page),
                 Route("/projects/{project_id}/milestones/{milestone_id}", spa_page),
                 Route(
