@@ -214,10 +214,12 @@ def exercise_mcp(session_id: str) -> None:
             if terminal == "complete_step"
             else {"summary": "The implementation cannot continue."}
         )
+        if os.environ.get("STUB_ACP_MCP_OMIT_OUTPUTS"):
+            arguments["outputs"] = {}
         # The broker result is authoritative and may close the ACP connection
         # before this subprocess receives its acknowledgement.
         try:
-            call(
+            session["mcp_terminal_response"] = call(
                 {
                     "jsonrpc": "2.0",
                     "id": "terminal",
@@ -225,6 +227,7 @@ def exercise_mcp(session_id: str) -> None:
                     "params": {"name": terminal, "arguments": arguments},
                 }
             )
+            save(session_id, session)
         except RuntimeError:
             return
     process.stdin.close()

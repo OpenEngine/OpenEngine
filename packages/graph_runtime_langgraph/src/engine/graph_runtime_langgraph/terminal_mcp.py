@@ -9,7 +9,11 @@ from dataclasses import dataclass
 from engine.domain import AgentId, AgentRunId, StepId, StepSpec
 from engine.domain.ids import WorkspaceId
 from engine.ports import ApprovalHandler, SourceControl
-from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
+from engine.runtime.terminal_mcp import (
+    REPOSITORY_TOOL_METHODS,
+    TerminalMcpBroker,
+    TerminalResultRegistry,
+)
 
 from engine.graph_runtime_langgraph.acp import BoundMcpServer
 from engine.graph_runtime_langgraph.executions import NodeExecution
@@ -63,7 +67,13 @@ class TerminalMcpServer:
         )
         broker.enable_repository_tools(
             source_control,
-            self.repository_tools,
+            tuple(
+                name
+                for name in self.repository_tools
+                if callable(
+                    getattr(source_control, REPOSITORY_TOOL_METHODS.get(name, ""), None)
+                )
+            ),
             WorkspaceId(workspace),
             approve,
         )

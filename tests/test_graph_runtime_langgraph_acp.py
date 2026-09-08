@@ -44,7 +44,15 @@ from engine.graph_runtime_langgraph import (
     TerminalMcpServer,
     answer_permission,
 )
-from engine.ports import GitResult
+from engine.ports import (
+    ChangeRequest,
+    GitResult,
+    JobLogs,
+    PipelineRetry,
+    PipelineStatus,
+    SourceControl,
+    WorkItem,
+)
 from engine.graph_runtime_langgraph.acp import APPROVAL_ID, ACPNode
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -82,6 +90,7 @@ def registry(
     uses_mcp: bool = False,
     mcp_git: bool = False,
     mcp_terminal: str = "",
+    mcp_omit_outputs: bool = False,
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -102,6 +111,11 @@ def registry(
                     **(
                         {"STUB_ACP_MCP_TERMINAL": mcp_terminal}
                         if mcp_terminal
+                        else {}
+                    ),
+                    **(
+                        {"STUB_ACP_MCP_OMIT_OUTPUTS": "1"}
+                        if mcp_omit_outputs
                         else {}
                     ),
                 },
@@ -188,6 +202,73 @@ class RecordingSourceControl:
     ) -> str:
         self.reviews.append((workspace_id, branch, base_ref, title, body))
         return "https://github.com/acme/repository/pull/7"
+
+    async def create_branch(
+        self, _workspace_id: WorkspaceId, _name: str, _base_ref: str
+    ) -> None:
+        pass
+
+    async def commit_all(self, _workspace_id: WorkspaceId, _message: str) -> str:
+        return "abc123"
+
+    async def publish(self, _workspace_id: WorkspaceId, _branch: str) -> None:
+        pass
+
+    async def add_comment(
+        self,
+        _pr_url: str,
+        _comment: str,
+        _file: str | None = None,
+        _line: int | None = None,
+    ) -> None:
+        pass
+
+    async def view_change_request(
+        self, _workspace_id: WorkspaceId, _number: int
+    ) -> ChangeRequest:
+        raise AssertionError("not called")
+
+    async def list_work_items(
+        self,
+        _workspace_id: WorkspaceId,
+        _state: str = "open",
+        _labels: Sequence[str] = (),
+        _limit: int = 30,
+    ) -> tuple[WorkItem, ...]:
+        return ()
+
+    async def view_work_item(
+        self, _workspace_id: WorkspaceId, _number: int
+    ) -> WorkItem:
+        raise AssertionError("not called")
+
+    async def list_pipeline_status(
+        self,
+        _workspace_id: WorkspaceId,
+        *,
+        ref: str | None = None,
+        change_request_number: int | None = None,
+    ) -> PipelineStatus:
+        raise AssertionError("not called")
+
+    async def get_job_logs(
+        self,
+        _workspace_id: WorkspaceId,
+        _pipeline_id: int,
+        _job_id: int | None = None,
+    ) -> JobLogs:
+        raise AssertionError("not called")
+
+    async def retry_pipeline(
+        self,
+        _workspace_id: WorkspaceId,
+        _pipeline_id: int,
+        _job_id: int | None = None,
+    ) -> PipelineRetry:
+        raise AssertionError("not called")
+
+
+assert isinstance(RecordingSourceControl(), SourceControl)
 
 
 def pool(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
@@ -473,6 +554,35 @@ def test_run_bound_git_keeps_the_broker_approval_boundary(tmp_path: Path) -> Non
     )
 
 
+def test_cancelling_run_bound_git_never_calls_source_control(tmp_path: Path) -> None:
+    source_control = RecordingSourceControl()
+
+    async def scenario() -> dict[str, Any]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_git=True),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            events = await until(log, run.run_id, "approval.requested")
+            await runtime.decide(
+                run.run_id,
+                events[-1].payload["approvalId"],  # type: ignore[arg-type]
+                ApprovalDecision.CANCEL,
+            )
+            await until(log, run.run_id, "run.finished")
+            return next(iter(sessions(tmp_path).values()))
+
+    session = asyncio.run(scenario())
+
+    assert source_control.git_calls == []
+    assert session["mcp_git"]["result"]["isError"] is True
+    assert session["mcp_git"]["result"]["content"] == [
+        {"type": "text", "text": "git_subcommand was not approved"}
+    ]
+
+
 def test_an_acp_answer_cannot_approve_an_unrelated_mcp_request_after_resume(
     tmp_path: Path,
 ) -> None:
@@ -516,7 +626,7 @@ def test_an_acp_answer_cannot_approve_an_unrelated_mcp_request_after_resume(
 def test_complete_step_carries_declared_outputs_into_graph_state(
     tmp_path: Path,
 ) -> None:
-    async def scenario() -> dict[str, Any]:
+    async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
         async with runtime_over(
             tmp_path,
             registry(
@@ -529,17 +639,55 @@ def test_complete_step_carries_declared_outputs_into_graph_state(
         ) as (runtime, log):
             run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
             await until(log, run.run_id, "run.finished")
-            return dict((await runtime.snapshot(run.run_id)).values)
+            return (
+                dict((await runtime.snapshot(run.run_id)).values),
+                next(iter(sessions(tmp_path).values())),
+            )
 
-    values = asyncio.run(scenario())
+    values, session = asyncio.run(scenario())
 
+    assert session["mcp_terminal"] == "complete_step"
     assert values[str(IMPLEMENTATION)] == "Implemented through MCP."
     assert values["pr_url"] == "https://github.com/acme/repository/pull/7"
     assert values[str(REVIEW)] == "Looks right."
 
 
+def test_complete_step_rejects_a_missing_declared_output(tmp_path: Path) -> None:
+    async def scenario() -> tuple[Any, dict[str, Any]]:
+        async with runtime_over(
+            tmp_path,
+            registry(
+                tmp_path,
+                uses_mcp=True,
+                mcp_terminal="complete_step",
+                mcp_omit_outputs=True,
+            ),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.finished")
+            return (
+                await runtime.snapshot(run.run_id),
+                next(iter(sessions(tmp_path).values())),
+            )
+
+    final, session = asyncio.run(scenario())
+
+    response = session["mcp_terminal_response"]["result"]
+    assert response["isError"] is True
+    assert response["content"] == [
+        {
+            "type": "text",
+            "text": "step result is missing required outputs: pr_url",
+        }
+    ]
+    assert "pr_url" not in final.values
+    assert final.values[str(IMPLEMENTATION)] == DONE
+
+
 def test_fail_step_fails_the_graph_run(tmp_path: Path) -> None:
-    async def scenario() -> Any:
+    async def scenario() -> tuple[Any, dict[str, Any]]:
         async with runtime_over(
             tmp_path,
             registry(tmp_path, uses_mcp=True, mcp_terminal="fail_step"),
@@ -548,13 +696,85 @@ def test_fail_step_fails_the_graph_run(tmp_path: Path) -> None:
         ) as (runtime, log):
             run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
             await until(log, run.run_id, "run.failed")
+            return (
+                await runtime.snapshot(run.run_id),
+                next(iter(sessions(tmp_path).values())),
+            )
+
+    final, session = asyncio.run(scenario())
+
+    assert session["mcp_terminal"] == "fail_step"
+    assert final.status.value == "failed"
+    assert final.error == "The implementation cannot continue."
+    assert str(REVIEW) not in final.values
+
+
+@pytest.mark.parametrize(
+    ("state", "source_control", "message"),
+    [
+        (
+            {"workspaceId": "ws-graph-run"},
+            None,
+            "this graph's workflow tools need a SourceControl bound to its runtime",
+        ),
+        (
+            {},
+            RecordingSourceControl(),
+            "this graph's workflow tools need state['workspaceId'] from an upstream "
+            "WorkspaceNode",
+        ),
+    ],
+    ids=("no-source-control", "no-workspace"),
+)
+def test_run_bound_tools_fail_loudly_when_their_binding_is_missing(
+    tmp_path: Path,
+    state: dict[str, object],
+    source_control: SourceControl | None,
+    message: str,
+) -> None:
+    async def scenario() -> Any:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path),
+            pipeline_with_run_bound_mcp,
+            source_control,
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, state)
+            await until(log, run.run_id, "run.failed")
             return await runtime.snapshot(run.run_id)
 
     final = asyncio.run(scenario())
 
     assert final.status.value == "failed"
-    assert final.error == "The implementation cannot continue."
-    assert str(REVIEW) not in final.values
+    assert final.error == message
+    assert not (tmp_path / "agent.log").exists()
+
+
+def test_run_bound_tools_intersect_with_source_control_capabilities(
+    tmp_path: Path,
+) -> None:
+    class GitOnlySourceControl:
+        async def run_git(
+            self, _workspace_id: WorkspaceId, _arguments: Sequence[str]
+        ) -> GitResult:
+            return GitResult(0, "", "")
+
+    async def scenario() -> None:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True),
+            pipeline_with_run_bound_mcp,
+            GitOnlySourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "run.finished")
+
+    asyncio.run(scenario())
+
+    session = next(iter(sessions(tmp_path).values()))
+    assert session["mcp_tools"] == [
+        ["complete_step", "fail_step", "clarify", "git_subcommand"]
+    ]
 
 
 def test_what_an_agent_says_is_published_where_it_said_it(tmp_path: Path) -> None:
