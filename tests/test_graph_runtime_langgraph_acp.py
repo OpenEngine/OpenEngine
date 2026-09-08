@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -57,6 +57,11 @@ IMPLEMENTATION = NodeId("implementation")
 REVIEW = NodeId("review")
 AGENT = "stub"
 PROMPT = "Implement the feature and run the tests."
+WORKFLOW_MCP_SERVER: Mapping[str, Any] = {
+    "name": "workflow",
+    "command": sys.executable,
+    "args": ["-m", "engine.runtime.terminal_mcp_server"],
+}
 
 #: Long enough that only a genuinely stuck run reaches it. A passing run never
 #: waits, but a child process and two SQLite files make this slower than the
@@ -98,13 +103,23 @@ def registry(
 
 
 def pipeline(
-    saver: Any, agents: ACPAgentRegistry, where: Path
+    saver: Any,
+    agents: ACPAgentRegistry,
+    where: Path,
+    *,
+    mcp_servers: tuple[Mapping[str, Any], ...] = (),
 ) -> LangGraphDefinition:
     """implementation -> review, with the implementation node an ACP agent."""
     builder: StateGraph = StateGraph(State)
     builder.add_node(
         str(IMPLEMENTATION),
-        ACPNode(agent=AGENT, prompt=PROMPT, registry=agents, cwd=str(where)),
+        ACPNode(
+            agent=AGENT,
+            prompt=PROMPT,
+            registry=agents,
+            cwd=str(where),
+            mcp_servers=mcp_servers,
+        ),
     )
     builder.add_node(str(REVIEW), _reviewed)
     builder.add_edge(START, str(IMPLEMENTATION))
@@ -113,6 +128,12 @@ def pipeline(
     return LangGraphDefinition(
         graph_id=GRAPH, name="ACP review", graph=builder.compile(checkpointer=saver)
     )
+
+
+def pipeline_with_workflow_mcp(
+    saver: Any, agents: ACPAgentRegistry, where: Path
+) -> LangGraphDefinition:
+    return pipeline(saver, agents, where, mcp_servers=(WORKFLOW_MCP_SERVER,))
 
 
 def pool(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
@@ -267,6 +288,23 @@ def test_an_acp_node_runs_a_turn_and_publishes_what_happened(tmp_path: Path) -> 
     # One conversation, started once. The node did not open a second.
     assert len(sent(tmp_path, "session/new")) == 1
     assert prompts(tmp_path) == [PROMPT]
+
+
+def test_an_acp_node_passes_its_mcp_servers_to_a_new_session(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        async with runtime_over(
+            tmp_path, registry(tmp_path), pipeline_with_workflow_mcp
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            await until(log, run.run_id, "run.finished")
+
+    asyncio.run(scenario())
+
+    created = sent(tmp_path, "session/new")
+    assert len(created) == 1
+    assert created[0]["params"]["mcpServers"] == [WORKFLOW_MCP_SERVER]
 
 
 def test_what_an_agent_says_is_published_where_it_said_it(tmp_path: Path) -> None:
@@ -635,19 +673,21 @@ def test_an_approval_survives_the_runtime_that_raised_it(tmp_path: Path) -> None
     """
 
     async def raise_it() -> tuple[RunId, str]:
-        async with runtime_over(tmp_path, registry(tmp_path, asks=True)) as (
-            runtime,
-            log,
-        ):
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True),
+            pipeline_with_workflow_mcp,
+        ) as (runtime, log):
             run = await runtime.start(GRAPH, {})
             asked = await until(log, run.run_id, "approval.requested")
             return run.run_id, str(asked[-1].payload["approvalId"])
 
     async def answer_it(run_id: RunId, approval_id: str) -> dict[str, Any]:
-        async with runtime_over(tmp_path, registry(tmp_path, asks=True)) as (
-            runtime,
-            log,
-        ):
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, asks=True),
+            pipeline_with_workflow_mcp,
+        ) as (runtime, log):
             found = await runtime.snapshot(run_id)
             released = await runtime.decide(
                 run_id, approval_id, ApprovalDecision.ACCEPT  # type: ignore[arg-type]
@@ -681,6 +721,12 @@ def test_an_approval_survives_the_runtime_that_raised_it(tmp_path: Path) -> None
     # One conversation, across two processes.
     assert len(sent(tmp_path, "session/new")) == 1
     assert len(sent(tmp_path, "session/load")) == 1
+    assert sent(tmp_path, "session/new")[0]["params"]["mcpServers"] == [
+        WORKFLOW_MCP_SERVER
+    ]
+    assert sent(tmp_path, "session/load")[0]["params"]["mcpServers"] == [
+        WORKFLOW_MCP_SERVER
+    ]
     session = list(sessions(tmp_path).values())[0]
     assert session["loads"] == 1
     assert session["granted"] is True
