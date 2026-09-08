@@ -628,6 +628,10 @@ export type ApiRunnerUtilization = {
   plan: string;
   windows: ApiUtilizationWindow[];
   error: string;
+  /** The command that would fix `error`, where one would. Empty for a failure
+   *  nothing on this machine can do anything about, like an unreachable
+   *  provider. */
+  remedy: string;
   readAt: number;
 };
 

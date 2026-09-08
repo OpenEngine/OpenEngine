@@ -9,6 +9,7 @@ const cached: ApiRunnerUtilization = {
   runner: "claude",
   plan: "max",
   error: "",
+  remedy: "",
   readAt: 1_757_000_000,
   windows: [
     { windowId: "five_hour", label: "5-hour", usedPercent: 4, resetsAt: "" },
@@ -29,6 +30,7 @@ const codex: ApiRunnerUtilization = {
   runner: "codex",
   plan: "prolite",
   error: "",
+  remedy: "",
   readAt: 1_757_000_900,
   windows: [{ windowId: "weekly", label: "Weekly", usedPercent: 7, resetsAt: "" }],
 };
@@ -132,6 +134,32 @@ describe("UtilizationPage", () => {
     const card = await screen.findByLabelText("claude utilization");
     expect(within(card).getByText("Codex is not signed in on this machine")).toBeVisible();
     expect(meters("claude")).toEqual(["5-hour 4%", "Weekly 9%"]);
+  });
+
+  /** "Sign in again" on its own tells the reader the half they already knew.
+   *  Neither sign-in is one this page can start for them, so the command is
+   *  the whole of what it has to offer. */
+  it("prints the command that would sign a refused runner back in", async () => {
+    server({
+      refresh: async () =>
+        json({
+          runners: [
+            {
+              ...cached,
+              windows: [],
+              error: "the stored Claude Code credential has expired",
+              remedy: "claude setup-token",
+            },
+          ],
+        }),
+    });
+
+    render(<UtilizationPage />);
+
+    const card = await screen.findByLabelText("claude utilization");
+    expect(within(card).getByText(/credential has expired/)).toHaveTextContent(
+      "Run claude setup-token to sign in again.",
+    );
   });
 
   it("asks every provider again when the reader asks it to", async () => {
