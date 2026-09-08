@@ -114,7 +114,7 @@ def test_the_repository_offers_the_same_workflow_on_either_engine() -> None:
     assert all(isinstance(one, GraphWorkflow) for one in loaded.graphs)
 
 
-def test_the_graph_is_the_four_stages_the_step_version_describes(
+def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     tmp_path: Path,
 ) -> None:
     """Read off the compiled graph, so a stage cannot be renamed by accident.
@@ -133,28 +133,32 @@ def test_the_graph_is_the_four_stages_the_step_version_describes(
 
     assert [str(node.node_id) for node in codex.nodes] == [
         "workspace",
+        "naming",
         "implementation",
         "review",
         "human-review",
     ]
     assert [node.name for node in codex.nodes] == [
         "Workspace",
+        "Naming",
         "Implementation",
         "Review",
         "Human review",
     ]
-    # The kinds a client would draw differently: a checkout, two agents, and
+    # The kinds a client would draw differently: a checkout, three agents, and
     # the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
         "workspace",
         "agent",
         "agent",
+        "agent",
         "human",
     ]
-    # The two a person reads and can talk to, which is what the rail offers
-    # beneath the WorkOrder's name. The checkout and the verdict are stages of
-    # the run rather than conversations in it.
+    # The implementation and review are the two conversations a person reads
+    # and can talk to. The checkout, naming turn, and verdict are stages of the
+    # run rather than conversations in it.
     assert [node.show_in_sidebar for node in codex.nodes] == [
+        False,
         False,
         True,
         True,
@@ -218,10 +222,23 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 2
+    assert len(agents) == 3
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
+
+
+def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
+    module = definition_module()
+    naming = nodes_of(module.pipeline("claude"))[module.NAMING]
+
+    assert naming.agent == "claude"
+    assert naming.output_key == "name"
+    assert naming.prompt({"task": "Resolve issue 270"}) == (
+        module.NAMING_PROMPT.format(task="Resolve issue 270")
+    )
+    assert "at most twelve words" in module.NAMING_PROMPT
+    assert "do not perform the task" in module.NAMING_PROMPT.lower()
 
 
 def test_the_human_stage_is_the_shared_component_rather_than_a_bespoke_node() -> None:

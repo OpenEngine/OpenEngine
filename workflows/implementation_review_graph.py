@@ -1,9 +1,9 @@
 """Implementation and review, run as a graph.
 
-The same four stages `implementation_review.py` describes as steps, written as a
-LangGraph instead:
+The same implementation and review stages `implementation_review.py` describes,
+with its naming turn made explicit as a LangGraph node:
 
-    workspace -> implementation -> review -> human-review
+    workspace -> naming -> implementation -> review -> human-review
 
 Both files are workflow definitions this repository owns, and a definition is
 classified by which kind it is rather than by a setting. A deployment that wants
@@ -61,9 +61,21 @@ from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
 BASE_REF = "origin/main"
 
 WORKSPACE = "workspace"
+NAMING = "naming"
 IMPLEMENTATION = "implementation"
 REVIEW = "review"
 HUMAN_REVIEW = "human-review"
+
+NAMING_PROMPT = (
+    "Give this WorkOrder a concise display name based on the task below. When "
+    "the request points at an issue or a pull request instead of describing the "
+    "work, read that item first and name what it is actually about. If it names "
+    "an issue or pull request by number, lead the name with the number, as in "
+    '"#270 Dependencies can run arbitrary install scripts". Do not change the '
+    "workspace and do not perform the task. Reply with only a concise name of at "
+    "most twelve words, with no quotes or ending punctuation.\n\n"
+    "The task:\n{task}"
+)
 
 #: Codex and Claude, reached through their ACP adapters. `agent_registry` is
 #: what routes an agent's permission request back to the run that raised it.
@@ -96,7 +108,7 @@ def pipeline(
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
 ) -> StateGraph:
-    """The four stages, with both agent nodes run by `runner`.
+    """The five stages, with every agent node run by `runner`.
 
     The two keyword arguments are the only things a deployment or a test has
     business replacing: where the checkouts are made, and which agents answer.
@@ -121,6 +133,19 @@ def pipeline(
             provider=workspace_provider
             or GitWorktreeWorkspaceProvider(DEFAULT_ROOT_DIRECTORY),
             base_ref=BASE_REF,
+        ),
+    )
+    builder.add_node(
+        NAMING,
+        ACPNode(
+            agent=runner,
+            registry=agents,
+            prompt=lambda state: NAMING_PROMPT.format(task=state.get("task", "")),
+            cwd=checkout,
+            output_key="name",
+            graph_node_name="Naming",
+            graph_node_description="Gives the WorkOrder a concise display name.",
+            graph_node_show_in_sidebar=False,
         ),
     )
     builder.add_node(
@@ -156,7 +181,8 @@ def pipeline(
     )
     builder.add_node(HUMAN_REVIEW, HumanReviewNode())
     builder.add_edge(START, WORKSPACE)
-    builder.add_edge(WORKSPACE, IMPLEMENTATION)
+    builder.add_edge(WORKSPACE, NAMING)
+    builder.add_edge(NAMING, IMPLEMENTATION)
     builder.add_edge(IMPLEMENTATION, REVIEW)
     builder.add_edge(REVIEW, HUMAN_REVIEW)
     builder.add_edge(HUMAN_REVIEW, END)

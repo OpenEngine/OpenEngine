@@ -948,6 +948,17 @@ GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
 }
 
 
+def _graph_workorder_name(values: object) -> str:
+    """The concise name a graph's naming node left in its state."""
+    if not isinstance(values, Mapping):
+        return ""
+    value = values.get("name")
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    first_line = value.strip().splitlines()[0]
+    return first_line.strip(" \t\"'`).:;!?")[:120]
+
+
 #: Where this module says what went wrong with something nobody asked it about
 #: -- a graph engine that would not open, a stranded run it could not pick back
 #: up. Those go to the log rather than to a person, because the person who
@@ -1158,25 +1169,27 @@ def create_app(
         The WorkOrder row is the other. A graph run keeps its real progress in
         the graph engine's own files, and this app only holds a row for it, so
         without this the row would say "an agent is working" long after the run
-        had finished or fallen over. Only the two endings are copied across;
-        the rest of what a graph says is about positions inside the graph, and
-        a row has nowhere to put them.
+        had finished or fallen over. The two endings and the name produced by
+        a naming node are copied across. The rest of what a graph says is about
+        positions inside the graph, and a row has nowhere to put it.
         """
         await graph_events.append(event)
         phase = GRAPH_ENDINGS.get(event.kind)
-        if phase is None:
+        name = _graph_workorder_name(event.payload.get("values"))
+        if phase is None and not name:
             return
         state = await session.state_store.load(event.run_id)
         if state is None:
             return
-        await session.state_store.save(
-            replace(
-                state,
-                phase=phase,
-                failure_reason=str(event.payload.get("error", ""))
-                or state.failure_reason,
-            )
+        updated = replace(
+            state,
+            name=name or state.name,
+            phase=phase or state.phase,
+            failure_reason=str(event.payload.get("error", ""))
+            or state.failure_reason,
         )
+        if updated != state:
+            await session.state_store.save(updated)
 
     async def restore_graph_runs(runtime: GraphRuntime) -> None:
         """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
@@ -1228,10 +1241,16 @@ def create_app(
                     await runtime.resume_from(state.run_id, snapshot.checkpoint_id)
                     continue
                 phase = GRAPH_PHASES[snapshot.status]
-                if phase is not state.phase or snapshot.error != state.failure_reason:
+                name = _graph_workorder_name(snapshot.values)
+                if (
+                    phase is not state.phase
+                    or snapshot.error != state.failure_reason
+                    or (name and name != state.name)
+                ):
                     await session.state_store.save(
                         replace(
                             state,
+                            name=name or state.name,
                             phase=phase,
                             failure_reason=snapshot.error or state.failure_reason,
                         )
@@ -1668,9 +1687,16 @@ def create_app(
         # a WorkOrder that claims to be working forever. So the engine is asked
         # once more, now that there is a row for its answer.
         latest = await runtime.snapshot(state.run_id)
-        if latest is not None and GRAPH_PHASES[latest.status] is not state.phase:
+        latest_name = (
+            _graph_workorder_name(latest.values) if latest is not None else ""
+        )
+        if latest is not None and (
+            GRAPH_PHASES[latest.status] is not state.phase
+            or (latest_name and latest_name != state.name)
+        ):
             state = replace(
                 state,
+                name=latest_name or state.name,
                 phase=GRAPH_PHASES[latest.status],
                 failure_reason=latest.error,
             )
