@@ -49,6 +49,7 @@ from engine.graph_runtime_langgraph import (
 from engine.graph_runtime_langgraph.components import (
     ACPNode,
     HumanReviewNode,
+    NameNode,
     WorkspaceNode,
     checkout,
 )
@@ -65,17 +66,6 @@ NAMING = "naming"
 IMPLEMENTATION = "implementation"
 REVIEW = "review"
 HUMAN_REVIEW = "human-review"
-
-NAMING_PROMPT = (
-    "Give this WorkOrder a concise display name based on the task below. When "
-    "the request points at an issue or a pull request instead of describing the "
-    "work, read that item first and name what it is actually about. If it names "
-    "an issue or pull request by number, lead the name with the number, as in "
-    '"#270 Dependencies can run arbitrary install scripts". Do not change the '
-    "workspace and do not perform the task. Reply with only a concise name of at "
-    "most twelve words, with no quotes or ending punctuation.\n\n"
-    "The task:\n{task}"
-)
 
 #: Codex and Claude, reached through their ACP adapters. `agent_registry` is
 #: what routes an agent's permission request back to the run that raised it.
@@ -137,15 +127,10 @@ def pipeline(
     )
     builder.add_node(
         NAMING,
-        ACPNode(
+        NameNode(
             agent=runner,
             registry=agents,
-            prompt=lambda state: NAMING_PROMPT.format(task=state.get("task", "")),
             cwd=checkout,
-            output_key="name",
-            graph_node_name="Naming",
-            graph_node_description="Gives the WorkOrder a concise display name.",
-            graph_node_show_in_sidebar=False,
         ),
     )
     builder.add_node(

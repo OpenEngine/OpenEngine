@@ -33,7 +33,8 @@ from engine.apps.worker.__main__ import main as worker
 from engine.apps.worker.composition import Settings as WorkerSettings
 from engine.domain import WorkflowId, WorkspaceId
 from engine.graph_runtime import GraphWorkflow
-from engine.graph_runtime_langgraph.components import HumanReviewNode
+from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode
+from engine.graph_runtime_langgraph.components.name import NAMING_PROMPT
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.ports import Workspace
 from engine.runtime.workflows import load_workflow_catalog
@@ -232,13 +233,15 @@ def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
     module = definition_module()
     naming = nodes_of(module.pipeline("claude"))[module.NAMING]
 
+    assert isinstance(naming, NameNode)
     assert naming.agent == "claude"
     assert naming.output_key == "name"
     assert naming.prompt({"task": "Resolve issue 270"}) == (
-        module.NAMING_PROMPT.format(task="Resolve issue 270")
+        NAMING_PROMPT.format(task="Resolve issue 270")
     )
-    assert "at most twelve words" in module.NAMING_PROMPT
-    assert "do not perform the task" in module.NAMING_PROMPT.lower()
+    assert "at most twelve words" in NAMING_PROMPT
+    assert "do not perform the task" in NAMING_PROMPT.lower()
+    assert naming.graph_node_show_in_sidebar is False
 
 
 def test_the_human_stage_is_the_shared_component_rather_than_a_bespoke_node() -> None:
