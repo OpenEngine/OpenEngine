@@ -88,6 +88,47 @@ tokens, OpenEngine refreshes them automatically after an authorization failure
 and retries the interrupted GitHub request once. Each colleague repeats steps
 1–6 once with the same client ID.
 
+## GitLab connection
+
+OpenEngine can also connect to GitLab through OAuth. GitLab.com and each
+self-managed instance have separate OAuth applications and credentials, so
+create an application on the instance you intend to use.
+
+### One-time setup: register an OAuth application
+
+1. In GitLab, open **Avatar → Edit profile → Access → Applications**, then
+   select **Add new application**.
+2. Fill in the application:
+   - **Name:** `OpenEngine`
+   - **Redirect URI:** `http://localhost:7171/auth/redirect` (the device flow
+     does not use it, but GitLab may require a value when registering the app)
+   - **Scopes:** `api`
+   - **Confidential:** leave unchecked
+   - **Allowed grant types:** enable `device_code`
+3. Save the application and copy its **Application ID**. Do not put the Client
+   Secret into OpenEngine; the device flow uses only the Application ID.
+
+### Connecting
+
+1. Open the Settings panel and select **GitLab OAuth**.
+2. Enter the instance URL. For GitLab.com, use `https://gitlab.com` — not a
+   group or project URL.
+3. Paste the Application ID and select **Save GitLab client ID**.
+4. Select **Connect GitLab**. Open the displayed GitLab link and enter the
+   device code displayed in OpenEngine. A phone is not required; the browser
+   can be on the same computer.
+5. GitLab confirms authorization and OpenEngine switches to **Connected**
+   after its next poll.
+
+The token pair is stored in the OS keychain per GitLab instance. OpenEngine
+refreshes an expired access token once after an authorization failure, persists
+the rotated credential pair, and retries the interrupted API request once.
+
+For self-managed GitLab, device authorization requires GitLab 17.9 or later
+and a public OAuth application with the `device_code` grant enabled. See
+[GitLab's OAuth documentation](https://docs.gitlab.com/api/oauth2/) for
+instance-specific configuration.
+
 ### Environment variable fallback
 
 If you deploy OpenEngine on a server where no keychain is available, set the
@@ -121,8 +162,8 @@ OpenEngine is fundamentally this: A planning agent which projects the timeline a
 
 The key concepts are:
 - A "Project". An end-to-end product that the operator is working on. Timelines and milestones are associated with this.
-- A "Workflow". Workflow runs belong to a Project. The orchestrator is able to kick off workflows which bake in the operators SDLC+SOP.
-- A "Conversation". Workflows are comprised of these individual agent interactions. Some Conversations may be implementation. Some may be review. 
+- A "Milestone". Some measurable outcome that you want to reach using code. Must come with acceptance criteria.
+- A "WorkOrder". WorkOrders belong to a project+milestone. They are the tasks necessary to complete a milestone.
 
 Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine uses claude and codex CLI under the hood. 
 

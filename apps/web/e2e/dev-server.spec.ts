@@ -26,10 +26,13 @@ import { expect, shot, test, type Script } from "./harness";
 
 const WORKFLOW = "[BETA] Implementation review (codex)";
 const TASK = "Add a greeting file to the repository.";
+const TITLE = "Adding a greeting";
+const NAMING_REQUEST = "Give this WorkOrder a concise display name";
 
 const SCRIPT: Script = {
-  title: "Adding a greeting",
+  title: TITLE,
   scenarios: [
+    { when: NAMING_REQUEST, steps: [{ type: "say", text: TITLE }] },
     { when: "Review the implementation", steps: [{ type: "say", text: "Read it." }] },
     {
       when: "Implement the requested change",
@@ -60,10 +63,12 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
   // reporting `Unexpected token '<'` where the run should be.
   await expect(page.locator(".stages .stage")).toHaveText([
     "Workspace",
+    "Naming",
     "Implementation",
     "Review",
     "Human review",
   ]);
+  await expect(page.getByRole("heading", { name: TITLE, level: 1 })).toBeVisible();
   // Named because it is the report this exists for, and because the page polls:
   // a proxy that answers once and then stops replaces the run with it.
   await expect(page.getByText("Could not load WorkOrder")).toHaveCount(0);

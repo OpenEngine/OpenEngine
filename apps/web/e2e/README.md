@@ -160,8 +160,9 @@ unzip it, and point `show-report` at the directory.
 ## The `[BETA]` graph WorkOrder, and what it cannot do yet
 
 `graph-workflow.spec.ts` is `workflow-run.spec.ts` walked again, on the other
-engine: the same task, the same four stages, but started from a `[BETA]` entry
-and run by LangGraph. It is split into one test per state a run passes through,
+engine: the same task, with an explicit naming stage before implementation, but
+started from a `[BETA]` entry and run by LangGraph. It is split into one test per
+state a run passes through,
 because a graph WorkOrder does not reach all of them yet and one long test
 would report only the first gap.
 

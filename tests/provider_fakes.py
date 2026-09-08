@@ -45,16 +45,18 @@ The server is read off argv the way each provider encodes it and spawned as
 given, credential and all, because the broker refuses a session it did not
 issue.
 
-Only turns that can pause are scripted. A turn run without the approval
-transport is the runtime naming a chat or a workflow, and is answered with the
-script's `title`: naming is not what any of these tests are about, and spending
-a scenario on it would make every script carry one.
+A turn that is naming a chat or a workflow rather than running a step is
+answered with the script's `title`: naming is not what any of these tests are
+about, and spending a scenario on it would make every script carry one. It is
+recognised by what it was served -- the repository tools alone, with none of
+the tools that end a step -- rather than by which transport carried it.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import select
 import shlex
 import subprocess
 import sys
@@ -284,6 +286,23 @@ def _is_loopback_broker(server: McpServer) -> bool:
     return "engine.runtime.planning_mcp_server" in server.args
 
 
+def _turn_steps(
+    prompt: str, server: McpServer | None
+) -> Sequence[Mapping[str, object]]:
+    """This turn's script: the title when it is a naming turn, else a scenario.
+
+    Read off the server the runtime attached rather than off which transport
+    ran the turn: naming is served the repository tools and nothing else, and
+    says so on the argv it hands over, while a step is served the tools that
+    end one. Which transport carries either is the runtime's business and has
+    changed once already.
+    """
+
+    if server is not None and "--repository-tools-only" in server.args:
+        return [{"type": "say", "text": _title()}]
+    return _steps(prompt)
+
+
 def _call_tool(
     server: McpServer, name: str, arguments: object
 ) -> tuple[str, bool]:
@@ -470,13 +489,49 @@ def _acp_turn(message_id: object, session_id: str, prompt: str, cwd: str) -> Non
                 _acp_say(session_id, "Stopped, as asked.")
                 _acp_respond(message_id, {"stopReason": "refusal"})
                 return
-            _acp_ran(session_id, command, *_execute(command, cwd or os.getcwd()))
+            _acp_running(session_id, command)
+            code, output, cancelled = _acp_execute(
+                session_id, command, cwd or os.getcwd()
+            )
+            if cancelled:
+                _acp_respond(message_id, {"stopReason": "cancelled"})
+                return
+            _acp_ran(session_id, command, code, output)
         else:
             raise SystemExit(
                 f"an ACP turn cannot do a {kind!r} step: a graph node ends by "
                 "finishing its turn, so it has no run-bound MCP server to call"
             )
     _acp_respond(message_id, {"stopReason": "end_turn"})
+
+
+def _acp_execute(session_id: str, command: str, cwd: str) -> tuple[int, str, bool]:
+    """Run a command while remaining able to receive ACP cancellation."""
+
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    while process.poll() is None:
+        readable, _, _ = select.select([sys.stdin], [], [], 0.05)
+        if not readable:
+            continue
+        message = json.loads(sys.stdin.readline())
+        params = message.get("params") or {}
+        if (
+            message.get("method") != "session/cancel"
+            or params.get("sessionId") != session_id
+        ):
+            continue
+        process.terminate()
+        output, _ = process.communicate()
+        return process.returncode, output, True
+    output, _ = process.communicate()
+    return process.returncode, output, False
 
 
 def _acp_allowed(session_id: str, command: str) -> bool:
@@ -551,8 +606,22 @@ def _acp_say(session_id: str, text: str) -> None:
 
 
 def _acp_ran(session_id: str, command: str, code: int, output: str) -> None:
-    """Report one command the way an agent reports a tool call it made."""
+    """Report the result of a command the agent finished."""
+    _acp_update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "completed" if code == 0 else "failed",
+            "content": [
+                {"type": "content", "content": {"type": "text", "text": output}}
+            ],
+        },
+    )
 
+
+def _acp_running(session_id: str, command: str) -> None:
+    """Report a command before running it, so its turn is observable."""
     _acp_update(
         session_id,
         {
@@ -562,15 +631,6 @@ def _acp_ran(session_id: str, command: str, code: int, output: str) -> None:
             "kind": "execute",
             "status": "in_progress",
             "rawInput": {"command": command},
-        },
-    )
-    _acp_update(
-        session_id,
-        {
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": "call-1",
-            "status": "completed" if code == 0 else "failed",
-            "content": [{"type": "content", "content": {"type": "text", "text": output}}],
         },
     )
 
@@ -623,7 +683,7 @@ def _codex_app_server(arguments: Sequence[str]) -> int:
     prompt = params["input"][0]["text"]
     _send({"id": turn["id"], "result": {"turn": {"id": _TURN_ID}}})
 
-    for index, step in enumerate(_steps(prompt), start=1):
+    for index, step in enumerate(_turn_steps(prompt, server), start=1):
         kind = step.get("type")
         if kind == "say":
             _codex_item(
@@ -804,7 +864,7 @@ def _claude_interactive(arguments: Sequence[str]) -> int:
     _send({"type": "system", "subtype": "init", "session_id": _SESSION_ID})
 
     answer = ""
-    for index, step in enumerate(_steps(prompt), start=1):
+    for index, step in enumerate(_turn_steps(prompt, server), start=1):
         kind = step.get("type")
         if kind == "say":
             answer = str(step["text"])

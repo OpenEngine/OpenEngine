@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import time
 
 import keyring
 
@@ -21,6 +22,20 @@ class StoredCredentials:
     expires_at: float | None = None
     refresh_token_expires_at: float | None = None
 
+    def is_usable(self, now: float | None = None) -> bool:
+        """Whether a non-empty access token can still be used or refreshed."""
+        if not self.access_token:
+            return False
+        current = time.time() if now is None else now
+        if self.expires_at is None or self.expires_at > current:
+            return True
+        return bool(
+            self.refresh_token
+            and (
+                self.refresh_token_expires_at is None
+                or self.refresh_token_expires_at > current
+            )
+        )
 
 class OAuthCredentialStore:
     """A secure keychain entry for one provider and one account identity."""
@@ -40,7 +55,7 @@ class OAuthCredentialStore:
     def get_credentials(self) -> StoredCredentials | None:
         try:
             value = keyring.get_password(self._service, self._username)
-        except keyring.errors.NoKeyringError:
+        except keyring.errors.KeyringError:
             return None
         if not value:
             return None
@@ -49,7 +64,7 @@ class OAuthCredentialStore:
         except json.JSONDecodeError:
             return StoredCredentials(value)
         if not isinstance(data, dict) or not isinstance(data.get("access_token"), str):
-            return StoredCredentials(value)
+            return None
         return StoredCredentials(
             data["access_token"],
             _optional_string(data.get("refresh_token")),

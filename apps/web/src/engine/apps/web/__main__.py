@@ -162,6 +162,7 @@ def compose_app(
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         milestone_scoper=build_milestone_scoper(settings),
+        work_orders=loaded.config.work_orders,
     )
 
 
