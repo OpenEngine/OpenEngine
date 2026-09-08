@@ -24,6 +24,11 @@ from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.__main__ import build_app
 from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
+from engine.apps.web.utilization import (
+    RunnerUtilization,
+    UtilizationService,
+    UtilizationWindow,
+)
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
@@ -1209,6 +1214,7 @@ def _workflow_app(
     graph_runtime=None,
     communications_channel: str = "",
     public_url: str = "",
+    utilization: UtilizationService | None = None,
 ):
     """Wire the app the way the composition root does.
 
@@ -1242,6 +1248,7 @@ def _workflow_app(
         graph_runtime=graph_runtime,
         communications_channel=communications_channel,
         public_url=public_url,
+        utilization=utilization,
     )
 
 
@@ -1422,6 +1429,95 @@ def test_deleting_a_run_forgets_it_along_with_its_history() -> None:
     assert again.status_code == 404
     assert asyncio.run(store.load(state.run_id)) is None
     assert asyncio.run(store.history(state.run_id)) == ()
+
+
+def test_utilization_is_served_from_the_cache_and_then_scraped(tmp_path) -> None:
+    """The two calls the page makes, and why there are two of them.
+
+    Opening it must draw something before either provider answers, so the cache
+    is a read of its own that touches no network; the scrape that follows is
+    what replaces the figures with today's.
+    """
+    reading = RunnerUtilization(
+        runner="claude",
+        plan="max",
+        windows=(
+            UtilizationWindow("five_hour", "5-hour", 12.0, "2026-09-08T20:10:00+00:00"),
+            UtilizationWindow("seven_day", "Weekly", 41.0, "2026-09-10T02:00:00+00:00"),
+        ),
+    )
+
+    async def read_claude(_client) -> RunnerUtilization:
+        return reading
+
+    utilization = UtilizationService(
+        cache_path=tmp_path / "utilization.json", readers={"claude": read_claude}
+    )
+    app = _workflow_app(
+        InMemoryStateStore(),
+        ConcurrentRunner(),
+        reviewers={"claude": _reviewer(), "codex": _reviewer()},
+        workflow_runners={"claude": ConcurrentRunner(), "codex": ConcurrentRunner()},
+        utilization=utilization,
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            empty = await client.get("/api/utilization")
+            scraped = await client.post("/api/utilization/refresh")
+            cached = await client.get("/api/utilization")
+            return empty, scraped, cached
+
+    empty, scraped, cached = asyncio.run(scenario())
+
+    # Nothing has been read yet, which is a page with no meters rather than an
+    # error: the scrape is what fills it.
+    assert empty.status_code == 200
+    assert empty.json() == {"runners": []}
+    assert scraped.status_code == 200
+    listed = scraped.json()["runners"]
+    # Only the runner something knows how to read, even though the deployment
+    # offers two.
+    assert [entry["runner"] for entry in listed] == ["claude"]
+    assert listed[0]["plan"] == "max"
+    assert [window["label"] for window in listed[0]["windows"]] == ["5-hour", "Weekly"]
+    assert [window["usedPercent"] for window in listed[0]["windows"]] == [12.0, 41.0]
+    # And the next open starts from what the scrape found, without asking again.
+    assert cached.json() == scraped.json()
+
+
+def test_utilization_refresh_refuses_a_cross_origin_page(tmp_path) -> None:
+    """It reads the tokens the runners signed in with, so it is guarded like
+    every other endpoint that touches a stored credential."""
+    asked = False
+
+    async def read_claude(_client) -> RunnerUtilization:
+        nonlocal asked
+        asked = True
+        return RunnerUtilization(runner="claude")
+
+    app = _workflow_app(
+        InMemoryStateStore(),
+        ConcurrentRunner(),
+        reviewers={"claude": _reviewer()},
+        workflow_runners={"claude": ConcurrentRunner()},
+        utilization=UtilizationService(
+            cache_path=tmp_path / "utilization.json", readers={"claude": read_claude}
+        ),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                "/api/utilization/refresh", headers={"origin": "https://elsewhere.example"}
+            )
+
+    refused = asyncio.run(scenario())
+
+    assert refused.status_code == 403
+    assert not asked
 
 
 def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:

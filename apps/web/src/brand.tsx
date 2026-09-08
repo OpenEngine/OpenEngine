@@ -3,6 +3,8 @@
 
 import type { PropsWithChildren, ReactNode } from "react";
 
+import { UTILIZATION_URL } from "./api";
+
 /** The openengine V, traced from the mark. Inherits `currentColor` so it can be
  *  laid on the flame tile in the rail and on anything else that needs it. */
 export function Mark({ title }: { title?: string }) {
@@ -32,11 +34,46 @@ export function RailBrand({ href = "/" }: { href?: string }) {
   );
 }
 
-export function RailFoot({ onSettings }: { onSettings?: () => void }) {
+/** Three bars on a baseline: what a runner has spent of its limits.
+ *
+ *  Amber rather than flame, which is the distinction the stylesheet draws
+ *  between the two: flame is for the thing on a screen that wants acting on,
+ *  and this opens a page that only reads. */
+function GraphIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M1 13.5h14V15H1z" />
+      <path d="M2 8h3v5.5H2zM6.5 4.5h3v9h-3zM11 1h3v12.5h-3z" />
+    </svg>
+  );
+}
+
+export function RailFoot({
+  onSettings,
+  utilizationActive = false,
+}: {
+  onSettings?: () => void;
+  /** Whether the utilization page is the one on screen. */
+  utilizationActive?: boolean;
+}) {
   return (
     <div className="rail-foot">
       <span className="rail-pip" aria-hidden="true" />
       <span className="rail-foot-label">Local openengine</span>
+      {/* Named for the page rather than for what is on it, and deliberately
+          without the word "runner" in it: the rail is on screen beside the
+          composer's runner picker, and a label containing that word is a
+          second match for anything looking the picker up by its own. */}
+      <a
+        aria-current={utilizationActive ? "page" : undefined}
+        aria-label="Open utilization"
+        className="rail-graph"
+        data-active={utilizationActive || undefined}
+        href={UTILIZATION_URL}
+        title="Utilization"
+      >
+        <GraphIcon />
+      </a>
       {onSettings && (
         <button
           aria-label="Open settings"
