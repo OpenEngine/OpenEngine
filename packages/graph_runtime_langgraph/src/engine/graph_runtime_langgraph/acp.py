@@ -327,6 +327,8 @@ class ACPNode:
     """What to call this node on screen. The node's own id when empty."""
     graph_node_kind: str = "agent"
     graph_node_description: str = ""
+    graph_node_show_in_sidebar: bool = True
+    """Whether clients should offer this node as a run conversation."""
     cwd: str | Callable[[Mapping[str, object]], str | None]
     """Where the session works, or how to read it off the graph's state.
 

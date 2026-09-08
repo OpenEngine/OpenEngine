@@ -46,6 +46,7 @@ from engine.graph_runtime_langgraph.acp import (
 )
 from engine.graph_runtime_langgraph.components import (
     HumanReviewNode,
+    NameNode,
     WorkspaceNode,
 )
 from engine.graph_runtime_langgraph.executions import (
@@ -84,6 +85,7 @@ __all__ = [
     "InMemoryGraphRuntimeStore",
     "LangGraphDefinition",
     "LangGraphRuntime",
+    "NameNode",
     "NoExecutionError",
     "NoWorkingDirectoryError",
     "NodeExecution",
