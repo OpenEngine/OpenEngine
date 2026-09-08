@@ -344,6 +344,13 @@ class ACPNode:
     so the node stays a description of the work rather than a copy per checkout.
     """
     mcp_servers: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    """ACP MCP server descriptions made available to this node's session.
+
+    The descriptions are passed to both ``session/new`` and ``session/load``.
+    Supplying them again on load matters because a resumed conversation may be
+    opened by a different agent process after the process that first hosted its
+    MCP servers has gone away.
+    """
 
     def __post_init__(self) -> None:
         # A literal is checkable now; a resolver is not, and is checked on the
@@ -443,11 +450,18 @@ class ACPNode:
         this node does is keep the record and hand it back.
         """
         if stored is not None:
-            return await resume_continuation(stored, registry=self.registry, cwd=cwd)
+            return await resume_continuation(
+                stored,
+                registry=self.registry,
+                cwd=cwd,
+                mcp_servers=self.mcp_servers,
+            )
         provider = (self.registry or default_registry()).resolve(self.agent)
         client = await provider.connect()
         try:
-            return client, await client.new_session(cwd=cwd)
+            return client, await client.new_session(
+                cwd=cwd, mcp_servers=self.mcp_servers
+            )
         except BaseException:
             await client.close()
             raise
