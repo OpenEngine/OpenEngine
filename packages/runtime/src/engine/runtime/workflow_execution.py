@@ -449,6 +449,23 @@ class WorkflowExecutor:
         it in. If the interactive attempt cannot run -- a transport the rest of
         the run never exercises may be missing or misconfigured -- the plain
         one still names the run, tools or no tools.
+
+        That fallback is deliberately quiet at the run level and loud in the
+        log, and the trade is worth stating: what it falls back to for Codex is
+        `codex exec`, the transport whose `never` policy is the whole reason
+        this turn moved. A deployment that fails here every time goes on
+        producing names, just worse ones, so the warning it logs is the only
+        thing that says so.
+
+        It catches broadly because nothing narrower is available to catch: an
+        adapter's unavailability error means the binary is not on PATH, which
+        is true of both transports and would make falling back pointless, and
+        an app-server that is missing or that fails its handshake surfaces as
+        the same execution error a model failure does. Distinguishing them
+        needs a port-level error the adapters raise for "this transport could
+        not start", which is a change to the port and both adapters rather than
+        to this call. The cost of the width is a wasted turn before the first
+        step when the failure was transient.
         """
 
         runner = self._runners[runner_name]
@@ -497,9 +514,22 @@ class WorkflowExecutor:
                     # only one a deployment can be wrong about, and the caller
                     # would otherwise drop the run's name over a transport
                     # every step went on working without.
-                    logger.exception(
-                        "could not name run %s interactively; retrying plainly",
+                    #
+                    # Warning rather than exception, and one fixed phrase, so
+                    # that the thing worth alerting on is greppable as a
+                    # condition: what falling back costs is the tools, which
+                    # for Codex is exactly the transport that could not call
+                    # them in the first place. A deployment stuck here goes on
+                    # naming runs off the bare prompt and looks healthy, so
+                    # this line is the only place it says so. The stack is
+                    # still attached for whoever goes looking.
+                    logger.warning(
+                        "naming fell back to the non-interactive transport "
+                        "for run %s on runner %r; its names will be made "
+                        "without the repository tools",
                         state.run_id,
+                        runner_name,
+                        exc_info=True,
                     )
             return await runner.run_turn_with_mcp(
                 agent_run_id,

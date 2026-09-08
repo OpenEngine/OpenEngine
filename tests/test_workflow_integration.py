@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -647,9 +648,9 @@ class CommentingSourceControl(WorkItemSourceControl):
         self,
         workspace_id: WorkspaceId,
         branch: str,
+        base_ref: str,
         title: str,
         body: str,
-        base_ref: str | None = None,
     ) -> str:
         raise AssertionError("a naming turn must not be able to open a pull request")
 
@@ -786,19 +787,35 @@ def test_a_naming_profile_granted_only_write_tools_gets_no_server() -> None:
     assert turn.message.content == "Named with no server"
 
 
-def test_a_naming_turn_falls_back_when_the_interactive_transport_cannot_run() -> None:
+def test_a_naming_turn_falls_back_when_the_interactive_transport_cannot_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Naming is the only turn on this transport, so it is the only one at risk.
 
     A deployment whose steps run non-interactively exercises app-server here
     and nowhere else. If that is missing or misconfigured, the plain transport
     still names the run rather than the caller dropping the name entirely.
+
+    The warning is asserted because it is the only thing that reports this: a
+    deployment stuck on the fallback still names every run, just off the bare
+    prompt, which is what the run this series started from did.
     """
 
     runner = RecordingNamingRunner(RuntimeError("app-server is not available"))
-    turn = _name(runner, ("view_work_item",))
+    with caplog.at_level(logging.WARNING, logger="engine.runtime.workflow_execution"):
+        turn = _name(runner, ("view_work_item",))
 
     assert [transport for transport, _ in runner.served] == ["interactive", "plain"]
     assert turn.message.content == "Named plainly"
+    fallen_back = [
+        record
+        for record in caplog.records
+        if "naming fell back to the non-interactive transport" in record.getMessage()
+    ]
+    assert len(fallen_back) == 1
+    assert fallen_back[0].levelno == logging.WARNING
+    assert "run-naming" in fallen_back[0].getMessage()
+    assert fallen_back[0].exc_info is not None
 
 
 def _approval(**overrides: object) -> ApprovalRequest:
@@ -1090,9 +1107,34 @@ NAMING_RUN = {
         {"type": "tool", "name": "view_work_item", "arguments": {"number": 270}},
         {"type": "say", "text": ISSUE_NAME},
     ],
+    # The steps themselves are beside the point here -- the name lands before
+    # the first one -- but the run is driven to a phase it is meant to sit at
+    # rather than abandoned mid-flight, so both need a scenario.
     "scenarios": [
         {
+            "when": "Inspect the workspace",
             "steps": [
+                {"type": "say", "text": "Read the change."},
+                # The review step refuses a completion with no comment on it.
+                {
+                    "type": "tool",
+                    "name": "add_comment",
+                    "arguments": {"pr_url": PULL_REQUEST, "comment": FINDING},
+                },
+                {
+                    "type": "tool",
+                    "name": "complete_step",
+                    "arguments": {
+                        "outcome": "success",
+                        "summary": "Reviewed the pinning.",
+                        "outputs": {"findings": FINDING},
+                    },
+                },
+            ],
+        },
+        {
+            "steps": [
+                {"type": "say", "text": "Pinning the dependencies."},
                 {
                     "type": "tool",
                     "name": "complete_step",
@@ -1101,9 +1143,9 @@ NAMING_RUN = {
                         "summary": "Pinned the dependencies.",
                         "outputs": {"pr_url": PULL_REQUEST},
                     },
-                }
-            ]
-        }
+                },
+            ],
+        },
     ],
 }
 
@@ -1157,14 +1199,27 @@ def test_a_scripted_cli_reads_the_issue_while_naming_a_run(
                 run_id = RunId(created.json()["runId"])
                 # From the store rather than the API, which shows the prompt
                 # for a run that has no name yet -- and the prompt is what an
-                # unnamed run would be indistinguishable from here. The name
-                # lands before the first step, so the workflow need not run on.
+                # unnamed run would be indistinguishable from here.
+                name = ""
                 for _ in range(6_000):
                     state = await capabilities.state_store.load(run_id)
                     if state is not None and state.name:
-                        return state.name
+                        name = state.name
+                        break
                     await asyncio.sleep(0.01)
-                raise AssertionError(f"run {run_id} was never named")
+                else:
+                    raise AssertionError(f"run {run_id} was never named")
+                # The name lands before the first step, but leaving here would
+                # tear the lifespan down while a CLI, an MCP server and a
+                # worktree are mid-creation. Let the run reach a phase it is
+                # meant to sit at, the way every other test at this tier does.
+                reached = await _await_phase(
+                    client, run_id, "awaiting_human_review", attempts=6_000
+                )
+                assert reached.json()["phase"] == "awaiting_human_review", (
+                    reached.json()["failureReason"]
+                )
+                return name
 
     try:
         with (
