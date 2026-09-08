@@ -358,8 +358,30 @@ def test_github_login_disabled_and_partial_configuration(tmp_path, monkeypatch):
     loaded = load_engine_config(environ={}, cwd=tmp_path)
     assert web_main._github_login_config(loaded) is None
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "partial")
-    with pytest.raises(ValueError, match="requires credentials"):
+    with pytest.raises(EngineConfigError, match="requires credentials"):
         web_main._github_login_config(loaded)
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]])
+@pytest.mark.parametrize("redirect_uri", ["", "http://public.test/api/auth/github/callback"])
+def test_web_reports_invalid_login_configuration(tmp_path, monkeypatch, capsys, args, redirect_uri):
+    path = tmp_path / "engine.toml"
+    path.write_text("")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "client")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "private-secret")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", redirect_uri)
+
+    def unexpected_start(*args, **kwargs):
+        pytest.fail("Invalid login configuration must stop startup")
+
+    monkeypatch.setattr(web_main.uvicorn, "run", unexpected_start)
+    monkeypatch.setattr(web_main, "report_wiring", unexpected_start)
+    assert web_main.main(["--config", str(path), *args]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("configuration error: GitHub login requires credentials")
+    assert "Traceback" not in captured.err
+    assert "private-secret" not in captured.err
+    assert captured.out == ""
 
 
 @pytest.mark.parametrize("key", ["github_login_client_id", "github_login_redirect_uri"])

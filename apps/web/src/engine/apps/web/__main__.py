@@ -116,7 +116,10 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
     )
     if not any((client_id, redirect_uri, secret)):
         return None
-    return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
+    try:
+        return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
+    except ValueError as error:
+        raise EngineConfigError(str(error)) from error
 
 
 def _github_client_id_source() -> str:
@@ -202,16 +205,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         loaded, workflow_catalog = read_configuration(args.config)
+        settings = _settings(loaded)
+        if args.check:
+            _github_login_config(loaded)
+            report_wiring(settings)
+            return 0
+        app = compose_app(loaded, workflow_catalog)
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
-    settings = _settings(loaded)
-
-    if args.check:
-        report_wiring(settings)
-        return 0
-
-    app = compose_app(loaded, workflow_catalog)
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)
     return 0
