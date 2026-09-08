@@ -45,10 +45,11 @@ The server is read off argv the way each provider encodes it and spawned as
 given, credential and all, because the broker refuses a session it did not
 issue.
 
-Only turns that can pause are scripted. A turn run without the approval
-transport is the runtime naming a chat or a workflow, and is answered with the
-script's `title`: naming is not what any of these tests are about, and spending
-a scenario on it would make every script carry one.
+A turn that is naming a chat or a workflow rather than running a step is
+answered with the script's `title`: naming is not what any of these tests are
+about, and spending a scenario on it would make every script carry one. It is
+recognised by what it was served -- the repository tools alone, with none of
+the tools that end a step -- rather than by which transport carried it.
 """
 
 from __future__ import annotations
@@ -283,6 +284,23 @@ def _is_loopback_broker(server: McpServer) -> bool:
     """Whether this MCP process has to connect back to Engine over TCP."""
 
     return "engine.runtime.planning_mcp_server" in server.args
+
+
+def _turn_steps(
+    prompt: str, server: McpServer | None
+) -> Sequence[Mapping[str, object]]:
+    """This turn's script: the title when it is a naming turn, else a scenario.
+
+    Read off the server the runtime attached rather than off which transport
+    ran the turn: naming is served the repository tools and nothing else, and
+    says so on the argv it hands over, while a step is served the tools that
+    end one. Which transport carries either is the runtime's business and has
+    changed once already.
+    """
+
+    if server is not None and "--repository-tools-only" in server.args:
+        return [{"type": "say", "text": _title()}]
+    return _steps(prompt)
 
 
 def _call_tool(
@@ -665,7 +683,7 @@ def _codex_app_server(arguments: Sequence[str]) -> int:
     prompt = params["input"][0]["text"]
     _send({"id": turn["id"], "result": {"turn": {"id": _TURN_ID}}})
 
-    for index, step in enumerate(_steps(prompt), start=1):
+    for index, step in enumerate(_turn_steps(prompt, server), start=1):
         kind = step.get("type")
         if kind == "say":
             _codex_item(
@@ -846,7 +864,7 @@ def _claude_interactive(arguments: Sequence[str]) -> int:
     _send({"type": "system", "subtype": "init", "session_id": _SESSION_ID})
 
     answer = ""
-    for index, step in enumerate(_steps(prompt), start=1):
+    for index, step in enumerate(_turn_steps(prompt, server), start=1):
         kind = step.get("type")
         if kind == "say":
             answer = str(step["text"])
