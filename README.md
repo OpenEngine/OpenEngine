@@ -105,6 +105,27 @@ Or via environment variables:
 GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-web
 ```
 
+### GitHub browser login
+
+Register a separate GitHub OAuth App for login and configure its callback as
+`https://your-engine-host/api/auth/github/callback`. Set
+`ENGINE_GITHUB_LOGIN_CLIENT_ID`, `ENGINE_GITHUB_LOGIN_CLIENT_SECRET`, and
+`ENGINE_GITHUB_LOGIN_REDIRECT_URI` on the server. All three are required;
+HTTP callbacks are accepted only for loopback development hosts.
+
+Visit `/api/auth/github/login` to start the browser authorization flow. It
+requests only `read:user`, uses OAuth state and PKCE, and returns the verified
+GitHub numeric ID and login as JSON at the callback. The user token is not
+returned or stored in the server's repository credential store. This follows
+[GitHub's web OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps).
+
+This is the identity-verification portion of SSO (#300). Session issuance and
+route protection (#301), and repository permission checks (#302), are separate
+work; this feature alone does not protect app access. Pending logins expire
+after ten minutes and live in one server process, so a restart requires a new
+login and multiple workers would require shared state or sticky routing.
+Without these environment variables the login endpoints return 503.
+
 To diagnose interactive runner protocol incompatibilities, set
 `ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and
 Claude Code record normalized session and interaction events alongside their

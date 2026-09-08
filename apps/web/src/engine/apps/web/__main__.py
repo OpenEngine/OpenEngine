@@ -28,6 +28,7 @@ from engine.apps.web.composition import (
     build_workflow_runners,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.github_login import GitHubLoginConfig
 from engine.adapters.communications.slack import SlackCredentialStore
 from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
@@ -126,6 +127,15 @@ def compose_app(
 ) -> Starlette:
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
+    login_values = [
+        os.environ.get(name, "")
+        for name in (
+            "ENGINE_GITHUB_LOGIN_CLIENT_ID",
+            "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
+            "ENGINE_GITHUB_LOGIN_REDIRECT_URI",
+        )
+    ]
+    github_login_config = GitHubLoginConfig(*login_values) if any(login_values) else None
     credential_store = GitHubCredentialStore()
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
@@ -156,6 +166,7 @@ def compose_app(
         credential_store=credential_store,
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
+        github_login_config=github_login_config,
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
         communications_channel=loaded.config.communications.channel,

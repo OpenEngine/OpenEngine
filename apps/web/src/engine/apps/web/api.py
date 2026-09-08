@@ -36,6 +36,7 @@ from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
+from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
     DeviceFlowState,
@@ -990,6 +991,7 @@ def create_app(
     credential_store: GitHubCredentialStore | None = None,
     github_client_id: str = "",
     github_client_id_source: str = "configuration",
+    github_login_config: GitHubLoginConfig | None = None,
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
     communications_channel: str = "",
@@ -2558,6 +2560,7 @@ def create_app(
         return JSONResponse(utilization_json(readings))
 
     routes = [
+        *GitHubLogin(github_login_config).routes(),
         Route("/api/config", config),
         Route("/api/github/status", github_status),
         Route("/api/source-control/status", source_control_status),
