@@ -60,9 +60,13 @@ export function RailFoot({
     <div className="rail-foot">
       <span className="rail-pip" aria-hidden="true" />
       <span className="rail-foot-label">Local openengine</span>
+      {/* Named for the page rather than for what is on it, and deliberately
+          without the word "runner" in it: the rail is on screen beside the
+          composer's runner picker, and a label containing that word is a
+          second match for anything looking the picker up by its own. */}
       <a
         aria-current={utilizationActive ? "page" : undefined}
-        aria-label="Open runner utilization"
+        aria-label="Open utilization"
         className="rail-graph"
         data-active={utilizationActive || undefined}
         href={UTILIZATION_URL}

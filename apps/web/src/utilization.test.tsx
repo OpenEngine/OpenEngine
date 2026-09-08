@@ -157,6 +157,32 @@ describe("UtilizationPage", () => {
     ).toHaveLength(1);
   });
 
+  /** The stale-figures path is the one this line exists for: a runner that
+   *  could not be read keeps last week's meters, and a bare clock time would
+   *  make them look like this minute's. */
+  it("dates a reading that was not taken today", async () => {
+    const now = Date.now() / 1000;
+    const days = 3 * 24 * 60 * 60;
+    server({
+      refresh: async () =>
+        json({
+          runners: [
+            { ...cached, runner: "claude", readAt: now },
+            { ...codex, readAt: now - days, error: "could not reach the provider" },
+          ],
+        }),
+    });
+
+    render(<UtilizationPage />);
+
+    const fresh = await screen.findByLabelText("claude utilization");
+    const stale = screen.getByLabelText("codex utilization");
+    const month = new Date((now - days) * 1000).toLocaleString(undefined, { month: "short" });
+
+    expect(within(stale).getByText(/^Read at /)).toHaveTextContent(month);
+    expect(within(fresh).getByText(/^Read at /)).not.toHaveTextContent(month);
+  });
+
   it("says so when the scrape itself could not be made", async () => {
     server({ refresh: async () => json({ error: "store unavailable" }, 500) });
 

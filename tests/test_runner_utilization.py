@@ -8,10 +8,13 @@ reached.
 
 import asyncio
 import json
+import os
+import subprocess
 
 import httpx
 import pytest
 
+from engine.apps.web import utilization as utilization_module
 from engine.apps.web.utilization import (
     CLAUDE_USAGE_URL,
     CODEX_USAGE_URL,
@@ -19,6 +22,7 @@ from engine.apps.web.utilization import (
     UtilizationError,
     UtilizationService,
     UtilizationWindow,
+    claude_access_token,
     codex_credentials,
     read_claude_utilization,
     read_codex_utilization,
@@ -131,6 +135,75 @@ def test_codex_credentials_are_a_pair_or_nothing(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("CODEX_HOME", str(home))
 
     assert codex_credentials() == ("token", "")
+
+
+def test_a_keychain_prompt_nobody_answers_is_given_up_on(monkeypatch, tmp_path) -> None:
+    """The one call here that can stop and wait on a person, bounded.
+
+    Reading an entry this process is not yet trusted with puts a dialog in front
+    of whoever is at the machine, and on a server nobody is. Unbounded, that
+    would hold the refresh open for as long as the dialog stood, and the thread
+    it was dispatched to with it.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(utilization_module.sys, "platform", "darwin")
+    waited: list[object] = []
+
+    def never_answers(argv, **options):
+        waited.append(options.get("timeout"))
+        raise subprocess.TimeoutExpired(argv, options.get("timeout") or 0)
+
+    monkeypatch.setattr(utilization_module.subprocess, "run", never_answers)
+
+    # No file to read either, so the keychain is the only place left to look.
+    assert claude_access_token(home=tmp_path) == ""
+    assert len(waited) == 1
+    assert isinstance(waited[0], (int, float)) and waited[0] > 0
+
+
+def test_two_refreshes_at_once_leave_a_whole_cache(monkeypatch, tmp_path) -> None:
+    """Two open tabs are two refreshes, and both of them write.
+
+    A scratch file they shared would let one rename the file the other was
+    still filling, leaving whichever lost as the cache -- half written, or
+    empty. Each writes its own and renames only that.
+    """
+    path = tmp_path / "utilization.json"
+    renamed: list[str] = []
+    replace_file = os.replace
+
+    def record(source, destination):
+        renamed.append(str(source))
+        replace_file(source, destination)
+
+    monkeypatch.setattr(utilization_module.os, "replace", record)
+
+    async def reader(name: str) -> RunnerUtilization:
+        # Yield, so the two refreshes are genuinely interleaved rather than run
+        # one after the other by an event loop with nothing else to do.
+        await asyncio.sleep(0)
+        return RunnerUtilization(runner=name, windows=(UtilizationWindow(name, "Weekly", 3.0),))
+
+    service = UtilizationService(
+        cache_path=path,
+        readers={
+            "claude": lambda _client: reader("claude"),
+            "codex": lambda _client: reader("codex"),
+        },
+    )
+
+    async def both():
+        return await asyncio.gather(service.refresh(("claude",)), service.refresh(("codex",)))
+
+    asyncio.run(both())
+
+    assert len(renamed) == 2
+    assert len(set(renamed)) == 2, "both refreshes wrote through the same scratch file"
+    # Whichever finished last is the cache, and it is a whole one.
+    stored = service.cached()
+    assert len(stored) == 1
+    assert stored[0].windows[0].used_percent == 3.0
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["utilization.json"]
 
 
 def test_a_runner_nobody_has_signed_in_says_so(monkeypatch, tmp_path) -> None:

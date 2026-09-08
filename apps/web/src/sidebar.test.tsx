@@ -590,7 +590,7 @@ describe("Sidebar", () => {
   it("offers the utilization page from the rail foot and marks it when open", () => {
     const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
 
-    const link = screen.getByRole("link", { name: "Open runner utilization" });
+    const link = screen.getByRole("link", { name: "Open utilization" });
     expect(link).toHaveAttribute("href", "/utilization");
     expect(link).not.toHaveAttribute("aria-current");
 
@@ -598,7 +598,7 @@ describe("Sidebar", () => {
       <Sidebar runs={[run]} initialSection="workflows" activeView="utilization" />,
     );
 
-    expect(screen.getByRole("link", { name: "Open runner utilization" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open utilization" })).toHaveAttribute(
       "aria-current",
       "page",
     );

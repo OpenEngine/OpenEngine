@@ -33,6 +33,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 from platformdirs import user_cache_path
@@ -56,6 +57,11 @@ CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 WEEK_SECONDS = 7 * 24 * 60 * 60
 
 _HTTP_TIMEOUT_SECONDS = 20.0
+
+#: How long to wait on the keychain before giving up on it. Short: reading an
+#: entry this process is already trusted with returns at once, and the only way
+#: to spend longer is a dialog waiting on somebody.
+_KEYCHAIN_TIMEOUT_SECONDS = 5.0
 
 #: Who is asking. Not decoration: the edge in front of one of these endpoints
 #: refuses a request whose agent names a generic HTTP client, so a client that
@@ -128,6 +134,12 @@ def _keychain_token() -> str:
     entry belongs to Claude Code, and the CLI is what the OS grants access to.
     Anywhere else this is simply empty, which the caller reports as "not signed
     in" -- the honest answer when nothing readable holds a token.
+
+    Bounded because this is the one call here that can stop and wait on a
+    person: an entry this process is not yet trusted with puts a modal in front
+    of whoever is at the machine, and nobody is, on a server. Waiting forever
+    would hold the refresh open and the thread it runs on with it, so a prompt
+    nobody answers reads the same as no keychain at all.
     """
     if sys.platform != "darwin":
         return ""
@@ -136,8 +148,9 @@ def _keychain_token() -> str:
             ["security", "find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"],
             capture_output=True,
             check=False,
+            timeout=_KEYCHAIN_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return ""
     if found.returncode:
         return ""
@@ -360,13 +373,25 @@ class UtilizationService:
         return replace(reading, runner=runner, read_at=time.time())
 
     def _write(self, readings: Sequence[RunnerUtilization]) -> None:
+        """Replace the cache atomically, from a scratch file nothing shares.
+
+        Two open tabs are two refreshes, and a scratch name they both hold would
+        let one rename the file the other is still filling -- leaving whichever
+        lost as the cache, half written or empty. A name per write means each
+        renames only its own, and the last one to finish wins whole.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps({"runners": [_reading_json(reading) for reading in readings]}) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, self._path)
+        temporary = self._path.with_name(f"{self._path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps({"runners": [_reading_json(reading) for reading in readings]}) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, self._path)
+        finally:
+            # Only reached when the rename did not happen; a scratch file left
+            # behind would never be read and never be cleaned up.
+            temporary.unlink(missing_ok=True)
 
 
 def _merge(

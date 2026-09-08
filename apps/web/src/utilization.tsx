@@ -44,9 +44,20 @@ function resetLabel(resetsAt: string): string {
   });
 }
 
+/** When the reading was taken, dated unless it was taken today.
+ *
+ *  This is the only thing on the page that says how old the figures under it
+ *  are, and the figures are routinely not from this minute: the cache is drawn
+ *  before any provider answers, and a runner that could not be read keeps the
+ *  ones it was last read with. A bare clock time makes last Tuesday's reading
+ *  look like this one, which is the reading the date matters most for. */
 function readLabel(readAt: number): string {
   if (!readAt) return "";
-  return new Date(readAt * 1000).toLocaleTimeString(undefined, {
+  const at = new Date(readAt * 1000);
+  if (Number.isNaN(at.getTime())) return "";
+  const today = at.toDateString() === new Date().toDateString();
+  return at.toLocaleString(undefined, {
+    ...(today ? {} : { month: "short", day: "numeric" }),
     hour: "numeric",
     minute: "2-digit",
   });
