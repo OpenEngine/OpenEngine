@@ -59,7 +59,11 @@ from engine.runtime.step_results import (
     awaits_human_answer,
     requests_clarification_or_escalation,
 )
-from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
+from engine.runtime.terminal_mcp import (
+    READ_ONLY_REPOSITORY_TOOLS,
+    TerminalMcpBroker,
+    TerminalResultRegistry,
+)
 from engine.runtime.workflows import WorkflowCatalog
 
 
@@ -445,30 +449,58 @@ class WorkflowExecutor:
         prompt: str,
         runner_name: str,
     ) -> AgentTurn:
-        """Name a run, with the repository tools its naming profile is granted.
+        """Name a run, with the read-only repository tools its profile holds.
 
         Naming happens once the workspace exists, so a granted profile can read
         what the request points at rather than paraphrase the request: "Resolve
         issue 270" is worth a name only after somebody has read issue 270.
 
-        The server bound here serves those tools and nothing else -- this turn
-        is not a step, so there is no step for `complete_step` to complete. A
-        profile that is granted nothing servable runs as it always has, with no
-        server at all.
+        Read-only by construction rather than by convention: what a profile is
+        granted is intersected with `READ_ONLY_REPOSITORY_TOOLS`, so a naming
+        profile that also asks for `add_comment` or `open_pull_request` is
+        served neither. Nobody is watching this turn, and a tool it cannot be
+        served is worth more than a rule about which tools to grant it. The
+        server serves nothing else either -- this turn is not a step, so there
+        is no step for `complete_step` to complete -- and a profile left with
+        nothing servable runs as it always has, with no server at all.
 
         An interactive runner is driven interactively even though nobody is
-        watching, because some providers make calling an attached MCP tool an
-        approval in its own right and refuse it outright when the turn has no
-        way to answer one. There is no conversation to raise that in, so
-        `_naming_approvals` answers it: yes to this broker's own tools, no to
-        anything else.
+        watching, because that is what carries an approval policy that permits
+        an attached MCP tool at all: Codex's non-interactive transport pins its
+        policy to `never` and refuses every tool call the naming turn makes,
+        whoever would have answered. `_naming_approvals` is then what answers a
+        provider that does raise one, since there is no conversation to raise
+        it in. If the interactive attempt cannot run -- a transport the rest of
+        the run never exercises may be missing or misconfigured -- the plain
+        one still names the run, tools or no tools.
+
+        That fallback is deliberately quiet at the run level and loud in the
+        log, and the trade is worth stating: what it falls back to for Codex is
+        `codex exec`, the transport whose `never` policy is the whole reason
+        this turn moved. A deployment that fails here every time goes on
+        producing names, just worse ones, so the warning it logs is the only
+        thing that says so.
+
+        It catches broadly because nothing narrower is available to catch: an
+        adapter's unavailability error means the binary is not on PATH, which
+        is true of both transports and would make falling back pointless, and
+        an app-server that is missing or that fails its handshake surfaces as
+        the same execution error a model failure does. Distinguishing them
+        needs a port-level error the adapters raise for "this transport could
+        not start", which is a change to the port and both adapters rather than
+        to this call. The cost of the width is a wasted turn before the first
+        step when the failure was transient.
         """
 
         runner = self._runners[runner_name]
         agent_run_id = AgentRunId(f"{state.run_id}:name:run")
         messages = (Message.user(state.prompt), Message.user(prompt))
         served = (
-            self._dispatcher.repository_tools(profile)
+            tuple(
+                name
+                for name in self._dispatcher.repository_tools(profile)
+                if name in READ_ONLY_REPOSITORY_TOOLS
+            )
             if isinstance(runner, McpAgentRunner)
             else ()
         )
@@ -489,14 +521,40 @@ class WorkflowExecutor:
             )
             granted = with_granted_tools(profile, served)
             if isinstance(runner, InteractiveMcpAgentRunner):
-                return await runner.run_turn_with_mcp_interactive(
-                    agent_run_id,
-                    granted,
-                    messages,
-                    broker.config,
-                    _naming_approvals(broker.config.name, served),
-                    workspace_id=state.workspace_id,
-                )
+                try:
+                    return await runner.run_turn_with_mcp_interactive(
+                        agent_run_id,
+                        granted,
+                        messages,
+                        broker.config,
+                        _naming_approvals(broker.config.name, served),
+                        workspace_id=state.workspace_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Named without its tools beats unnamed: this is the only
+                    # turn in the run driven over this transport, so it is the
+                    # only one a deployment can be wrong about, and the caller
+                    # would otherwise drop the run's name over a transport
+                    # every step went on working without.
+                    #
+                    # Warning rather than exception, and one fixed phrase, so
+                    # that the thing worth alerting on is greppable as a
+                    # condition: what falling back costs is the tools, which
+                    # for Codex is exactly the transport that could not call
+                    # them in the first place. A deployment stuck here goes on
+                    # naming runs off the bare prompt and looks healthy, so
+                    # this line is the only place it says so. The stack is
+                    # still attached for whoever goes looking.
+                    logger.warning(
+                        "naming fell back to the non-interactive transport "
+                        "for run %s on runner %r; its names will be made "
+                        "without the repository tools",
+                        state.run_id,
+                        runner_name,
+                        exc_info=True,
+                    )
             return await runner.run_turn_with_mcp(
                 agent_run_id,
                 granted,
@@ -739,13 +797,22 @@ def _naming_approvals(server_name: str, served: Sequence[str]) -> ApprovalHandle
     nor a conversation, so a request raised here has no screen to appear on and
     waiting on one would hang the run before its first step. Bounded because of
     what it says yes to -- a call to one of the tools this turn just bound and
-    was told it holds. Everything a person would actually want to see, a
-    command or an edit escaping the sandbox, is refused rather than granted
-    unattended: naming a run is not licence to do the work.
+    was told it holds, every one of them read-only by the time it gets here.
+    Everything a person would actually want to see, a command or an edit
+    escaping the sandbox, is refused rather than granted unattended: naming a
+    run is not licence to do the work.
 
-    Both spellings of the tool are accepted because providers differ on which
-    one they report: one names the server it is asking about, another the
-    prefixed tool within it.
+    Which providers reach this at all differs. Claude raises a tool call as a
+    permission request and is answered here. Codex normalises only command and
+    file-change requests, so its MCP calls arrive already permitted by the
+    interactive transport's policy and never reach this handler -- but if a
+    later Codex does raise one, the adapter has to name it in
+    `APP_SERVER_APPROVAL_METHODS` for this to see it, and until then would
+    refuse it as an unsupported method.
+
+    Every spelling of the tool is accepted because providers differ on which
+    one they report: the server being asked about, the tool within it, or the
+    prefixed name the transcript records.
     """
 
     names = frozenset(
