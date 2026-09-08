@@ -50,6 +50,7 @@ from typing import Any
 from uuid import uuid4
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
+from engine.ports import SourceControl
 from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
@@ -128,6 +129,7 @@ class LangGraphRuntime:
         self,
         *graphs: LangGraphDefinition,
         store: GraphRuntimeStore | None = None,
+        source_control: SourceControl | None = None,
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
         self._store: GraphRuntimeStore = store or InMemoryGraphRuntimeStore()
@@ -135,8 +137,14 @@ class LangGraphRuntime:
         self._registry = ExecutionRegistry()
         self._live: dict[RunId, _Live] = {}
         self._entries: dict[NodeId, int] = {}
+        self._source_control = source_control
 
     # --- the contract ------------------------------------------------------
+
+    @property
+    def source_control(self) -> SourceControl | None:
+        """Repository operations available to invocation-bound graph tools."""
+        return self._source_control
 
     def observe(self, observer: EventObserver) -> None:
         self._observer = observer

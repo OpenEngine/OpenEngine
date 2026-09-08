@@ -26,6 +26,7 @@ was delivered once, and that the continuation prompt is not it.
 
 import json
 import os
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -126,6 +127,85 @@ def narrate_a_tool_call(session_id: str) -> None:
     )
 
 
+def exercise_mcp(session_id: str) -> None:
+    """Launch the supplied stdio server and cross its broker boundary."""
+    session = load(session_id)
+    servers = session.get("mcp_servers") or []
+    if not servers:
+        raise RuntimeError("the ACP session received no MCP server")
+    server = servers[0]
+    process = subprocess.Popen(
+        [server["command"], *server.get("args", [])],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+
+    def call(message: dict[str, Any]) -> dict[str, Any]:
+        process.stdin.write(json.dumps(message) + "\n")
+        process.stdin.flush()
+        line = process.stdout.readline()
+        if not line:
+            assert process.stderr is not None
+            raise RuntimeError(process.stderr.read() or "MCP server exited")
+        return json.loads(line)
+
+    listed = call({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
+    called = call(
+        {
+            "jsonrpc": "2.0",
+            "id": "clarify",
+            "method": "tools/call",
+            "params": {"name": "clarify", "arguments": {}},
+        }
+    )
+    if not session.get("mcp_tools"):
+        review = call(
+            {
+                "jsonrpc": "2.0",
+                "id": "review",
+                "method": "tools/call",
+                "params": {
+                    "name": "open_pull_request",
+                    "arguments": {
+                        "branch": "agent/graph-tools",
+                        "title": "feat: add graph tools",
+                        "body": "Test body.",
+                    },
+                },
+            }
+        )
+        session["mcp_review"] = review
+    session.setdefault("mcp_tools", []).append(
+        [tool["name"] for tool in listed["result"]["tools"]]
+    )
+    args = server.get("args", [])
+    session.setdefault("mcp_ports", []).append(args[args.index("--port") + 1])
+    session.setdefault("mcp_clarified", []).append(called)
+    save(session_id, session)
+    if os.environ.get("STUB_ACP_MCP_GIT"):
+        session["mcp_git"] = call(
+            {
+                "jsonrpc": "2.0",
+                "id": "git",
+                "method": "tools/call",
+                "params": {
+                    "name": "git_subcommand",
+                    "arguments": {"arguments": ["status", "--short"]},
+                },
+            }
+        )
+        save(session_id, session)
+    process.stdin.close()
+    return_code = process.wait(timeout=5)
+    if return_code:
+        assert process.stderr is not None
+        raise RuntimeError(process.stderr.read() or f"MCP exited {return_code}")
+
+
 def receive() -> dict[str, Any] | None:
     """The next message, recorded on the way past. `None` at end of input."""
     while True:
@@ -187,6 +267,10 @@ def ask_permission(session_id: str) -> dict[str, Any] | None:
 def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
     session = load(session_id)
     session["turns"].append(prompt_text)
+    save(session_id, session)
+    if os.environ.get("STUB_ACP_USE_MCP"):
+        exercise_mcp(session_id)
+        session = load(session_id)
     if os.environ.get("STUB_ACP_WAIT_FOR_CANCEL") and not session.get("cancelled"):
         save(session_id, session)
         while message := receive():
@@ -261,12 +345,20 @@ def main() -> int:
             respond(message_id, capabilities())
         elif method == "session/new":
             session_id = f"sess_{uuid.uuid4().hex[:8]}"
-            save(session_id, {"turns": [], "awaiting_permission": False})
+            save(
+                session_id,
+                {
+                    "turns": [],
+                    "awaiting_permission": False,
+                    "mcp_servers": params.get("mcpServers", []),
+                },
+            )
             respond(message_id, {"sessionId": session_id})
         elif method == "session/load":
             session_id = str(params.get("sessionId"))
             session = load(session_id)
             session["loads"] = session.get("loads", 0) + 1
+            session["mcp_servers"] = params.get("mcpServers", [])
             save(session_id, session)
             say(session_id, "Restored the conversation.")
             respond(message_id, None)

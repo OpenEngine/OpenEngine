@@ -56,7 +56,7 @@ from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
 )
-from engine.ports import AgentRunner, Communications
+from engine.ports import AgentRunner, Communications, SourceControl
 from engine.runtime import (
     PLANNING_TOOL_NAMES,
     AgentSession,
@@ -248,7 +248,9 @@ def build_communications(
 
 
 def build_graph_runtime(
-    settings: Settings, graphs: Sequence[GraphWorkflow]
+    settings: Settings,
+    graphs: Sequence[GraphWorkflow],
+    source_control: SourceControl | None = None,
 ) -> AbstractAsyncContextManager[GraphRuntime] | None:
     """The engine that runs graph workflows, or nothing when there are none.
 
@@ -269,7 +271,11 @@ def build_graph_runtime(
     """
     if not graphs:
         return None
-    return sqlite_runtime(tuple(graphs), settings.graph_state_directory)
+    return sqlite_runtime(
+        tuple(graphs),
+        settings.graph_state_directory,
+        source_control=source_control,
+    )
 
 
 def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
