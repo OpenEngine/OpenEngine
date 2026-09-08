@@ -138,9 +138,12 @@ returned or stored in the server's repository credential store. This follows
 
 This is the identity-verification portion of SSO (#300). Session issuance and
 route protection (#301), and repository permission checks (#302), are separate
-work; this feature alone does not protect app access. Pending logins expire
-after ten minutes and live in one server process, so a restart requires a new
-login and multiple workers would require shared state or sticky routing.
+work; this feature alone does not protect app access. Login state and the PKCE verifier
+live in a signed, HttpOnly browser cookie that expires after ten minutes;
+abandoned logins reserve no server slots. Replay protection relies on GitHub
+consuming authorization codes once and binding them to the PKCE verifier.
+The cookie signing key lives in one process, so a restart requires a new
+login and multiple workers require sticky routing or a shared signing key.
 Without login configuration the login endpoints return 503.
 
 To diagnose interactive runner protocol incompatibilities, set

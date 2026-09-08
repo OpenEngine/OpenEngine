@@ -71,7 +71,7 @@ def test_success_and_replay(flow):
 
 
 @pytest.mark.parametrize("failure", ["missing", "wrong", "other-browser", "expired", "denied", "no-code"])
-def test_rejects_invalid_callbacks_before_exchange(flow, failure):
+def test_rejects_invalid_callbacks_before_exchange(flow, failure, monkeypatch):
     client = browser(flow)
     state = start(client)["state"][0]
     params = {"code": "code"}
@@ -82,8 +82,7 @@ def test_rejects_invalid_callbacks_before_exchange(flow, failure):
     elif failure == "other-browser":
         client = browser(flow)
     elif failure == "expired":
-        nonce, verifier, _ = flow._pending[state]
-        flow._pending[state] = (nonce, verifier, 0)
+        monkeypatch.setattr("engine.apps.web.github_login.time.time", lambda: 10**12)
     elif failure == "denied":
         params = {"error": "access_denied"}
     elif failure == "no-code":
@@ -120,7 +119,7 @@ def test_provider_failures_are_sanitized(flow, failure):
         response = callback(client, state, code="code")
     assert response.status_code == 502
     assert response.json() == {"error": "Could not verify GitHub identity"}
-    assert state not in flow._pending
+    assert callback(client, state, code="code").status_code == 400
 
 
 def test_disabled():
@@ -140,14 +139,50 @@ def test_loopback_and_secret_repr():
     assert "private-secret" not in repr(config)
 
 
-def test_pending_logins_bounded_and_expired_entries_pruned(flow):
+def test_flood_does_not_block_independent_browser(flow):
     client = browser(flow)
-    for _ in range(1024):
+    independent = browser(flow)
+    state = start(independent)["state"][0]
+    for _ in range(1100):
+        # An attacker can discard cookies; no pending capacity is reserved.
+        client.cookies.clear()
         assert client.get("/api/auth/github/login", follow_redirects=False).status_code == 302
-    assert client.get("/api/auth/github/login").status_code == 503
-    flow._pending = {k: (v[0], v[1], 0) for k, v in flow._pending.items()}
-    assert client.get("/api/auth/github/login", follow_redirects=False).status_code == 302
-    assert len(flow._pending) == 1
+    assert browser(flow).get("/api/auth/github/login", follow_redirects=False).status_code == 302
+
+    def provider(request):
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "alice"})
+        return httpx.Response(200, json={"access_token": "token"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        assert callback(independent, state, code="code").status_code == 200
+
+
+@pytest.mark.parametrize("cookie", ["garbage", "a.b.c.d", "x" * 257])
+def test_invalid_cookie_rejected(flow, cookie):
+    client = browser(flow)
+    state = start(client)["state"][0]
+    client.cookies.clear()
+    with patch("engine.apps.web.github_login.httpx.AsyncClient") as outbound:
+        response = client.get("/api/auth/github/callback", params={"state": state, "code": "code"},
+                              headers={"cookie": f"engine_github_login={cookie}"})
+        assert response.status_code == 400
+        outbound.assert_not_called()
+
+
+def test_signed_cookie_tampering_rejected(flow):
+    client = browser(flow)
+    state = start(client)["state"][0]
+    cookie = client.cookies.get("engine_github_login")
+    parts = cookie.split(".")
+    parts[2] = str(10**12)
+    client.cookies.clear()
+    with patch("engine.apps.web.github_login.httpx.AsyncClient") as outbound:
+        response = client.get("/api/auth/github/callback", params={"state": state, "code": "code"},
+                              headers={"cookie": "engine_github_login=" + ".".join(parts)})
+        assert response.status_code == 400
+        outbound.assert_not_called()
 
 
 def test_stale_callback_preserves_newer_login(flow):
@@ -192,3 +227,33 @@ def test_token_exchange_uses_rotated_file_secret(tmp_path, monkeypatch):
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
     with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
         assert callback(client, state, code="code").status_code == 200
+
+
+def test_captured_callback_replay_cannot_verify_identity_twice(flow):
+    client = browser(flow)
+    state = start(client)["state"][0]
+    cookie = client.cookies.get("engine_github_login")
+    exchanges = 0
+    identities = 0
+
+    def provider(request):
+        nonlocal exchanges, identities
+        if request.url.path == "/login/oauth/access_token":
+            exchanges += 1
+            if exchanges > 1:
+                # GitHub consumes authorization codes once, even if a caller
+                # restores a captured cookie after the browser deleted it.
+                return httpx.Response(200, json={"error": "bad_verification_code"})
+            return httpx.Response(200, json={"access_token": "token"})
+        identities += 1
+        return httpx.Response(200, json={"id": 42, "login": "alice"})
+
+    for expected in (200, 502):
+        http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+        with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+            response = client.get(
+                "/api/auth/github/callback", params={"state": state, "code": "same-code"},
+                headers={"cookie": f"engine_github_login={cookie}"},
+            )
+        assert response.status_code == expected
+    assert identities == 1

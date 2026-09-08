@@ -1,11 +1,12 @@
 """Per-browser GitHub identity verification, separate from repo credentials.
 
 Session issuance and application access control are follow-up work (#301).
-Pending logins are process-local: a restart requires starting login again.
+Login cookies use a process-local signing key: a restart requires login again.
 """
 
 import base64
 import hashlib
+import hmac
 import os
 import secrets
 import time
@@ -59,7 +60,7 @@ class GitHubLoginConfig:
 class GitHubLogin:
     def __init__(self, config: GitHubLoginConfig | None) -> None:
         self.config = config
-        self._pending: dict[str, tuple[str, str, float]] = {}
+        self._signing_key = secrets.token_bytes(32)
 
     def routes(self) -> list[Route]:
         return [
@@ -70,12 +71,10 @@ class GitHubLogin:
     async def login(self, request: Request) -> Response:
         if self.config is None:
             return JSONResponse({"error": "GitHub login is not configured"}, 503, headers=_HEADERS)
-        now = time.monotonic()
-        self._pending = {k: v for k, v in self._pending.items() if v[2] > now}
-        if len(self._pending) >= 1024:
-            return JSONResponse({"error": "Too many pending logins"}, 503, headers=_HEADERS)
-        state, browser, verifier = (secrets.token_urlsafe(32) for _ in range(3))
-        self._pending[state] = (browser, verifier, now + _TTL)
+        state, verifier = (secrets.token_urlsafe(32) for _ in range(2))
+        payload = f"{state}.{verifier}.{int(time.time()) + _TTL}"
+        signature = hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
+        browser = f"{payload}.{signature}"
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         response = RedirectResponse("https://github.com/login/oauth/authorize?" + urlencode({
             "client_id": self.config.client_id,
@@ -90,10 +89,27 @@ class GitHubLogin:
                             httponly=True, samesite="lax")
         return response
 
+    def _login_cookie(self, request: Request) -> tuple[str, str, int] | None:
+        cookie = request.cookies.get(_COOKIE, "")
+        if len(cookie) > 256:
+            return None
+        parts = cookie.split(".")
+        if len(parts) != 4:
+            return None
+        state, verifier, expires, signature = parts
+        payload = ".".join(parts[:3])
+        expected = hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
+        if not secrets.compare_digest(signature.encode(), expected.encode()):
+            return None
+        try:
+            return state, verifier, int(expires)
+        except ValueError:
+            return None
+
     async def callback(self, request: Request) -> Response:
-        pending = self._pending.get(request.query_params.get("state", ""))
+        pending = self._login_cookie(request)
         owns_cookie = pending is not None and secrets.compare_digest(
-            request.cookies.get(_COOKIE, "").encode(), pending[0].encode()
+            request.query_params.get("state", "").encode(), pending[0].encode()
         )
         response = await self._callback(request)
         response.headers.update(_HEADERS)
@@ -105,14 +121,17 @@ class GitHubLogin:
     async def _callback(self, request: Request) -> Response:
         if self.config is None:
             return JSONResponse({"error": "GitHub login is not configured"}, 503)
-        pending = self._pending.pop(request.query_params.get("state", ""), None)
-        browser = request.cookies.get(_COOKIE, "")
-        if (pending is None or pending[2] <= time.monotonic()
-                or not secrets.compare_digest(browser.encode(), pending[0].encode())):
+        pending = self._login_cookie(request)
+        if (pending is None or pending[2] <= time.time()
+                or not secrets.compare_digest(
+                    request.query_params.get("state", "").encode(), pending[0].encode()
+                )):
             return JSONResponse({"error": "Invalid or expired GitHub login state"}, 400)
         code = request.query_params.get("code")
         if request.query_params.get("error") or not code:
             return JSONResponse({"error": "GitHub authorization was not completed"}, 400)
+        # No server-side pending table: abandoned logins cannot reserve capacity.
+        # GitHub consumes codes once and binds them to this cookie's PKCE verifier.
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 token_response = await client.post(
