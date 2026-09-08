@@ -9,6 +9,8 @@ export type Route =
   | { kind: "milestone"; projectId: string; milestoneId: string }
   | { kind: "new-task"; projectId: string; milestoneId: string }
   | { kind: "graph-conversation"; runId: string; nodeId: string }
+  /** What every runner's subscription has been spent on, across providers. */
+  | { kind: "utilization" }
   /** `plan` is the same chat page, opened on the planning agent and always on
    *  a new conversation. */
   | { kind: "chat"; threadId?: string; runId?: string; plan?: boolean };
@@ -18,6 +20,7 @@ export function routeForPath(pathname: string): Route {
   if (path === "/" || path === "/runs") return { kind: "runs" };
   if (path === "/runs/new") return { kind: "new-run" };
   if (path === "/plan") return { kind: "chat", plan: true };
+  if (path === "/utilization") return { kind: "utilization" };
   const projectMilestones = path.match(/^\/projects\/([^/]+)\/milestones$/);
   if (projectMilestones)
     return { kind: "project", projectId: decodeURIComponent(projectMilestones[1]) };

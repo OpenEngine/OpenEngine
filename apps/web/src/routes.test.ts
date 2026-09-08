@@ -31,4 +31,11 @@ describe("routeForPath", () => {
       milestoneId: "milestone-1",
     });
   });
+
+  /** A page of its own rather than a conversation: everything unrecognised
+   *  falls through to chat, so this has to be matched before it. */
+  it("routes the rail's graph icon to the utilization page", () => {
+    expect(routeForPath("/utilization")).toEqual({ kind: "utilization" });
+    expect(routeForPath("/utilization/")).toEqual({ kind: "utilization" });
+  });
 });

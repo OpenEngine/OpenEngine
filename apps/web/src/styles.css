@@ -1125,6 +1125,46 @@ select:disabled { cursor: default; }
 .empty h2 { margin-bottom: 8px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
 .empty p { color: var(--muted); }
 
+/* --- runner utilization -------------------------------------------------- */
+
+.usage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+  padding: 26px var(--gutter) 48px;
+}
+.usage-card {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  padding: 18px 20px 20px;
+  background: var(--fill);
+  border-top: 3px solid var(--amber);
+}
+.usage-card-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.usage-card-head h2 { font-size: 18px; font-weight: 700; letter-spacing: -.015em; }
+
+.usage-window { display: grid; gap: 8px; }
+.usage-window-head { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; }
+.usage-window-label {
+  color: var(--faint);
+  font: 500 10px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.usage-window-value { font: 600 19px/1 var(--mono); letter-spacing: -.02em; }
+.usage-window-reset { color: var(--faint); }
+
+/* A rule that fills rather than a bar that floats: the track is the same
+   hairline every other measure on a page is drawn with. */
+.usage-track { height: 8px; background: var(--rule); }
+.usage-fill { display: block; height: 100%; background: var(--ink); }
+.usage-fill[data-tone="warn"] { background: var(--amber); }
+.usage-fill[data-tone="alert"] { background: var(--flame); }
+
+.usage-error { margin: 0; }
+.usage-read-at { color: var(--faint); }
+
 /* --- run detail ---------------------------------------------------------- */
 
 .detail-head { display: grid; gap: 18px; padding: 26px var(--gutter) 30px; }
@@ -1318,6 +1358,21 @@ select:disabled { cursor: default; }
 }
 .rail-gear:hover { color: var(--night-ink); }
 .rail-gear svg { width: 14px; height: 14px; }
+
+/* The one coloured thing in the rail's foot. Amber rather than flame because
+   what it opens only reads, which is the distinction the two accents draw. */
+.rail-graph {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--amber);
+  opacity: .78;
+}
+.rail-graph:hover, .rail-graph[data-active] { opacity: 1; }
+.rail-graph svg { width: 14px; height: 14px; }
 
 .settings-panel {
   display: flex;

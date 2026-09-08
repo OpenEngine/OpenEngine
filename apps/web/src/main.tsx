@@ -29,6 +29,7 @@ import {
 } from "./runs";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar, type RailSection } from "./sidebar";
+import { UtilizationPage } from "./utilization";
 import "./styles.css";
 
 function ChatPanel({
@@ -415,7 +416,15 @@ function App() {
           : undefined
       }
       activeMilestonesPage={route.kind === "project"}
-      activeView={route.kind === "runs" ? "runs" : route.kind === "new-run" ? "new" : undefined}
+      activeView={
+        route.kind === "runs"
+          ? "runs"
+          : route.kind === "new-run"
+            ? "new"
+            : route.kind === "utilization"
+              ? "utilization"
+              : undefined
+      }
       onArchiveProject={archiveProject}
       onDeleteRun={deleteRun}
     />
@@ -456,6 +465,8 @@ function App() {
           <RunDetailPage runId={route.runId} />
         ) : route.kind === "graph-conversation" ? (
           <GraphConversationPage runId={route.runId} nodeId={route.nodeId} />
+        ) : route.kind === "utilization" ? (
+          <UtilizationPage />
         ) : route.kind === "project" ? (
           <ProjectMilestonesPage projectId={route.projectId} />
         ) : route.kind === "milestone" ? (

@@ -213,7 +213,7 @@ export function Sidebar({
    *  milestone child keeps the project row marked but is not the page named by
    *  its parent link. Defaults true for callers predating child pages. */
   activeMilestonesPage?: boolean;
-  activeView?: "runs" | "new";
+  activeView?: "runs" | "new" | "utilization";
   /** Omitted where nothing owns the projects list, which leaves the rows
    *  readable and drops a button that could not have worked. */
   onArchiveProject?: (project: ApiProject, archived: boolean) => void;
@@ -364,7 +364,10 @@ export function Sidebar({
       {settingsOpen ? (
         <SettingsPanel onClose={() => setSettingsOpen(false)} />
       ) : (
-        <RailFoot onSettings={() => setSettingsOpen(true)} />
+        <RailFoot
+          onSettings={() => setSettingsOpen(true)}
+          utilizationActive={activeView === "utilization"}
+        />
       )}
     </aside>
   );

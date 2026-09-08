@@ -604,6 +604,50 @@ export function disconnectSlack(): Promise<void> {
   return api<void>("/api/slack/disconnect", { method: "POST" });
 }
 
+/** Where the utilization page lives, which the rail's graph icon opens. */
+export const UTILIZATION_URL = "/utilization";
+
+/** One limit a provider meters a subscription against.
+ *
+ *  `usedPercent` is the provider's own figure. `resetsAt` is an instant, or
+ *  empty for a window the provider gave no reset for. */
+export type ApiUtilizationWindow = {
+  windowId: string;
+  label: string;
+  usedPercent: number;
+  resetsAt: string;
+};
+
+/** One runner's reading, taken or attempted.
+ *
+ *  `error` and windows can both be set: a scrape that failed keeps the figures
+ *  the last one found, so the page says what it knows and why it is not newer.
+ *  `readAt` is epoch seconds, and zero for a runner never read. */
+export type ApiRunnerUtilization = {
+  runner: string;
+  plan: string;
+  windows: ApiUtilizationWindow[];
+  error: string;
+  readAt: number;
+};
+
+/** The last reading, answered from the cache without touching a provider. */
+export function getUtilization(
+  signal?: AbortSignal,
+): Promise<{ runners: ApiRunnerUtilization[] }> {
+  return api<{ runners: ApiRunnerUtilization[] }>("/api/utilization", { signal });
+}
+
+/** Ask every runner's provider again, and remember what came back. */
+export function refreshUtilization(
+  signal?: AbortSignal,
+): Promise<{ runners: ApiRunnerUtilization[] }> {
+  return api<{ runners: ApiRunnerUtilization[] }>("/api/utilization/refresh", {
+    method: "POST",
+    signal,
+  });
+}
+
 /** A refusal, carrying the status it was refused with.
  *
  *  The message is what a reader is shown and is unchanged, so nothing that

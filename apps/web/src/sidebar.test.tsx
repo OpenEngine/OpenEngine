@@ -585,4 +585,22 @@ describe("Sidebar", () => {
     expect(entry).toHaveTextContent("Implementation conversation ❔");
   });
 
+  /** The foot's second control, beside the gear rather than inside it: what a
+   *  runner has spent is a page, not a setting. */
+  it("offers the utilization page from the rail foot and marks it when open", () => {
+    const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
+
+    const link = screen.getByRole("link", { name: "Open runner utilization" });
+    expect(link).toHaveAttribute("href", "/utilization");
+    expect(link).not.toHaveAttribute("aria-current");
+
+    rerender(
+      <Sidebar runs={[run]} initialSection="workflows" activeView="utilization" />,
+    );
+
+    expect(screen.getByRole("link", { name: "Open runner utilization" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
 });
