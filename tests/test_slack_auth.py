@@ -188,6 +188,7 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
     slack_store = MagicMock(spec=SlackCredentialStore)
     slack_store.credentials.return_value = SlackCredentials("client", "secret")
     slack_store.token.side_effect = [None, "xoxb-token"]
+    slack_store.signing_secret.return_value = None
     app = create_app(
         session,
         runners,
@@ -207,11 +208,21 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
         callback = client.get("/api/slack/callback?code=code&state=nonce")
         after = client.get("/api/slack/status")
 
-    assert before.json() == {"configured": True, "connected": False, "events": False}
+    assert before.json() == {
+        "configured": True,
+        "connected": False,
+        "events": False,
+        "signingSecret": False,
+    }
     assert "client_id=client" in connect.json()["authorizationUrl"]
     assert callback.status_code == 200
     slack_store.set_token.assert_called_once_with("xoxb-token")
-    assert after.json() == {"configured": True, "connected": True, "events": False}
+    assert after.json() == {
+        "configured": True,
+        "connected": True,
+        "events": False,
+        "signingSecret": False,
+    }
 
 
 def test_slack_callback_rejects_wrong_state(tmp_path) -> None:

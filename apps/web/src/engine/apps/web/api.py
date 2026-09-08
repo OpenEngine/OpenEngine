@@ -2499,14 +2499,17 @@ def create_app(
 
     async def slack_status(_request: Request) -> JSONResponse:
         credentials = _slack_store.credentials()
+        signing_secret = bool(_signing_secret())
         return JSONResponse(
             {
                 "configured": credentials is not None,
                 "connected": bool(_slack_store.token()),
-                # Whether a mention could actually start something: the two
-                # halves are independent, and a deployment that connected but
-                # never saved a signing secret hears nothing.
-                "events": bool(_signing_secret()) and bool(work_orders.repository),
+                # Whether a mention could actually start something, and which
+                # of its two independent halves is missing -- so the settings
+                # panel can offer the one this deployment still needs rather
+                # than a paragraph listing everything it might.
+                "events": signing_secret and bool(work_orders.repository),
+                "signingSecret": signing_secret,
             }
         )
 
@@ -2518,6 +2521,19 @@ def create_app(
         client_id = (body.get("clientId") or "").strip()
         client_secret = (body.get("clientSecret") or "").strip()
         signing_secret = (body.get("signingSecret") or "").strip()
+        if signing_secret and not client_id and not client_secret:
+            # Adding only the signing secret, to a deployment that connected
+            # before it was asked for. It belongs to the app already
+            # configured, so this must not walk the path below: revoking the
+            # token and re-saving the same OAuth pair would cost a working
+            # connection to enable mentions on it.
+            if _slack_store.credentials() is None:
+                return _error("Slack OAuth credentials are not configured", 409)
+            try:
+                _slack_store.set_signing_secret(signing_secret)
+            except SlackAuthError as error:
+                return _error(str(error), 500)
+            return Response(status_code=204)
         if not client_id or not client_secret:
             return _error("clientId and clientSecret are required", 400)
         token = _slack_store.token()

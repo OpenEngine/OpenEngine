@@ -231,9 +231,13 @@ def verify_signature(
         return False
     try:
         age = abs(time.time() - float(timestamp))
-    except ValueError:
+    except (ValueError, OverflowError):
         return False
-    if age > _SIGNATURE_MAX_AGE_SECONDS:
+    # Written as a refused-unless-recent test rather than `age > max`, because
+    # `float("nan")` parses and every comparison against it is False -- so the
+    # other spelling would wave a non-finite timestamp straight past the one
+    # check that exists to catch a replay.
+    if not age <= _SIGNATURE_MAX_AGE_SECONDS:
         return False
     expected = "v0=" + hmac.new(
         signing_secret.encode(),

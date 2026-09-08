@@ -325,7 +325,7 @@ class WorkflowExecutor:
     ) -> None:
         """Notify operators without making Slack availability block a workflow."""
         step = definition.step(command.step_id)
-        if not isinstance(step, HumanReviewStep) or step.notification is None:
+        if not isinstance(step, HumanReviewStep):
             return
         pull_request_url = _pull_request_url(state)
         outcome = state.step_results[-1].outcome if state.step_results else "unknown"
@@ -336,6 +336,12 @@ class WorkflowExecutor:
             # The run was asked for in a conversation, so the person who asked
             # is told there, by name: this is the point the work stops needing
             # an agent and starts needing them.
+            #
+            # Deliberately not gated on `step.notification`, which says whether
+            # to announce in the operators' channel -- a different question with
+            # a different audience. Coupling the two would let a workflow that
+            # omits it leave a thread reporting a review complete and then going
+            # silent forever, with nobody told a decision is waiting on them.
             work_order = self._notifier.work_order_link(state)
             if work_order is not None:
                 links.append(work_order)
@@ -346,6 +352,8 @@ class WorkflowExecutor:
                 links=links,
                 mention=True,
             )
+            return
+        if step.notification is None:
             return
         if not self._communications_channel or not self._public_url:
             return

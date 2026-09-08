@@ -11,7 +11,7 @@ import hashlib
 import hmac
 import json
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -160,6 +160,23 @@ def test_signature_accepts_slack_and_refuses_everything_else() -> None:
     assert not verify_signature(SIGNING_SECRET, stale, replayed, body)
 
 
+@pytest.mark.parametrize("timestamp", ["nan", "inf", "-inf", "not-a-number"])
+def test_a_timestamp_that_is_not_a_time_is_refused(timestamp: str) -> None:
+    """The age check has to reject these, not fall through to the digest.
+
+    `float("nan")` parses, and every comparison against NaN is False -- so an
+    age test written the obvious way round waves it past the only guard there
+    is against a replay.
+    """
+    body = b'{"type":"event_callback"}'
+    signature = "v0=" + hmac.new(
+        SIGNING_SECRET.encode(),
+        b"v0:" + timestamp.encode() + b":" + body,
+        hashlib.sha256,
+    ).hexdigest()
+    assert not verify_signature(SIGNING_SECRET, timestamp, signature, body)
+
+
 # --- the endpoint ------------------------------------------------------------
 
 
@@ -208,7 +225,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None):
         public_url="https://engine.example",
         work_orders=work_orders,
         credential_store=MagicMock(),
-    ), capabilities
+    ), capabilities, slack_store
 
 
 def _workflow_catalog():
@@ -239,7 +256,7 @@ def _workflow_catalog():
 def test_handshake_is_answered_with_the_challenge(tmp_path) -> None:
     from starlette.testclient import TestClient
 
-    app, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
+    app, _capabilities, slack_store = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
     body = json.dumps({"type": "url_verification", "challenge": "abc"}).encode()
     with TestClient(app) as client:
         response = client.post("/api/slack/events", content=body, headers=_signed(body))
@@ -251,7 +268,7 @@ def test_an_unsigned_delivery_starts_nothing(tmp_path) -> None:
     from starlette.testclient import TestClient
 
     communications = RecordingCommunications()
-    app, capabilities = _app(
+    app, capabilities, slack_store = _app(
         tmp_path,
         communications,
         WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1"),
@@ -287,7 +304,7 @@ def test_a_mention_starts_a_work_order_and_replies_in_the_thread(tmp_path) -> No
     from starlette.testclient import TestClient
 
     communications = RecordingCommunications()
-    app, capabilities = _app(
+    app, capabilities, slack_store = _app(
         tmp_path,
         communications,
         WorkOrdersConfig(
@@ -333,7 +350,7 @@ def test_a_redelivery_does_not_start_the_work_order_twice(tmp_path) -> None:
     from starlette.testclient import TestClient
 
     communications = RecordingCommunications()
-    app, capabilities = _app(
+    app, capabilities, slack_store = _app(
         tmp_path,
         communications,
         WorkOrdersConfig(
@@ -371,7 +388,7 @@ def test_a_mention_with_no_repository_configured_says_so(tmp_path) -> None:
     from starlette.testclient import TestClient
 
     communications = RecordingCommunications()
-    app, capabilities = _app(
+    app, capabilities, slack_store = _app(
         tmp_path, communications, WorkOrdersConfig(), _workflow_catalog()
     )
     body = json.dumps(
@@ -581,7 +598,7 @@ class OneWorkspaceProvider:
         )
 
 
-def _reporting_workflow():
+def _reporting_workflow(*, notification: bool = True):
     import openengine as oe
 
     coder = oe.agent(id="coder", instructions="Implement it.")
@@ -617,20 +634,23 @@ def _reporting_workflow():
                 summary=oe.template("done"),
                 approved=oe.succeed(),
                 rejected=oe.fail(),
-                notification=oe.slack_notification(),
+                notification=oe.slack_notification() if notification else None,
             ),
         ],
     )
 
 
-def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
+PULL_REQUEST = "https://example.invalid/pr/9"
+DRIVEN_RUN = RunId("run-1")
+
+
+def _drive_to_human_review(definition) -> RecordingCommunications:
+    """Run a work order with an origin until it parks on a human decision."""
     from engine.runtime import Capabilities, WorkflowCatalog, WorkflowExecutor
 
-    pull_request = "https://example.invalid/pr/9"
     communications = RecordingCommunications()
     store = InMemoryStateStore()
-    definition = _reporting_workflow()
-    runner = CompletingMcpRunner(pull_request)
+    runner = CompletingMcpRunner(PULL_REQUEST)
     capabilities = Capabilities(
         workflow_runtime=object(),
         source_control=object(),
@@ -646,7 +666,7 @@ def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
         catalog=WorkflowCatalog.from_definitions([definition]),
         public_url="https://engine.example",
     )
-    run_id = RunId("run-1")
+    run_id = DRIVEN_RUN
     origin = RunOrigin(channel="C123", thread_id="1700.0001", author="U777")
 
     async def scenario() -> None:
@@ -672,6 +692,12 @@ def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
         )
 
     asyncio.run(scenario())
+    return communications
+
+
+def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
+    pull_request = PULL_REQUEST
+    communications = _drive_to_human_review(_reporting_workflow())
 
     said = [message.text for _channel, message, _thread in communications.posts]
     assert all(thread == "1700.0001" for _c, _m, thread in communications.posts)
@@ -689,7 +715,7 @@ def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
     )
     assert [link.url for link in completion.links] == [
         pull_request,
-        f"https://engine.example/runs/{run_id}",
+        f"https://engine.example/runs/{DRIVEN_RUN}",
     ]
 
     # The last word is addressed to whoever asked, because it is their decision
@@ -698,6 +724,66 @@ def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
     assert ready.mention == "U777"
     assert "ready for your decision" in ready.text.lower()
     assert pull_request in [link.url for link in ready.links]
+
+
+def test_the_author_is_pinged_even_without_an_operator_notification() -> None:
+    """`notification` configures the operators' channel, not this.
+
+    A workflow that omits it must still ping whoever asked, or their thread
+    reports the review complete and then goes silent forever with the run
+    parked on a decision nobody was told about.
+    """
+    communications = _drive_to_human_review(_reporting_workflow(notification=False))
+
+    ready = communications.posts[-1][1]
+    assert ready.mention == "U777"
+    assert "ready for your decision" in ready.text.lower()
+    assert PULL_REQUEST in [link.url for link in ready.links]
+
+
+def test_the_signing_secret_can_be_added_without_reconnecting(tmp_path) -> None:
+    """Enabling mentions must not cost an operator their Slack connection.
+
+    Saving the OAuth pair revokes the token and starts the flow over, which is
+    right when the app changes and wrong as the price of one extra secret.
+    """
+    from starlette.testclient import TestClient
+
+    app, _capabilities, slack_store = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
+    store = slack_store
+    store.signing_secret.return_value = None
+
+    with (
+        patch(
+            "engine.apps.web.api.revoke_slack_token", new=AsyncMock()
+        ) as revoke,
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            "/api/slack/credentials", json={"signingSecret": "shhh"}
+        )
+
+    assert response.status_code == 204
+    store.set_signing_secret.assert_called_once_with("shhh")
+    store.set_credentials.assert_not_called()
+    store.disconnect.assert_not_called()
+    revoke.assert_not_awaited()
+
+
+def test_the_signing_secret_alone_needs_credentials_already_saved(tmp_path) -> None:
+    from starlette.testclient import TestClient
+
+    app, _capabilities, slack_store = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
+    store = slack_store
+    store.credentials.return_value = None
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/slack/credentials", json={"signingSecret": "shhh"}
+        )
+
+    assert response.status_code == 409
+    store.set_signing_secret.assert_not_called()
 
 
 def test_a_provider_that_is_down_does_not_break_the_run() -> None:

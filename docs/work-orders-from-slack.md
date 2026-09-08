@@ -33,6 +33,12 @@ from your app's *Basic Information* page. It is how this server tells a real
 delivery from anyone who found the URL, and an unsigned request is refused.
 Without one saved, `/api/slack/events` answers 503 and nothing starts.
 
+A deployment that connected Slack before this existed adds the secret on its
+own, in the field the panel shows once it sees one is missing. It does not
+re-enter the OAuth pair: saving those revokes the bot token and starts the
+authorization over, which is right when the app changes and not a price for
+turning mentions on.
+
 **3. Slack knows where to deliver.** In your Slack app, under *Event
 Subscriptions*, set the request URL to `<public_url>/api/slack/events` and
 subscribe the bot to `app_mention`. Slack verifies the URL once with a
@@ -71,7 +77,13 @@ Everything else in the thread is the runtime reporting, not the agent:
 | `clarify` | the agent answered a question and changed nothing |
 | Any other pausing tool | `*Implementation* is waiting for an answer.` with what it asked |
 | The run died outside a step | `This work order failed.` with the reason |
-| Reviews finished | the human-review notification, addressed to whoever asked |
+| Reviews finished | the review is complete and waiting on them, addressed by name |
+
+That last one does not depend on the workflow's `notification=`, which says
+whether to *also* announce in the operators' channel — a different message with
+a different audience. A run started from a conversation always gets its ping,
+or the thread would report the review complete and then go quiet with the run
+parked on a decision nobody was told about.
 
 Answering in the thread does **not** continue the run today. The reply is
 where the WorkOrder reports; the WorkOrder page is where it is answered, which
