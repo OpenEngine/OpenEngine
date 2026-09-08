@@ -280,10 +280,15 @@ class TerminalMcpBroker:
                     }
                 try:
                     status = _status_argument(arguments)
+                except ValueError as error:
+                    return {"ok": False, "error": str(error)}
+                try:
                     await self._status_reporter(status)
                 except Exception as error:
-                    # Reporting is not the work. A provider that is down is
-                    # something the step is told about and carries on from.
+                    # Reporting is not the work, so this does not end the step
+                    # -- but the step is told the truth about it. A provider
+                    # that is down and an acknowledgement saying "posted" is
+                    # the one combination an agent cannot act on.
                     return {"ok": False, "error": f"could not post the status: {error}"}
                 return {"ok": True, "acknowledgement": "status posted"}
             if self._step is None:
@@ -302,13 +307,16 @@ class TerminalMcpBroker:
                 # Reported here rather than with the other two terminal tools,
                 # because this one is not terminal: no event leaves the broker
                 # for the executor to announce, so nothing else would see it.
+                #
+                # Swallowed here, unlike `update_status` above: the agent did
+                # not ask for this message, and refusing a valid `clarify`
+                # because a chat provider is down would turn a working answer
+                # into a step with no valid ending.
                 if self._status_reporter is not None:
-                    try:
+                    with suppress(Exception):
                         await self._status_reporter(
                             "answered a question without changing the work order"
                         )
-                    except Exception:
-                        pass
                 return {"ok": True, "acknowledgement": "clarified"}
             if name == "complete_step":
                 if "add_comment" in self._repository_tools and not self._comments_added:

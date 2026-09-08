@@ -501,7 +501,11 @@ class WorkflowExecutor:
         step_name = step.name if step is not None else str(command.step.step_id)
 
         async def report_status(status: str) -> None:
-            await self._notifier.announce(state, f"*{step_name}*: {status}")
+            # `deliver` rather than `announce`: the agent is waiting on the
+            # answer to its own tool call, and is owed a true one. The tool
+            # server turns a failure into an error result, which does not end
+            # the step -- the run carries on either way.
+            await self._notifier.deliver(state, f"*{step_name}*: {status}")
 
         async def fold(event: Event) -> _StepOutcome:
             transition_state = state

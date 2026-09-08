@@ -786,19 +786,71 @@ def test_the_signing_secret_alone_needs_credentials_already_saved(tmp_path) -> N
     store.set_signing_secret.assert_not_called()
 
 
-def test_a_provider_that_is_down_does_not_break_the_run() -> None:
-    class BrokenCommunications:
-        async def post(self, *_args, **_kwargs) -> str:
-            raise RuntimeError("Slack is unavailable")
+class BrokenCommunications:
+    async def post(self, *_args, **_kwargs) -> str:
+        raise RuntimeError("Slack is unavailable")
 
-        async def reply(self, *_args) -> str:  # pragma: no cover
-            raise NotImplementedError
+    async def reply(self, *_args) -> str:  # pragma: no cover
+        raise NotImplementedError
 
-    notifier = RunNotifier(BrokenCommunications(), "https://engine.example")
-    state = RunState(
+
+def _origin_state() -> RunState:
+    return RunState(
         run_id=RunId("run-1"),
         task_id=TaskId("task-1"),
         workflow_id=WorkflowId("implementation-review-v1"),
         origin=RunOrigin(channel="C1", thread_id="1700.0001", author="U1"),
     )
-    asyncio.run(notifier.announce(state, "half way there"))
+
+
+def test_a_provider_that_is_down_does_not_break_the_run() -> None:
+    notifier = RunNotifier(BrokenCommunications(), "https://engine.example")
+    asyncio.run(notifier.announce(_origin_state(), "half way there"))
+
+
+def test_an_agent_is_told_when_its_status_did_not_reach_anyone() -> None:
+    """The acknowledgement has to be true, or it is worse than no answer.
+
+    An agent told "status posted" by a step whose status went nowhere will not
+    mention the gap or say it again, so the one path with somebody waiting on
+    the answer reports the failure instead of swallowing it.
+    """
+
+    async def scenario() -> None:
+        notifier = RunNotifier(BrokenCommunications(), "https://engine.example")
+        state = _origin_state()
+
+        async def report(status: str) -> None:
+            await notifier.deliver(state, f"*Implementation*: {status}")
+
+        broker = TerminalMcpBroker(
+            run_id=state.run_id,
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("implementation"), AgentId("coder")),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_status_updates(report)
+        async with broker:
+            answer = await broker._submit(
+                {
+                    "token": broker._token,
+                    "request_id": 1,
+                    "name": "update_status",
+                    "arguments": {"status": "reading the code"},
+                }
+            )
+            # The step is not ended by it: the run is the thing that matters,
+            # and a `clarify` in the same session still answers normally.
+            clarified = await broker._submit(
+                {
+                    "token": broker._token,
+                    "request_id": 2,
+                    "name": "clarify",
+                    "arguments": {},
+                }
+            )
+        assert answer["ok"] is False
+        assert "Slack is unavailable" in answer["error"]
+        assert clarified == {"ok": True, "acknowledgement": "clarified"}
+
+    asyncio.run(scenario())

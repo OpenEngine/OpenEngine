@@ -98,6 +98,9 @@ is what the link in every message is for.
 - **Slack redeliveries are ignored.** Slack retries anything it did not hear a
   prompt 200 for; acting on a retry would start the same work order twice, so a
   delivery carrying `X-Slack-Retry-Num` is acknowledged and dropped.
-- **Nothing is reported when the provider is down.** Delivery is best effort
-  everywhere: a Slack outage must not fail the work it was reporting on. The
-  run continues and its record on the WorkOrder page is unaffected.
+- **Nothing is reported when the provider is down.** A Slack outage must not
+  fail the work it was reporting on, so the runtime's own messages are best
+  effort: they are logged and dropped, and the run continues with its record on
+  the WorkOrder page unaffected. `update_status` is the exception, because the
+  agent is waiting on the answer to its own tool call — it is told the status
+  did not go out, which does not end the step either.
