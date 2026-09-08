@@ -69,6 +69,23 @@ REPOSITORY_TOOL_METHODS: dict[str, str] = {
 #: The repository tools, in the order a server lists them.
 REPOSITORY_TOOL_NAMES: tuple[str, ...] = tuple(REPOSITORY_TOOL_METHODS)
 
+#: The repository tools that only read. What a turn nobody is watching may be
+#: served, so that "it cannot change anything" is true of the server rather
+#: than of the profile that happens to be pointed at it today: a naming profile
+#: granted `add_comment` would otherwise post one unattended. `git_subcommand`
+#: is not here because a subcommand can push, and the three that write through
+#: the API are not either. Add to this only what a person would not want to be
+#: asked about.
+READ_ONLY_REPOSITORY_TOOLS: frozenset[str] = frozenset(
+    {
+        "view_change_request",
+        "list_work_items",
+        "view_work_item",
+        "list_pipeline_status",
+        "get_job_logs",
+    }
+)
+
 #: What `open_pull_request` proposes against when the agent names no base.
 DEFAULT_BASE_REF = "main"
 
@@ -950,6 +967,7 @@ def main() -> None:
 
 __all__ = [
     "DEFAULT_BASE_REF",
+    "READ_ONLY_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",
     "REPOSITORY_TOOL_NAMES",
     "TerminalEvent",

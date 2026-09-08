@@ -50,6 +50,13 @@ answered with the script's `title`: naming is not what any of these tests are
 about, and spending a scenario on it would make every script carry one. It is
 recognised by what it was served -- the repository tools alone, with none of
 the tools that end a step -- rather than by which transport carried it.
+
+A script that *is* about naming says so with a top-level `naming` list of steps,
+which that turn then runs like any other:
+
+    {"naming": [{"type": "tool", "name": "view_work_item",
+                 "arguments": {"number": 270}},
+                {"type": "say", "text": "#270 Pin the dependencies"}]}
 """
 
 from __future__ import annotations
@@ -289,18 +296,29 @@ def _is_loopback_broker(server: McpServer) -> bool:
 def _turn_steps(
     prompt: str, server: McpServer | None
 ) -> Sequence[Mapping[str, object]]:
-    """This turn's script: the title when it is a naming turn, else a scenario.
+    """This turn's script: the run's `naming` steps when it is a naming turn.
 
-    Read off the server the runtime attached rather than off which transport
-    ran the turn: naming is served the repository tools and nothing else, and
-    says so on the argv it hands over, while a step is served the tools that
-    end one. Which transport carries either is the runtime's business and has
-    changed once already.
+    A naming turn is read off the server the runtime attached rather than off
+    which transport ran the turn: naming is served the repository tools and
+    nothing else, and says so on the argv it hands over, while a step is served
+    the tools that end one. Which transport carries either is the runtime's
+    business and has changed once already.
+
+    Most scripts say nothing about naming and get a turn that answers `title`,
+    because naming is not what they are about. A script that does carry
+    `naming` steps drives that turn like any other -- which is the only way to
+    put a real CLI, calling a real tool over the real bridge, in front of the
+    thing a naming turn is for.
     """
 
-    if server is not None and "--repository-tools-only" in server.args:
+    if server is None or "--repository-tools-only" not in server.args:
+        return _steps(prompt)
+    naming = _script().get("naming")
+    if naming is None:
         return [{"type": "say", "text": _title()}]
-    return _steps(prompt)
+    if not isinstance(naming, list):
+        raise SystemExit("naming must be a JSON array of steps")
+    return naming
 
 
 def _call_tool(

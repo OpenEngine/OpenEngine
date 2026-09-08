@@ -36,8 +36,10 @@ from engine.domain import (
     RunNamed,
     RunPhase,
     RunRequested,
+    RunState,
     StepCompleted,
     StepSpec,
+    TaskId,
     ToolSpec,
     WorkflowId,
     WorkspaceId,
@@ -61,6 +63,7 @@ from engine.runtime.terminal_mcp import (
     TerminalEvent,
     TerminalResultRegistry,
 )
+from engine.runtime.workflow_execution import WorkflowExecutor, _naming_approvals
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 from provider_fakes import (
     SCRIPT_ENVIRONMENT_VARIABLE,
@@ -625,6 +628,233 @@ def test_a_run_is_named_after_the_issue_its_task_points_at(
         ]
 
 
+# --- what a turn nobody is watching may be served, and may be told yes to ----
+
+
+class CommentingSourceControl(WorkItemSourceControl):
+    """A composition that can write, offered to a profile that asks to."""
+
+    async def add_comment(
+        self,
+        pr_url: str,
+        comment: str,
+        file: str | None = None,
+        line: int | None = None,
+    ) -> None:
+        raise AssertionError("a naming turn must not be able to comment")
+
+    async def request_review(
+        self,
+        workspace_id: WorkspaceId,
+        branch: str,
+        title: str,
+        body: str,
+        base_ref: str | None = None,
+    ) -> str:
+        raise AssertionError("a naming turn must not be able to open a pull request")
+
+
+def _served_tools(mcp_server: McpServerConfig) -> tuple[str, ...]:
+    """The repository tools a broker's argv actually offers this turn."""
+    args = list(mcp_server.args)
+    return tuple(
+        args[index + 1]
+        for index, argument in enumerate(args)
+        if argument == "--repository-tool"
+    )
+
+
+class RecordingNamingRunner:
+    """Records which transport named the run, and what it was served on it."""
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+    def __init__(self, interactive_error: Exception | None = None) -> None:
+        self.interactive_error = interactive_error
+        self.served: list[tuple[str, tuple[str, ...]]] = []
+
+    async def run_turn(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        self.served.append(("none", ()))
+        return AgentTurn(Message.assistant("Named with no server"))
+
+    async def run_turn_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        tools: Sequence[ToolSpec] = (),
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        raise AssertionError("a naming turn with no server does not need approvals")
+
+    async def cancel(self, agent_run_id: AgentRunId) -> None:
+        return None
+
+    async def run_turn_with_mcp(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        self.served.append(("plain", _served_tools(mcp_server)))
+        return AgentTurn(Message.assistant("Named plainly"))
+
+    async def run_turn_with_mcp_interactive(
+        self,
+        agent_run_id: AgentRunId,
+        profile: AgentProfile,
+        messages: Sequence[Message],
+        mcp_server: McpServerConfig,
+        on_approval: ApprovalHandler,
+        on_message: object | None = None,
+        workspace_id: WorkspaceId | None = None,
+    ) -> AgentTurn:
+        self.served.append(("interactive", _served_tools(mcp_server)))
+        if self.interactive_error is not None:
+            raise self.interactive_error
+        return AgentTurn(Message.assistant("Named interactively"))
+
+
+def _naming_executor(runner: RecordingNamingRunner) -> WorkflowExecutor:
+    unused = object()
+    return WorkflowExecutor(
+        Capabilities(
+            workflow_runtime=unused,
+            source_control=CommentingSourceControl(),
+            agent_runner=runner,
+            communications=unused,
+            workspace_provider=unused,
+            state_store=unused,
+        ),
+        {"test": runner},
+        review_runners={"test": runner},
+        catalog=CATALOG,
+    )
+
+
+def _naming_state() -> RunState:
+    return RunState(
+        run_id=RunId("run-naming"),
+        task_id=TaskId("task-naming"),
+        workflow_id=WorkflowId("implementation-review-v1"),
+        prompt="Resolve issue 270.",
+        workspace_id=WorkspaceId("ws-naming"),
+    )
+
+
+def _name(runner: RecordingNamingRunner, capabilities: tuple[str, ...]) -> AgentTurn:
+    executor = _naming_executor(runner)
+    profile = AgentProfile(
+        AgentId("namer"), "Name the run.", capabilities=capabilities
+    )
+    return asyncio.run(
+        executor._naming_turn(_naming_state(), profile, "Name this.", "test")
+    )
+
+
+def test_a_naming_turn_is_served_only_the_tools_that_read() -> None:
+    """A grant it should not have been given is one it is not served.
+
+    Nobody is watching this turn, so the guarantee has to hold of the server
+    rather than of whichever profile is pointed at it: granted the tools to
+    comment and to open a pull request, it gets neither.
+    """
+
+    runner = RecordingNamingRunner()
+    turn = _name(runner, ("view_work_item", "add_comment", "open_pull_request"))
+
+    assert runner.served == [("interactive", ("view_work_item",))]
+    assert turn.message.content == "Named interactively"
+
+
+def test_a_naming_profile_granted_only_write_tools_gets_no_server() -> None:
+    runner = RecordingNamingRunner()
+    turn = _name(runner, ("add_comment", "open_pull_request"))
+
+    assert runner.served == [("none", ())]
+    assert turn.message.content == "Named with no server"
+
+
+def test_a_naming_turn_falls_back_when_the_interactive_transport_cannot_run() -> None:
+    """Naming is the only turn on this transport, so it is the only one at risk.
+
+    A deployment whose steps run non-interactively exercises app-server here
+    and nowhere else. If that is missing or misconfigured, the plain transport
+    still names the run rather than the caller dropping the name entirely.
+    """
+
+    runner = RecordingNamingRunner(RuntimeError("app-server is not available"))
+    turn = _name(runner, ("view_work_item",))
+
+    assert [transport for transport, _ in runner.served] == ["interactive", "plain"]
+    assert turn.message.content == "Named plainly"
+
+
+def _approval(**overrides: object) -> ApprovalRequest:
+    return ApprovalRequest(
+        **{
+            "approval_id": "naming",
+            "kind": ApprovalKind.TOOL_USE,
+            "tool_name": "workflow",
+            "allowed_decisions": (ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+            **overrides,
+        }  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_", "expected"),
+    [
+        # The three spellings a provider may report the same call under: the
+        # server being asked about, the tool within it, and the prefixed name
+        # the transcript records.
+        (_approval(), ApprovalDecision.ACCEPT),
+        (_approval(tool_name="view_work_item"), ApprovalDecision.ACCEPT),
+        (
+            _approval(tool_name="mcp__workflow__view_work_item"),
+            ApprovalDecision.ACCEPT,
+        ),
+        (_approval(tool_name="mcp__other__view_work_item"), ApprovalDecision.CANCEL),
+        (_approval(tool_name="add_comment"), ApprovalDecision.CANCEL),
+        (_approval(tool_name=None), ApprovalDecision.CANCEL),
+        (
+            _approval(kind=ApprovalKind.COMMAND_EXECUTION, command="rm -rf ."),
+            ApprovalDecision.CANCEL,
+        ),
+        (_approval(requires_human=True), ApprovalDecision.CANCEL),
+        (
+            _approval(allowed_decisions=(ApprovalDecision.CANCEL,)),
+            ApprovalDecision.CANCEL,
+        ),
+    ],
+)
+def test_the_naming_turn_answers_only_its_own_tools(
+    request_: ApprovalRequest, expected: ApprovalDecision
+) -> None:
+    """The accept branch is one f-string wide, and no provider asserts it.
+
+    A typo in the prefixed spelling, or a provider that starts reporting a
+    different one, puts the naming turn back to naming off the bare prompt --
+    with every other test still green, because they raise the spelling they
+    then assert.
+    """
+
+    approve = _naming_approvals("workflow", ("view_work_item",))
+
+    assert asyncio.run(approve(request_)) is expected
+
+
 # --- the same workflow, driven by scripted CLIs over the real MCP bridge -----
 #
 # Everything above replaces the transport to isolate the reducer. These replace
@@ -849,6 +1079,104 @@ def test_a_scripted_cli_drives_a_run_over_the_real_mcp_bridge(
     inline = next((kw for _, p, kw in post_calls if "/pulls/7/comments" in p), None)
     assert inline is not None
     assert inline.get("json", {}).get("body") == FINDING
+
+
+#: A script that is about naming. `title` is deliberately not the name this run
+#: should end up with: the fake answers it whenever a script says nothing about
+#: naming, so a passing assertion here means the `naming` steps really ran.
+NAMING_RUN = {
+    "title": "Named off the bare request",
+    "naming": [
+        {"type": "tool", "name": "view_work_item", "arguments": {"number": 270}},
+        {"type": "say", "text": ISSUE_NAME},
+    ],
+    "scenarios": [
+        {
+            "steps": [
+                {
+                    "type": "tool",
+                    "name": "complete_step",
+                    "arguments": {
+                        "outcome": "success",
+                        "summary": "Pinned the dependencies.",
+                        "outputs": {"pr_url": PULL_REQUEST},
+                    },
+                }
+            ]
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_scripted_cli_reads_the_issue_while_naming_a_run(
+    provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real CLI, calling a repository tool over the real bridge, while naming.
+
+    The tier the transport mistake belongs in. A fake that raises an approval
+    and asserts the answer defines the semantics it checks, so it cannot notice
+    a provider that stops honouring them; this spawns the CLI the runtime would
+    spawn, over whichever transport the runtime picks, and asks only whether
+    the issue was read.
+    """
+
+    from unittest.mock import patch
+    from engine.adapters.source_control.github import GitHubSourceControl
+
+    repository = _repository(tmp_path)
+    app, capabilities = _compose(tmp_path, repository, monkeypatch, NAMING_RUN)
+
+    read: list[str] = []
+
+    async def fake_api(self, method: str, path: str, **kwargs: object) -> object:
+        read.append(path)
+        if path.endswith("/comments"):
+            return []
+        return {"number": 270, "title": ISSUE_TITLE, "state": "open"}
+
+    # The fixture's `origin` is a local bare clone, which is no `owner/repo`.
+    async def fake_coords(self, root_path: str) -> tuple[str, str]:
+        return ("acme", "api")
+
+    async def scenario() -> str:
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-v1",
+                        "prompt": "Resolve issue 270.",
+                        "repository": str(repository),
+                        "runner": provider,
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                # From the store rather than the API, which shows the prompt
+                # for a run that has no name yet -- and the prompt is what an
+                # unnamed run would be indistinguishable from here. The name
+                # lands before the first step, so the workflow need not run on.
+                for _ in range(6_000):
+                    state = await capabilities.state_store.load(run_id)
+                    if state is not None and state.name:
+                        return state.name
+                    await asyncio.sleep(0.01)
+                raise AssertionError(f"run {run_id} was never named")
+
+    try:
+        with (
+            patch.object(GitHubSourceControl, "_api", fake_api),
+            patch.object(GitHubSourceControl, "_repo_coords", fake_coords),
+        ):
+            name = asyncio.run(scenario())
+    finally:
+        capabilities.state_store.close()
+
+    assert name == ISSUE_NAME
+    assert "/repos/acme/api/issues/270" in read
 
 
 def test_codex_clarification_pauses_the_step_and_reaches_chat(
