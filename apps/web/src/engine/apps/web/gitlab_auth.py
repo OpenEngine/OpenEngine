@@ -8,6 +8,7 @@ issued by one instance must never be sent to another one.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 import time
 from urllib.parse import urlsplit
 
@@ -94,6 +95,13 @@ class GitLabCredentialStore(OAuthCredentialStore):
     def __init__(self, origin: str = "https://gitlab.com") -> None:
         self.origin = normalize_origin(origin)
         super().__init__(_KEYRING_SERVICE, f"{_TOKEN_PREFIX}{self.origin}")
+        self._refresh_lock: asyncio.Lock | None = None
+
+    def refresh_lock(self) -> asyncio.Lock:
+        """Serialize refresh-token rotation for this credential-store instance."""
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
+        return self._refresh_lock
 
     def _check_backend(self) -> None:
         try:

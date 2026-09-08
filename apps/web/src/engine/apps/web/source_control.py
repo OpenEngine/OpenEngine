@@ -22,8 +22,8 @@ from engine.ports.source_control import (
 )
 from platformdirs import user_config_path
 
-SourceControlProvider = Literal["gh-cli", "github-oauth"]
-_PROVIDERS = frozenset({"gh-cli", "github-oauth"})
+SourceControlProvider = Literal["gh-cli", "github-oauth", "gitlab-oauth"]
+_PROVIDERS = frozenset({"gh-cli", "github-oauth", "gitlab-oauth"})
 _Result = TypeVar("_Result")
 
 
@@ -47,15 +47,23 @@ class SourceControlPreferences:
             return None
         return value if value in _PROVIDERS else None
 
-    def set(self, provider: SourceControlProvider) -> None:
+    def set(self, provider: SourceControlProvider, gitlab_origin: str | None = None) -> None:
         if provider not in _PROVIDERS:
             raise ValueError(f"unsupported source-control provider: {provider}")
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps({"sourceControlProvider": provider}) + "\n", encoding="utf-8"
-        )
+        value: dict[str, str] = {"sourceControlProvider": provider}
+        if gitlab_origin:
+            value["gitlabOrigin"] = gitlab_origin
+        temporary.write_text(json.dumps(value) + "\n", encoding="utf-8")
         os.replace(temporary, self._path)
+
+    def gitlab_origin(self) -> str | None:
+        try:
+            value = json.loads(self._path.read_text(encoding="utf-8")).get("gitlabOrigin")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+        return value if isinstance(value, str) and value else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,9 +132,12 @@ class RoutingSourceControl:
         preferences: SourceControlPreferences,
         gh_cli: SourceControl,
         github_oauth: SourceControl,
+        gitlab_oauth: SourceControl | None = None,
     ) -> None:
         self._preferences = preferences
         self._providers = {"gh-cli": gh_cli, "github-oauth": github_oauth}
+        if gitlab_oauth is not None:
+            self._providers["gitlab-oauth"] = gitlab_oauth
 
     def _selected(self) -> tuple[SourceControlProvider, SourceControl]:
         selected = self._preferences.get()
@@ -141,7 +152,7 @@ class RoutingSourceControl:
         try:
             return await operation(source_control)
         except RuntimeError as error:
-            name = "GH CLI" if provider == "gh-cli" else "GitHub OAuth"
+            name = {"gh-cli": "GH CLI", "github-oauth": "GitHub OAuth", "gitlab-oauth": "GitLab OAuth"}[provider]
             raise RuntimeError(f"{name} provider failed: {error}") from error
 
     async def run_git(

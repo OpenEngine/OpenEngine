@@ -502,7 +502,7 @@ export type ApiHistory = {
 export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
 
 export type SourceControlStatus = {
-  provider: "gh-cli" | "github-oauth";
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
   autoSelected: boolean;
   ghCli: {
     installed: boolean;
@@ -513,7 +513,7 @@ export type SourceControlStatus = {
 };
 
 export type SourceControlProviderStatus = {
-  provider: "gh-cli" | "github-oauth";
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
   autoSelected: boolean;
 };
 
@@ -550,11 +550,12 @@ export function getSourceControlProvider(): Promise<SourceControlProviderStatus>
 }
 
 export function setSourceControlProvider(
-  provider: "gh-cli" | "github-oauth" | "gitlab",
+  provider: "gh-cli" | "github-oauth" | "gitlab-oauth",
+  origin?: string,
 ): Promise<void> {
   return api<void>("/api/source-control/provider", {
     method: "POST",
-    body: JSON.stringify({ provider }),
+    body: JSON.stringify({ provider, origin }),
   });
 }
 

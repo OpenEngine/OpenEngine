@@ -2318,12 +2318,17 @@ def create_app(
     async def set_source_control_provider(request: Request) -> Response:
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        provider = (await request.json()).get("provider")
-        if provider == "gitlab":
-            return _error("GitLab is not supported yet", 409)
-        if provider not in {"gh-cli", "github-oauth"}:
-            return _error("provider must be 'gh-cli' or 'github-oauth'", 400)
-        _source_control_preferences.set(provider)
+        body = await request.json()
+        provider = body.get("provider")
+        if provider not in {"gh-cli", "github-oauth", "gitlab-oauth"}:
+            return _error("provider must be 'gh-cli', 'github-oauth', or 'gitlab-oauth'", 400)
+        origin = body.get("origin") if isinstance(body.get("origin"), str) else None
+        if provider == "gitlab-oauth":
+            try:
+                origin = normalize_gitlab_origin(origin or "https://gitlab.com")
+            except ValueError as error:
+                return _error(str(error), 400)
+        _source_control_preferences.set(provider, origin if provider == "gitlab-oauth" else None)
         return Response(status_code=204)
 
     async def github_get_client_id(_request: Request) -> JSONResponse:
