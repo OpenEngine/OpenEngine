@@ -927,3 +927,54 @@ it("displays a saved override when the conversation is reopened", async () => {
   await open([], graphRun({ runnerOverrides: { [NODE]: "claude" } }));
   expect(await screen.findByRole("combobox", { name: "Runner" })).toHaveValue("claude");
 });
+
+it("retries a failed node after saving a runner change and prevents duplicate retries", async () => {
+  const user = userEvent.setup();
+  const events = [event({ type: "run.failed", payload: { error: "You've hit your limit" } })];
+  const run = graphRun({ status: "failed", activeExecutions: [] });
+  const fetch = serve(events, run);
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  const select = await screen.findByRole("combobox", { name: "Runner" });
+  const retry = await screen.findByRole("button", { name: "Retry" });
+
+  let saveRunner!: (response: Response) => void;
+  fetch.mockImplementationOnce(() => new Promise((resolve) => { saveRunner = resolve; }));
+  await user.selectOptions(select, "claude");
+  expect(retry).toBeDisabled();
+  run.runnerOverrides = { [NODE]: "claude" };
+  await act(async () => saveRunner(json(run)));
+  await waitFor(() => expect(retry).toBeEnabled());
+  expect(select).toHaveValue("claude");
+
+  let resume!: (response: Response) => void;
+  fetch.mockImplementationOnce(() => new Promise((resolve) => { resume = resolve; }));
+  await user.click(retry);
+  expect(fetch).toHaveBeenCalledWith(
+    `/graph/api/runs/${runId}/transitions`,
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ node: NODE }) }),
+  );
+  expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+  expect(select).toBeDisabled();
+  run.status = "running";
+  events.push(event({ sequence: 2, type: "run.forked", nodeId: null }));
+  await act(async () => resume(json(run)));
+  await waitFor(() => expect(screen.queryByText("You've hit your limit")).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+});
+
+it("shows a retry failure and lets the operator try again", async () => {
+  const user = userEvent.setup();
+  const fetch = serve(
+    [event({ type: "run.failed", payload: { error: "Agent limit reached" } })],
+    graphRun({ status: "failed", activeExecutions: [] }),
+  );
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  fetch.mockImplementationOnce(async () => json({ error: "Unable to resume" }, { status: 500 }));
+  await user.click(retry);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Unable to resume");
+  expect(screen.getByText("Agent limit reached")).toBeVisible();
+  expect(retry).toBeEnabled();
+  await user.click(retry);
+  await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+});

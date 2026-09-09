@@ -37,6 +37,7 @@ import {
   getGraphRun,
   getGraphTopology,
   messageText,
+  retryGraphNode,
   steerGraphRun,
   setGraphAutoApprove,
   setGraphRunner,
@@ -458,6 +459,10 @@ function GraphDock({
   workspace,
   error,
   failure,
+  retry,
+  retryDisabled,
+  retryBusy,
+  retryError,
   unplaced,
 }: {
   conversationId: string;
@@ -465,6 +470,10 @@ function GraphDock({
   workspace: string;
   error: string;
   failure: string;
+  retry: () => void;
+  retryDisabled: boolean;
+  retryBusy: boolean;
+  retryError: string;
   unplaced: readonly InlineApproval[];
 }) {
   return (
@@ -481,7 +490,15 @@ function GraphDock({
           before the agent said anything, or right after somebody steered it --
           and a failure hung on the last turn is lost in both cases, which are
           the two where a reader most needs to be told. */}
-      {failure && <p className="notice">{failure}</p>}
+      {failure && (
+        <div className="notice">
+          <p>{failure}</p>
+          <button type="button" className="btn" disabled={retryDisabled} onClick={retry}>
+            {retryBusy ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      )}
+      {retryError && <p className="notice" role="alert">{retryError}</p>}
       {canSteer ? <GraphComposer /> : <p className="step-note">{IDLE_NOTE}</p>}
       {error && <p className="notice">{error}</p>}
       {workspace && (
@@ -526,6 +543,21 @@ export function GraphConversationPage({
     .filter((value): value is string => Boolean(value));
   const [runnerBusy, setRunnerBusy] = useState(false);
   const [runnerError, setRunnerError] = useState("");
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryError, setRetryError] = useState("");
+
+  async function retry() {
+    setRetryBusy(true);
+    setRetryError("");
+    try {
+      setRun(await retryGraphNode(runId, nodeId));
+      refresh();
+    } catch (failure) {
+      setRetryError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setRetryBusy(false);
+    }
+  }
 
   async function chooseRunner(next: string) {
     if (next === runner) return;
@@ -680,7 +712,7 @@ export function GraphConversationPage({
                 aria-label="Runner"
                 className="field-box"
                 value={runner}
-                disabled={!run || runnerBusy}
+                disabled={!run || runnerBusy || retryBusy}
                 onChange={(event) => void chooseRunner(event.target.value)}
               >
                 {runners.map((value) => <option key={value} value={value}>{value}</option>)}
@@ -719,6 +751,10 @@ export function GraphConversationPage({
               workspace={workspace}
               error={steerError}
               failure={conversation.failure}
+              retry={() => void retry()}
+              retryDisabled={run?.status !== "failed" || runnerBusy || retryBusy}
+              retryBusy={retryBusy}
+              retryError={retryError}
               unplaced={conversation.unplaced}
             />
           }

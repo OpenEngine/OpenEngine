@@ -355,6 +355,14 @@ export function getGraphRun(
   });
 }
 
+/** Retry a node from the latest checkpoint that was about to run it. */
+export function retryGraphNode(runId: string, nodeId: string): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/transitions`,
+    { method: "POST", body: JSON.stringify({ node: nodeId }) },
+  );
+}
+
 export function setGraphRunner(
   runId: string,
   nodeId: string,
