@@ -1,39 +1,6 @@
 """Implementation and review, run as a graph.
 
-The same implementation and review stages `implementation_review.py` describes,
-with its naming turn made explicit as a LangGraph node:
-
     workspace -> naming -> implementation -> review -> human-review
-
-Both files are workflow definitions this repository owns, and a definition is
-classified by which kind it is rather than by a setting. A deployment that wants
-only one of them ships only one of these files.
-
-**This is offered, and it is new.** The web interface lists it in the WorkOrder
-dropdown behind a `[BETA]` label, and creating a WorkOrder with it starts the
-graph below on the graph engine. Its stages, its agents' conversations and the
-questions it stops on are on the WorkOrder page, drawn from the events the run
-publishes. Beta because those events are held in the server's memory, so a
-restart loses the transcript of what was said before it. See
-`docs/graph-workorders-beta.md`.
-
-Three things the graph runtime can do that the step runtime cannot, which is
-what makes this more than a translation:
-
-* the checkout is a **node**, so provisioning is a position a run stands at --
-  and can be reported as having failed at -- rather than something that happens
-  before the run exists;
-* the human decision is an **approval**, so the node that raised it keeps
-  running while somebody thinks. Accepting releases it; refusing ends the run;
-* an agent that stops to ask permission does so **without ending its turn**, so
-  answering carries on the same conversation instead of starting a new one.
-
-One graph per runner, because a node names the agent it runs. Picking a runner
-means starting `implementation-review-codex` or `implementation-review-claude`,
-rather than filling in a field on one graph.
-
-Where the checkouts go is the deployment's business, so it is not named here --
-`pipeline` takes it. See `pipeline`.
 """
 
 from collections.abc import Mapping
