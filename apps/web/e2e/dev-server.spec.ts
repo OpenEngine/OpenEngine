@@ -39,6 +39,11 @@ const SCRIPT: Script = {
         { type: "say", text: "Read it." },
         {
           type: "tool",
+          name: "add_comment",
+          arguments: { pr_url: "https://github.com/acme/api/pull/7", comment: "No issues found." },
+        },
+        {
+          type: "tool",
           name: "complete_step",
           arguments: {
             outcome: "success",

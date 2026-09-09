@@ -57,6 +57,11 @@ const ASKING_SCRIPT: Script = {
         { type: "say", text: REVIEWED },
         {
           type: "tool",
+          name: "add_comment",
+          arguments: { pr_url: PULL_REQUEST, comment: REVIEWED },
+        },
+        {
+          type: "tool",
           name: "complete_step",
           arguments: {
             outcome: "success",
@@ -103,6 +108,11 @@ const SCRIPT: Script = {
       when: "Review the implementation",
       steps: [
         { type: "say", text: REVIEWED },
+        {
+          type: "tool",
+          name: "add_comment",
+          arguments: { pr_url: PULL_REQUEST, comment: REVIEWED },
+        },
         {
           type: "tool",
           name: "complete_step",
@@ -163,6 +173,11 @@ const STEERING_SCRIPT: Script = {
       when: "Review the implementation",
       steps: [
         { type: "say", text: "The implementation is ready for review." },
+        {
+          type: "tool",
+          name: "add_comment",
+          arguments: { pr_url: PULL_REQUEST, comment: "Ready for review." },
+        },
         {
           type: "tool",
           name: "complete_step",
