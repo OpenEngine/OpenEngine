@@ -2004,3 +2004,72 @@ def test_runner_change_preserves_pending_approval_after_restart(tmp_path: Path) 
             assert len(sent(tmp_path, "session/load")) == 1
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_retry_after_follow_up_failure_preserves_context_on_new_runner(
+    tmp_path: Path, restart: bool,
+) -> None:
+    from dataclasses import replace
+
+    from httpx import ASGITransport, AsyncClient
+    from engine.graph_runtime.api import create_app
+
+    follow_up = "Review the remaining edge cases."
+
+    def build(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
+        builder = StateGraph(State)
+        builder.add_node(str(IMPLEMENTATION), ACPNode(
+            agent=AGENT, prompt=PROMPT, registry=agents, cwd=str(where),
+            graph_node_always_open=True,
+        ))
+        builder.add_edge(START, str(IMPLEMENTATION))
+        builder.add_edge(str(IMPLEMENTATION), END)
+        return LangGraphDefinition(
+            graph_id=GRAPH, name="conversation", graph=builder.compile(checkpointer=saver)
+        )
+
+    async def retry(runtime: LangGraphRuntime, log: EventLog, run_id: RunId) -> None:
+        transport = ASGITransport(app=create_app(runtime, log))
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            changed = await client.patch(
+                f"/api/runs/{run_id}/runner",
+                json={"node": IMPLEMENTATION, "runner": "alternate"},
+            )
+            assert changed.status_code == 200
+            cursor = runtime.store.events_since(run_id)[-1].sequence
+            resumed = await client.post(
+                f"/api/runs/{run_id}/transitions", json={"node": IMPLEMENTATION},
+            )
+            assert resumed.status_code == 200
+            events = await until(log, run_id, "run.finished", cursor=cursor)
+            started = next(e for e in events if e.kind is EventKind.CONVERSATION_STARTED)
+            assert started.payload["agent"] == "alternate"
+            replay = prompts(tmp_path)[-1]
+            for context in (PROMPT, follow_up, DONE, NARRATION, "tool.call:", "tool.result:"):
+                assert context in replay
+            assert replay.startswith("Continue the previous conversation")
+            assert not any(
+                e.kind is EventKind.TRANSCRIPT and e.payload.get("role") == "user"
+                for e in events
+            )
+
+    async def scenario() -> None:
+        provider = registry(tmp_path, narrates=True).resolve(AGENT)
+        agents = ACPAgentRegistry([
+            replace(provider, env={**provider.env, "STUB_ACP_FAIL_PROMPT": follow_up}),
+            replace(provider, name="alternate"),
+        ])
+        async with runtime_over(tmp_path, agents, build=build) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            await until(log, run.run_id, "run.finished")
+            await runtime.steer(run.run_id, follow_up, node_id=IMPLEMENTATION)
+            await until(log, run.run_id, "run.failed")
+            assert "You've hit your limit" in (await runtime.snapshot(run.run_id)).error
+            if not restart:
+                await retry(runtime, log, run.run_id)
+        if restart:
+            async with runtime_over(tmp_path, agents, build=build) as (runtime, log):
+                await retry(runtime, log, run.run_id)
+
+    asyncio.run(scenario())
