@@ -2910,8 +2910,9 @@ def create_app(
         readings = await _utilization.refresh(tuple(runners))
         return JSONResponse(utilization_json(readings))
 
+    github_login = GitHubLogin(github_login_config)
     routes = [
-        *GitHubLogin(github_login_config).routes(),
+        *github_login.routes(),
         Route("/api/config", config),
         Route("/api/github/status", github_status),
         Route("/api/source-control/status", source_control_status),
@@ -3054,6 +3055,8 @@ def create_app(
     app.state.thread_service = service
     app.state.milestone_scoper = milestone_scoper
     app.state.slack_ingress = slack_ingress
+    # Enforce session auth on API routes when GitHub login is configured.
+    app = github_login.middleware(app)
     return app
 
 

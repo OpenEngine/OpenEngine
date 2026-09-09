@@ -547,6 +547,21 @@ function App() {
   );
 }
 
+function UserBadge({ auth }: { auth: AuthStatus }) {
+  if (!auth.loginRequired || !auth.user) return null;
+  return (
+    <div className="user-badge">
+      <span className="user-badge-name">{auth.user.login}</span>
+      <button
+        className="user-badge-logout"
+        onClick={() => void logout().then(() => window.location.replace("/login"))}
+      >
+        Sign out
+      </button>
+    </div>
+  );
+}
+
 function Root() {
   const route = useMemo(currentRoute, []);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -554,16 +569,26 @@ function Root() {
   useEffect(() => {
     getAuthStatus()
       .then(setAuth)
-      .catch(() => setAuth({ authenticated: false, user: null, loginRequired: false }));
+      .catch(() => setAuth({ authenticated: false, user: null, loginRequired: true }));
   }, []);
 
   if (auth === null)
     return <main className="state">Starting openengine…</main>;
 
-  if (route.kind === "login" || (auth.loginRequired && !auth.authenticated))
+  if (auth.loginRequired && !auth.authenticated)
     return <LoginPage />;
 
-  return <App />;
+  if (route.kind === "login") {
+    window.location.replace("/");
+    return <main className="state">Redirecting…</main>;
+  }
+
+  return (
+    <>
+      <UserBadge auth={auth} />
+      <App />
+    </>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(

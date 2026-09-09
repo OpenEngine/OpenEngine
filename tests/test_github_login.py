@@ -8,6 +8,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 from starlette.applications import Starlette
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
@@ -319,3 +320,52 @@ def test_status_not_configured():
     client = browser(flow)
     response = client.get("/api/auth/github/status")
     assert response.json() == {"authenticated": False, "user": None, "loginRequired": False}
+
+
+# --- middleware tests ---------------------------------------------------------
+
+def _app_with_middleware(flow):
+    """Starlette app with a dummy /api/data route, wrapped in the auth middleware."""
+    from starlette.responses import JSONResponse as _J
+    routes = flow.routes() + [Route("/api/data", lambda _r: _J({"ok": True}))]
+    inner = Starlette(routes=routes)
+    app = flow.middleware(inner)
+    return TestClient(app, base_url="https://engine.test")
+
+
+def test_middleware_blocks_unauthenticated_api(flow):
+    client = _app_with_middleware(flow)
+    response = client.get("/api/data")
+    assert response.status_code == 401
+    assert response.json()["error"] == "authentication required"
+
+
+def test_middleware_allows_auth_endpoints(flow):
+    client = _app_with_middleware(flow)
+    # Status is exempt from the middleware.
+    response = client.get("/api/auth/github/status")
+    assert response.status_code == 200
+    assert response.json()["loginRequired"] is True
+
+
+def test_middleware_allows_authenticated_api(flow):
+    client = _app_with_middleware(flow)
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        callback(client, params["state"][0], code="code")
+    response = client.get("/api/data")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_middleware_noop_when_not_configured():
+    flow = GitHubLogin(None)
+    from starlette.responses import JSONResponse as _J
+    routes = flow.routes() + [Route("/api/data", lambda _r: _J({"ok": True}))]
+    inner = Starlette(routes=routes)
+    app = flow.middleware(inner)
+    client = TestClient(app, base_url="https://engine.test")
+    response = client.get("/api/data")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}

@@ -8,7 +8,7 @@ the status endpoint so the frontend can gate access.
 import base64
 import hashlib
 import hmac
-import json
+
 import os
 import secrets
 import time
@@ -21,6 +21,7 @@ from dotenv import dotenv_values
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 _PATH = "/api/auth/github"
 _COOKIE = "engine_github_login"
@@ -82,21 +83,21 @@ class GitHubLogin:
         return hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
 
     def _make_session_cookie(self, user_id: int, login: str) -> str:
-        """Build a signed session value: id.login.expires.signature."""
+        """Build a signed session value: id|login|expires|signature."""
         expires = int(time.time()) + _SESSION_TTL
-        payload = f"{user_id}.{login}.{expires}"
-        return f"{payload}.{self._sign(payload)}"
+        payload = f"{user_id}|{login}|{expires}"
+        return f"{payload}|{self._sign(payload)}"
 
     def _read_session(self, request: Request) -> dict[str, object] | None:
         """Verify and decode the session cookie, or None if invalid/expired."""
         cookie = request.cookies.get(_SESSION_COOKIE, "")
         if not cookie or len(cookie) > 512:
             return None
-        parts = cookie.split(".")
+        parts = cookie.split("|")
         if len(parts) != 4:
             return None
         user_id_str, login, expires_str, signature = parts
-        payload = ".".join(parts[:3])
+        payload = "|".join(parts[:3])
         if not secrets.compare_digest(signature.encode(), self._sign(payload).encode()):
             return None
         try:
@@ -224,3 +225,48 @@ class GitHubLogin:
         response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
                                samesite="lax", secure=self._is_secure())
         return response
+
+    def middleware(self, app: ASGIApp) -> ASGIApp:
+        """ASGI middleware that enforces session auth on /api/ routes.
+
+        Unauthenticated requests to protected API endpoints receive a 401.
+        Auth-related endpoints, static assets, and SPA pages are exempt.
+        """
+        if not self.configured:
+            return app
+        return _SessionAuthMiddleware(app, self)
+
+
+# Paths under /api/ that must remain accessible without a session cookie so
+# the login flow itself can work.
+_AUTH_EXEMPT = frozenset({
+    f"{_PATH}/login",
+    f"{_PATH}/callback",
+    f"{_PATH}/status",
+    f"{_PATH}/logout",
+})
+
+
+class _SessionAuthMiddleware:
+    def __init__(self, app: ASGIApp, login: GitHubLogin) -> None:
+        self.app = app
+        self.login = login
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path: str = scope.get("path", "")
+        if not path.startswith("/api/") or path in _AUTH_EXEMPT:
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        if self.login._read_session(request) is not None:
+            await self.app(scope, receive, send)
+            return
+        response = JSONResponse(
+            {"error": "authentication required"},
+            status_code=401,
+            headers=_HEADERS,
+        )
+        await response(scope, receive, send)

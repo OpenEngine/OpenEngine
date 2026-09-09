@@ -1436,6 +1436,27 @@ select:disabled { cursor: default; }
   font-size: 16px;
   gap: 10px;
 }
+.user-badge {
+  position: fixed;
+  top: 8px;
+  right: 12px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 500 12px/1 var(--mono);
+  color: var(--muted);
+}
+.user-badge-name { opacity: .7; }
+.user-badge-logout {
+  background: none;
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  font: inherit;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.user-badge-logout:hover { background: var(--smoke); }
 
 /* --- state --------------------------------------------------------------- */
 
