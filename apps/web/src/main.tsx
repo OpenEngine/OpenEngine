@@ -474,7 +474,11 @@ function App() {
         ) : route.kind === "run" ? (
           <RunDetailPage runId={route.runId} />
         ) : route.kind === "graph-conversation" ? (
-          <GraphConversationPage runId={route.runId} nodeId={route.nodeId} />
+          <GraphConversationPage
+            runId={route.runId}
+            nodeId={route.nodeId}
+            workOrderName={runs.find((run) => run.runId === route.runId)?.name}
+          />
         ) : route.kind === "utilization" ? (
           <UtilizationPage />
         ) : route.kind === "project" ? (
