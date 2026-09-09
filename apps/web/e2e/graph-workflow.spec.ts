@@ -50,7 +50,7 @@ const BLOCKING_COMMAND = `until [ -f ${RELEASE} ]; do sleep 0.05; done`;
 const ASKING_SCRIPT: Script = {
   title: TITLE,
   scenarios: [
-    { when: NAMING_REQUEST, steps: [{ type: "say", text: TITLE }] },
+    { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
     { when: "Review the implementation", steps: [{ type: "say", text: REVIEWED }] },
     {
       when: STEER,
@@ -81,7 +81,7 @@ const ASKING_SCRIPT: Script = {
 const SCRIPT: Script = {
   title: TITLE,
   scenarios: [
-    { when: NAMING_REQUEST, steps: [{ type: "say", text: TITLE }] },
+    { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
     // The reviewer is asked about the implementation *and quoted the original
     // task*, so its prompt contains the implementation's own scenario word.
     // The first match wins, so the one only a reviewer can match goes first.
@@ -114,7 +114,7 @@ const STEERING_SCRIPT: Script = {
   scenarios: [
     {
       when: NAMING_REQUEST,
-      steps: [{ type: "say", text: "Waiting for guidance" }],
+      steps: [{ type: "say", text: JSON.stringify({ name: "Waiting for guidance" }) }],
     },
     {
       when: INTERRUPT_STEERING,

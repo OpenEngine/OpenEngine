@@ -440,20 +440,53 @@ def test_state_keeps_what_earlier_nodes_reported(tmp_path: Path) -> None:
     assert CHECKOUT in values
 
 
-def test_naming_failure_does_not_keep_the_implementation_from_starting(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("response", "expected_name"),
+    [
+        (None, None),
+        (
+            '{"name": "  #301 Add GitHub auth sessions  "}',
+            "#301 Add GitHub auth sessions",
+        ),
+        (
+            'I’ll read issue #301 to identify the name.\n'
+            '{"name": "#301 Add GitHub auth sessions"}',
+            "#301 Add GitHub auth sessions",
+        ),
+        ('{"name": "Fix {auth} sessions"}', "Fix {auth} sessions"),
+        ("I’ll read issue #301 to identify the name.", None),
+        ('{"name": "unfinished', None),
+        ('{"title": "Wrong field"}', None),
+        ('{"name": 301}', None),
+        ('{"name": null}', None),
+        ('{"name": "  "}', None),
+        ('[{"name": "Not an object"}]', None),
+        ('{"name": "A name"}\nTrailing narration', None),
+    ],
+)
+def test_naming_reads_a_json_name_and_always_allows_implementation_to_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    response: str | None,
+    expected_name: str | None,
 ) -> None:
-    """Naming is optional metadata, so its provider failing cannot fail work."""
+    """Narration is not a name, and invalid metadata cannot fail the work."""
     started: list[str] = []
 
     async def cannot_open(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("naming provider unavailable")
 
+    async def answer(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"name": response}
+
     async def implement(_state: dict[str, Any]) -> dict[str, Any]:
         started.append("implementation")
         return {"implementation": "done"}
 
-    monkeypatch.setattr(ACPNode, "_open", cannot_open)
+    if response is None:
+        monkeypatch.setattr(ACPNode, "_open", cannot_open)
+    else:
+        monkeypatch.setattr(ACPNode, "__call__", answer)
     builder: StateGraph = StateGraph(State)
     builder.add_node("naming", NameNode(agent="codex", cwd=str(tmp_path)))
     builder.add_node("implementation", implement)
@@ -473,7 +506,10 @@ def test_naming_failure_does_not_keep_the_implementation_from_starting(
     assert finished.status.value == "completed"
     assert finished.error == ""
     assert finished.values["implementation"] == "done"
-    assert "name" not in finished.values
+    if expected_name is None:
+        assert "name" not in finished.values
+    else:
+        assert finished.values["name"] == expected_name
     assert started == ["implementation"]
 
 

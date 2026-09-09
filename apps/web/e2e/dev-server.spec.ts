@@ -32,7 +32,7 @@ const NAMING_REQUEST = "Give this WorkOrder a concise display name";
 const SCRIPT: Script = {
   title: TITLE,
   scenarios: [
-    { when: NAMING_REQUEST, steps: [{ type: "say", text: TITLE }] },
+    { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
     { when: "Review the implementation", steps: [{ type: "say", text: "Read it." }] },
     {
       when: "Implement the requested change",

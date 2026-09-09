@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -20,8 +21,10 @@ NAMING_PROMPT = (
     "work, read that item first and name what it is actually about. If it names "
     "an issue or pull request by number, lead the name with the number, as in "
     '"#270 Dependencies can run arbitrary install scripts". Do not change the '
-    "workspace and do not perform the task. Reply with only a concise name of at "
-    "most twelve words, with no quotes or ending punctuation.\n\n"
+    "workspace and do not perform the task. Return a JSON object with a single "
+    '"name" field, for example {{"name": "#270 Secure dependency installs"}}. '
+    "The name must be a non-empty string of at most twelve words, with no "
+    "ending punctuation. Return no Markdown fences or text after the JSON.\n\n"
     "The task:\n{task}"
 )
 
@@ -49,7 +52,26 @@ class NameNode(ACPNode):
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         try:
-            return await ACPNode.__call__(self, state)
+            update = await ACPNode.__call__(self, state)
+            key = self.output_key or str(current_execution().node_id)
+            response = update[key]
+            if isinstance(response, str):
+                # ACP includes narration before tool calls in the turn's text.
+                # Only a final JSON object may supply the display name.
+                for index, character in enumerate(response):
+                    if character != "{":
+                        continue
+                    try:
+                        value = json.loads(response[index:])
+                    except json.JSONDecodeError:
+                        continue
+                    name = value.get("name")
+                    if isinstance(name, str) and name.strip():
+                        return {key: name.strip()}
+                    break
+            raise ValueError(
+                "naming response must end with a JSON object containing a name"
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
