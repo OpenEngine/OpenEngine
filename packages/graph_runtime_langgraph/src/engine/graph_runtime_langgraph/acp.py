@@ -184,7 +184,7 @@ class _Turn:
         decision = await self._approve(
             channel=_ACP_APPROVAL,
             reason=self.node.reason_for(request),
-            kind=self.node.kind,
+            kind=self.node.kind_of(request),
             command=self.node.command_of(request),
             tool_name=self.node.tool_of(request),
             request=dict(request.params),
@@ -427,7 +427,7 @@ class ACPNode:
     output_key: str = ""
     """The state key the agent's message is written to. The node id when empty."""
     kind: ApprovalKind = ApprovalKind.COMMAND_EXECUTION
-    """What its permission requests are reported as."""
+    """Fallback kind for permission requests that do not require human input."""
     continuation_prompt: str = (
         "The request you were waiting on has been answered. Carry on with what "
         "you were doing; this is the same task, not a new one."
@@ -820,6 +820,17 @@ class ACPNode:
         return self.prompt
 
     # --- how one agent's permission request reads as an approval -----------
+
+    def kind_of(self, request: ACPPermissionRequest) -> ApprovalKind:
+        # ACP's activity kind is often just "other" for these tools; inspect
+        # the tool's name/title before falling back to the node's fixed kind.
+        for field in ("name", "toolName", "title", "kind"):
+            value = request.tool_call.get(field)
+            if value == "AskUserQuestion":
+                return ApprovalKind.USER_INPUT
+            if value in ("ExitPlanMode", "switch_mode"):
+                return ApprovalKind.PLAN_APPROVAL
+        return self.kind
 
     def reason_for(self, request: ACPPermissionRequest) -> str:
         title = request.tool_call.get("title")

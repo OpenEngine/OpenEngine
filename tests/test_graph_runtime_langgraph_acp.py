@@ -35,7 +35,7 @@ from typing import Any
 
 import pytest
 
-from engine.domain import ApprovalDecision, RunId, WorkspaceId
+from engine.domain import ApprovalDecision, ApprovalKind, RunId, WorkspaceId
 from engine.graph_runtime import EventLog, GraphId, NodeId, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     LangGraphDefinition,
@@ -91,6 +91,7 @@ def registry(
     mcp_git: bool = False,
     mcp_terminal: str = "",
     mcp_omit_outputs: bool = False,
+    tool_call: Mapping[str, Any] | None = None,
 ) -> ACPAgentRegistry:
     """One stub agent, reachable as `"stub"`, answering through the runtime."""
     return ACPAgentRegistry(
@@ -102,6 +103,7 @@ def registry(
                     "STUB_ACP_STATE": str(tmp_path),
                     "STUB_ACP_LOG": str(tmp_path / "agent.log"),
                     "STUB_ACP_RESPONSE": response,
+                    **({"STUB_ACP_TOOL_CALL": json.dumps(tool_call)} if tool_call else {}),
                     **({"STUB_ACP_ASK": "1"} if asks or asks_every else {}),
                     **({"STUB_ACP_ASK_EVERY": "1"} if asks_every else {}),
                     **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
@@ -400,6 +402,57 @@ def prompts(tmp_path: Path) -> list[str]:
 
 
 # --- an agent that just runs ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("tool_call", "expected_kind"),
+    [
+        ({"title": "ExitPlanMode", "kind": "other"}, ApprovalKind.PLAN_APPROVAL),
+        ({"title": "AskUserQuestion", "kind": "other"}, ApprovalKind.USER_INPUT),
+        ({"title": "Review the plan", "kind": "switch_mode"}, ApprovalKind.PLAN_APPROVAL),
+    ],
+)
+@pytest.mark.parametrize("enable_before_request", [False, True])
+def test_acp_human_requests_require_manual_approval(
+    tmp_path: Path,
+    tool_call: dict[str, str],
+    expected_kind: ApprovalKind,
+    enable_before_request: bool,
+) -> None:
+    async def scenario() -> None:
+        agents = registry(
+            tmp_path, asks=True, tool_call={"toolCallId": "call_1", **tool_call}
+        )
+        async with runtime_over(tmp_path, agents) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            if enable_before_request:
+                await runtime.set_auto_approve(run.run_id, IMPLEMENTATION, True)
+            events = await until(log, run.run_id, "approval.requested")
+            assert events[-1].payload["kind"] == expected_kind.value
+            # This also exercises enabling the preference on an existing request.
+            snapshot = await runtime.set_auto_approve(run.run_id, IMPLEMENTATION, True)
+            assert len(snapshot.pending_approvals) == 1
+            approval = snapshot.pending_approvals[0]
+            assert approval.kind is expected_kind
+            assert await runtime.recorded_decision(approval.approval_id) is None
+            await runtime.decide(run.run_id, approval.approval_id, ApprovalDecision.ACCEPT)
+            await until(log, run.run_id, "run.finished")
+
+    asyncio.run(scenario())
+
+
+def test_acp_commands_can_still_be_auto_approved(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with runtime_over(tmp_path, registry(tmp_path, asks=True)) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            await runtime.set_auto_approve(run.run_id, IMPLEMENTATION, True)
+            events = await until(log, run.run_id, "run.finished")
+            requested = [event for event in events if event.kind.value == "approval.requested"]
+            assert len(requested) == 1
+            assert requested[0].payload["kind"] == ApprovalKind.COMMAND_EXECUTION.value
+            assert not (await runtime.snapshot(run.run_id)).pending_approvals
+
+    asyncio.run(scenario())
 
 
 def test_an_acp_node_runs_a_turn_and_publishes_what_happened(tmp_path: Path) -> None:

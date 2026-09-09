@@ -273,7 +273,8 @@ def ask_permission(session_id: str) -> dict[str, Any] | None:
             "method": "session/request_permission",
             "params": {
                 "sessionId": session_id,
-                "toolCall": {
+                "toolCall": json.loads(os.environ["STUB_ACP_TOOL_CALL"])
+                if "STUB_ACP_TOOL_CALL" in os.environ else {
                     "toolCallId": "call_1",
                     "title": "run the tests",
                     "kind": "execute",
