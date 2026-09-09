@@ -94,6 +94,7 @@ def registry(
     mcp_omit_outputs: bool = False,
     tool_call: Mapping[str, Any] | None = None,
     mcp_clarify: bool = False,
+    mcp_clarify_on_correction: bool = False,
     mcp_terminal_on_correction: bool = False,
     mcp_terminal_after_grant: bool = False,
 ) -> ACPAgentRegistry:
@@ -125,6 +126,11 @@ def registry(
                         else {}
                     ),
                     **({"STUB_ACP_MCP_CLARIFY": "1"} if mcp_clarify else {}),
+                    **(
+                        {"STUB_ACP_MCP_CLARIFY_ON_CORRECTION": "1"}
+                        if mcp_clarify_on_correction
+                        else {}
+                    ),
                     **(
                         {"STUB_ACP_MCP_TERMINAL_ON_CORRECTION": "1"}
                         if mcp_terminal_on_correction
@@ -841,12 +847,55 @@ def test_clarify_preserves_the_graph_position_until_continuation(
     paused, final = asyncio.run(scenario())
 
     assert paused.status.value == "running"
-    assert paused.next_nodes == (IMPLEMENTATION,)
-    assert paused.active_executions
+    assert [execution.node_id for execution in paused.active_executions] == [
+        IMPLEMENTATION
+    ]
     assert str(IMPLEMENTATION) not in paused.values
     assert str(REVIEW) not in paused.values
     assert final.values["pr_url"] == "https://github.com/acme/repository/pull/7"
     assert final.values[str(REVIEW)] == "Looks right."
+
+
+def test_clarify_resets_the_invalid_completion_budget(tmp_path: Path) -> None:
+    async def scenario() -> tuple[Any, Any, list[RuntimeEvent]]:
+        async with runtime_over(
+            tmp_path,
+            registry(
+                tmp_path,
+                response="I stopped without a terminal result.",
+                uses_mcp=True,
+                mcp_clarify_on_correction=True,
+            ),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "transcript", count=4)
+            paused = await runtime.snapshot(run.run_id)
+            await runtime.steer(run.run_id, "Continue with the implementation.")
+            events = await until(log, run.run_id, "run.failed")
+            return paused, await runtime.snapshot(run.run_id), events
+
+    paused, final, events = asyncio.run(scenario())
+
+    assert [execution.node_id for execution in paused.active_executions] == [
+        IMPLEMENTATION
+    ]
+    assert prompts(tmp_path) == [
+        PROMPT,
+        INVALID_COMPLETION_ERROR,
+        "Continue with the implementation.",
+        INVALID_COMPLETION_ERROR,
+        INVALID_COMPLETION_ERROR,
+    ]
+    assert final.error == (
+        "the implementation agent ended 3 turns without reporting a valid "
+        "terminal result"
+    )
+    assert str(REVIEW) not in final.values
+    assert len(
+        [text for role, text in transcript(events) if role == "assistant"]
+    ) == 5
 
 
 def test_complete_step_rejects_a_missing_declared_output(tmp_path: Path) -> None:

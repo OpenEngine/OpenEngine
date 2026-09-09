@@ -585,6 +585,7 @@ class ACPNode:
                         # this superstep and follow its outgoing edge. The live
                         # execution remains at the same graph position until a
                         # person steers the next message into this conversation.
+                        corrections = 0
                         pending_prompts.extend(execution.pending_messages())
                         asked = (
                             pending_prompts.popleft()

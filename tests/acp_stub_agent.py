@@ -154,8 +154,12 @@ def exercise_mcp(session_id: str, prompt_text: str) -> None:
         return json.loads(line)
 
     listed = call({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
+    clarify_on_correction = bool(
+        os.environ.get("STUB_ACP_MCP_CLARIFY_ON_CORRECTION")
+        and "Valid completion states" in prompt_text
+    )
     clarified_this_turn = bool(
-        os.environ.get("STUB_ACP_MCP_CLARIFY")
+        (os.environ.get("STUB_ACP_MCP_CLARIFY") or clarify_on_correction)
         and not session.get("mcp_clarified_once")
     )
     if clarified_this_turn:
