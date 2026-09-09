@@ -90,7 +90,7 @@ from langgraph_acp import (
     resume_continuation,
 )
 
-from engine.graph_runtime.events import EventKind
+from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime_langgraph.executions import NodeExecution, current_execution
 from engine.runtime.step_results import (
     INVALID_COMPLETION_CORRECTIONS,
@@ -374,6 +374,56 @@ def prompt_text(prompt: ACPPrompt) -> str:
     )
 
 
+_REPLAY_OMITTED = "[Earlier conversation omitted from replay.]\n\n"
+_MAX_REPLAY_PROMPT_CHARS = 1_048_576
+
+
+def _replay_prompt(history: Sequence[RuntimeEvent], opening: str) -> str:
+    """Budget the complete input, preserving the new message verbatim."""
+    prefix = "Continue the previous conversation below, including its tool history.\n\n"
+    suffix = f"\n\nUser: {opening}"
+    available = _MAX_REPLAY_PROMPT_CHARS - len(prefix) - len(suffix)
+    if available < len(_REPLAY_OMITTED):
+        raise ValueError(
+            f"Follow-up message is too large to replay conversation history "
+            f"within {_MAX_REPLAY_PROMPT_CHARS:,} characters "
+            f"(message: {len(opening):,} characters). Shorten the message and retry."
+        )
+    return prefix + _replay_history(history, max_chars=min(512_000, available)) + suffix
+
+
+def _replay_history(
+    history: Sequence[RuntimeEvent], *, max_chars: int = 512_000,
+) -> str:
+    """Bound synthetic history, which is sent as one provider input string.
+
+    Raw tool events can contain entire file diffs. Keep excerpts and recent
+    context within the budget left after reserving space for the new message.
+    The durable event log is never truncated.
+    """
+    omitted = _REPLAY_OMITTED
+    truncated = "\n[Content truncated for replay.]\n"
+    remaining = max_chars - len(omitted)
+    parts: list[str] = []
+    for event in reversed(history):
+        if event.kind is EventKind.TRANSCRIPT:
+            rendered = f"{event.payload.get('role', 'assistant')}: {event.payload.get('text', '')}"
+            limit = remaining - 2
+        else:
+            rendered = f"{event.kind.value}: {json.dumps(dict(event.payload))}"
+            limit = min(16_000, remaining - 2)
+        if limit < len(truncated):
+            break
+        if len(rendered) > limit:
+            keep = limit - len(truncated)
+            head = (keep + 1) // 2
+            rendered = rendered[:head] + truncated + rendered[len(rendered) - (keep - head):]
+        parts.append(rendered)
+        remaining -= len(rendered) + 2
+    prefix = omitted if len(parts) < len(history) else ""
+    return prefix + "\n\n".join(reversed(parts))
+
+
 def _outcome(
     decision: ApprovalDecision, request: ACPPermissionRequest
 ) -> ACPPermissionOutcome:
@@ -606,16 +656,7 @@ class ACPNode:
                 opening = prompt_text(asked)
                 if not resuming and history and pending_prompts:
                     opening = pending_prompts.popleft()
-                    transcript = "\n\n".join(
-                        f"{event.payload.get('role', 'assistant')}: {event.payload.get('text', '')}"
-                        if event.kind is EventKind.TRANSCRIPT
-                        else f"{event.kind.value}: {json.dumps(dict(event.payload))}"
-                        for event in history
-                    )
-                    asked = (
-                        "Continue the previous conversation below, including its tool history.\n\n"
-                        f"{transcript}\n\nUser: {opening}"
-                    )
+                    asked = _replay_prompt(history, opening)
                 # Published before the turn it starts, because a transcript that
                 # holds only the agent's half is not a conversation: a reader
                 # opening one has to guess what was asked, and cannot tell the work
