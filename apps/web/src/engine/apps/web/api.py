@@ -953,10 +953,9 @@ BETA = "[BETA]"
 #: are `/graph/api/runs/...` and cannot collide with this app's own `/api`.
 GRAPH_PREFIX = "/graph"
 
-#: The two things the graph engine says that change what a WorkOrder row should
-#: read: it finished, or it stopped. Everything else it says is about positions
-#: inside the graph, which this app's row has no way to show.
-GRAPH_ENDINGS: Mapping[EventKind, RunPhase] = {
+#: Graph lifecycle events that change what a WorkOrder row should read.
+GRAPH_EVENT_PHASES: Mapping[EventKind, RunPhase] = {
+    EventKind.RUN_FORKED: RunPhase.RUNNING_AGENT,
     EventKind.RUN_FINISHED: RunPhase.SUCCEEDED,
     EventKind.RUN_FAILED: RunPhase.FAILED,
 }
@@ -1209,12 +1208,12 @@ def create_app(
         The WorkOrder row is the other. A graph run keeps its real progress in
         the graph engine's own files, and this app only holds a row for it, so
         without this the row would say "an agent is working" long after the run
-        had finished or fallen over. The two endings and the name produced by
+        had finished or fallen over. Restarts, endings, and the name produced by
         a naming node are copied across. The rest of what a graph says is about
         positions inside the graph, and a row has nowhere to put it.
         """
         await graph_events.append(event)
-        phase = GRAPH_ENDINGS.get(event.kind)
+        phase = GRAPH_EVENT_PHASES.get(event.kind)
         name = _graph_workorder_name(event.payload.get("values"))
         if phase is None and not name:
             return
@@ -1225,8 +1224,10 @@ def create_app(
             state,
             name=name or state.name,
             phase=phase or state.phase,
-            failure_reason=str(event.payload.get("error", ""))
-            or state.failure_reason,
+            failure_reason=(
+                "" if event.kind is EventKind.RUN_FORKED
+                else str(event.payload.get("error", "")) or state.failure_reason
+            ),
         )
         if updated != state:
             await session.state_store.save(updated)

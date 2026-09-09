@@ -5464,6 +5464,58 @@ def test_a_failed_graph_run_says_why_on_its_row() -> None:
     assert ended["failureReason"] == "codex is out of quota"
 
 
+def test_messaging_a_failed_graph_implementer_resets_its_workorder() -> None:
+    graph = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(
+            NodeId("implementation"),
+            (AwaitSteering(), Fail("codex is out of quota")),
+            always_open=True,
+        ),),
+    )
+    app, runtime = _graph_app(InMemoryStateStore(), graph)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                async with asyncio.timeout(5):
+                    while not (await runtime.snapshot(run_id)).active_executions:
+                        await asyncio.sleep(0)
+                response = await client.post(
+                    f"/graph/api/runs/{run_id}/steering",
+                    json={"node": "implementation", "message": "Start implementing."},
+                )
+                assert response.status_code == 200
+                failed = (await _await_phase(client, run_id, "failed")).json()
+                assert failed["phase"] == "failed"
+                assert failed["failureReason"] == "codex is out of quota"
+
+                restarted = await client.post(
+                    f"/graph/api/runs/{run_id}/steering",
+                    json={"node": "implementation", "message": "Try again."},
+                )
+                assert restarted.status_code == 200
+                assert restarted.json()["status"] == "running"
+                assert restarted.json()["error"] == ""
+                return (await client.get(f"/api/runs/{run_id}")).json()
+
+    restarted = asyncio.run(scenario())
+    assert restarted["phase"] == "running_agent"
+    assert restarted["failureReason"] == ""
+    assert restarted["terminalOutcome"] is None
+
+
 def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded() -> None:
     """The narrowest bit of ordering in the whole change.
 
