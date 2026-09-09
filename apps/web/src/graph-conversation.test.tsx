@@ -58,9 +58,11 @@ function graphRun(overrides: Partial<ApiGraphRun> = {}): ApiGraphRun {
 }
 
 /** A server that answers the two reads the page makes, and records writes. */
-function serve(events: ApiGraphEvent[], run: ApiGraphRun = graphRun()) {
+function serve(events: ApiGraphEvent[], run: ApiGraphRun = graphRun(), alwaysOpen = false) {
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
+    if (path === `/graph/api/graphs/${run.graphId}`)
+      return json({ graphId: run.graphId, nodes: [{ nodeId: NODE, alwaysOpen }] });
     if (path === `/api/runs/${runId}/graph-events`) return json({ events });
     if (path === `/graph/api/runs/${runId}`) return json(run);
     if (path.startsWith(`/graph/api/runs/${runId}/`)) return json(run);
@@ -429,6 +431,29 @@ describe("GraphConversationPage", () => {
     );
   });
 
+  it.each(["completed", "running"] as const)(
+    "reopens implementation through steering when review is %s",
+    async (status) => {
+      const fetch = serve([], graphRun({
+        status,
+        activeExecutions: status === "running"
+          ? [{ executionId: "review-1", nodeId: "review" }]
+          : [],
+      }), true);
+      render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+
+      await userEvent.type(await screen.findByLabelText("Message the agent"), "Fix the edge case.");
+      await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+      await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+        `/graph/api/runs/${runId}/steering`,
+        expect.objectContaining({
+          body: JSON.stringify({ message: "Fix the edge case.", node: NODE }),
+        }),
+      ));
+    },
+  );
+
   it("offers no composer to a node with nothing in flight", async () => {
     await open(
       [
@@ -583,6 +608,8 @@ describe("GraphConversationPage", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const path = String(input);
         if (path === `/api/runs/${runId}/graph-events`) return json({ events: [] });
+        if (path === `/graph/api/graphs/${asked.graphId}`)
+          return json({ graphId: asked.graphId, nodes: [] });
         if (path.startsWith(`/graph/api/runs/${runId}/approvals/`)) {
           answered = true;
           return json(graphRun({ status: "completed", activeExecutions: [] }));

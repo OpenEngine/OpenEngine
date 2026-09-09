@@ -13,8 +13,7 @@
  *
  *  * the transcript is folded from events instead of loaded from a thread;
  *  * sending is **steering** -- a message for the turn an agent is in the
- *    middle of, refused when that node has nothing in flight, because there is
- *    nobody to say it to;
+ *    middle of, or a new turn on a node that permits reopening;
  *  * a request is answered on the graph engine's own approvals endpoint, which
  *    `answerApprovalsWith` is how the shared card learns.
  */
@@ -36,12 +35,14 @@ import {
   decideGraphApproval,
   getGraphEvents,
   getGraphRun,
+  getGraphTopology,
   messageText,
   steerGraphRun,
   setGraphAutoApprove,
   type ApiApproval,
   type ApiGraphEvent,
   type ApiGraphRun,
+  type ApiGraphTopology,
   type ApprovalDecision,
 } from "./api";
 import { answerApprovalsWith, publishApproval, type InlineApproval } from "./approvals";
@@ -431,7 +432,7 @@ function GraphComposer() {
     <ComposerPrimitive.Root className="composer">
       <ComposerPrimitive.Input
         className="composer-input"
-        placeholder="Say something to the agent working here…"
+        placeholder="Say something to the agent…"
         aria-label="Message the agent"
         rows={1}
       />
@@ -449,14 +450,14 @@ function GraphComposer() {
 
 function GraphDock({
   conversationId,
-  working,
+  canSteer,
   workspace,
   error,
   failure,
   unplaced,
 }: {
   conversationId: string;
-  working: boolean;
+  canSteer: boolean;
   workspace: string;
   error: string;
   failure: string;
@@ -477,7 +478,7 @@ function GraphDock({
           and a failure hung on the last turn is lost in both cases, which are
           the two where a reader most needs to be told. */}
       {failure && <p className="notice">{failure}</p>}
-      {working ? <GraphComposer /> : <p className="step-note">{IDLE_NOTE}</p>}
+      {canSteer ? <GraphComposer /> : <p className="step-note">{IDLE_NOTE}</p>}
       {error && <p className="notice">{error}</p>}
       {workspace && (
         <div className="dock-foot">
@@ -500,6 +501,17 @@ export function GraphConversationPage({
 }) {
   const { events, run, error, loaded, refresh, setRun } = useGraphRun(runId);
   const [steerError, setSteerError] = useState("");
+  const [topology, setTopology] = useState<ApiGraphTopology>();
+  const graphId = run?.graphId;
+  useEffect(() => {
+    if (!graphId) return;
+    const controller = new AbortController();
+    void getGraphTopology(graphId, controller.signal)
+      .then(setTopology)
+      .catch(() => {});
+    return () => controller.abort();
+  }, [graphId]);
+
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
   const [autoApproveError, setAutoApproveError] = useState("");
 
@@ -532,6 +544,10 @@ export function GraphConversationPage({
   );
   const working = Boolean(
     run?.activeExecutions.some((execution) => execution.nodeId === nodeId),
+  );
+  const canSteer = working || Boolean(
+    graphId && topology?.graphId === graphId &&
+    topology.nodes.some((node) => node.nodeId === nodeId && node.alwaysOpen),
   );
   const workspace =
     typeof run?.values.workspace === "string" ? run.values.workspace : "";
@@ -589,16 +605,16 @@ export function GraphConversationPage({
         title: phaseLabel(nodeId),
         // What the shared view reads to know whose conversation this is: the
         // backlink to the WorkOrder is built from these two.
-        custom: { workflowRunId: runId, workflowStepId: nodeId, editable: working },
+        custom: { workflowRunId: runId, workflowStepId: nodeId, editable: canSteer },
       },
     ],
-    [conversationId, nodeId, runId, working],
+    [conversationId, nodeId, runId, canSteer],
   );
 
   const runtime = useExternalStoreRuntime<GraphMessage>({
     isLoading: !loaded,
     isRunning: working,
-    isSendDisabled: !working,
+    isSendDisabled: !canSteer,
     messages: conversation.messages,
     convertMessage,
     onNew: async (message) => {
@@ -653,7 +669,7 @@ export function GraphConversationPage({
           dock={
             <GraphDock
               conversationId={conversationId}
-              working={working}
+              canSteer={canSteer}
               workspace={workspace}
               error={steerError}
               failure={conversation.failure}
