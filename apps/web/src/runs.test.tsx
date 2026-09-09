@@ -496,6 +496,78 @@ describe("RunsPage", () => {
 });
 
 describe("RunDetailPage", () => {
+  it.each([
+    ["https://github.com/example/repo/pull/1", "https://github.com/example/repo/pull/1"],
+    ["http://example.com/pull/1", "http://example.com/pull/1"],
+    ["javascript:alert(1)", null],
+    ["data:text/html,unsafe", null],
+  ])("renders structured graph outputs and validates approval URL %s", async (prUrl, expectedUrl) => {
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      workflowVersion: "",
+      steps: [],
+    });
+    const values = {
+      empty: null,
+      planning: "Plan complete",
+      implementation: {
+        summary: "Implemented the change",
+        pr_url: prUrl,
+        metadata: { checks: { passed: true } },
+        artifacts: ["report", { name: "build" }],
+        count: 0,
+        approved: false,
+        omitted: null,
+      },
+      later: { pr_url: "javascript:alert(2)" },
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1") return json({
+        runId: "run-1",
+        graphId: graphRun.workflowId,
+        status: "awaiting_approval",
+        activeExecutions: [],
+        nextNodes: [],
+        values,
+        pendingApprovals: [{ nodeId: "review", reason: "Review the change", allowedDecisions: ["accept", "cancel"] }],
+        error: "",
+      });
+      if (path === `/graph/api/graphs/${graphRun.workflowId}`) return json({
+        graphId: graphRun.workflowId,
+        nodes: Object.keys(values).map((nodeId) => ({ nodeId, name: nodeId, kind: "agent" })),
+      });
+      if (path === "/api/runs/run-1/graph-events") return json({
+        events: [{ sequence: 1, type: "node.finished", nodeId: "implementation", payload: {} }],
+      });
+      return json({ error: "not found" }, { status: 404 });
+    }));
+
+    render(<RunDetailPage runId="run-1" />);
+
+    const heading = await screen.findByRole("heading", { name: "implementation" });
+    const step = within(heading.closest("article")!);
+    expect(step.getByText("Implemented the change")).toBeVisible();
+    expect(step.getByText('{"checks":{"passed":true}}')).toBeVisible();
+    expect(step.getByText('["report",{"name":"build"}]')).toBeVisible();
+    expect(step.getByText("0")).toBeVisible();
+    expect(step.getByText("false")).toBeVisible();
+    expect(step.queryByText("omitted")).not.toBeInTheDocument();
+    expect(step.queryByText("summary")).not.toBeInTheDocument();
+    expect(screen.getByText("Plan complete")).toBeVisible();
+    const empty = screen.getByRole("heading", { name: "empty" }).closest("article")!;
+    expect(within(empty).queryByRole("definition")).not.toBeInTheDocument();
+    if (expectedUrl) {
+      expect(step.getByRole("link", { name: `${prUrl} ↗` })).toHaveAttribute("href", expectedUrl);
+      expect(screen.getByRole("link", { name: "View pull request ↗" })).toHaveAttribute("href", expectedUrl);
+    } else {
+      expect(step.getByText(prUrl!)).toBeVisible();
+      expect(step.queryByRole("link")).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "View pull request ↗" })).not.toBeInTheDocument();
+    }
+  });
+
   it("says where to look for a beta WorkOrder that has no stages here", async () => {
     // A graph WorkOrder has no steps to draw, because a graph is not made of
     // them. Without a word of explanation the page reads as one that never
