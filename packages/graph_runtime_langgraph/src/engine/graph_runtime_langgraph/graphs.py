@@ -83,6 +83,10 @@ class DescribesItself(Protocol):
     node that did not ask for it should not be surprised by one.
     """
 
+    @property
+    def graph_node_group(self) -> str: ...
+    """Optional display group shared by related nodes."""
+
 
 @dataclass(frozen=True)
 class LangGraphDefinition:
@@ -141,6 +145,7 @@ class LangGraphDefinition:
                     description=_description_of(node),
                     show_in_sidebar=_shown_in_sidebar(node),
                     always_open=_always_open(node),
+                    group=_group_of(node),
                 )
                 for node in drawn.nodes.values()
                 if node.id not in (START, END)
@@ -210,6 +215,10 @@ def _always_open(node: Any) -> bool:
     default must be the safe choice.
     """
     return bool(getattr(_described(node), "graph_node_always_open", False))
+
+
+def _group_of(node: Any) -> str:
+    return str(getattr(_described(node), "graph_node_group", ""))
 
 
 __all__ = ["END", "START", "DescribesItself", "LangGraphDefinition"]

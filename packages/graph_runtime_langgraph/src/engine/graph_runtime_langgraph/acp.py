@@ -460,6 +460,8 @@ class ACPNode:
     """Whether steering can restart this node after the graph moves past it."""
     graph_node_show_in_sidebar: bool = True
     """Whether clients should offer this node as a run conversation."""
+    graph_node_group: str = ""
+    """Optional display group shared by related nodes."""
     cwd: str | Callable[[Mapping[str, object]], str | None]
     """Where the session works, or how to read it off the graph's state.
 

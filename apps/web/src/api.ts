@@ -205,6 +205,8 @@ export type ApiRunStepListing = {
   conversationId: string | null;
   conversationUrl: string | null;
   waiting: boolean;
+  /** Related graph nodes shown together on the WorkOrder overview. */
+  group?: string;
 };
 
 /** A step with the prose the agent wrote, which only its own page draws. */
@@ -296,6 +298,8 @@ export type ApiGraphTopology = {
     showInSidebar?: boolean;
     /** Whether steering can restart this node when it is no longer active. */
     alwaysOpen?: boolean;
+    /** Related nodes shown together in navigation and WorkOrder summaries. */
+    group?: string;
   }[];
 };
 

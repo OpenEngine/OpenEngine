@@ -154,6 +154,17 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Reranker",
         "Human review",
     ]
+    assert [node.group for node in codex.nodes] == [
+        "",
+        "",
+        "",
+        "Review",
+        "Review",
+        "Review",
+        "Review",
+        "",
+        "",
+    ]
     # The kinds: a checkout, seven agents (implementation + 4 reviewers +
     # reranker + naming), and the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [

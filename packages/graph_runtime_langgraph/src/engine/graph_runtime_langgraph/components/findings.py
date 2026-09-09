@@ -175,6 +175,7 @@ class ReviewNode(ACPNode):
     """Store validated findings under this facet's own key for parallel writes."""
 
     facet: str
+    graph_node_group: str = "Review"
 
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)

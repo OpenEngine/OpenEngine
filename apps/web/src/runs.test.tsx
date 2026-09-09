@@ -582,6 +582,66 @@ describe("RunDetailPage", () => {
     expect(screen.queryByText("Conversation not started")).not.toBeInTheDocument();
   });
 
+  it("collapses related graph agents into one overview group", async () => {
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      workflowName: "Implementation review (codex)",
+      workflowVersion: "",
+      currentStepId: null,
+      steps: [],
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1")
+        return json({
+          runId: "run-1",
+          graphId: graphRun.workflowId,
+          status: "running",
+          activeExecutions: [{ executionId: "execution-1", nodeId: "implementation" }],
+          nextNodes: ["implementation"],
+          values: {},
+          pendingApprovals: [],
+          error: "",
+        });
+      if (path === `/graph/api/graphs/${graphRun.workflowId}`)
+        return json({
+          graphId: graphRun.workflowId,
+          nodes: [
+            { nodeId: "implementation", name: "Implementation", kind: "agent" },
+            {
+              nodeId: "review-security",
+              name: "Review (Security)",
+              kind: "agent",
+              group: "Review",
+            },
+            {
+              nodeId: "review-performance",
+              name: "Review (Performance)",
+              kind: "agent",
+              group: "Review",
+            },
+            { nodeId: "reranker", name: "Reranker", kind: "agent" },
+          ],
+        });
+      if (path === "/api/runs/run-1/graph-events") return json({ events: [] });
+      return json({ error: "not found" }, { status: 404 });
+    }));
+    const user = userEvent.setup();
+    const { container } = render(<RunDetailPage runId="run-1" />);
+
+    await screen.findByText("Implementation review (codex)");
+    const stages = within(container.querySelector(".stages") as HTMLElement);
+    expect(stages.getByText("Review")).toBeVisible();
+    expect(stages.queryByText("Review (Security)")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Review (Security)" })).not.toBeVisible();
+
+    await user.click(screen.getByText("Review", { selector: "summary strong" }));
+
+    expect(screen.getByRole("heading", { name: "Review (Security)" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Review (Performance)" })).toBeVisible();
+  });
+
   it("renders steps from an arbitrary workflow definition", async () => {
     const generic = run({
       workflowId: "release-v2",

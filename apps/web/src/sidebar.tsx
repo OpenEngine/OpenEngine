@@ -32,7 +32,59 @@ type RailConversation = {
   name: string;
   href: string;
   waiting: boolean;
+  group?: string;
 };
+
+type RailConversationGroup = {
+  key: string;
+  name: string;
+  conversations: RailConversation[];
+};
+
+/** Keep ungrouped conversations in place and replace each named group with one
+ *  collapsible entry at the position of its first member. */
+function groupConversations(
+  conversations: RailConversation[],
+): (RailConversation | RailConversationGroup)[] {
+  const groups = new Map<string, RailConversationGroup>();
+  const entries: (RailConversation | RailConversationGroup)[] = [];
+  for (const conversation of conversations) {
+    if (!conversation.group) {
+      entries.push(conversation);
+      continue;
+    }
+    const existing = groups.get(conversation.group);
+    if (existing) {
+      existing.conversations.push(conversation);
+      continue;
+    }
+    const group = {
+      key: `group-${conversation.group}`,
+      name: conversation.group,
+      conversations: [conversation],
+    };
+    groups.set(conversation.group, group);
+    entries.push(group);
+  }
+  return entries;
+}
+
+function ConversationLink({ conversation, activeUrl }: {
+  conversation: RailConversation;
+  activeUrl?: string;
+}) {
+  const active = activeUrl === conversation.href;
+  return (
+    <a
+      aria-current={active ? "page" : undefined}
+      data-active={active || undefined}
+      href={conversation.href}
+    >
+      {conversation.name}
+      {conversation.waiting && <span aria-label="Waiting for input"> ❔</span>}
+    </a>
+  );
+}
 
 /** What one WorkOrder offers beneath its name.
  *
@@ -56,6 +108,7 @@ function conversationsOf(
         key: node.nodeId,
         name: node.name,
         href: graphConversationUrl(run.runId, node.nodeId),
+        group: node.group || undefined,
         waiting: !runFinished(run) &&
           (run.graphProgress?.waitingNodeIds.includes(node.nodeId) ?? false),
       }));
@@ -300,6 +353,7 @@ export function Sidebar({
           <nav className="rail-scroll" aria-label="Recent WorkOrders">
             {runs.map((run) => {
               const conversations = conversationsOf(run, graphNodes);
+              const conversationGroups = groupConversations(conversations);
               const progress = isGraphRun(run) && !runFinished(run)
                 ? run.graphProgress
                 : undefined;
@@ -311,9 +365,11 @@ export function Sidebar({
                       ? [] : progress.nextNodeIds),
                   ])]
                 : [];
-              const status = currentNodes.map((id) =>
-                graphNodes[run.workflowId]?.find((node) => node.nodeId === id)?.name ?? id,
-              ).join(", ") || runStatusLabel(run);
+              const status = [...new Set(currentNodes.map((id) => {
+                const node = graphNodes[run.workflowId]
+                  ?.find((candidate) => candidate.nodeId === id);
+                return node?.group || node?.name || id;
+              }))].join(", ") || runStatusLabel(run);
               const executing = isGraphRun(run)
                 ? !!progress?.activeNodeIds.length
                 : IN_PROGRESS_PHASES.has(run.phase);
@@ -354,23 +410,39 @@ export function Sidebar({
                   </div>
                   {conversations.length > 0 && (
                     <div className="rail-sub" aria-label={`Conversations for ${run.name}`}>
-                      {conversations.map((conversation) => (
-                        <a
-                          aria-current={
-                            activeConversationUrl === conversation.href ? "page" : undefined
-                          }
-                          data-active={
-                            activeConversationUrl === conversation.href || undefined
-                          }
-                          href={conversation.href}
-                          key={conversation.key}
-                        >
-                          {conversation.name}
-                          {conversation.waiting && (
-                            <span aria-label="Waiting for input"> ❔</span>
-                          )}
-                        </a>
-                      ))}
+                      {conversationGroups.map((entry) =>
+                        "conversations" in entry ? (
+                          <details
+                            className="rail-sub-group"
+                            open={entry.conversations.some(
+                              (conversation) => activeConversationUrl === conversation.href,
+                            ) || undefined}
+                            key={entry.key}
+                          >
+                            <summary>
+                              {entry.name}
+                              {entry.conversations.some((conversation) => conversation.waiting) && (
+                                <span aria-label="Waiting for input"> ❔</span>
+                              )}
+                            </summary>
+                            <div>
+                              {entry.conversations.map((conversation) => (
+                                <ConversationLink
+                                  activeUrl={activeConversationUrl}
+                                  conversation={conversation}
+                                  key={conversation.key}
+                                />
+                              ))}
+                            </div>
+                          </details>
+                        ) : (
+                          <ConversationLink
+                            activeUrl={activeConversationUrl}
+                            conversation={entry}
+                            key={entry.key}
+                          />
+                        ),
+                      )}
                     </div>
                   )}
                 </div>
