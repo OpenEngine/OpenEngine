@@ -35,7 +35,7 @@ from typing import Any
 
 import pytest
 
-from engine.domain import ApprovalDecision, ApprovalKind, RunId, WorkspaceId
+from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
 from engine.graph_runtime import EventLog, GraphId, NodeId, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     LangGraphDefinition,
@@ -1878,5 +1878,57 @@ def test_node_runner_override_is_lazy_durable_and_used_on_next_execution(tmp_pat
             events = await until(log, other.run_id, "run.finished")
             assert (await runtime.snapshot(other.run_id)).runner_overrides == {}
             assert next(e for e in events if e.kind.value == "conversation.started").payload["agent"] == AGENT
+
+    asyncio.run(scenario())
+
+
+def test_runner_change_preserves_pending_approval_after_restart(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    async def scenario() -> None:
+        agents = registry(tmp_path, asks=True)
+        agents.register(replace(registry(tmp_path).resolve(AGENT), name="alternate"))
+        async with runtime_over(tmp_path, agents) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            events = await until(log, run.run_id, "approval.requested")
+            approval_id = ApprovalId(str(events[-1].payload["approvalId"]))
+            original = await runtime.store.session(run.run_id, str(IMPLEMENTATION))
+
+        async with runtime_over(tmp_path, agents) as (runtime, log):
+            found = await runtime.snapshot(run.run_id)
+            assert found.status.value == "awaiting_approval"
+            assert found.active_executions == ()
+            await runtime.set_runner(run.run_id, IMPLEMENTATION, "alternate")
+            await runtime.decide(run.run_id, approval_id, ApprovalDecision.ACCEPT)
+            events = await until(log, run.run_id, "run.finished")
+            started = next(e for e in events if e.kind.value == "conversation.started")
+            assert started.payload["agent"] == AGENT
+            assert started.payload["resumed"] is True
+            assert started.payload["sessionId"] == original.session_id
+            final = await runtime.snapshot(run.run_id)
+            assert final.values[str(IMPLEMENTATION)] == DONE
+            assert final.pending_approvals == ()
+            assert final.runner_overrides == {IMPLEMENTATION: "alternate"}
+            assert not any(e.kind.value == "approval.requested" for e in events)
+            assert len(sent(tmp_path, "session/new")) == 1
+            assert len(sent(tmp_path, "session/load")) == 1
+            assert prompts(tmp_path).count(PROMPT) == 1
+            assert len(prompts(tmp_path)) == 2
+            assert list(sessions(tmp_path).values())[0]["granted"] is True
+            binding = await runtime.store.session(run.run_id, str(IMPLEMENTATION))
+            assert binding.agent == AGENT
+            assert binding.session_id == original.session_id
+
+            point = next(
+                p for p in await runtime.history(run.run_id)
+                if IMPLEMENTATION in p.next_nodes
+            )
+            await runtime.resume_from(run.run_id, point.checkpoint_id)
+            events = await until(log, run.run_id, "run.finished", count=2)
+            started = [e for e in events if e.kind.value == "conversation.started"][-1]
+            assert started.payload["agent"] == "alternate"
+            assert started.payload["resumed"] is False
+            assert len(sent(tmp_path, "session/new")) == 2
+            assert len(sent(tmp_path, "session/load")) == 1
 
     asyncio.run(scenario())

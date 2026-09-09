@@ -529,10 +529,24 @@ class ACPNode:
             record.runner_overrides.get(execution.node_id, self.agent)
             if record else self.agent
         )
+        stored = await execution.runtime.store.session(
+            execution.run_id, self.session_key or str(execution.node_id)
+        )
+        resuming = await self._answer_to_apply(execution.runtime, stored)
+        # Deliver a recorded answer in the conversation that raised it. Runner
+        # overrides apply only to fresh executions, after this recovery finishes.
+        if stored is not None and resuming is not None:
+            runner = stored.agent
         node = self if runner == self.agent else replace(self, agent=runner)
-        return await node._run(state, cwd)
+        return await node._run(state, cwd, stored, resuming)
 
-    async def _run(self, state: Mapping[str, object], cwd: str) -> dict[str, object]:
+    async def _run(
+        self,
+        state: Mapping[str, object],
+        cwd: str,
+        stored: ACPContinuation | None,
+        resuming: _StoredAnswer | None,
+    ) -> dict[str, object]:
         execution = current_execution()
         runtime = execution.runtime
         key = self.session_key or str(execution.node_id)
@@ -556,11 +570,6 @@ class ACPNode:
                     terminal_results.append(bound.result)
                 if bound.clarification is not None:
                     clarifications.append(bound.clarification)
-            stored = await runtime.store.session(execution.run_id, key)
-            # A continuation belongs to its provider and cannot cross runners.
-            if stored is not None and stored.agent != self.agent:
-                stored = None
-            resuming = await self._answer_to_apply(runtime, stored)
             client, session = await self._open(
                 stored if resuming else None, cwd, tuple(mcp_servers),
                 self.session_config,
