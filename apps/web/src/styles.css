@@ -1456,7 +1456,7 @@ select:disabled { cursor: default; }
   padding: 4px 8px;
   cursor: pointer;
 }
-.user-badge-logout:hover { background: var(--smoke); }
+.user-badge-logout:hover { background: var(--fill-hover); }
 
 /* --- state --------------------------------------------------------------- */
 
