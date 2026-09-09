@@ -44,6 +44,11 @@ class OAuthCredentialStore:
         self._service = service
         self._username = username
 
+    @property
+    def credential_identity(self) -> tuple[str, str]:
+        """The non-secret keychain identity used for coordination locks."""
+        return self._service, self._username
+
     def _check_backend(self) -> None:
         try:
             priority = keyring.get_keyring().priority

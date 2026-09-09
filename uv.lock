@@ -727,6 +727,7 @@ dependencies = [
     { name = "engine-graph-runtime-langgraph" },
     { name = "engine-runtime" },
     { name = "engine-scoper" },
+    { name = "filelock" },
     { name = "keyring" },
     { name = "platformdirs" },
     { name = "python-dotenv" },
@@ -749,6 +750,7 @@ requires-dist = [
     { name = "engine-graph-runtime-langgraph", editable = "packages/graph_runtime_langgraph" },
     { name = "engine-runtime", editable = "packages/runtime" },
     { name = "engine-scoper", editable = "packages/scoper" },
+    { name = "filelock", specifier = ">=3.18" },
     { name = "keyring", specifier = ">=25" },
     { name = "platformdirs", specifier = ">=4" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -783,6 +785,15 @@ requires-dist = [
     { name = "engine-core", editable = "packages/engine" },
     { name = "engine-graph-runtime-langgraph", editable = "packages/graph_runtime_langgraph" },
     { name = "engine-runtime", editable = "packages/runtime" },
+]
+
+[[package]]
+name = "filelock"
+version = "3.32.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/46/126b1831dca12060d4a8296bf9c4fe5c93c4f22197fa239cb0cc82042bba/filelock-3.32.6.tar.gz", hash = "sha256:a3f55a18af3652a94d8f47d6055df434f254ca1d02ef2524850c6d249ca2512c", size = 225172, upload-time = "2026-09-08T22:57:11.528Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/06/4f138f618dbea66803291274f228f01daf29f306fe8b96bc30dab765df75/filelock-3.32.6-py3-none-any.whl", hash = "sha256:3f16ecd0117feae0dfc147e8c62eb5daeccd8bd800378c3ddf416de9b4feb6b1", size = 100189, upload-time = "2026-09-08T22:57:10.182Z" },
 ]
 
 [[package]]

@@ -33,7 +33,10 @@ from engine.adapters.agent_runner.claude_code import (
     claude_session_config,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
-from engine.adapters.communications.slack import SlackCommunications, SlackCredentialStore
+from engine.adapters.communications.slack import (
+    SlackCommunications,
+    SlackCredentialStore,
+)
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
@@ -48,6 +51,7 @@ from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeWorkspaceProvider,
 )
 from engine.apps.web.github_auth import (
+    GITHUB_CREDENTIAL_IDENTITY,
     GitHubAuthError,
     GitHubCredentialStore,
     GitHubRefreshTokenInvalidError,
@@ -57,15 +61,18 @@ from engine.apps.web.gitlab_auth import (
     GitLabAuthError,
     GitLabCredentialStore,
     GitLabRefreshTokenInvalidError,
+)
+from engine.apps.web.gitlab_auth import (
     refresh_access_token as refresh_gitlab_access_token,
 )
-from engine.graph_runtime import GraphRuntime, GraphWorkflow
-from engine.graph_runtime_langgraph.workflows import sqlite_runtime
-from engine.scoper import MilestoneScoper, codex_milestone_scoper
+from engine.apps.web.oauth_lifecycle import oauth_lifecycle_event, token_fingerprint
+from engine.apps.web.oauth_lock import credential_lock
 from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
 )
+from engine.graph_runtime import GraphRuntime, GraphWorkflow
+from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.ports import AgentRunner, Communications, SourceControl
 from engine.runtime import (
     PLANNING_TOOL_NAMES,
@@ -75,6 +82,7 @@ from engine.runtime import (
     PlanningMcpBroker,
     project_chat_capabilities,
 )
+from engine.scoper import MilestoneScoper, codex_milestone_scoper
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,47 +184,124 @@ def build_capabilities(
         a waiter retries with credentials written by the first caller.
         """
         nonlocal _refresh_lock, _refresh_persistence_failed
+        oauth_lifecycle_event(
+            "github_refresh_unauthorized",
+            failed_access_token=token_fingerprint(failed_token),
+        )
         if _store is None:
+            oauth_lifecycle_event(
+                "github_refresh_skipped", reason="no_credential_store"
+            )
             return False
         # GitHub rotates refresh tokens.  If we receive a fresh pair but cannot
         # durably save it, retrying with the stale stored token would consume
         # another one and eventually strand the user.  Stop retrying until a
         # new connection is established or this process is restarted.
         if _refresh_persistence_failed:
+            oauth_lifecycle_event("github_refresh_skipped", reason="persistence_failed")
             return False
         client_id = settings.github_client_id or _store.get_client_id()
         if not client_id:
+            oauth_lifecycle_event("github_refresh_skipped", reason="no_client_id")
             return False
         if _refresh_lock is None:
             _refresh_lock = asyncio.Lock()
         async with _refresh_lock:
-            credentials = _store.get_credentials()
-            if credentials is None:
-                return False
-            if credentials.access_token != failed_token:
-                return True
-            if not credentials.refresh_token:
-                # Legacy bare tokens and manually saved PATs are not
-                # refreshable.  A 401 alone is not sufficient reason to erase
-                # a user credential that this process did not issue.
-                return False
-            try:
-                refreshed = await refresh_access_token(
-                    client_id, credentials.refresh_token
+            identity = getattr(
+                _store, "credential_identity", GITHUB_CREDENTIAL_IDENTITY
+            )
+            async with credential_lock(*identity) as acquired:
+                if not acquired:
+                    oauth_lifecycle_event(
+                        "github_refresh_skipped", reason="lock_timeout"
+                    )
+                    return False
+                credentials = _store.get_credentials()
+                if credentials is None:
+                    oauth_lifecycle_event(
+                        "github_refresh_skipped", reason="credentials_missing"
+                    )
+                    return False
+                if credentials.access_token != failed_token:
+                    oauth_lifecycle_event(
+                        "github_refresh_reused_newer_credentials",
+                        access_token=token_fingerprint(credentials.access_token),
+                    )
+                    return True
+                if not credentials.refresh_token:
+                    # Legacy bare tokens and manually saved PATs are not
+                    # refreshable.  A 401 alone is not sufficient reason to erase
+                    # a user credential that this process did not issue.
+                    oauth_lifecycle_event(
+                        "github_refresh_skipped", reason="no_refresh_token"
+                    )
+                    return False
+                attempted_refresh_token = credentials.refresh_token
+                oauth_lifecycle_event(
+                    "github_refresh_started",
+                    refresh_token=token_fingerprint(attempted_refresh_token),
                 )
-            except GitHubRefreshTokenInvalidError:
-                _store.delete()
-                return False
-            except GitHubAuthError:
-                # A network or GitHub-service failure is temporary; retain the
-                # token pair for the next request.
-                return False
-            try:
-                _store.set_credentials(refreshed)
-            except GitHubAuthError:
-                _refresh_persistence_failed = True
-                return False
-            return True
+                try:
+                    refreshed = await refresh_access_token(
+                        client_id, attempted_refresh_token
+                    )
+                except GitHubRefreshTokenInvalidError:
+                    # Another process may have rotated the pair while this request
+                    # was waiting to enter the critical section. Never erase its
+                    # newer credentials because this process used a stale token.
+                    current = _store.get_credentials()
+                    if (
+                        current is not None
+                        and current.refresh_token != attempted_refresh_token
+                    ):
+                        oauth_lifecycle_event(
+                            "github_refresh_invalid_retained_newer_credentials",
+                            attempted_refresh_token=token_fingerprint(
+                                attempted_refresh_token
+                            ),
+                            current_refresh_token=token_fingerprint(
+                                current.refresh_token
+                            ),
+                        )
+                        return True
+                    _store.delete()
+                    oauth_lifecycle_event(
+                        "github_refresh_invalid_deleted_credentials",
+                        refresh_token=token_fingerprint(attempted_refresh_token),
+                    )
+                    return False
+                except GitHubAuthError:
+                    # A network or GitHub-service failure is temporary; retain the
+                    # token pair for the next request.
+                    oauth_lifecycle_event(
+                        "github_refresh_failed", reason="provider_or_network_error"
+                    )
+                    return False
+                current = _store.get_credentials()
+                if current is None or current.refresh_token != attempted_refresh_token:
+                    oauth_lifecycle_event(
+                        "github_refresh_discarded_stale_response",
+                        attempted_refresh_token=token_fingerprint(
+                            attempted_refresh_token
+                        ),
+                        current_refresh_token=token_fingerprint(
+                            current.refresh_token if current is not None else None
+                        ),
+                    )
+                    return current is not None
+                try:
+                    _store.set_credentials(refreshed)
+                except GitHubAuthError:
+                    _refresh_persistence_failed = True
+                    oauth_lifecycle_event("github_refresh_persist_failed")
+                    return False
+                oauth_lifecycle_event(
+                    "github_refresh_completed",
+                    previous_refresh_token=token_fingerprint(attempted_refresh_token),
+                    access_token=token_fingerprint(refreshed.access_token),
+                    refresh_token=token_fingerprint(refreshed.refresh_token),
+                )
+                return True
 
     oauth = GitHubSourceControl(
         _token,
@@ -225,6 +310,7 @@ def build_capabilities(
             _token, on_token_unauthorized=_refresh_after_unauthorized
         ),
     )
+
     def _gitlab_origin() -> str:
         return (
             settings.source_control_preferences.gitlab_origin()
