@@ -221,6 +221,8 @@ class GitHubLogin:
         }, headers=_HEADERS)
 
     async def logout(self, request: Request) -> Response:
+        if self._read_session(request) is None:
+            return JSONResponse({"ok": True}, headers=_HEADERS)
         response = JSONResponse({"ok": True}, headers=_HEADERS)
         response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
                                samesite="lax", secure=self._is_secure())

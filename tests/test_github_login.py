@@ -315,6 +315,14 @@ def test_logout_clears_session(flow):
     assert client.get("/api/auth/github/status").json()["authenticated"] is False
 
 
+def test_logout_without_session_is_noop(flow):
+    """Cross-site POST without a session cookie does not set Set-Cookie."""
+    client = browser(flow)
+    response = client.post("/api/auth/github/logout")
+    assert response.json() == {"ok": True}
+    assert "set-cookie" not in response.headers
+
+
 def test_status_not_configured():
     flow = GitHubLogin(None)
     client = browser(flow)

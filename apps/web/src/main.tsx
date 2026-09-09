@@ -562,15 +562,29 @@ function UserBadge({ auth }: { auth: AuthStatus }) {
   );
 }
 
+function Redirect({ to }: { to: string }) {
+  useEffect(() => { window.location.replace(to); }, [to]);
+  return <main className="state">Redirecting…</main>;
+}
+
 function Root() {
   const route = useMemo(currentRoute, []);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
 
+  const [authError, setAuthError] = useState(false);
+
   useEffect(() => {
     getAuthStatus()
       .then(setAuth)
-      .catch(() => setAuth({ authenticated: false, user: null, loginRequired: true }));
+      .catch(() => setAuthError(true));
   }, []);
+
+  if (authError)
+    return (
+      <main className="state state-fatal">
+        Could not reach the server. Please refresh to try again.
+      </main>
+    );
 
   if (auth === null)
     return <main className="state">Starting openengine…</main>;
@@ -578,10 +592,8 @@ function Root() {
   if (auth.loginRequired && !auth.authenticated)
     return <LoginPage />;
 
-  if (route.kind === "login") {
-    window.location.replace("/");
-    return <main className="state">Redirecting…</main>;
-  }
+  if (route.kind === "login")
+    return <Redirect to="/" />;
 
   return (
     <>
