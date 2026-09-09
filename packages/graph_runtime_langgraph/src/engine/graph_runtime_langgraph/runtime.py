@@ -311,6 +311,24 @@ class LangGraphRuntime:
         )
         return await self.resume_from(run_id, checkpoint_id)
 
+    async def set_runner(
+        self, run_id: RunId, node_id: NodeId, runner: str
+    ) -> RunSnapshot:
+        record = await self._require(run_id)
+        node = self._definitions[record.graph_id].topology.node(node_id)
+        if node is None:
+            raise UnknownNodeError(f"unknown node: {node_id}")
+        if not node.runner or runner not in (*node.runners, node.runner):
+            raise ValueError(f"unsupported runner for {node_id}: {runner}")
+        if runner != record.runner_overrides.get(node_id, node.runner):
+            overrides = dict(record.runner_overrides)
+            if runner == node.runner:
+                overrides.pop(node_id, None)
+            else:
+                overrides[node_id] = runner
+            await self._store.remember_run(replace(record, runner_overrides=overrides))
+        return await self._snapshot(run_id)
+
     async def set_auto_approve(
         self, run_id: RunId, node_id: NodeId, enabled: bool
     ) -> RunSnapshot:
@@ -976,6 +994,7 @@ class LangGraphRuntime:
             pending_approvals=tuple(_pending(record_) for record_ in pending),
             error=record.error,
             auto_approve_nodes=record.auto_approve_nodes,
+            runner_overrides=record.runner_overrides,
         )
 
 

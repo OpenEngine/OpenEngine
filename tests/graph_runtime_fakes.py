@@ -212,6 +212,7 @@ class _Run:
         self.answered: set[ApprovalId] = set()
         """Requests that have been resolved, so a repeat is a 409 and not a 404."""
         self.auto_approve_nodes: tuple[NodeId, ...] = ()
+        self.runner_overrides: dict[NodeId, str] = {}
         self.error = ""
         self.executors: set[asyncio.Task[None]] = set()
         """Every task driving this run, which must never be more than one.
@@ -269,6 +270,7 @@ class _Run:
             pending_approvals=tuple(self.pending.values()),
             error=self.error,
             auto_approve_nodes=self.auto_approve_nodes,
+            runner_overrides=self.runner_overrides,
         )
 
     def _status(self) -> RunStatus:
@@ -519,6 +521,21 @@ class ScriptedGraphRuntime:
             node_id=target.node_id,
             execution_id=target.execution_id,
         )
+        return self._snapshot(run)
+
+    async def set_runner(
+        self, run_id: RunId, node_id: NodeId, runner: str
+    ) -> RunSnapshot:
+        run = self._require(run_id)
+        node = self.topology(run.graph.graph_id).node(node_id)
+        if node is None:
+            raise UnknownNodeError(f"unknown node: {node_id}")
+        if not node.runner or runner not in (*node.runners, node.runner):
+            raise ValueError(f"unsupported runner for {node_id}: {runner}")
+        if runner == node.runner:
+            run.runner_overrides.pop(node_id, None)
+        elif runner != run.runner_overrides.get(node_id, node.runner):
+            run.runner_overrides[node_id] = runner
         return self._snapshot(run)
 
     async def set_auto_approve(
