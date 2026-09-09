@@ -411,6 +411,11 @@ ul, ol { padding: 0; list-style: none; }
 .panel-head-workflow {
   grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(150px, 200px));
 }
+.panel-head-workflow > .field:last-child {
+  grid-column: -2 / -1;
+  justify-self: end;
+  text-align: right;
+}
 .panel-head-copy { display: grid; gap: 10px; min-width: 0; }
 .panel-head h1 {
   font-size: clamp(24px, 2.4vw, 33px);
