@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import uvicorn
+from dotenv import dotenv_values
 from starlette.applications import Starlette
 
 from engine.apps.web.api import create_app
@@ -30,6 +31,7 @@ from engine.apps.web.composition import (
     claude_session_config_for,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.github_login import GitHubLoginConfig
 from engine.adapters.communications.slack import SlackCredentialStore
 from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
@@ -101,6 +103,27 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
     )
 
 
+def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None:
+    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+    values = dotenv_values(secret_file, interpolate=False)
+    client_id = os.environ.get(
+        "ENGINE_GITHUB_LOGIN_CLIENT_ID", loaded.config.github_login_client_id
+    )
+    redirect_uri = os.environ.get(
+        "ENGINE_GITHUB_LOGIN_REDIRECT_URI", loaded.config.github_login_redirect_uri
+    )
+    secret = os.environ.get(
+        "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
+        values.get("ENGINE_GITHUB_LOGIN_CLIENT_SECRET") or "",
+    )
+    if not any((client_id, redirect_uri, secret)):
+        return None
+    try:
+        return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
+    except ValueError as error:
+        raise EngineConfigError(str(error)) from error
+
+
 def _github_client_id_source() -> str:
     return "environment" if "GITHUB_CLIENT_ID" in os.environ else "configuration"
 
@@ -132,6 +155,7 @@ def compose_app(
 ) -> Starlette:
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
+    github_login_config = _github_login_config(loaded)
     credential_store = GitHubCredentialStore()
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
@@ -164,6 +188,7 @@ def compose_app(
         credential_store=credential_store,
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
+        github_login_config=github_login_config,
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
         communications_channel=loaded.config.communications.channel,
@@ -190,16 +215,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         loaded, workflow_catalog = read_configuration(args.config)
+        settings = _settings(loaded)
+        if args.check:
+            _github_login_config(loaded)
+            report_wiring(settings)
+            return 0
+        app = compose_app(loaded, workflow_catalog)
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
-    settings = _settings(loaded)
-
-    if args.check:
-        report_wiring(settings)
-        return 0
-
-    app = compose_app(loaded, workflow_catalog)
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)
     return 0

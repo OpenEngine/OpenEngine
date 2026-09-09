@@ -107,6 +107,8 @@ class EngineConfig:
 
     default_branch: str = "main"
     github_client_id: str = ""
+    github_login_client_id: str = ""
+    github_login_redirect_uri: str = ""
     github_token: str = ""
     public_url: str = ""
     communications: CommunicationsConfig = CommunicationsConfig()
@@ -195,6 +197,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "communications",
             "default_branch",
             "github_client_id",
+            "github_login_client_id",
+            "github_login_redirect_uri",
             "github_token",
             "orchestrator",
             "public_url",
@@ -303,6 +307,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         attribution=attribution,
         default_branch=default_branch,
         github_client_id=github_client_id,
+        github_login_client_id=_optional_nonblank_string(
+            document.get("github_login_client_id", ""), "github_login_client_id"
+        ),
+        github_login_redirect_uri=_optional_nonblank_string(
+            document.get("github_login_redirect_uri", ""), "github_login_redirect_uri"
+        ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
         communications=CommunicationsConfig(

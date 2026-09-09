@@ -348,3 +348,75 @@ def test_every_entrypoint_rejects_an_explicit_missing_config(
     assert entrypoint([*arguments, "--config", str(missing)]) == 2
 
     assert "configuration file does not exist" in capsys.readouterr().err
+
+
+def test_github_login_toml_and_secret_rotation(tmp_path, monkeypatch):
+    for name in ("CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URI"):
+        monkeypatch.delenv(f"ENGINE_GITHUB_LOGIN_{name}", raising=False)
+    (tmp_path / "engine.toml").write_text(
+        'github_login_client_id = "login-client"\n'
+        'github_login_redirect_uri = "https://engine.test/api/auth/github/callback"\n'
+    )
+    secret_file = tmp_path / ".env"
+    secret_file.write_text('ENGINE_GITHUB_LOGIN_CLIENT_SECRET="first-${LITERAL}"\n')
+    loaded = load_engine_config(environ={}, cwd=tmp_path)
+    config = web_main._github_login_config(loaded)
+    assert config.client_id == "login-client"
+    assert config.current_secret() == "first-${LITERAL}"
+    secret_file.write_text('ENGINE_GITHUB_LOGIN_CLIENT_SECRET=rotated\n')
+    assert config.current_secret() == "rotated"
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "environment-secret")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "environment-client")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "https://override.test/api/auth/github/callback")
+    override = web_main._github_login_config(loaded)
+    assert override.client_id == "environment-client"
+    assert override.redirect_uri == "https://override.test/api/auth/github/callback"
+    assert override.current_secret() == "environment-secret"
+    monkeypatch.delenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET")
+    secret_file.unlink()
+    with pytest.raises(ValueError, match="secret is not configured"):
+        config.current_secret()
+
+
+def test_github_login_disabled_and_partial_configuration(tmp_path, monkeypatch):
+    for name in ("CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URI"):
+        monkeypatch.delenv(f"ENGINE_GITHUB_LOGIN_{name}", raising=False)
+    monkeypatch.chdir(tmp_path)
+    loaded = load_engine_config(environ={}, cwd=tmp_path)
+    assert web_main._github_login_config(loaded) is None
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "partial")
+    with pytest.raises(EngineConfigError, match="requires credentials"):
+        web_main._github_login_config(loaded)
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]])
+@pytest.mark.parametrize("redirect_uri", ["", "http://public.test/api/auth/github/callback"])
+def test_web_reports_invalid_login_configuration(tmp_path, monkeypatch, capsys, args, redirect_uri):
+    path = tmp_path / "engine.toml"
+    path.write_text("")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "client")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "private-secret")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", redirect_uri)
+
+    def unexpected_start(*args, **kwargs):
+        pytest.fail("Invalid login configuration must stop startup")
+
+    monkeypatch.setattr(web_main.uvicorn, "run", unexpected_start)
+    monkeypatch.setattr(web_main, "report_wiring", unexpected_start)
+    assert web_main.main(["--config", str(path), *args]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("configuration error: GitHub login requires credentials")
+    assert "Traceback" not in captured.err
+    assert "private-secret" not in captured.err
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("key", ["github_login_client_id", "github_login_redirect_uri"])
+def test_github_login_config_requires_strings(key):
+    with pytest.raises(EngineConfigError, match=f"{key} must be a string"):
+        parse_engine_config({key: 42})
+
+
+def test_github_login_secret_not_accepted_in_toml():
+    with pytest.raises(EngineConfigError):
+        parse_engine_config({"github_login_client_secret": "secret"})

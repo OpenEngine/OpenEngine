@@ -19,3 +19,7 @@ node_modules/
 .codex/
 test-results/
 playwright-report/
+
+# Server-local secrets
+.env
+.env.*
