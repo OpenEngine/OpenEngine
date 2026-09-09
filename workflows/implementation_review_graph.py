@@ -165,6 +165,7 @@ def pipeline(
             ),
             output_key=IMPLEMENTATION,
             graph_node_name="Implementation",
+            graph_node_always_open=True,
             graph_node_description="Makes the requested change.",
         ),
     )

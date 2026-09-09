@@ -455,6 +455,8 @@ class ACPNode:
     """What to call this node on screen. The node's own id when empty."""
     graph_node_kind: str = "agent"
     graph_node_description: str = ""
+    graph_node_always_open: bool = False
+    """Whether steering can restart this node after the graph moves past it."""
     graph_node_show_in_sidebar: bool = True
     """Whether clients should offer this node as a run conversation."""
     cwd: str | Callable[[Mapping[str, object]], str | None]

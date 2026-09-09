@@ -165,6 +165,10 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         True,
         False,
     ]
+    for topology in topologies:
+        assert [str(node.node_id) for node in topology.nodes if node.always_open] == [
+            "implementation"
+        ]
     assert str(codex.entry_point) == "workspace"
 
 

@@ -288,6 +288,8 @@ export type ApiGraphTopology = {
     /** Whether the rail should offer this node's conversation. Absent means
      *  shown: a node that says nothing is one a person can go and read. */
     showInSidebar?: boolean;
+    /** Whether steering can restart this node when it is no longer active. */
+    alwaysOpen?: boolean;
   }[];
 };
 
@@ -355,13 +357,12 @@ export function setGraphAutoApprove(
   );
 }
 
-/** Say something to the agent a node is running, while it runs.
+/** Steer a node's live agent or reopen a node that allows it.
  *
  *  Addressed to the node rather than to the run: a graph may have several
  *  agents working at once, and the conversation on screen is one of them. The
- *  engine refuses this when that node has nothing in flight, because there is
- *  nobody to say it to -- steering is a message for a live turn, not a queued
- *  instruction for whatever runs next. */
+ *  engine refuses idle nodes unless their topology marks them always open;
+ *  those resume from their checkpoint with the message queued. */
 export function steerGraphRun(
   runId: string,
   nodeId: string,
