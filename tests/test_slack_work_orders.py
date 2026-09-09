@@ -898,3 +898,139 @@ def test_an_agent_is_told_when_its_status_did_not_reach_anyone() -> None:
         assert clarified == {"ok": True, "acknowledgement": "clarified"}
 
     asyncio.run(scenario())
+
+
+# --- concierge broker ---------------------------------------------------------
+
+
+def test_concierge_broker_creates_a_work_order() -> None:
+    """The create_workorder tool calls the factory callback and returns the URL."""
+    from engine.runtime.concierge import ConciergeBroker
+
+    async def scenario() -> None:
+        created: list[tuple[str, str]] = []
+
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            created.append((repository, prompt))
+            return "https://engine.example/runs/run-abc", "run-abc"
+
+        broker = ConciergeBroker(
+            create_workorder=create,
+            default_repository="acme/api",
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {"prompt": "add a health endpoint"},
+                }
+            )
+        assert result["ok"] is True
+        assert "run-abc" in result["text"]
+        assert created == [("acme/api", "add a health endpoint")]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_requires_repository() -> None:
+    """Without a default or explicit repository the tool refuses."""
+    from engine.runtime.concierge import ConciergeBroker
+
+    async def scenario() -> None:
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            raise AssertionError("should not be called")
+
+        broker = ConciergeBroker(create_workorder=create, default_repository="")
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {"prompt": "do something"},
+                }
+            )
+        assert result["ok"] is False
+        assert "repository" in result["error"]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_uses_explicit_repository() -> None:
+    """An explicit repository overrides the default."""
+    from engine.runtime.concierge import ConciergeBroker
+
+    async def scenario() -> None:
+        created: list[tuple[str, str]] = []
+
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            created.append((repository, prompt))
+            return "https://engine.example/runs/run-1", "run-1"
+
+        broker = ConciergeBroker(
+            create_workorder=create,
+            default_repository="acme/api",
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {
+                        "prompt": "fix the bug",
+                        "repository": "acme/frontend",
+                    },
+                }
+            )
+        assert result["ok"] is True
+        assert created == [("acme/frontend", "fix the bug")]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_rejects_empty_prompt() -> None:
+    from engine.runtime.concierge import ConciergeBroker
+
+    async def scenario() -> None:
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            raise AssertionError("should not be called")
+
+        broker = ConciergeBroker(
+            create_workorder=create, default_repository="acme/api"
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {"prompt": "  "},
+                }
+            )
+        assert result["ok"] is False
+        assert "prompt" in result["error"]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_rejects_unknown_tool() -> None:
+    from engine.runtime.concierge import ConciergeBroker
+
+    async def scenario() -> None:
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            raise AssertionError("should not be called")
+
+        broker = ConciergeBroker(
+            create_workorder=create, default_repository="acme/api"
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "complete_step",
+                    "arguments": {},
+                }
+            )
+        assert result["ok"] is False
+        assert "unknown" in result["error"]
+
+    asyncio.run(scenario())

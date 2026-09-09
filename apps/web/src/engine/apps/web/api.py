@@ -136,12 +136,14 @@ from engine.ports import (
     WorkspaceState,
 )
 from engine.runtime import (
+    CONCIERGE,
     PLANNER,
     AgentSession,
     ApprovalBroker,
     ApprovalConfig,
     ApprovalDecisionNotAllowedError,
     ApprovalNotPendingError,
+    ConciergeBroker,
     RunNotifier,
     RunReader,
     UnknownApprovalError,
@@ -2882,78 +2884,139 @@ def create_app(
             return Response(status_code=200)
         mention = slack_mention_from_event(payload)
         if mention is not None:
-            await start_mentioned_work_order(mention)
+            await handle_concierge_mention(mention)
         return Response(status_code=200)
 
-    async def start_mentioned_work_order(mention: SlackMention) -> None:
-        """Turn somebody pinging the bot into a work order, and say so.
+    # --- concierge: conversational agent behind @OpenEngineBot ----------------
 
-        Only the step workflows are startable this way. A `[BETA]` graph run is
-        driven by the other engine, which has neither the run-bound tools an
-        agent reports status through nor a place to keep where the request came
-        from -- so offering one here would be offering a work order that goes
-        silent the moment it starts.
+    #: Thread key (channel, thread_ts) -> agent instance id. A mention in a
+    #: thread that already has a concierge session continues that session
+    #: rather than starting a new one.
+    _concierge_threads: dict[tuple[str, str], AgentInstanceId] = {}
+
+    #: Instance id -> the origin that started the thread, so a work order
+    #: created later can report back to the same place.
+    _concierge_origins: dict[AgentInstanceId, RunOrigin] = {}
+
+    def _concierge_broker_factory(
+        _store: StateStore,
+        _capabilities: Sequence[str],
+        instance: AgentInstance,
+    ) -> ConciergeBroker:
+        """Build a concierge broker bound to one turn's conversation."""
+        origin = _concierge_origins.get(instance.instance_id)
+
+        async def do_create_workorder(
+            repository: str, prompt: str
+        ) -> tuple[str, str]:
+            definition = _mentioned_workflow()
+            if definition is None:
+                raise RuntimeError(
+                    "no step workflow is configured under "
+                    "`work_orders.workflow`"
+                )
+            runner_name = (
+                work_orders.runner or workflow_executor.default_runner
+            )
+            if runner_name not in workflow_executor.runners:
+                raise RuntimeError(f"unknown runner: {runner_name}")
+            state = await start_step_run(
+                prompt=prompt,
+                repository=repository,
+                workflow_id=definition.workflow_id,
+                definition=definition,
+                runner_name=runner_name,
+                origin=origin,
+            )
+            link = run_notifier.work_order_link(state)
+            url = link.url if link is not None else ""
+            # Announce the work order in the thread so the user sees it
+            # alongside the concierge's own answer.
+            if origin is not None:
+                await run_notifier.post(
+                    origin,
+                    CommunicationsMessage(
+                        f"Started a work order on `{repository}`. "
+                        "I will report progress here.",
+                        (link,) if link is not None else (),
+                        mention=origin.author,
+                    ),
+                    state,
+                )
+            return url, str(state.run_id)
+
+        return ConciergeBroker(
+            create_workorder=do_create_workorder,
+            default_repository=work_orders.repository,
+        )
+
+    concierge_session = AgentSession(
+        session.capabilities,
+        profiles={CONCIERGE.agent_id: CONCIERGE},
+        runners=runners,
+        mcp_brokers={"create_workorder": _concierge_broker_factory},
+    )
+
+    async def handle_concierge_mention(mention: SlackMention) -> None:
+        """Route a mention to a concierge session that can greet and create
+        work orders.
+
+        The first mention in a thread creates a new agent instance; subsequent
+        mentions in the same thread continue the conversation so context is
+        preserved across turns.
         """
+        if not _slack_store.token():
+            log.warning(
+                "ignoring a Slack mention in %s: this server is not connected "
+                "to Slack, so a reply could not be posted",
+                mention.channel,
+            )
+            return
+
         origin = RunOrigin(
             channel=mention.channel,
             thread_id=mention.thread_id,
             author=mention.author,
         )
+        key = (mention.channel, mention.thread_id)
 
-        async def refuse(reason: str) -> None:
-            await run_notifier.post(
-                origin, CommunicationsMessage(reason, mention=origin.author)
+        if key not in _concierge_threads:
+            instance = await concierge_session.start(
+                AgentId("concierge"),
+                runner=next(iter(runners)),
             )
+            _concierge_threads[key] = instance.instance_id
+            _concierge_origins[instance.instance_id] = origin
 
-        if not _slack_store.token():
-            # Slack keeps delivering mentions to an app that is installed, so
-            # one can arrive after this server was disconnected. Nothing is
-            # started, because everything the run would say -- including the
-            # refusal below -- goes nowhere: it would provision a workspace and
-            # run a write-access agent to completion in silence. The log is the
-            # only place left to say so.
-            log.warning(
-                "ignoring a Slack mention in %s: this server is not connected "
-                "to Slack, so a work order started from it could not report "
-                "anything back",
+        instance_id = _concierge_threads[key]
+
+        try:
+            turn = await concierge_session.say(
+                instance_id,
+                mention.text,
+                runner=next(iter(runners)),
+            )
+        except Exception:
+            log.exception(
+                "concierge turn failed for thread %s in %s",
+                mention.thread_id,
                 mention.channel,
             )
-            return
-        if not work_orders.repository:
-            await refuse(
-                "I cannot start a work order until this deployment configures "
-                "`work_orders.repository`."
+            await run_notifier.post(
+                origin,
+                CommunicationsMessage(
+                    "Sorry, something went wrong. Please try again.",
+                    mention=origin.author,
+                ),
             )
             return
-        definition = _mentioned_workflow()
-        if definition is None:
-            await refuse(
-                "I cannot start a work order: this deployment has no step "
-                "workflow configured under `work_orders.workflow`."
-            )
-            return
-        runner_name = work_orders.runner or workflow_executor.default_runner
-        if runner_name not in workflow_executor.runners:
-            await refuse(f"I cannot start a work order: unknown runner {runner_name}.")
-            return
-        state = await start_step_run(
-            prompt=mention.text,
-            repository=work_orders.repository,
-            workflow_id=definition.workflow_id,
-            definition=definition,
-            runner_name=runner_name,
-            origin=origin,
-        )
-        link = run_notifier.work_order_link(state)
+
         await run_notifier.post(
             origin,
             CommunicationsMessage(
-                f"Started a work order on `{work_orders.repository}`. "
-                "I will report progress here.",
-                (link,) if link is not None else (),
+                turn.message.content,
                 mention=origin.author,
             ),
-            state,
         )
 
     def _mentioned_workflow() -> WorkflowDefinition | None:

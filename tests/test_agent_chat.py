@@ -1020,10 +1020,11 @@ def test_shipped_profiles_grant_nothing_they_cannot_honour() -> None:
     """Every shipped grant is backed by a tool in the web composition."""
     from engine.runtime import BUILT_IN
 
-    assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder"), AgentId("planner")}
+    assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder"), AgentId("planner"), AgentId("concierge")}
     assert BUILT_IN[AgentId("foreman")].capabilities == ()
     assert BUILT_IN[AgentId("coder")].capabilities == ()
     assert BUILT_IN[AgentId("planner")].capabilities == ()
+    assert BUILT_IN[AgentId("concierge")].capabilities == ("create_workorder",)
     assert all(profile.instructions.strip() for profile in BUILT_IN.values())
 
 
