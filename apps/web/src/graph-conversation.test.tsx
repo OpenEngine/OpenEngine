@@ -431,7 +431,7 @@ describe("GraphConversationPage", () => {
     );
   });
 
-  it.each(["completed", "running"] as const)(
+  it.each(["completed", "running", "failed"] as const)(
     "reopens implementation through steering when review is %s",
     async (status) => {
       const fetch = serve([], graphRun({
@@ -740,6 +740,25 @@ describe("GraphConversationPage", () => {
     );
 
     expect(screen.getByText("the agent could not be started")).toBeVisible();
+  });
+
+  it("clears the old failure when the graph restarts", async () => {
+    await open([
+      event({
+        sequence: 1,
+        type: "run.failed",
+        payload: { error: "codex is out of quota" },
+      }),
+      event({
+        sequence: 2,
+        type: "steering.received",
+        payload: { message: "Try again." },
+      }),
+      event({ sequence: 3, type: "run.forked", nodeId: null }),
+    ]);
+
+    expect(screen.queryByText("codex is out of quota")).toBeNull();
+    expect(screen.getByText("Try again.")).toBeVisible();
   });
 
   it("shows one node's conversation and not its sibling's", async () => {

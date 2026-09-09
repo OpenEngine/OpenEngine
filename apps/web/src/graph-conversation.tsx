@@ -275,6 +275,9 @@ export function graphConversation(
       case "run.failed":
         failure = String(payload.error ?? "");
         break;
+      case "run.forked":
+        failure = "";
+        break;
       default:
         break;
     }
@@ -554,7 +557,7 @@ export function GraphConversationPage({
   const conversationId = graphConversationId(runId, nodeId);
 
   const nodeEvents = useMemo(
-    () => events.filter((event) => event.nodeId === nodeId),
+    () => events.filter((event) => event.nodeId === nodeId || event.type === "run.forked"),
     [events, nodeId],
   );
   const pending = useMemo(
