@@ -80,7 +80,7 @@ describe("Sidebar", () => {
   it("keeps the two sections in one order and opens only the one asked for", () => {
     const { container } = render(<Sidebar runs={[run]} initialSection="workflows" />);
 
-    const headers = [...container.querySelectorAll("[aria-expanded]")];
+    const headers = [...container.querySelectorAll(".rail-head[aria-expanded]")];
     expect(headers.map((element) => element.textContent)).toEqual([
       "Projects",
       "WorkOrders",
@@ -88,6 +88,52 @@ describe("Sidebar", () => {
     expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
     expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("filters multiple stages and outcomes without toggling the accordion", async () => {
+    const user = userEvent.setup();
+    const runs = [run,
+      { ...run, runId: "review", name: "Review run", steps: [{ ...run.steps[0], name: "Review" }] },
+      { ...run, runId: "human", name: "Human run", phase: "awaiting_human_review" },
+      { ...run, runId: "failed", name: "Failed run", phase: "failed" },
+      { ...run, runId: "succeeded", name: "Succeeded run", phase: "succeeded" },
+    ];
+    const { rerender } = render(<Sidebar runs={runs} initialSection="workflows" />);
+    await user.click(header("Filter WorkOrders"));
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
+    for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "succeeded" }));
+    expect(screen.queryByRole("link", { name: /Succeeded run/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Failed run/ })).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "Review" }));
+    expect(screen.queryByRole("link", { name: /Review run/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Human run/ })).toBeVisible();
+    rerender(<Sidebar runs={[...runs]} initialSection="workflows" />);
+    expect(screen.queryByRole("link", { name: /Succeeded run/ })).not.toBeInTheDocument();
+    for (const name of ["Implementation", "Human Review", "failed"]) {
+      await user.click(screen.getByRole("checkbox", { name }));
+    }
+    expect(screen.getByText("No WorkOrders match the selected filters.")).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "succeeded" }));
+    expect(screen.getByRole("link", { name: /Succeeded run/ })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "WorkOrder filters" })).not.toBeInTheDocument();
+    expect(header("Filter WorkOrders")).toHaveFocus();
+  });
+
+  it("filters graph frontiers and gives terminal outcomes priority", async () => {
+    const user = userEvent.setup();
+    const graphProgress = { activeNodeIds: ["review"], waitingNodeIds: [], nextNodeIds: [] };
+    const { rerender } = render(<Sidebar runs={[{ ...graphRun, graphProgress }]}
+      graphNodes={{ [graphRun.workflowId]: nodes }} initialSection="workflows" />);
+    await user.click(header("Filter WorkOrders"));
+    await user.click(screen.getByRole("checkbox", { name: "Review" }));
+    expect(screen.queryByRole("link", { name: /Second run/ })).not.toBeInTheDocument();
+    rerender(<Sidebar runs={[{ ...graphRun, phase: "succeeded", graphProgress }]}
+      graphNodes={{ [graphRun.workflowId]: nodes }} initialSection="workflows" />);
+    expect(screen.getByRole("link", { name: /Second run/ })).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "succeeded" }));
+    expect(screen.queryByRole("link", { name: /Second run/ })).not.toBeInTheDocument();
   });
 
   it("moves the open state to the clicked section and closes the others", async () => {

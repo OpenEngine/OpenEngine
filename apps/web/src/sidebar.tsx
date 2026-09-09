@@ -69,30 +69,96 @@ function conversationsOf(
     }));
 }
 
+const WORKORDER_FILTERS = ["Implementation", "Review", "Human Review", "failed", "succeeded"] as const;
+type WorkOrderFilter = typeof WORKORDER_FILTERS[number];
+
+function currentGraphNodes(run: ApiWorkflowRunListing) {
+  const progress = isGraphRun(run) && !runFinished(run) ? run.graphProgress : undefined;
+  return progress ? [...new Set([
+    ...progress.activeNodeIds,
+    ...progress.waitingNodeIds,
+    ...(progress.activeNodeIds.length || progress.waitingNodeIds.length ? [] : progress.nextNodeIds),
+  ])] : [];
+}
+
+function workOrderCategories(run: ApiWorkflowRunListing, nodes: GraphNodes): WorkOrderFilter[] {
+  if (run.phase === "succeeded" || run.phase === "failed") return [run.phase];
+  if (run.phase === "awaiting_human_review") return ["Human Review"];
+  const stages = isGraphRun(run)
+    ? currentGraphNodes(run).map((id) => nodes[run.workflowId]?.find((node) => node.nodeId === id) ?? { name: id, kind: "" })
+    : run.steps.filter((step) => step.stepId === run.currentStepId);
+  // Setup and other active stages belong to Implementation until review starts.
+  return stages.length ? stages.map((stage) => {
+    if (stage.kind === "human" || /human[ _-]*review/i.test(stage.name)) return "Human Review";
+    return /review/i.test(stage.name) ? "Review" : "Implementation";
+  }) : ["Implementation"];
+}
+
+function WorkOrderFilters({ selected, onChange }: {
+  selected: WorkOrderFilter[];
+  onChange: (selected: WorkOrderFilter[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rail-filter" onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+    }} onKeyDown={(event) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        event.currentTarget.querySelector("button")?.focus();
+      }
+    }}>
+      <button type="button" className="rail-filter-toggle" aria-label="Filter WorkOrders"
+        title="Filter WorkOrders" aria-expanded={open} aria-controls="rail-workorder-filters"
+        data-active={selected.length < WORKORDER_FILTERS.length || undefined}
+        onClick={() => setOpen(!open)}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 4h18l-7 8v7l-4 2v-9z" />
+        </svg>
+      </button>
+      {open && <div className="rail-filter-options" id="rail-workorder-filters"
+        role="group" aria-label="WorkOrder filters">
+        {WORKORDER_FILTERS.map((filter) => <label key={filter}>
+          <input type="checkbox" checked={selected.includes(filter)} onChange={(event) =>
+            onChange(event.target.checked ? [...selected, filter] : selected.filter((item) => item !== filter))
+          } />
+          {filter}
+        </label>)}
+      </div>}
+    </div>
+  );
+}
+
 function Section({
   id,
   title,
   open,
   onToggle,
   children,
+  action,
 }: {
   id: RailSection;
   title: string;
   open: boolean;
   onToggle: (section: RailSection) => void;
   children: ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <section className="rail-section" data-open={open || undefined}>
-      <button
-        aria-controls={`rail-${id}`}
-        aria-expanded={open}
-        className="rail-head"
-        onClick={() => onToggle(id)}
-        type="button"
-      >
-        {title}
-      </button>
+      <div className="rail-heading">
+        <button
+          aria-controls={`rail-${id}`}
+          aria-expanded={open}
+          className="rail-head"
+          onClick={() => onToggle(id)}
+          type="button"
+        >
+          {title}
+        </button>
+        {action}
+      </div>
       {/* A closed section is laid out at zero height rather than unmounted, so
           the slide has something to move; `inert` is what keeps the Tab key and
           screen readers out of the part of it that is off screen. */}
@@ -233,6 +299,10 @@ export function Sidebar({
   const open = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
   const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [runFilters, setRunFilters] = useState<WorkOrderFilter[]>([...WORKORDER_FILTERS]);
+  const filteredRuns = runs.filter((run) =>
+    workOrderCategories(run, graphNodes).some((category) => runFilters.includes(category)),
+  );
   // A row with nowhere to go is never the page you are reading. Both sides are
   // optional here, so comparing them alone would call two absent URLs a match
   // and mark every such row on every page.
@@ -284,7 +354,8 @@ export function Sidebar({
             )}
           </nav>
         </Section>
-        <Section id="workflows" title="WorkOrders" open={open === "workflows"} onToggle={toggle}>
+        <Section id="workflows" title="WorkOrders" open={open === "workflows"} onToggle={toggle}
+          action={<WorkOrderFilters selected={runFilters} onChange={setRunFilters} />}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/runs/new">
               + New WorkOrder
@@ -298,19 +369,15 @@ export function Sidebar({
             </a>
           </div>
           <nav className="rail-scroll" aria-label="Recent WorkOrders">
-            {runs.map((run) => {
+            {runs.length > 0 && filteredRuns.length === 0 && (
+              <p className="rail-note">No WorkOrders match the selected filters.</p>
+            )}
+            {filteredRuns.map((run) => {
               const conversations = conversationsOf(run, graphNodes);
               const progress = isGraphRun(run) && !runFinished(run)
                 ? run.graphProgress
                 : undefined;
-              const currentNodes = progress
-                ? [...new Set([
-                    ...progress.activeNodeIds,
-                    ...progress.waitingNodeIds,
-                    ...(progress.activeNodeIds.length || progress.waitingNodeIds.length
-                      ? [] : progress.nextNodeIds),
-                  ])]
-                : [];
+              const currentNodes = currentGraphNodes(run);
               const status = currentNodes.map((id) =>
                 graphNodes[run.workflowId]?.find((node) => node.nodeId === id)?.name ?? id,
               ).join(", ") || runStatusLabel(run);

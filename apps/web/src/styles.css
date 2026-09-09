@@ -216,6 +216,26 @@ ul, ol { padding: 0; list-style: none; }
   overflow: hidden;
 }
 
+.rail-heading { display: flex; align-items: center; }
+.rail-heading .rail-head { flex: 1; }
+.rail-filter { position: relative; margin-right: 10px; }
+.rail-filter-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  color: var(--night-muted); background: transparent;
+  border: 1px solid transparent; cursor: pointer;
+}
+.rail-filter-toggle:hover, .rail-filter-toggle:focus-visible { border-color: var(--night-ink); }
+.rail-filter-toggle[data-active] { color: var(--white); border-color: var(--night-muted); }
+.rail-filter-options {
+  position: absolute; right: 0; top: 100%; z-index: 10;
+  display: grid; gap: 10px; min-width: 170px; padding: 12px;
+  color: var(--night-ink); background: var(--night);
+  border: 1px solid var(--night-rule); font: 12px/1.4 var(--mono);
+  box-shadow: 0 6px 18px #0004;
+}
+.rail-filter-options label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
 .rail-head {
   display: flex;
   gap: 10px;
@@ -233,7 +253,7 @@ ul, ol { padding: 0; list-style: none; }
 }
 .rail-head:hover { border-color: #6a6a64; }
 .rail-head:focus-visible { border-color: var(--night-ink); outline: 0; }
-.rail-section[data-open] > .rail-head { color: var(--white); }
+.rail-section[data-open] > .rail-heading > .rail-head { color: var(--white); }
 
 .rail-note {
   display: grid;
@@ -1637,6 +1657,8 @@ select:disabled { cursor: default; }
      ahead of whatever the open one is showing. */
   .rail-sections { flex-direction: row; gap: 8px; align-items: center; min-width: 0; border: 0; }
   .rail-section { display: contents; }
+  .rail-heading { flex-shrink: 0; }
+  .rail-filter-options { position: fixed; top: 64px; right: 12px; }
   .rail-head { order: 0; width: auto; padding: 10px 8px; white-space: nowrap; }
   .rail-section-body { display: none; }
   .rail-section[data-open] > .rail-section-body {
