@@ -19,7 +19,7 @@ import {
 } from "./api";
 import { RailBrand, RailFoot } from "./brand";
 import { SettingsPanel } from "./settings-panel";
-import { isGraphRun, IN_PROGRESS_PHASES, runStatusLabel } from "./runs";
+import { isGraphRun, IN_PROGRESS_PHASES, runFinished, runStatusLabel } from "./runs";
 
 export type RailSection = "projects" | "workflows";
 
@@ -56,7 +56,8 @@ function conversationsOf(
         key: node.nodeId,
         name: node.name,
         href: graphConversationUrl(run.runId, node.nodeId),
-        waiting: false,
+        waiting: !runFinished(run) &&
+          (run.graphProgress?.waitingNodeIds.includes(node.nodeId) ?? false),
       }));
   return run.steps
     .filter((step) => step.conversationUrl)
@@ -299,6 +300,23 @@ export function Sidebar({
           <nav className="rail-scroll" aria-label="Recent WorkOrders">
             {runs.map((run) => {
               const conversations = conversationsOf(run, graphNodes);
+              const progress = isGraphRun(run) && !runFinished(run)
+                ? run.graphProgress
+                : undefined;
+              const currentNodes = progress
+                ? [...new Set([
+                    ...progress.activeNodeIds,
+                    ...progress.waitingNodeIds,
+                    ...(progress.activeNodeIds.length || progress.waitingNodeIds.length
+                      ? [] : progress.nextNodeIds),
+                  ])]
+                : [];
+              const status = currentNodes.map((id) =>
+                graphNodes[run.workflowId]?.find((node) => node.nodeId === id)?.name ?? id,
+              ).join(", ") || runStatusLabel(run);
+              const executing = isGraphRun(run)
+                ? !!progress?.activeNodeIds.length
+                : IN_PROGRESS_PHASES.has(run.phase);
               return (
                 <div className="rail-group" key={run.runId}>
                   <div
@@ -312,10 +330,10 @@ export function Sidebar({
                         {run.name}
                       </span>
                       <span className="rail-item-meta">
-                        {IN_PROGRESS_PHASES.has(run.phase) && (
+                        {executing && (
                           <span className="rail-live" aria-label="WorkOrder is in progress" />
                         )}
-                        {runStatusLabel(run)} · {run.workflowVersion || run.workflowId}
+                        {status} · {run.workflowVersion || run.workflowId}
                       </span>
                     </a>
                     {/* The project row's × put next to a WorkOrder, where it

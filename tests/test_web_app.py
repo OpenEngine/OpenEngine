@@ -122,6 +122,7 @@ from engine.graph_runtime import (
 )
 from engine.runtime.terminal_mcp import _mcp_response
 from graph_runtime_fakes import (
+    Ask,
     AwaitSteering,
     Fail,
     Say,
@@ -5140,6 +5141,46 @@ def test_creating_a_beta_work_order_starts_the_graph() -> None:
     assert created.json()["workflowVersion"] == ""
     assert created.json()["steps"] == []
     assert [one["runId"] for one in listed.json()["runs"]] == [str(run_id)]
+
+
+def test_graph_run_listing_carries_live_node_and_approval_state() -> None:
+    graph = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Ask("Run tests"),)),),
+    )
+    app, runtime = _graph_app(InMemoryStateStore(), graph)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": str(graph.graph_id),
+                        "prompt": "Implement it",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                for _ in range(100):
+                    snapshot = await runtime.snapshot(run_id)
+                    if snapshot is not None and snapshot.pending_approvals:
+                        break
+                    await asyncio.sleep(0)
+                else:
+                    raise AssertionError("graph never requested approval")
+                return (await client.get("/api/runs")).json()["runs"][0]
+
+    row = asyncio.run(scenario())
+    assert row["steps"] == []
+    assert row["graphProgress"] == {
+        "activeNodeIds": ["implementation"],
+        "waitingNodeIds": ["implementation"],
+        "nextNodeIds": [],
+    }
 
 
 def test_a_graph_naming_node_names_its_work_order() -> None:
