@@ -36,6 +36,14 @@ const SCRIPT: Script = {
     {
       when: "Review the implementation",
       steps: [
+        { type: "tool", name: "complete_step", arguments: {
+          outcome: "success", summary: "Facet reviewed.", outputs: { findings: "[]" },
+        } },
+      ],
+    },
+    {
+      when: "You are a senior reviewer consolidating findings",
+      steps: [
         { type: "say", text: "Read it." },
         {
           type: "tool",
@@ -48,7 +56,7 @@ const SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "Reviewed the greeting.",
-            outputs: { findings: "No issues found." },
+            outputs: { findings: "[]" },
           },
         },
       ],
@@ -95,7 +103,11 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
     "Workspace",
     "Naming",
     "Implementation",
-    "Review",
+    "Review (Security)",
+    "Review (Bugs & task adherence)",
+    "Review (Performance)",
+    "Review (Conciseness)",
+    "Reranker",
     "Human review",
   ]);
   await expect(page.getByRole("heading", { name: TITLE, level: 1 })).toBeVisible();

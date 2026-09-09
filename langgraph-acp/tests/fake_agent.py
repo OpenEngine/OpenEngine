@@ -195,6 +195,11 @@ def main() -> int:
                 respond(message_id, {})
             else:
                 respond(message_id, {"sessionId": SESSION_ID})
+        elif method == "session/set_config_option":
+            if message.get("params", {}).get("value") == "unavailable":
+                fail(message_id, -32602, "Unknown model")
+            else:
+                respond(message_id, {"configOptions": []})
         elif method == "session/load":
             update(
                 {

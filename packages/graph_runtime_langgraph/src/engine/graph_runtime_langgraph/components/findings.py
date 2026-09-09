@@ -12,8 +12,11 @@ where something needs to read one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 from typing import Any
+
+from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +36,22 @@ class Finding:
     line: int | None = None
     """The line number, if applicable."""
 
+    def __post_init__(self) -> None:
+        for name, limit in (("tagline", 2), ("description", 3)):
+            value = getattr(self, name)
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value.splitlines()) > limit
+            ):
+                raise ValueError(f"{name} must contain 1-{limit} non-empty lines")
+        if self.file is not None and not isinstance(self.file, str):
+            raise ValueError("file must be a string")
+        if self.line is not None and (type(self.line) is not int or self.line < 1):
+            raise ValueError("line must be a positive integer")
+        if not isinstance(self.agent, str) or not isinstance(self.facet, str):
+            raise ValueError("agent and facet must be strings")
+
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"tagline": self.tagline, "description": self.description}
         if self.facet:
@@ -48,10 +67,10 @@ class Finding:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Finding:
         return cls(
-            tagline=str(data.get("tagline", "")),
-            description=str(data.get("description", "")),
-            facet=str(data.get("facet", "")),
-            agent=str(data.get("agent", "")),
+            tagline=data.get("tagline", ""),
+            description=data.get("description", ""),
+            facet=data.get("facet", ""),
+            agent=data.get("agent", ""),
             file=data.get("file"),
             line=data.get("line"),
         )
@@ -137,4 +156,44 @@ __all__ = [
     "Finding",
     "REVIEW_FACETS",
     "ReviewFacet",
+    "ReviewNode",
+    "RerankerNode",
 ]
+
+
+def parse_findings(value: object) -> list[Finding]:
+    """Reject malformed reviewer output instead of silently treating it as clean."""
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError("findings must be a JSON array of objects")
+    return [Finding.from_dict(item) for item in value]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ReviewNode(ACPNode):
+    """Store validated findings under this facet's own key for parallel writes."""
+
+    facet: str
+
+    def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
+        update = ACPNode._terminal_update(self, event)
+        findings = parse_findings(update.get("findings"))
+        return {
+            self.output_key: [
+                replace(finding, agent=self.agent, facet=self.facet).to_dict()
+                for finding in findings
+            ]
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RerankerNode(ACPNode):
+    """Keep the reranker's accepted findings as structured checkpoint state."""
+
+    def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
+        update = ACPNode._terminal_update(self, event)
+        findings = parse_findings(update.get("findings"))
+        if any(not finding.agent or not finding.facet for finding in findings):
+            raise ValueError("reranked findings must retain reviewer lineage")
+        return {self.output_key: [finding.to_dict() for finding in findings]}
