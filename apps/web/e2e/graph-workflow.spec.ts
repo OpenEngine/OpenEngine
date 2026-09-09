@@ -175,6 +175,34 @@ test("@beta a graph WorkOrder provisions a checkout and runs its agents", async 
   await shot(page, testInfo, "2 implemented");
 });
 
+test("@beta the workflow tools reach the agent in a session it accepts", async ({
+  page,
+  engine,
+}) => {
+  engine.script(SCRIPT);
+
+  const runUrl = await create(page, engine.repository);
+
+  // Implementation is the first node to attach the run-bound workflow tools,
+  // so a server description ACP would refuse stops the run *here*: naming
+  // opens a session with no MCP servers at all and succeeds, and the run then
+  // fails with `session/new` refused before the implementation agent has said
+  // a word. Polled on both, so a refusal is reported as the message the agent
+  // sent rather than as a timeout waiting for work that never started.
+  await expect
+    .poll(
+      async () => {
+        const run = await graphRun(page, runUrl);
+        return {
+          error: String(run.error ?? ""),
+          implementation: String(run.values?.implementation ?? ""),
+        };
+      },
+      { timeout: 60_000 },
+    )
+    .toEqual({ error: "", implementation: expect.stringContaining(IMPLEMENTED) });
+});
+
 test("@beta the WorkOrder page shows a graph run's stages", async ({ page, engine }) => {
   engine.script(SCRIPT);
 

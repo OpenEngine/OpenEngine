@@ -426,6 +426,53 @@ def _close(process: "subprocess.Popen[str]") -> None:
 #: question at a time, which is all an ACP turn can have.
 _ACP_PERMISSION_ID = 8001
 
+#: What ACP requires of an MCP server description, by the transport it names.
+#: A description without a `type` is the stdio one, which is the only kind
+#: Engine sends, and `env` is required of it even when there is nothing to put
+#: there -- the field a description is most easily built without, because
+#: nothing else in it needs one.
+_ACP_MCP_SERVER_FIELDS: Mapping[object, tuple[str, ...]] = {
+    None: ("name", "command", "args", "env"),
+    "stdio": ("name", "command", "args", "env"),
+    "http": ("name", "url", "headers"),
+    "sse": ("name", "url", "headers"),
+}
+
+
+def _acp_refusal(params: Mapping[str, object]) -> str | None:
+    """Why a real agent would refuse these `mcpServers`, if it would.
+
+    Validated rather than accepted because a real one validates: claude answers
+    `session/new` with `-32602` when a server description misses a field its
+    schema requires, and the session never opens, so the node fails before its
+    first turn with nothing said. A fake that took whatever it was handed made
+    that failure unreachable from every tier below production.
+    """
+
+    servers = params.get("mcpServers") or []
+    if not isinstance(servers, list):
+        return "mcpServers must be an array"
+    for index, server in enumerate(servers):
+        if not isinstance(server, Mapping):
+            return f"mcpServers[{index}] must be an object"
+        required = _ACP_MCP_SERVER_FIELDS.get(server.get("type"))
+        if required is None:
+            return f"mcpServers[{index}].type is not a transport ACP defines"
+        missing = [field for field in required if server.get(field) is None]
+        if missing:
+            return f"mcpServers[{index}] is missing {', '.join(missing)}"
+    return None
+
+
+def _acp_invalid_params(message_id: object, reason: str) -> None:
+    _send(
+        {
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "error": {"code": -32602, "message": f"Invalid params: {reason}"},
+        }
+    )
+
 
 def fake_acp(directory: Path) -> str:
     """An ACP agent, for the graph runtime's `ACPNode`."""
@@ -467,10 +514,18 @@ def _acp(arguments: Sequence[str]) -> int:
                 },
             )
         elif method == "session/new":
+            refusal = _acp_refusal(params)
+            if refusal is not None:
+                _acp_invalid_params(message_id, refusal)
+                continue
             session_id = f"acp-{len(working_directories) + 1}"
             working_directories[session_id] = str(params.get("cwd") or "")
             _acp_respond(message_id, {"sessionId": session_id})
         elif method == "session/load":
+            refusal = _acp_refusal(params)
+            if refusal is not None:
+                _acp_invalid_params(message_id, refusal)
+                continue
             session_id = str(params.get("sessionId"))
             working_directories[session_id] = str(params.get("cwd") or "")
             _acp_respond(message_id, {})

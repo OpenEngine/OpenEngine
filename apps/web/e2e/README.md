@@ -179,6 +179,7 @@ already does for a step run. As of this writing:
 | --- | --- |
 | the graph is offered, and the form does not ask for a runner | yes |
 | the run provisions a checkout and both agents work in it | yes |
+| the workflow tools reach the agent in a session it accepts | yes |
 | the WorkOrder page shows the run's stages | no |
 | the checkout is named on the WorkOrder page | no |
 | an agent's conversation is readable from the page | no |
@@ -192,7 +193,12 @@ The agents are scripted the same way as everywhere else here, but over a third
 protocol. `ACPNode` talks ACP to an adapter that wraps a CLI, not to the CLI, so
 `provider_fakes.fake_acp` is an ACP agent reading the same script. A graph node
 ends by finishing its turn rather than by calling `complete_step`, so a `tool`
-step is refused in an ACP scenario rather than ignored. `harness/server.py`
+step is refused in an ACP scenario rather than ignored. It also validates the
+`mcpServers` it is handed and refuses `session/new` with `-32602` when a server
+description is missing a field ACP requires, which is what a real agent does:
+the run-bound workflow tools are attached at exactly that moment, and a fake
+that accepted anything would let a description no agent would open through.
+`harness/server.py`
 rebuilds the repository's graphs through `graph_for(runner, ...)` to point them
 at that agent and at the test's own worktree root; the ids, names, stages and
 prompts are the shipped ones.
