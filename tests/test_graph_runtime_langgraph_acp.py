@@ -181,6 +181,30 @@ def pipeline(
     )
 
 
+def always_open_pipeline(
+    saver: Any, agents: ACPAgentRegistry, where: Path
+) -> LangGraphDefinition:
+    """Like ``pipeline``, but the implementation node can be steered after it finishes."""
+    builder: StateGraph = StateGraph(State)
+    builder.add_node(
+        str(IMPLEMENTATION),
+        ACPNode(
+            agent=AGENT,
+            prompt=PROMPT,
+            registry=agents,
+            cwd=str(where),
+            graph_node_always_open=True,
+        ),
+    )
+    builder.add_node(str(REVIEW), _reviewed)
+    builder.add_edge(START, str(IMPLEMENTATION))
+    builder.add_edge(str(IMPLEMENTATION), str(REVIEW))
+    builder.add_edge(str(REVIEW), END)
+    return LangGraphDefinition(
+        graph_id=GRAPH, name="ACP always-open", graph=builder.compile(checkpointer=saver)
+    )
+
+
 def pipeline_with_workflow_mcp(
     saver: Any, agents: ACPAgentRegistry, where: Path
 ) -> LangGraphDefinition:
@@ -1228,6 +1252,71 @@ def test_steering_sent_during_a_steered_turn_still_reaches_the_agent(
         "Use the fast suite.",
         "And skip the linter.",
     ]
+
+
+def test_steering_an_always_open_node_after_completion_preserves_session(
+    tmp_path: Path,
+) -> None:
+    """The conversation must survive a steering reopen.
+
+    When implementation finishes and the graph advances through review, the
+    session is saved. Steering the always-open implementation node restarts it
+    from its checkpoint, but the agent must reload the *same* session so that
+    earlier clarifications, tool history, and context are present when the
+    follow-up arrives. Opening a new session would lose everything the agent
+    and user discussed before.
+    """
+
+    async def scenario() -> dict[str, Any]:
+        async with runtime_over(
+            tmp_path, registry(tmp_path), always_open_pipeline
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            first_done = await until(log, run.run_id, "run.finished")
+
+            # The run has finished (implementation + review). Steer the
+            # always-open implementation node with a follow-up.
+            await runtime.steer(
+                run.run_id,
+                "Use the other approach we discussed.",
+                node_id=IMPLEMENTATION,
+            )
+            events = await until(
+                log,
+                run.run_id,
+                "run.finished",
+                cursor=first_done[-1].sequence,
+            )
+            return {
+                "events": events,
+                "all_events": first_done + events,
+            }
+
+    outcome = asyncio.run(scenario())
+
+    # One session/new (the original), and one session/load (the reopen).
+    assert len(sent(tmp_path, "session/new")) == 1
+    assert len(sent(tmp_path, "session/load")) == 1
+
+    # The steering message was delivered to the *same* conversation, as a
+    # further turn — not as a new session with the original prompt.
+    all_sessions = sessions(tmp_path)
+    assert len(all_sessions) == 1
+    session = list(all_sessions.values())[0]
+    assert session["turns"] == [PROMPT, "Use the other approach we discussed."]
+
+    # The follow-up appears in the transcript, not the original prompt again.
+    steered_transcript = transcript(outcome["events"])
+    assert ("user", "Use the other approach we discussed.") in steered_transcript
+
+    # The conversation was marked as resumed, not fresh.
+    conversation_events = [
+        event
+        for event in outcome["events"]
+        if event.kind.value == "conversation.started"
+    ]
+    assert conversation_events
+    assert conversation_events[0].payload["resumed"] is True
 
 
 # --- approvals, answered by the process that raised them --------------------

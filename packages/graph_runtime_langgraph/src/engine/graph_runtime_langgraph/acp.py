@@ -541,8 +541,17 @@ class ACPNode:
                     clarifications.append(bound.clarification)
             stored = await runtime.store.session(execution.run_id, key)
             resuming = await self._answer_to_apply(runtime, stored)
+            # Steering reopened this node if a saved session exists but no
+            # approval triggered the restart — the queued message is the
+            # reason, and the conversation it belongs to must survive.
+            steered_reopen = (
+                stored is not None
+                and resuming is None
+                and execution._steered.is_set()
+            )
             client, session = await self._open(
-                stored if resuming else None, cwd, tuple(mcp_servers),
+                stored if (resuming is not None or steered_reopen) else None,
+                cwd, tuple(mcp_servers),
                 self.session_config,
             )
             turn = _Turn(self, execution, key, session.session_id)
@@ -554,7 +563,7 @@ class ACPNode:
                 asyncio.create_task(result()) for result in terminal_results
             ]
             try:
-                if resuming is None:
+                if resuming is None and not steered_reopen:
                     await runtime.store.remember_session(
                         execution.run_id, key, self._binding(execution, session, key)
                     )
@@ -563,10 +572,28 @@ class ACPNode:
                     {
                         "agent": self.agent,
                         "sessionId": session.session_id,
-                        "resumed": resuming is not None,
+                        "resumed": resuming is not None or steered_reopen,
                     },
                 )
-                asked = self.continuation_prompt if resuming else self._prompt(state)
+                if steered_reopen:
+                    # The steering message *is* the prompt. Pull it from the
+                    # queue so the agent sees the follow-up, not the original
+                    # task again. Any extras stay on the queue for the main
+                    # loop to drain via pending_messages().
+                    steered_msgs = execution.pending_messages()
+                    asked = (
+                        steered_msgs[0]
+                        if steered_msgs
+                        else await execution.next_message()
+                    )
+                    for extra in steered_msgs[1:]:
+                        execution._steering.put_nowait(extra)
+                    if not execution._steering.empty():
+                        execution._steered.set()
+                elif resuming is not None:
+                    asked = self.continuation_prompt
+                else:
+                    asked = self._prompt(state)
                 # Published before the turn it starts, because a transcript that
                 # holds only the agent's half is not a conversation: a reader
                 # opening one has to guess what was asked, and cannot tell the work
@@ -579,7 +606,7 @@ class ACPNode:
                 # sentence on screen as something the reader appears to have typed,
                 # directly beneath the approval they just answered. An empty prompt
                 # is skipped for the same reason: a turn nobody spoke.
-                if resuming is None and (opening := prompt_text(asked)):
+                if not resuming and (opening := prompt_text(asked)):
                     await execution.say(opening, role="user")
                 corrections = 0
                 said = ""
