@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 
 DatabaseKind = Literal["sqlite", "postgres"]
+StoreKind = Literal["state", "graph"]
 _MIGRATIONS = Path(__file__).resolve().parent
 
 
@@ -35,29 +36,42 @@ def database_kind(database: str | Connection | sqlite3.Connection) -> DatabaseKi
     raise ValueError(f"unsupported database backend: {backend}")
 
 
-def alembic_config(database_url: str) -> Config:
+def _history(kind: DatabaseKind, store: StoreKind) -> Path:
+    if store == "state":
+        return _MIGRATIONS / kind
+    if store == "graph" and kind == "sqlite":
+        return _MIGRATIONS / "sqlite_graph"
+    raise ValueError(f"unsupported migration store/backend: {store}/{kind}")
+
+
+def alembic_config(database_url: str, *, store: StoreKind = "state") -> Config:
     """Build an Alembic config pointed at the active database's history."""
     kind = database_kind(database_url)
     config = Config()
-    config.set_main_option("script_location", str(_MIGRATIONS / kind))
+    config.set_main_option("script_location", str(_history(kind, store)))
     # ConfigParser treats percent signs as interpolation, while passwords in a
     # valid database URL may contain percent escapes.
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
 
 
-def upgrade(database_url: str, revision: str = "head") -> None:
+def upgrade(
+    database_url: str, revision: str = "head", *, store: StoreKind = "state"
+) -> None:
     """Upgrade a database URL using its dialect-specific history."""
-    command.upgrade(alembic_config(database_url), revision)
+    command.upgrade(alembic_config(database_url, store=store), revision)
 
 
 def upgrade_connection(
-    connection: Connection | sqlite3.Connection, revision: str = "head"
+    connection: Connection | sqlite3.Connection,
+    revision: str = "head",
+    *,
+    store: StoreKind = "state",
 ) -> None:
     """Upgrade an existing connection, including an in-memory SQLite database."""
     kind = database_kind(connection)
     config = Config()
-    config.set_main_option("script_location", str(_MIGRATIONS / kind))
+    config.set_main_option("script_location", str(_history(kind, store)))
 
     if isinstance(connection, Connection):
         config.attributes["connection"] = connection
@@ -85,10 +99,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="SQLAlchemy database URL (defaults to DATABASE_URL)",
     )
     parser.add_argument("--revision", default="head")
+    parser.add_argument("--store", choices=("state", "graph"), default="state")
     args = parser.parse_args(argv)
     if not args.database_url:
         parser.error("database_url is required when DATABASE_URL is not set")
-    upgrade(args.database_url, args.revision)
+    upgrade(args.database_url, args.revision, store=args.store)
     return 0
 
 

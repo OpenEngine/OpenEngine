@@ -48,6 +48,7 @@ from engine.domain import (
     RunId,
 )
 from langgraph_acp import ACPContinuation
+from migrations.migration import upgrade_connection
 
 from engine.graph_runtime.events import EventKind, EventStore, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
@@ -241,42 +242,6 @@ class InMemoryGraphRuntimeStore:
                 )
 
 
-#: Applied additively on construction, including for existing databases.
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS events (
-    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    node_id TEXT,
-    execution_id TEXT
-);
-CREATE INDEX IF NOT EXISTS events_by_run ON events (run_id, sequence);
-
-CREATE TABLE IF NOT EXISTS runs (
-    run_id TEXT PRIMARY KEY,
-    graph_id TEXT NOT NULL,
-    error TEXT NOT NULL DEFAULT '',
-    ordinal INTEGER
-);
-CREATE TABLE IF NOT EXISTS sessions (
-    run_id TEXT NOT NULL,
-    session_key TEXT NOT NULL,
-    continuation TEXT NOT NULL,
-    PRIMARY KEY (run_id, session_key)
-);
-CREATE TABLE IF NOT EXISTS approvals (
-    approval_id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    record TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    decision TEXT,
-    ordinal INTEGER
-);
-CREATE INDEX IF NOT EXISTS approvals_by_run ON approvals (run_id);
-"""
-
-
 class SqliteGraphRuntimeStore:
     """The same store, in a file that outlives the interpreter.
 
@@ -294,12 +259,7 @@ class SqliteGraphRuntimeStore:
             str(path), isolation_level=None, check_same_thread=False
         )
         self._connection.row_factory = sqlite3.Row
-        self._connection.executescript(_SCHEMA)
-        columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(runs)")}
-        if "auto_approve_nodes" not in columns:
-            self._connection.execute(
-                "ALTER TABLE runs ADD COLUMN auto_approve_nodes TEXT NOT NULL DEFAULT '[]'"
-            )
+        upgrade_connection(self._connection, store="graph")
         self._ordinal = 0
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:

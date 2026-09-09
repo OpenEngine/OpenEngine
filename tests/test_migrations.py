@@ -201,3 +201,91 @@ def test_postgres_history_is_a_placeholder(capsys) -> None:
     sql = capsys.readouterr().out
     assert "CREATE TABLE agent_instances" not in sql
     assert "postgres_0001" in sql
+
+
+def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: Path) -> None:
+    from migrations.migration import main
+
+    database = tmp_path / "graph.sqlite3"
+    url = f"sqlite:///{database}"
+    assert main([url, "--store", "graph"]) == 0
+    with sqlite3.connect(database) as connection:
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )}
+        assert tables == {"events", "runs", "sessions", "approvals", "sqlite_sequence", "alembic_version"}
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("sqlite_graph_0001",)
+        connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
+        assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
+        for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
+            assert index in {row[1] for row in connection.execute(f"PRAGMA index_list({table})")}
+    command.downgrade(alembic_config(url, store="graph"), "base")
+    upgrade(url, store="graph")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM runs").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("has_auto_approve", [False, True])
+def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: bool) -> None:
+    from engine.domain import RunId
+    from engine.graph_runtime import EventKind, RuntimeEvent
+    from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore
+
+    database = tmp_path / "graph.sqlite3"
+    with sqlite3.connect(database) as connection:
+        # The schema shipped before Alembic, including an event deleted after
+        # allocation: adoption must retain sqlite_sequence as well as live rows.
+        connection.executescript("""
+            CREATE TABLE events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+                kind TEXT NOT NULL, payload TEXT NOT NULL, node_id TEXT, execution_id TEXT
+            );
+            CREATE INDEX events_by_run ON events (run_id, sequence);
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY, graph_id TEXT NOT NULL,
+                error TEXT NOT NULL DEFAULT '', ordinal INTEGER
+            );
+            CREATE TABLE sessions (
+                run_id TEXT NOT NULL, session_key TEXT NOT NULL, continuation TEXT NOT NULL,
+                PRIMARY KEY (run_id, session_key)
+            );
+            CREATE TABLE approvals (
+                approval_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, record TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending', decision TEXT, ordinal INTEGER
+            );
+            CREATE INDEX approvals_by_run ON approvals (run_id);
+            INSERT INTO runs VALUES ('run', 'graph', '', 1);
+            INSERT INTO sessions VALUES ('run', 'session', '{"session_id":"saved"}');
+            INSERT INTO approvals VALUES ('approval', 'run', '{}', 'pending', NULL, 1);
+        """)
+        if has_auto_approve:
+            connection.execute("ALTER TABLE runs ADD COLUMN auto_approve_nodes TEXT NOT NULL DEFAULT '[]'")
+            connection.execute("UPDATE runs SET auto_approve_nodes = '[\"coder\"]'")
+        connection.execute(
+            "INSERT INTO events VALUES (7, 'run', ?, '{}', 'node', 'execution')",
+            (EventKind.RUN_STARTED.value,),
+        )
+        connection.execute("INSERT INTO events (sequence, run_id, kind, payload) VALUES (8, 'run', 'unused', '{}')")
+        connection.execute("DELETE FROM events WHERE sequence = 8")
+
+    for _ in range(2):
+        store = SqliteGraphRuntimeStore(database)
+        events = store.events_since(RunId("run"))
+        assert len(events) == 1
+        assert (events[0].sequence, events[0].node_id, events[0].execution_id) == (7, "node", "execution")
+        store.close()
+    store = SqliteGraphRuntimeStore(database)
+    assert store.append_event(RuntimeEvent(RunId("run"), EventKind.RUN_STARTED)).sequence == 9
+    store.close()
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT * FROM sessions").fetchone() == ("run", "session", '{"session_id":"saved"}')
+        assert connection.execute("SELECT * FROM approvals").fetchone() == ("approval", "run", "{}", "pending", None, 1)
+        assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
+            "graph", '["coder"]' if has_auto_approve else "[]"
+        )
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("sqlite_graph_0001",)
+
+
+def test_graph_history_rejects_postgres() -> None:
+    with pytest.raises(ValueError, match="unsupported migration store/backend: graph/postgres"):
+        alembic_config("postgresql://localhost/engine", store="graph")

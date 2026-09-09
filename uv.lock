@@ -594,6 +594,7 @@ source = { editable = "packages/graph_runtime_langgraph" }
 dependencies = [
     { name = "engine-domain" },
     { name = "engine-graph-runtime" },
+    { name = "engine-migrations" },
     { name = "engine-ports" },
     { name = "engine-runtime" },
     { name = "langgraph" },
@@ -606,6 +607,7 @@ dependencies = [
 requires-dist = [
     { name = "engine-domain", editable = "packages/domain" },
     { name = "engine-graph-runtime", editable = "packages/graph_runtime" },
+    { name = "engine-migrations", editable = "." },
     { name = "engine-ports", editable = "packages/ports" },
     { name = "engine-runtime", editable = "packages/runtime" },
     { name = "langgraph", specifier = ">=1.0" },
