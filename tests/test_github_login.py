@@ -408,3 +408,22 @@ def test_invalid_session_rejected_at_status_and_api_boundaries(flow, failure):
         response = client.get(path, headers=headers)
         assert response.status_code == 401
         assert response.json() == {"error": "authentication required"}
+
+
+@pytest.mark.parametrize("destination, expected", [
+    ("/runs/run-123?tab=events#latest", "/runs/run-123?tab=events#latest"),
+    ("/conversations/thread-1", "/conversations/thread-1"),
+    ("https://evil.test/", "/"), ("//evil.test/", "/"),
+    ("/%2fevil.test", "/"), ("/\\evil.test", "/"),
+    ("/%0d%0aLocation:evil", "/"), ("javascript:alert(1)", "/"),
+])
+def test_login_returns_to_validated_destination(flow, destination, expected):
+    client = browser(flow)
+    response = client.get("/api/auth/github/login", params={"return_to": destination},
+                          follow_redirects=False)
+    state = parse_qs(urlsplit(response.headers["location"]).query)["state"][0]
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, state, code="code", return_to="//evil.test")
+    assert response.headers["location"] == expected
+    assert client.get("/api/auth/github/status").json()["authenticated"] is True

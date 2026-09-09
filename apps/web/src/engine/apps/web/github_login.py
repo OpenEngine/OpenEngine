@@ -14,7 +14,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 
 import httpx
 from dotenv import dotenv_values
@@ -29,6 +29,15 @@ _SESSION_COOKIE = "engine_session"
 _TTL = 600
 _SESSION_TTL = 86400  # 24 hours
 _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+
+
+def _return_to(value: str) -> str:
+    # Reject browser URL normalization tricks as well as external URLs.
+    decoded = unquote(value)
+    if (len(value) > 2048 or not value.startswith("/") or not decoded.startswith("/") or decoded.startswith("//")
+            or "\\" in decoded or any(ord(c) < 33 or ord(c) == 127 for c in decoded)):
+        return "/"
+    return value
 
 
 @dataclass(frozen=True)
@@ -116,7 +125,10 @@ class GitHubLogin:
         if self.config is None:
             return JSONResponse({"error": "GitHub login is not configured"}, 503, headers=_HEADERS)
         state, verifier = (secrets.token_urlsafe(32) for _ in range(2))
-        payload = f"{state}.{verifier}.{int(time.time()) + _TTL}"
+        destination = base64.urlsafe_b64encode(
+            _return_to(request.query_params.get("return_to", "/")).encode()
+        ).decode()
+        payload = f"{state}.{verifier}.{int(time.time()) + _TTL}.{destination}"
         signature = self._sign(payload)
         browser = f"{payload}.{signature}"
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
@@ -133,19 +145,21 @@ class GitHubLogin:
                             httponly=True, samesite="lax")
         return response
 
-    def _login_cookie(self, request: Request) -> tuple[str, str, int] | None:
+    def _login_cookie(self, request: Request) -> tuple[str, str, int, str] | None:
         cookie = request.cookies.get(_COOKIE, "")
-        if len(cookie) > 256:
+        if len(cookie) > 3072:
             return None
         parts = cookie.split(".")
-        if len(parts) != 4:
+        if len(parts) != 5:
             return None
-        state, verifier, expires, signature = parts
-        payload = ".".join(parts[:3])
+        state, verifier, expires, destination, signature = parts
+        payload = ".".join(parts[:4])
         if not secrets.compare_digest(signature.encode(), self._sign(payload).encode()):
             return None
         try:
-            return state, verifier, int(expires)
+            return state, verifier, int(expires), _return_to(
+                base64.urlsafe_b64decode(destination).decode()
+            )
         except ValueError:
             return None
 
@@ -162,7 +176,7 @@ class GitHubLogin:
         return response
 
     async def _callback(
-        self, request: Request, pending: tuple[str, str, int] | None
+        self, request: Request, pending: tuple[str, str, int, str] | None
     ) -> Response:
         if self.config is None:
             return JSONResponse({"error": "GitHub login is not configured"}, 503)
@@ -205,7 +219,7 @@ class GitHubLogin:
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
         # Issue a session cookie and redirect to the app.
-        response = RedirectResponse("/", status_code=302)
+        response = RedirectResponse(pending[3], status_code=302)
         session_value = self._make_session_cookie(user["id"], user["login"])
         response.set_cookie(_SESSION_COOKIE, session_value, max_age=_SESSION_TTL,
                             path="/", secure=self._is_secure(),

@@ -24,7 +24,7 @@ function visit(path: string) {
   vi.stubGlobal("window", {
     ...window,
     document: window.document,
-    location: { pathname: url.pathname, search: url.search, replace },
+    location: { pathname: url.pathname, search: url.search, hash: url.hash, replace },
   });
 }
 
@@ -60,6 +60,16 @@ describe("AuthGate", () => {
     expect(await screen.findByRole("link", { name: "Sign in with GitHub" })).toBeVisible();
     expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("passes a signed-out deep link to the login flow", async () => {
+    visit("/runs/run-123?tab=events#latest");
+    vi.mocked(getAuthStatus).mockResolvedValue(signedOut);
+    renderGate();
+    const link = await screen.findByRole("link", { name: "Sign in with GitHub" });
+    const url = new URL(link.getAttribute("href")!, "http://localhost");
+    expect(url.pathname).toBe("/api/auth/github/login");
+    expect(url.searchParams.get("return_to")).toBe("/runs/run-123?tab=events#latest");
   });
 
   it("opens the app and displays the authenticated user's name", async () => {
