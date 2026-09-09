@@ -1823,3 +1823,60 @@ def test_finished_node_steering_replays_durable_transcript(tmp_path: Path, resta
         assert len(prompts(tmp_path)) == 2
 
     asyncio.run(exercise())
+
+
+def test_node_runner_override_is_lazy_durable_and_used_on_next_execution(tmp_path: Path) -> None:
+    from dataclasses import replace
+    from unittest.mock import AsyncMock, patch
+
+    from httpx import ASGITransport, AsyncClient
+    from engine.graph_runtime.api import create_app
+
+    async def scenario() -> None:
+        agents = registry(tmp_path)
+        agents.register(replace(agents.resolve(AGENT), name="alternate"))
+        async with runtime_over(tmp_path, agents) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            await until(log, run.run_id, "run.finished")
+            point = next(p for p in await runtime.history(run.run_id) if IMPLEMENTATION in p.next_nodes)
+            transport = ASGITransport(app=create_app(runtime))
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                topology = (await client.get(f"/api/graphs/{GRAPH}")).json()
+                node = next(n for n in topology["nodes"] if n["nodeId"] == IMPLEMENTATION)
+                assert node["runner"] == AGENT
+                assert node["runners"] == ["alternate", AGENT]
+                url = f"/api/runs/{run.run_id}/runner"
+                with patch.object(runtime.store, "remember_run", new_callable=AsyncMock) as write:
+                    unchanged = await client.patch(url, json={"node": IMPLEMENTATION, "runner": AGENT})
+                    assert unchanged.json()["runnerOverrides"] == {}
+                    write.assert_not_awaited()
+                for body in (
+                    {"node": IMPLEMENTATION, "runner": "unknown"},
+                    {"node": "missing", "runner": "alternate"},
+                    {"node": REVIEW, "runner": "alternate"},
+                    {"node": IMPLEMENTATION, "runner": ""},
+                ):
+                    assert (await client.patch(url, json=body)).status_code == 400
+                changed = await client.patch(url, json={"node": IMPLEMENTATION, "runner": "alternate"})
+                assert changed.json()["runnerOverrides"] == {IMPLEMENTATION: "alternate"}
+                assert changed.json()["values"] == unchanged.json()["values"]
+                with patch.object(runtime.store, "remember_run", new_callable=AsyncMock) as write:
+                    await client.patch(url, json={"node": IMPLEMENTATION, "runner": "alternate"})
+                    write.assert_not_awaited()
+
+        async with runtime_over(tmp_path, agents) as (runtime, log):
+            assert (await runtime.snapshot(run.run_id)).runner_overrides == {IMPLEMENTATION: "alternate"}
+            await runtime.resume_from(run.run_id, point.checkpoint_id)
+            events = await until(log, run.run_id, "run.finished")
+            started = [e for e in events if e.kind.value == "conversation.started"]
+            assert started[-1].payload["agent"] == "alternate"
+            assert (await runtime.store.session(run.run_id, str(IMPLEMENTATION))).agent == "alternate"
+            assert runtime.topology(GRAPH).node(IMPLEMENTATION).runner == AGENT
+            reset = await runtime.set_runner(run.run_id, IMPLEMENTATION, AGENT)
+            assert reset.runner_overrides == {}
+            other = await runtime.start(GRAPH, {})
+            events = await until(log, other.run_id, "run.finished")
+            assert (await runtime.snapshot(other.run_id)).runner_overrides == {}
+            assert next(e for e in events if e.kind.value == "conversation.started").payload["agent"] == AGENT
+
+    asyncio.run(scenario())

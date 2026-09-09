@@ -62,7 +62,7 @@ function serve(events: ApiGraphEvent[], run: ApiGraphRun = graphRun(), alwaysOpe
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
     if (path === `/graph/api/graphs/${run.graphId}`)
-      return json({ graphId: run.graphId, nodes: [{ nodeId: NODE, alwaysOpen }] });
+      return json({ graphId: run.graphId, nodes: [{ nodeId: NODE, alwaysOpen, runner: "codex", runners: ["codex", "claude"] }] });
     if (path === `/api/runs/${runId}/graph-events`) return json({ events });
     if (path === `/graph/api/runs/${runId}`) return json(run);
     if (path.startsWith(`/graph/api/runs/${runId}/`)) return json(run);
@@ -876,4 +876,35 @@ it("persists the node's auto-approve checkbox and shows save failures", async ()
       body: JSON.stringify({ node: NODE, autoApprove: false }),
     }),
   );
+});
+
+
+it("shows the node default without writing and saves only a changed runner", async () => {
+  const user = userEvent.setup();
+  const run = graphRun();
+  const fetch = serve([], run);
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  const select = await screen.findByRole("combobox", { name: "Runner" });
+  expect(select).toHaveValue("codex");
+  await user.selectOptions(select, "codex");
+  expect(fetch.mock.calls.some(([path]) => String(path).endsWith("/runner"))).toBe(false);
+
+  fetch.mockImplementationOnce(async () => json({ error: "Save failed" }, { status: 500 }));
+  await user.selectOptions(select, "claude");
+  expect(await screen.findByText("Save failed")).toBeVisible();
+  expect(select).toHaveValue("codex");
+
+  run.runnerOverrides = { [NODE]: "claude" };
+  await user.selectOptions(select, "claude");
+  await waitFor(() => expect(select).toHaveValue("claude"));
+  expect(fetch).toHaveBeenCalledWith(
+    `/graph/api/runs/${runId}/runner`,
+    expect.objectContaining({ method: "PATCH", body: JSON.stringify({ node: NODE, runner: "claude" }) }),
+  );
+  expect(screen.queryByText("Save failed")).not.toBeInTheDocument();
+});
+
+it("displays a saved override when the conversation is reopened", async () => {
+  await open([], graphRun({ runnerOverrides: { [NODE]: "claude" } }));
+  expect(await screen.findByRole("combobox", { name: "Runner" })).toHaveValue("claude");
 });

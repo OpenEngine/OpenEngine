@@ -182,6 +182,18 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
+    async def set_runner(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        try:
+            node = NodeId(_required_string(body, "node"))
+            runner = _required_string(body, "runner")
+            run = await runtime.set_runner(_run_id(request), node, runner)
+        except ValueError as error:
+            return _error(str(error), 400)
+        except Exception as error:
+            return _refusal(error)
+        return JSONResponse(_snapshot_json(run))
+
     async def set_auto_approve(request: Request) -> JSONResponse:
         body = await _json_body(request)
         if not isinstance(body.get("autoApprove"), bool):
@@ -231,6 +243,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             Route("/api/graphs/{graph_id}", describe_graph),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", get_run),
+            Route("/api/runs/{run_id}/runner", set_runner, methods=["PATCH"]),
             Route("/api/runs/{run_id}/auto-approve", set_auto_approve, methods=["PATCH"]),
             Route("/api/runs/{run_id}/checkpoints", get_checkpoints),
             Route("/api/runs/{run_id}/events", run_events),
@@ -321,6 +334,8 @@ def _topology_json(graph: GraphTopology) -> dict[str, object]:
                 "description": node.description,
                 "showInSidebar": node.show_in_sidebar,
                 "alwaysOpen": node.always_open,
+                "runner": node.runner,
+                "runners": list(node.runners),
             }
             for node in graph.nodes
         ],
@@ -351,6 +366,7 @@ def _snapshot_json(run: RunSnapshot) -> dict[str, object]:
         ],
         "error": run.error,
         "autoApproveNodes": _nodes_json(run.auto_approve_nodes),
+        "runnerOverrides": dict(run.runner_overrides),
     }
 
 

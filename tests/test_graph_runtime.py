@@ -349,6 +349,8 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 # a person can go and read, which is what a client offers.
                 "showInSidebar": True,
                 "alwaysOpen": False,
+                "runner": "",
+                "runners": [],
             },
             {
                 "nodeId": str(REVIEW),
@@ -357,6 +359,8 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 "description": "",
                 "showInSidebar": True,
                 "alwaysOpen": False,
+                "runner": "",
+                "runners": [],
             },
         ],
         "edges": [

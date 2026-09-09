@@ -63,6 +63,11 @@ class GraphNode:
     node should opt in to it deliberately.
     """
 
+    runner: str = ""
+    """The node's default runner, empty when it cannot be overridden."""
+    runners: tuple[str, ...] = ()
+    """Runner names supported by this node."""
+
 
 @dataclass(frozen=True, slots=True)
 class GraphEdge:

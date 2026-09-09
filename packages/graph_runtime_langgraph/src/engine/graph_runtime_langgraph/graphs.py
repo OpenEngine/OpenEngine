@@ -141,6 +141,8 @@ class LangGraphDefinition:
                     description=_description_of(node),
                     show_in_sidebar=_shown_in_sidebar(node),
                     always_open=_always_open(node),
+                    runner=getattr(_described(node), "graph_node_runner", ""),
+                    runners=getattr(_described(node), "graph_node_runners", ()),
                 )
                 for node in drawn.nodes.values()
                 if node.id not in (START, END)

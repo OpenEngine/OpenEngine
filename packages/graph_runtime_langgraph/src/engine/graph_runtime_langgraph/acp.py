@@ -66,7 +66,7 @@ import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import uuid4
 
@@ -512,13 +512,29 @@ class ACPNode:
                 "resolver that reads it off the run's state."
             )
 
+    @property
+    def graph_node_runner(self) -> str:
+        return self.agent
+
+    @property
+    def graph_node_runners(self) -> tuple[str, ...]:
+        return (self.registry or default_registry()).names
+
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
-        runtime = execution.runtime
-        # First, before the store is read and before anything is launched: a
-        # node that does not know where to work has nothing to resume into and
-        # no session worth opening, so it fails having done nothing.
+        # Validate the working directory before reading state or opening a session.
         cwd = self._cwd(state)
+        record = await execution.runtime.store.run(execution.run_id)
+        runner = (
+            record.runner_overrides.get(execution.node_id, self.agent)
+            if record else self.agent
+        )
+        node = self if runner == self.agent else replace(self, agent=runner)
+        return await node._run(state, cwd)
+
+    async def _run(self, state: Mapping[str, object], cwd: str) -> dict[str, object]:
+        execution = current_execution()
+        runtime = execution.runtime
         key = self.session_key or str(execution.node_id)
         turn: _Turn | None = None
 
@@ -541,6 +557,9 @@ class ACPNode:
                 if bound.clarification is not None:
                     clarifications.append(bound.clarification)
             stored = await runtime.store.session(execution.run_id, key)
+            # A continuation belongs to its provider and cannot cross runners.
+            if stored is not None and stored.agent != self.agent:
+                stored = None
             resuming = await self._answer_to_apply(runtime, stored)
             client, session = await self._open(
                 stored if resuming else None, cwd, tuple(mcp_servers),

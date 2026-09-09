@@ -39,6 +39,7 @@ import {
   messageText,
   steerGraphRun,
   setGraphAutoApprove,
+  setGraphRunner,
   type ApiApproval,
   type ApiGraphEvent,
   type ApiGraphRun,
@@ -512,6 +513,29 @@ export function GraphConversationPage({
     return () => controller.abort();
   }, [graphId]);
 
+  const node = topology && topology.graphId === graphId
+    ? topology.nodes.find((node) => node.nodeId === nodeId)
+    : undefined;
+  const runner = run?.runnerOverrides?.[nodeId] ?? node?.runner ?? "";
+  const runners = [...new Set([node?.runner, ...(node?.runners ?? []), runner])]
+    .filter((value): value is string => Boolean(value));
+  const [runnerBusy, setRunnerBusy] = useState(false);
+  const [runnerError, setRunnerError] = useState("");
+
+  async function chooseRunner(next: string) {
+    if (next === runner) return;
+    setRunnerBusy(true);
+    setRunnerError("");
+    try {
+      setRun(await setGraphRunner(runId, nodeId, next));
+      refresh();
+    } catch (failure) {
+      setRunnerError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setRunnerBusy(false);
+    }
+  }
+
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
   const [autoApproveError, setAutoApproveError] = useState("");
 
@@ -643,6 +667,22 @@ export function GraphConversationPage({
               : "A WorkOrder node owns this transcript."}
           </p>
         </div>
+        {node?.runner && (
+          <label className="field">
+            <span>Runner</span>
+            <select
+              aria-label="Runner"
+              className="field-box"
+              value={runner}
+              disabled={!run || runnerBusy}
+              onChange={(event) => void chooseRunner(event.target.value)}
+            >
+              {runners.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+            <span className="micro">Applies the next time this node starts.</span>
+            {runnerError && <span className="field-error">{runnerError}</span>}
+          </label>
+        )}
         <label className="field">
           <span className="field-box auto-approve-control">
             <input
