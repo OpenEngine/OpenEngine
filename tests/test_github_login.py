@@ -8,7 +8,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 from starlette.applications import Starlette
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 from starlette.testclient import TestClient
 
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
@@ -333,17 +333,23 @@ def test_status_not_configured():
 # --- middleware tests ---------------------------------------------------------
 
 def _app_with_middleware(flow):
-    """Starlette app with a dummy /api/data route, wrapped in the auth middleware."""
+    """Mount the real graph API alongside a web route behind session auth."""
+    from engine.graph_runtime.api import create_app
+    from graph_runtime_fakes import ScriptedGraphRuntime
     from starlette.responses import JSONResponse as _J
-    routes = flow.routes() + [Route("/api/data", lambda _r: _J({"ok": True}))]
+    routes = flow.routes() + [
+        Route("/api/data", lambda _r: _J({"ok": True})),
+        Mount("/graph", app=create_app(ScriptedGraphRuntime())),
+    ]
     inner = Starlette(routes=routes)
     app = flow.middleware(inner)
     return TestClient(app, base_url="https://engine.test")
 
 
-def test_middleware_blocks_unauthenticated_api(flow):
+@pytest.mark.parametrize("path", ["/api/data", "/graph/api/graphs"])
+def test_middleware_blocks_unauthenticated_api(flow, path):
     client = _app_with_middleware(flow)
-    response = client.get("/api/data")
+    response = client.get(path)
     assert response.status_code == 401
     assert response.json()["error"] == "authentication required"
 
@@ -356,15 +362,18 @@ def test_middleware_allows_auth_endpoints(flow):
     assert response.json()["loginRequired"] is True
 
 
-def test_middleware_allows_authenticated_api(flow):
+@pytest.mark.parametrize("path, expected", [
+    ("/api/data", {"ok": True}), ("/graph/api/graphs", {"graphs": []}),
+])
+def test_middleware_allows_authenticated_api(flow, path, expected):
     client = _app_with_middleware(flow)
     params = start(client)
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
     with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
         callback(client, params["state"][0], code="code")
-    response = client.get("/api/data")
+    response = client.get(path)
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.json() == expected
 
 
 def test_middleware_noop_when_not_configured():
@@ -377,3 +386,25 @@ def test_middleware_noop_when_not_configured():
     response = client.get("/api/data")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+@pytest.mark.parametrize("failure", ["expired", "malformed", "tampered", "other-key"])
+def test_invalid_session_rejected_at_status_and_api_boundaries(flow, failure):
+    if failure == "expired":
+        with patch("engine.apps.web.github_login.time.time", return_value=0):
+            cookie = flow._make_session_cookie(42, "alice")
+    elif failure == "malformed":
+        cookie = "not-a-session"
+    elif failure == "tampered":
+        cookie = flow._make_session_cookie(42, "alice").replace("42|alice|", "43|admin|")
+    else:
+        cookie = GitHubLogin(flow.config)._make_session_cookie(42, "alice")
+    client = _app_with_middleware(flow)
+    headers = {"cookie": f"engine_session={cookie}"}
+    status = client.get("/api/auth/github/status", headers=headers)
+    assert status.status_code == 200
+    assert status.json() == {"authenticated": False, "user": None, "loginRequired": True}
+    for path in ("/api/data", "/graph/api/graphs"):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 401
+        assert response.json() == {"error": "authentication required"}

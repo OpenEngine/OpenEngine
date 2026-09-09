@@ -96,7 +96,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  if (authError)
+  if (authError && auth === null)
     return (
       <main className="state state-fatal">
         Could not reach the server. Please refresh to try again.

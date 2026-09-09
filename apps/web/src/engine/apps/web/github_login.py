@@ -230,7 +230,7 @@ class GitHubLogin:
         return response
 
     def middleware(self, app: ASGIApp) -> ASGIApp:
-        """ASGI middleware that enforces session auth on /api/ routes.
+        """ASGI middleware that enforces session auth on the web and graph API routes.
 
         Unauthenticated requests to protected API endpoints receive a 401.
         Auth-related endpoints, static assets, and SPA pages are exempt.
@@ -261,7 +261,7 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         path: str = scope.get("path", "")
-        if not path.startswith("/api/") or path in _AUTH_EXEMPT:
+        if not path.startswith(("/api/", "/graph/api/")) or path in _AUTH_EXEMPT:
             await self.app(scope, receive, send)
             return
         request = Request(scope)

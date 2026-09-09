@@ -1,4 +1,5 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -128,6 +129,32 @@ describe("AuthGate", () => {
     expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Sign in with GitHub" })).toBeVisible();
   });
+
+  it.each([signedIn, { ...signedOut, loginRequired: false }])(
+    "preserves edited application state across a failed background check (%j)",
+    async (status) => {
+      vi.useFakeTimers();
+      vi.mocked(getAuthStatus).mockResolvedValueOnce(status)
+        .mockRejectedValueOnce(new Error("Temporary outage"))
+        .mockResolvedValue(status);
+      function Editor() {
+        const [note, setNote] = useState("");
+        return <input aria-label="Decision note" value={note}
+          onChange={(event) => setNote(event.target.value)} />;
+      }
+      render(<AuthGate><Editor /></AuthGate>);
+      await act(async () => { await Promise.resolve(); });
+      const input = screen.getByRole("textbox", { name: "Decision note" });
+      fireEvent.change(input, { target: { value: "Keep this draft" } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(input).toBeVisible();
+      expect(input).toHaveValue("Keep this draft");
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(getAuthStatus).toHaveBeenCalledTimes(3);
+      expect(screen.getByRole("textbox", { name: "Decision note" })).toBe(input);
+      expect(input).toHaveValue("Keep this draft");
+    },
+  );
 
   it("shows sign-out failure and allows retry without navigating early", async () => {
     vi.mocked(getAuthStatus).mockResolvedValue(signedIn);
