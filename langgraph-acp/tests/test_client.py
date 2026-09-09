@@ -171,11 +171,21 @@ async def test_mcp_servers_reach_the_agent_as_given(tmp_path: Path) -> None:
 @asyncio_test
 async def test_session_config_reaches_the_agent_in_session_new(tmp_path: Path) -> None:
     log = tmp_path / "sent.jsonl"
-    config = {"attribution": {"commit": "", "pr": "", "sessionUrl": False}}
+    config = {
+        "claudeCode": {
+            "options": {
+                "settings": {
+                    "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+                    "outputStyle": "Concise",
+                },
+            },
+        },
+    }
     async with connected(log=log) as client:
         await client.new_session(session_config=config)
 
-    assert params_of(log, "session/new")["sessionConfig"] == config
+    assert params_of(log, "session/new")["_meta"] == config
+    assert "sessionConfig" not in params_of(log, "session/new")
 
 
 @asyncio_test
@@ -184,7 +194,7 @@ async def test_session_config_omitted_when_none(tmp_path: Path) -> None:
     async with connected(log=log) as client:
         await client.new_session()
 
-    assert "sessionConfig" not in params_of(log, "session/new")
+    assert "_meta" not in params_of(log, "session/new")
 
 
 @asyncio_test
@@ -209,11 +219,12 @@ async def test_resuming_asks_the_agent_to_load_the_session(tmp_path: Path) -> No
 @asyncio_test
 async def test_session_config_reaches_the_agent_in_session_load(tmp_path: Path) -> None:
     log = tmp_path / "sent.jsonl"
-    config = {"outputStyle": "Concise"}
+    config = {"claudeCode": {"options": {"settings": {"outputStyle": "Concise"}}}}
     async with connected(log=log) as client:
         await client.resume_session("sess_fake_1", session_config=config)
 
-    assert params_of(log, "session/load")["sessionConfig"] == config
+    assert params_of(log, "session/load")["_meta"] == config
+    assert "sessionConfig" not in params_of(log, "session/load")
 
 
 @asyncio_test

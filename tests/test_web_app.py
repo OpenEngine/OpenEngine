@@ -341,8 +341,8 @@ def test_engine_config_produces_claude_session_config_for_acp_runners() -> None:
     )
     config = claude_session_config_for(settings)
     assert config is not None
-    assert config["attribution"]["commit"] == ""
-    assert config["outputStyle"] == "Concise"
+    assert config["claudeCode"]["options"]["settings"]["attribution"]["commit"] == ""
+    assert config["claudeCode"]["options"]["settings"]["outputStyle"] == "Concise"
 
 
 def test_default_engine_config_produces_no_session_config() -> None:

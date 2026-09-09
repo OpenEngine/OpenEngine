@@ -447,11 +447,11 @@ def build_graph_runtime(
 
 
 def claude_session_config_for(settings: Settings) -> dict[str, object] | None:
-    """The ACP ``sessionConfig`` that wires Engine's TOML settings to Claude.
+    """The ACP session metadata that wires Engine's TOML settings to Claude.
 
     Translates the deployment's ``attribution`` and ``[claude] output_style``
     into the dict the ``claude-agent-acp`` adapter reads from
-    ``session/new``. Returns ``None`` when every setting is at its default.
+    ``session/new`` under ``_meta``. Returns ``None`` when every setting is at its default.
     """
     return claude_session_config(
         attribution=settings.engine_config.attribution,
