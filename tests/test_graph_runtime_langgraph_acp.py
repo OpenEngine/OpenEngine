@@ -1121,6 +1121,42 @@ def test_steering_interrupts_the_turn_in_flight(tmp_path: Path) -> None:
     assert len(sent(tmp_path, "session/cancel")) == 1
 
 
+def test_steering_does_not_send_a_terminal_correction(tmp_path: Path) -> None:
+    async def scenario() -> tuple[list[RuntimeEvent], Any]:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, response="", waits_for_cancel=True),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            agent_log = tmp_path / "agent.log"
+            async with asyncio.timeout(PATIENCE):
+                while not agent_log.exists() or not prompts(tmp_path):
+                    await asyncio.sleep(0.01)
+            await runtime.steer(run.run_id, "Use the fast suite.")
+            async with asyncio.timeout(PATIENCE):
+                while len(prompts(tmp_path)) < 2:
+                    await asyncio.sleep(0.01)
+            await asyncio.sleep(0.1)
+            return (
+                runtime.store.events_since(run.run_id),
+                await runtime.snapshot(run.run_id),
+            )
+
+    events, waiting = asyncio.run(scenario())
+
+    assert transcript(events) == [
+        ("user", PROMPT),
+        ("user", "Use the fast suite."),
+    ]
+    assert prompts(tmp_path) == [PROMPT, "Use the fast suite."]
+    assert waiting.status.value == "running"
+    assert [execution.node_id for execution in waiting.active_executions] == [
+        IMPLEMENTATION
+    ]
+
+
 def test_steering_an_acp_execution_continues_the_same_session(tmp_path: Path) -> None:
     """The requirement, stated as what must *not* have happened.
 

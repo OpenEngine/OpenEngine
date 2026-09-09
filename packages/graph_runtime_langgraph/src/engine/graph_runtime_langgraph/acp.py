@@ -687,6 +687,7 @@ class ACPNode:
                     await execution.say(opening, role="user")
                 corrections = 0
                 said = ""
+                steering_replaced_empty_turn = False
                 while True:
                     result = await self._speak_or_terminal(
                         turn, session, asked, terminal_tasks, clarifications
@@ -705,6 +706,7 @@ class ACPNode:
                             if pending_prompts
                             else await execution.next_message()
                         )
+                        steering_replaced_empty_turn = False
                         await execution.say(asked, role="user")
                         continue
 
@@ -715,10 +717,27 @@ class ACPNode:
                         # turn in this same conversation. Process one at a time; the
                         # next loop drains anything queued during the reply.
                         asked = pending_prompts.popleft()
+                        steering_replaced_empty_turn = not said
                         await execution.say(asked, role="user")
                         continue
                     if not terminal_tasks:
                         return {self.output_key or str(execution.node_id): said}
+                    if steering_replaced_empty_turn and not said:
+                        # Some providers finish the replacement turn with the
+                        # cancellation that interrupted its predecessor. That
+                        # empty turn is not an attempt to finish the work order:
+                        # keep the conversation open instead of following the
+                        # person's steering with an internal correction.
+                        done, _ = await asyncio.wait(terminal_tasks, timeout=1.0)
+                        completed = next(
+                            (task for task in terminal_tasks if task in done), None
+                        )
+                        if completed is not None:
+                            return self._terminal_update(completed.result())
+                        asked = await execution.next_message()
+                        steering_replaced_empty_turn = False
+                        await execution.say(asked, role="user")
+                        continue
                     if corrections >= INVALID_COMPLETION_CORRECTIONS:
                         raise RuntimeError(
                             f"the {execution.node_id} agent ended "
