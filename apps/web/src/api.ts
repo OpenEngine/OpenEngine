@@ -294,6 +294,9 @@ export type ApiGraphTopology = {
     /** Whether the rail should offer this node's conversation. Absent means
      *  shown: a node that says nothing is one a person can go and read. */
     showInSidebar?: boolean;
+    /** Whether the node should be hidden from both the sidebar and the
+     *  flattened graph view. Absent means visible. */
+    hidden?: boolean;
     /** Whether steering can restart this node when it is no longer active. */
     alwaysOpen?: boolean;
   }[];

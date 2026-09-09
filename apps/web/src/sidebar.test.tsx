@@ -538,6 +538,26 @@ describe("Sidebar", () => {
     expect(rail.queryByRole("link", { name: "Human review" })).not.toBeInTheDocument();
   });
 
+  /** A hidden node is absent from both the sidebar and the flattened graph
+   *  view, stronger than showInSidebar which only hides from the rail. */
+  it("leaves out hidden nodes even when showInSidebar is not false", () => {
+    const nodesWithHidden: typeof nodes = [
+      ...nodes,
+      { nodeId: "internal", name: "Internal", kind: "agent", hidden: true },
+    ];
+    render(
+      <Sidebar
+        runs={[graphRun]}
+        graphNodes={{ "implementation-review-codex": nodesWithHidden }}
+        initialSection="workflows"
+      />,
+    );
+
+    const rail = within(body("WorkOrders"));
+    expect(rail.queryByRole("link", { name: "Internal" })).not.toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "Implementation" })).toBeInTheDocument();
+  });
+
   it("marks the graph conversation on screen rather than the run it belongs to", () => {
     render(
       <Sidebar

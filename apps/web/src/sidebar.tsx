@@ -51,7 +51,7 @@ function conversationsOf(
 ): RailConversation[] {
   if (isGraphRun(run))
     return (nodes[run.workflowId] ?? [])
-      .filter((node) => node.showInSidebar !== false)
+      .filter((node) => node.showInSidebar !== false && !node.hidden)
       .map((node) => ({
         key: node.nodeId,
         name: node.name,

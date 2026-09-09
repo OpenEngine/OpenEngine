@@ -52,7 +52,9 @@ The rail lists a `[BETA]` WorkOrder's conversations under its name —
 those are its graph's nodes rather than something that has to happen first. The
 checkout and the human verdict are stages of the run rather than conversations
 in it, so they are not offered there; a node says which it is with
-`show_in_sidebar`.
+`show_in_sidebar`. A node can go further with `hidden`, which removes it from
+the flattened graph view as well — useful for purely internal nodes that are
+neither conversations nor visible stages.
 
 The WorkOrder page shows a graph run's stages, and each agent node has an **Open
 conversation** link once it has said anything. That conversation is the same

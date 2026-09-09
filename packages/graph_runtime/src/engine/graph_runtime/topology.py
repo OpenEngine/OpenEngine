@@ -50,6 +50,19 @@ class GraphNode:
     Advice to a client rather than a permission: the node is still in the
     topology, still has a position, and is still readable at its own address.
     """
+    hidden: bool = False
+    """Whether a client should hide this node from both the sidebar and the
+    flattened graph view.
+
+    False by default: a node is normally something a person can see and read.
+    A node that is purely internal -- neither a conversation to offer nor a
+    stage to show -- says ``True`` so that every view leaves it out, not just
+    the sidebar.
+
+    Stronger than ``show_in_sidebar``: a hidden node is absent from the
+    flattened graph view as well, whereas a node with ``show_in_sidebar=False``
+    still appears there as a stage of the run.
+    """
     always_open: bool = False
     """Whether steering to this node resets the graph when it is not executing.
 

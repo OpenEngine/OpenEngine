@@ -76,6 +76,16 @@ class DescribesItself(Protocol):
     """
 
     @property
+    def graph_node_hidden(self) -> bool: ...
+    """Whether a client should hide this node from every view.
+
+    False unless the node says otherwise: a node that says nothing is one a
+    person can see. A node that is purely internal -- neither a conversation
+    to offer nor a stage to show -- says ``True`` so that the sidebar and the
+    flattened graph view both leave it out.
+    """
+
+    @property
     def graph_node_always_open(self) -> bool: ...
     """Whether steering to this node resets the graph when it is not executing.
 
@@ -140,6 +150,7 @@ class LangGraphDefinition:
                     kind=_kind_of(node),
                     description=_description_of(node),
                     show_in_sidebar=_shown_in_sidebar(node),
+                    hidden=_hidden(node),
                     always_open=_always_open(node),
                 )
                 for node in drawn.nodes.values()
@@ -201,6 +212,15 @@ def _shown_in_sidebar(node: Any) -> bool:
     would hide the run from them.
     """
     return bool(getattr(_described(node), "graph_node_show_in_sidebar", True))
+
+
+def _hidden(node: Any) -> bool:
+    """Whether a client should hide this node from every view.
+
+    Not hidden unless the node says so: a graph this package did not write says
+    nothing, and leaving its nodes out of every view would hide the run.
+    """
+    return bool(getattr(_described(node), "graph_node_hidden", False))
 
 
 def _always_open(node: Any) -> bool:
