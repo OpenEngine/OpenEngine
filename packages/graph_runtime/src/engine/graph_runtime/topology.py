@@ -50,6 +50,18 @@ class GraphNode:
     Advice to a client rather than a permission: the node is still in the
     topology, still has a position, and is still readable at its own address.
     """
+    always_open: bool = False
+    """Whether steering to this node resets the graph when it is not executing.
+
+    An always-open node can receive a message even after the graph has moved
+    past it: steering resolves to a ``resume_from`` the checkpoint where this
+    node was about to run, followed by delivery of the message once the
+    execution starts. The effect is the same as "send it back to this node"
+    combined with a steering instruction, in one request.
+
+    False by default, because resetting a graph is a destructive action and a
+    node should opt in to it deliberately.
+    """
 
 
 @dataclass(frozen=True, slots=True)

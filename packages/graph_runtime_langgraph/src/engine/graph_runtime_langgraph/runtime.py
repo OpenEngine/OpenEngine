@@ -56,7 +56,9 @@ from langgraph.checkpoint.base import create_checkpoint
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.control import (
     CANCELLED,
+    AmbiguousExecutionError,
     ApprovalNotPendingError,
+    NoSuchPositionError,
     PendingApproval,
     RunNotSteerableError,
     RunSnapshot,
@@ -116,11 +118,20 @@ class _Live:
     arriving inside it would find nothing left to stop and start a driver of its
     own -- two of them then interleaving into one thread's checkpoints.
     """
+    pending_steers: dict[NodeId, list[str]] | None = None
+    """Messages to deliver when an execution of the named node is acquired.
+
+    Set by ``steer`` when an always-open node is not currently executing: the
+    graph is resumed from the node's checkpoint, and the message is queued here
+    so that ``_acquire`` can hand it to the new execution before the node's
+    coroutine runs a line.
+    """
 
     def __post_init__(self) -> None:
         self.executions = {} if self.executions is None else self.executions
         self.published = set() if self.published is None else self.published
         self.control = asyncio.Lock() if self.control is None else self.control
+        self.pending_steers = {} if self.pending_steers is None else self.pending_steers
 
 
 class LangGraphRuntime:
@@ -259,7 +270,12 @@ class LangGraphRuntime:
         node_id: NodeId | None = None,
     ) -> RunSnapshot:
         await self._require(run_id)
-        target, execution = self._registry.resolve(run_id, execution_id, node_id)
+        try:
+            target, execution = self._registry.resolve(run_id, execution_id, node_id)
+        except (RunNotSteerableError, AmbiguousExecutionError):
+            if node_id is not None and self._is_always_open(run_id, node_id):
+                return await self._steer_always_open(run_id, node_id, message)
+            raise
         await execution.steer(message)
         # Accepted for delivery, not delivered: the execution takes it at its
         # next interruption point and says so itself. Blocking until then would
@@ -272,6 +288,28 @@ class LangGraphRuntime:
             target.execution_id,
         )
         return await self._snapshot(run_id)
+
+    async def _steer_always_open(
+        self, run_id: RunId, node_id: NodeId, message: str
+    ) -> RunSnapshot:
+        """Resume the graph at an always-open node and queue the message.
+
+        The message is stored on ``_Live.pending_steers`` and delivered by
+        ``_acquire`` when the driver registers the new execution -- before the
+        node's coroutine runs a line, so nothing is missed.
+        """
+        checkpoint_id = await self._position_for_node(run_id, node_id)
+        live = self._live.setdefault(
+            run_id, _Live(run_id, (await self._require(run_id)).graph_id)
+        )
+        live.pending_steers.setdefault(node_id, []).append(message)
+        await self.publish(
+            run_id,
+            EventKind.STEERING_RECEIVED,
+            {"message": message},
+            node_id,
+        )
+        return await self.resume_from(run_id, checkpoint_id)
 
     async def set_auto_approve(
         self, run_id: RunId, node_id: NodeId, enabled: bool
@@ -781,7 +819,44 @@ class LangGraphRuntime:
         execution = NodeExecution(self, live.run_id, execution_id, node_id)
         live.executions[execution_id] = execution
         self._registry.register(live.run_id, execution_id, node_id, execution)
+        # Deliver any messages queued by a steer that triggered a resume.
+        # Done here so the message is on the queue before the node's coroutine
+        # runs a line -- _acquire is called from the checkpoint handler, which
+        # fires before LangGraph schedules the task.
+        pending = live.pending_steers.pop(node_id, None)
+        if pending:
+            for msg in pending:
+                execution._steering.put_nowait(msg)
+                execution._steered.set()
         return execution
+
+    # --- always-open helpers ------------------------------------------------
+
+    def _is_always_open(self, run_id: RunId, node_id: NodeId) -> bool:
+        """Whether a node is marked always-open in its graph's topology."""
+        live = self._live.get(run_id)
+        if live is None:
+            return False
+        definition = self._definitions.get(live.graph_id)
+        if definition is None:
+            return False
+        graph_node = definition.topology.node(node_id)
+        return graph_node is not None and graph_node.always_open
+
+    async def _position_for_node(
+        self, run_id: RunId, node_id: NodeId
+    ) -> CheckpointId:
+        """The most recent checkpoint about to run ``node_id``.
+
+        The same policy ``api._position_for_node`` applies, lifted here so the
+        runtime can resolve it without going through HTTP.
+        """
+        for checkpoint in reversed(await self.history(run_id)):
+            if node_id in checkpoint.next_nodes:
+                return checkpoint.checkpoint_id
+        raise NoSuchPositionError(
+            f"this run has never been about to run {node_id}"
+        )
 
     # --- reading position --------------------------------------------------
 

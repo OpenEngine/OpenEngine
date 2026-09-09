@@ -107,6 +107,7 @@ class _Player:
     beats: tuple[Beat, ...]
     graph_node_kind: str = "agent"
     graph_node_description: str = ""
+    graph_node_always_open: bool = False
 
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, Any]:
         execution = current_execution()
@@ -162,7 +163,12 @@ def compile_scripted(
     builder: StateGraph = StateGraph(State)
     for node in scripted.nodes:
         builder.add_node(
-            str(node.node_id), _Player(node.beats, graph_node_kind=node.kind)
+            str(node.node_id),
+            _Player(
+                node.beats,
+                graph_node_kind=node.kind,
+                graph_node_always_open=node.always_open,
+            ),
         )
     builder.add_edge(START, str(scripted.nodes[0].node_id))
     for node in scripted.nodes:

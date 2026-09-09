@@ -43,6 +43,7 @@ from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
 from engine.graph_runtime import (
     CANCELLED,
     ActiveExecution,
+    AmbiguousExecutionError,
     ApprovalNotPendingError,
     Checkpoint,
     CheckpointId,
@@ -54,8 +55,11 @@ from engine.graph_runtime import (
     GraphId,
     GraphNode,
     GraphTopology,
+    NoSuchPositionError,
     NodeId,
+    UnknownNodeError,
     PendingApproval,
+    RunNotSteerableError,
     RunSnapshot,
     RunStatus,
     RuntimeEvent,
@@ -136,6 +140,8 @@ class ScriptedNode:
     kind: str = "agent"
     output_key: str = ""
     """State key a spoken answer is written to; the node id when empty."""
+    always_open: bool = False
+    """Whether steering to this node resets the graph when it is not executing."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +170,12 @@ class ScriptedGraph:
             name=self.name,
             entry_point=self.nodes[0].node_id,
             nodes=tuple(
-                GraphNode(node.node_id, node.name or str(node.node_id), node.kind)
+                GraphNode(
+                    node.node_id,
+                    node.name or str(node.node_id),
+                    node.kind,
+                    always_open=node.always_open,
+                )
                 for node in self.nodes
             ),
             edges=tuple(
@@ -401,6 +412,7 @@ class ScriptedGraphRuntime:
         self._observer: EventObserver | None = None
         self._executions = ExecutionRegistry()
         self._entries: dict[NodeId, int] = {}
+        self._pending_steers: dict[RunId, dict[NodeId, list[str]]] = {}
         self.ids = count(1)
 
     # --- the control surface's contract ------------------------------------
@@ -489,7 +501,12 @@ class ScriptedGraphRuntime:
         node_id: NodeId | None = None,
     ) -> RunSnapshot:
         run = self._require(run_id)
-        target, execution = self._executions.resolve(run_id, execution_id, node_id)
+        try:
+            target, execution = self._executions.resolve(run_id, execution_id, node_id)
+        except (RunNotSteerableError, AmbiguousExecutionError):
+            if node_id is not None and self._is_always_open(run, node_id):
+                return await self._steer_always_open(run, node_id, message)
+            raise
         await execution.steer(message)
         # Accepted for delivery, not yet delivered: the execution picks it up at
         # its next interruption point and says so itself, with a transcript
@@ -702,6 +719,10 @@ class ScriptedGraphRuntime:
             self, run, ExecutionId(f"execution-{next(self.ids)}"), node_id
         )
         self._entries[node_id] = self._entries.get(node_id, 0) + 1
+        # Deliver any messages queued by a steer that triggered this resume.
+        run_steers = self._pending_steers.get(run.run_id, {})
+        for msg in run_steers.pop(node_id, []):
+            execution._steering.put_nowait(msg)
         # Registered for the whole execution, so steering and approvals reach it
         # wherever it has got to -- and released however it ends, including by
         # the cancellation a fork does.
@@ -791,6 +812,39 @@ class ScriptedGraphRuntime:
         for active in self._executions.active(run.run_id):
             self._executions.release(run.run_id, active.execution_id)
         run.frontier = ()
+
+    # --- always-open helpers ------------------------------------------------
+
+    def _is_always_open(self, run: _Run, node_id: NodeId) -> bool:
+        graph_node = run.graph.topology().node(node_id)
+        return graph_node is not None and graph_node.always_open
+
+    async def _steer_always_open(
+        self, run: _Run, node_id: NodeId, message: str
+    ) -> RunSnapshot:
+        """Resume the graph at an always-open node and queue the message."""
+        checkpoint_id: CheckpointId | None = None
+        for checkpoint in reversed(run.checkpoints):
+            if node_id in checkpoint.next_nodes:
+                checkpoint_id = checkpoint.checkpoint_id
+                break
+        if checkpoint_id is None:
+            raise NoSuchPositionError(
+                f"this run has never been about to run {node_id}"
+            )
+        # Store the message so _run_node can pick it up after the resume.
+        self._pending_steers.setdefault(run.run_id, {}).setdefault(node_id, []).append(
+            message
+        )
+        await self.emit(
+            run,
+            EventKind.STEERING_RECEIVED,
+            {"message": message},
+            node_id=node_id,
+        )
+        return await self.resume_from(run.run_id, checkpoint_id)
+
+    # --- internal ----------------------------------------------------------
 
     def _require(self, run_id: RunId) -> _Run:
         run = self._runs.get(run_id)
