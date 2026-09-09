@@ -53,7 +53,8 @@ from engine.ports import (
     SourceControl,
     WorkItem,
 )
-from engine.graph_runtime_langgraph.acp import APPROVAL_ID, ACPNode
+from engine.graph_runtime_langgraph.acp import APPROVAL_ID, ACPNode, _replay_history
+from engine.graph_runtime.events import EventKind
 from engine.runtime import INVALID_COMPLETION_ERROR
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -1785,7 +1786,10 @@ def test_a_node_that_resolves_no_directory_starts_no_agent(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("restart", [False, True])
-def test_finished_node_steering_replays_durable_transcript(tmp_path: Path, restart: bool) -> None:
+@pytest.mark.parametrize("large_tools", [False, True])
+def test_finished_node_steering_replays_durable_transcript(
+    tmp_path: Path, restart: bool, large_tools: bool,
+) -> None:
     def build(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
         builder = StateGraph(State)
         builder.add_node(str(IMPLEMENTATION), ACPNode(
@@ -1803,6 +1807,12 @@ def test_finished_node_steering_replays_durable_transcript(tmp_path: Path, resta
         async with runtime_over(tmp_path, agents, build=build) as (runtime, log):
             run = await runtime.start(GRAPH, {})
             await until(log, run.run_id, "run.finished")
+            if large_tools:
+                for kind in (EventKind.TOOL_CALL, EventKind.TOOL_RESULT, EventKind.TOOL_CALL):
+                    runtime.store.append_event(RuntimeEvent(
+                        run_id=run.run_id, node_id=IMPLEMENTATION, kind=kind,
+                        payload={"name": "Editing files", "content": "diff" * 180_000},
+                    ))
             before = runtime.store.events_since(run.run_id)
             if not restart:
                 await runtime.steer(run.run_id, "Please adjust the implementation.", node_id=IMPLEMENTATION)
@@ -1820,9 +1830,34 @@ def test_finished_node_steering_replays_durable_transcript(tmp_path: Path, resta
         assert "tool.call:" in replay
         assert "tool.result:" in replay
         assert replay.endswith("User: Please adjust the implementation.")
+        assert len(replay) < 1_048_576
+        if large_tools:
+            assert "[Content truncated for replay.]" in replay
         assert len(prompts(tmp_path)) == 2
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("kind", [EventKind.TRANSCRIPT, EventKind.TOOL_CALL])
+def test_replay_history_bounds_total_size_and_keeps_recent_context(kind: EventKind) -> None:
+    history = [
+        RuntimeEvent(
+            run_id=RunId("replay"), kind=kind,
+            payload={"text": f"message {i}: " + "x" * 20_000},
+        )
+        for i in range(100)
+    ]
+    history.append(RuntimeEvent(
+        run_id=RunId("replay"), kind=EventKind.TRANSCRIPT,
+        payload={"role": "assistant", "text": "Latest answer."},
+    ))
+    replay = _replay_history(history)
+    assert len(replay) <= 512_000
+    assert replay.startswith("[Earlier conversation omitted from replay.]")
+    assert "message 0:" not in replay
+    assert "message 99:" in replay
+    assert replay.endswith("assistant: Latest answer.")
+    assert len(history[0].payload["text"]) > 20_000
 
 
 def test_node_runner_override_is_lazy_durable_and_used_on_next_execution(tmp_path: Path) -> None:

@@ -90,7 +90,7 @@ from langgraph_acp import (
     resume_continuation,
 )
 
-from engine.graph_runtime.events import EventKind
+from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime_langgraph.executions import NodeExecution, current_execution
 from engine.runtime.step_results import (
     INVALID_COMPLETION_CORRECTIONS,
@@ -374,6 +374,36 @@ def prompt_text(prompt: ACPPrompt) -> str:
     )
 
 
+def _replay_history(history: Sequence[RuntimeEvent]) -> str:
+    """Bound synthetic history, which is sent as one provider input string.
+
+    Raw tool events can contain entire file diffs. Keep excerpts and recent
+    context within 512,000 characters, leaving room below the provider's input
+    limit for the new message. The durable event log is never truncated.
+    """
+    omitted = "[Earlier conversation omitted from replay.]\n\n"
+    truncated = "\n[Content truncated for replay.]\n"
+    remaining = 512_000 - len(omitted)
+    parts: list[str] = []
+    for event in reversed(history):
+        if event.kind is EventKind.TRANSCRIPT:
+            rendered = f"{event.payload.get('role', 'assistant')}: {event.payload.get('text', '')}"
+            limit = remaining - 2
+        else:
+            rendered = f"{event.kind.value}: {json.dumps(dict(event.payload))}"
+            limit = min(16_000, remaining - 2)
+        if limit < len(truncated):
+            break
+        if len(rendered) > limit:
+            keep = limit - len(truncated)
+            head = (keep + 1) // 2
+            rendered = rendered[:head] + truncated + rendered[len(rendered) - (keep - head):]
+        parts.append(rendered)
+        remaining -= len(rendered) + 2
+    prefix = omitted if len(parts) < len(history) else ""
+    return prefix + "\n\n".join(reversed(parts))
+
+
 def _outcome(
     decision: ApprovalDecision, request: ACPPermissionRequest
 ) -> ACPPermissionOutcome:
@@ -606,12 +636,7 @@ class ACPNode:
                 opening = prompt_text(asked)
                 if not resuming and history and pending_prompts:
                     opening = pending_prompts.popleft()
-                    transcript = "\n\n".join(
-                        f"{event.payload.get('role', 'assistant')}: {event.payload.get('text', '')}"
-                        if event.kind is EventKind.TRANSCRIPT
-                        else f"{event.kind.value}: {json.dumps(dict(event.payload))}"
-                        for event in history
-                    )
+                    transcript = _replay_history(history)
                     asked = (
                         "Continue the previous conversation below, including its tool history.\n\n"
                         f"{transcript}\n\nUser: {opening}"
