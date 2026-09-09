@@ -15,6 +15,11 @@ later transitions without polling the transcript.
 
 from __future__ import annotations
 
+from engine.slack_concierge import SlackConcierge, SlackIngress
+from engine.slack_concierge.slack_egress import tool_permission
+from langgraph_acp.agent import ACPAgentProvider
+from langgraph_acp.providers import CodexACPProvider
+
 import asyncio
 import json
 import logging
@@ -66,10 +71,8 @@ from engine.apps.web.utilization import (
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCredentialStore,
-    SlackMention,
     authorization_url as slack_authorization_url,
     exchange_code as exchange_slack_code,
-    mention_from_event as slack_mention_from_event,
     revoke_token as revoke_slack_token,
     verify_signature as verify_slack_signature,
 )
@@ -1045,6 +1048,7 @@ def create_app(
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     utilization: UtilizationService | None = None,
     milestone_scoper: MilestoneScoping | None = None,
+    concierge_provider: ACPAgentProvider | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_runners is not None and review_runners is None:
@@ -1304,6 +1308,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         async with AsyncExitStack() as opened:
+            opened.push_async_callback(slack_ingress.close)
             if graph_runtime is not None:
                 # Opening the graph engine is what makes a `[BETA]` WorkOrder
                 # startable: it compiles every graph in the workflow directory
@@ -2843,124 +2848,41 @@ def create_app(
         _slack_redirect_uri = None
         return Response(status_code=204)
 
-    async def slack_events(request: Request) -> Response:
-        """Slack's Events API: the door a mention comes in through.
+    async def concierge_reply(origin: RunOrigin, text: str) -> None:
+        await run_notifier.post(origin, CommunicationsMessage(text, mention=origin.author))
 
-        Every answer here is a 200 with an empty body once the delivery is
-        established as Slack's, including the ones where nothing happens. Slack
-        reads any other status as "did not arrive" and sends it again, so a
-        work order that failed to start for a reason retrying cannot fix would
-        be attempted three more times -- and one that started successfully but
-        answered slowly would be started twice.
-
-        A signature that does not verify is the exception, and is refused: an
-        unsigned request to this address is not Slack, and starting agents on
-        the say-so of whoever found the URL is the one thing this must not do.
-        """
-        body = await request.body()
-        signing_secret = _signing_secret()
-        if not signing_secret:
-            log.warning(
-                "a Slack event was delivered but no signing secret is saved, "
-                "so it could not be verified and was ignored"
-            )
-            return _error("Slack request signing is not configured", 503)
-        if not verify_slack_signature(
-            signing_secret,
-            request.headers.get("x-slack-request-timestamp", ""),
-            request.headers.get("x-slack-signature", ""),
-            body,
-        ):
-            return _error("invalid Slack signature", 401)
-        try:
-            payload = json.loads(body)
-        except ValueError:
-            return _error("invalid Slack event", 400)
-        if not isinstance(payload, dict):
-            return _error("invalid Slack event", 400)
-        if payload.get("type") == "url_verification":
-            # The one-off handshake that makes Slack accept this address.
-            return JSONResponse({"challenge": str(payload.get("challenge", ""))})
-        if request.headers.get("x-slack-retry-num"):
-            # A redelivery of something already accepted. Whatever it was, it
-            # is either running or already failed for a reason nothing about
-            # this attempt changes; acting again would double the work order.
-            return Response(status_code=200)
-        mention = slack_mention_from_event(payload)
-        if mention is not None:
-            await start_mentioned_work_order(mention)
-        return Response(status_code=200)
-
-    async def start_mentioned_work_order(mention: SlackMention) -> None:
-        """Turn somebody pinging the bot into a work order, and say so.
-
-        Only the step workflows are startable this way. A `[BETA]` graph run is
-        driven by the other engine, which has neither the run-bound tools an
-        agent reports status through nor a place to keep where the request came
-        from -- so offering one here would be offering a work order that goes
-        silent the moment it starts.
-        """
-        origin = RunOrigin(
-            channel=mention.channel,
-            thread_id=mention.thread_id,
-            author=mention.author,
-        )
-
-        async def refuse(reason: str) -> None:
-            await run_notifier.post(
-                origin, CommunicationsMessage(reason, mention=origin.author)
-            )
-
-        if not _slack_store.token():
-            # Slack keeps delivering mentions to an app that is installed, so
-            # one can arrive after this server was disconnected. Nothing is
-            # started, because everything the run would say -- including the
-            # refusal below -- goes nowhere: it would provision a workspace and
-            # run a write-access agent to completion in silence. The log is the
-            # only place left to say so.
-            log.warning(
-                "ignoring a Slack mention in %s: this server is not connected "
-                "to Slack, so a work order started from it could not report "
-                "anything back",
-                mention.channel,
-            )
-            return
-        if not work_orders.repository:
-            await refuse(
-                "I cannot start a work order until this deployment configures "
-                "`work_orders.repository`."
-            )
-            return
+    async def concierge_create_workorder(
+        origin: RunOrigin, repository: str, prompt: str,
+    ) -> tuple[str, str]:
         definition = _mentioned_workflow()
         if definition is None:
-            await refuse(
-                "I cannot start a work order: this deployment has no step "
-                "workflow configured under `work_orders.workflow`."
-            )
-            return
+            raise RuntimeError("no step workflow is configured under `work_orders.workflow`")
         runner_name = work_orders.runner or workflow_executor.default_runner
         if runner_name not in workflow_executor.runners:
-            await refuse(f"I cannot start a work order: unknown runner {runner_name}.")
-            return
+            raise RuntimeError(f"unknown runner: {runner_name}")
         state = await start_step_run(
-            prompt=mention.text,
-            repository=work_orders.repository,
-            workflow_id=definition.workflow_id,
-            definition=definition,
-            runner_name=runner_name,
-            origin=origin,
+            prompt=prompt, repository=repository,
+            workflow_id=definition.workflow_id, definition=definition,
+            runner_name=runner_name, origin=origin,
         )
         link = run_notifier.work_order_link(state)
         await run_notifier.post(
-            origin,
-            CommunicationsMessage(
-                f"Started a work order on `{work_orders.repository}`. "
-                "I will report progress here.",
-                (link,) if link is not None else (),
-                mention=origin.author,
-            ),
-            state,
+            origin, CommunicationsMessage(
+                f"Started a work order on `{repository}`. I will report progress here.",
+                (link,) if link else (), mention=origin.author,
+            ), state,
         )
+        return link.url if link else "", str(state.run_id)
+
+    slack_concierge = SlackConcierge(
+        provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
+        create_workorder=concierge_create_workorder,
+        reply=concierge_reply, default_repository=work_orders.repository,
+    )
+    slack_ingress = SlackIngress(
+        slack_concierge, signing_secret=_signing_secret,
+        verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
+    )
 
     def _mentioned_workflow() -> WorkflowDefinition | None:
         """Which workflow a mention runs: the configured one, or the only one."""
@@ -3019,7 +2941,7 @@ def create_app(
         Route("/api/slack/connect", slack_connect, methods=["POST"]),
         Route("/api/slack/callback", slack_callback, name="slack_callback"),
         Route("/api/slack/disconnect", slack_disconnect, methods=["POST"]),
-        Route("/api/slack/events", slack_events, methods=["POST"]),
+        Route("/api/slack/events", slack_ingress.webhook, methods=["POST"]),
         Route("/api/utilization", read_utilization),
         Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
         Route("/api/projects", list_projects),
@@ -3130,6 +3052,7 @@ def create_app(
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.thread_service = service
     app.state.milestone_scoper = milestone_scoper
+    app.state.slack_ingress = slack_ingress
     return app
 
 

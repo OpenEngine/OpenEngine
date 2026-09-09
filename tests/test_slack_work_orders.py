@@ -35,7 +35,8 @@ from engine.domain import (
     WorkflowId,
     WorkspaceId,
 )
-from engine.ports import AgentTurn, Message as CommunicationsMessage
+from engine.domain.chat import Message
+from engine.ports import AgentTurn, Message as CommunicationsMessage, McpServerConfig
 from engine.runtime import RunNotifier, WorkOrdersConfig
 from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
@@ -194,20 +195,39 @@ class RecordingCommunications:
         raise NotImplementedError
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None):
+class _FakeMcpRunner:
+    """A minimal runner that satisfies ``McpAgentRunner`` for tests.
+
+    Returns a canned greeting from the concierge without calling any tools.
+    """
+
+    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
+
+    async def run_turn(self, agent_run_id, profile, messages, tools=(), workspace_id=None):
+        return AgentTurn(message=Message.assistant("Hi, how can I help?"))
+
+    async def run_turn_with_mcp(self, agent_run_id, profile, messages, mcp_server, workspace_id=None):
+        return AgentTurn(message=Message.assistant("Hi, how can I help?"))
+
+    async def cancel(self, agent_run_id):
+        pass
+
+
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
     stub = object()
+    runner = _FakeMcpRunner()
     capabilities = Capabilities(
         workflow_runtime=stub,
         source_control=stub,
-        agent_runner=stub,
+        agent_runner=runner,
         communications=communications,
         workspace_provider=stub,
         state_store=InMemoryStateStore(),
     )
-    runners = {"default": stub}
+    runners = {"default": runner}
     session = AgentSession(capabilities, profiles={}, runners=runners)
     slack_store = MagicMock(spec=SlackCredentialStore)
     slack_store.credentials.return_value = SlackCredentials("client", "secret")
@@ -225,6 +245,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None):
         public_url="https://engine.example",
         work_orders=work_orders,
         credential_store=MagicMock(),
+        concierge_provider=provider or FakeACPProvider(),
     ), capabilities, slack_store
 
 
@@ -260,6 +281,7 @@ def test_handshake_is_answered_with_the_challenge(tmp_path) -> None:
     body = json.dumps({"type": "url_verification", "challenge": "abc"}).encode()
     with TestClient(app) as client:
         response = client.post("/api/slack/events", content=body, headers=_signed(body))
+        client.portal.call(app.state.slack_ingress.drain)
     assert response.status_code == 200
     assert response.json() == {"challenge": "abc"}
 
@@ -300,7 +322,8 @@ def test_an_unsigned_delivery_starts_nothing(tmp_path) -> None:
     assert asyncio.run(capabilities.state_store.list_runs()) == ()
 
 
-def test_a_mention_starts_a_work_order_and_replies_in_the_thread(tmp_path) -> None:
+def test_a_mention_replies_through_the_concierge(tmp_path) -> None:
+    """A mention routes through the concierge agent and replies in thread."""
     from starlette.testclient import TestClient
 
     communications = RecordingCommunications()
@@ -328,25 +351,17 @@ def test_a_mention_starts_a_work_order_and_replies_in_the_thread(tmp_path) -> No
     ).encode()
     with TestClient(app) as client:
         response = client.post("/api/slack/events", content=body, headers=_signed(body))
+        client.portal.call(app.state.slack_ingress.drain)
 
     assert response.status_code == 200
-    runs = asyncio.run(capabilities.state_store.list_runs())
-    assert len(runs) == 1
-    state = runs[0]
-    assert state.prompt == "add a health endpoint"
-    assert state.repository == "acme/api"
-    assert state.origin == RunOrigin(
-        channel="C123", thread_id="1700.0001", author="U777"
-    )
-
+    # The concierge replies in the thread with its greeting.
     channel, message, thread_id = communications.posts[0]
     assert (channel, thread_id) == ("C123", "1700.0001")
     assert message.mention == "U777"
-    assert "acme/api" in message.text
-    assert message.links[0].url == f"https://engine.example/runs/{state.run_id}"
+    assert "Hi, how can I help?" in message.text
 
 
-def test_a_redelivery_does_not_start_the_work_order_twice(tmp_path) -> None:
+def test_a_redelivery_is_ignored(tmp_path) -> None:
     from starlette.testclient import TestClient
 
     communications = RecordingCommunications()
@@ -380,11 +395,15 @@ def test_a_redelivery_does_not_start_the_work_order_twice(tmp_path) -> None:
             headers={**_signed(body), "x-slack-retry-num": "1"},
         )
 
+        client.portal.call(app.state.slack_ingress.drain)
+
     assert retry.status_code == 200
-    assert len(asyncio.run(capabilities.state_store.list_runs())) == 1
+    # Only one reply — the redelivery was ignored.
+    assert len(communications.posts) == 1
 
 
-def test_a_mention_with_no_repository_configured_says_so(tmp_path) -> None:
+def test_a_mention_without_config_still_greets(tmp_path) -> None:
+    """Even without work_orders config, the concierge greets the user."""
     from starlette.testclient import TestClient
 
     communications = RecordingCommunications()
@@ -405,12 +424,14 @@ def test_a_mention_with_no_repository_configured_says_so(tmp_path) -> None:
     ).encode()
     with TestClient(app) as client:
         response = client.post("/api/slack/events", content=body, headers=_signed(body))
+        client.portal.call(app.state.slack_ingress.drain)
 
     assert response.status_code == 200
-    assert asyncio.run(capabilities.state_store.list_runs()) == ()
+    # The concierge greets regardless of work_orders config — it is the
+    # create_workorder tool that checks repositories, not the greeting.
     _channel, message, thread_id = communications.posts[0]
     assert thread_id == "1700.0001"
-    assert "work_orders.repository" in message.text
+    assert "Hi, how can I help?" in message.text
 
 
 def test_a_mention_starts_nothing_while_slack_is_disconnected(tmp_path) -> None:
@@ -447,6 +468,7 @@ def test_a_mention_starts_nothing_while_slack_is_disconnected(tmp_path) -> None:
     ).encode()
     with TestClient(app) as client:
         response = client.post("/api/slack/events", content=body, headers=_signed(body))
+        client.portal.call(app.state.slack_ingress.drain)
         # And the panel does not claim otherwise while it is in that state.
         status = client.get("/api/slack/status").json()
 
@@ -897,4 +919,414 @@ def test_an_agent_is_told_when_its_status_did_not_reach_anyone() -> None:
         assert "Slack is unavailable" in answer["error"]
         assert clarified == {"ok": True, "acknowledgement": "clarified"}
 
+    asyncio.run(scenario())
+
+
+# --- concierge broker ---------------------------------------------------------
+
+
+def test_concierge_broker_creates_a_work_order() -> None:
+    """The create_workorder tool calls the factory callback and returns the URL."""
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario() -> None:
+        created: list[tuple[str, str]] = []
+
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            created.append((repository, prompt))
+            return "https://engine.example/runs/run-abc", "run-abc"
+
+        broker = ConciergeBroker(
+            create_workorder=create,
+            default_repository="acme/api",
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {"prompt": "add a health endpoint"},
+                }
+            )
+        assert result["ok"] is True
+        assert "run-abc" in result["text"]
+        assert created == [("acme/api", "add a health endpoint")]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_requires_repository() -> None:
+    """Without a default or explicit repository the tool refuses."""
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario() -> None:
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            raise AssertionError("should not be called")
+
+        broker = ConciergeBroker(create_workorder=create, default_repository="")
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {"prompt": "do something"},
+                }
+            )
+        assert result["ok"] is False
+        assert "repository" in result["error"]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_uses_explicit_repository() -> None:
+    """An explicit repository overrides the default."""
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario() -> None:
+        created: list[tuple[str, str]] = []
+
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            created.append((repository, prompt))
+            return "https://engine.example/runs/run-1", "run-1"
+
+        broker = ConciergeBroker(
+            create_workorder=create,
+            default_repository="acme/api",
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {
+                        "prompt": "fix the bug",
+                        "repository": "acme/frontend",
+                    },
+                }
+            )
+        assert result["ok"] is True
+        assert created == [("acme/frontend", "fix the bug")]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_rejects_empty_prompt() -> None:
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario() -> None:
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            raise AssertionError("should not be called")
+
+        broker = ConciergeBroker(
+            create_workorder=create, default_repository="acme/api"
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {"prompt": "  "},
+                }
+            )
+        assert result["ok"] is False
+        assert "prompt" in result["error"]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_rejects_unknown_tool() -> None:
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario() -> None:
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            raise AssertionError("should not be called")
+
+        broker = ConciergeBroker(
+            create_workorder=create, default_repository="acme/api"
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "complete_step",
+                    "arguments": {},
+                }
+            )
+        assert result["ok"] is False
+        assert "unknown" in result["error"]
+
+    asyncio.run(scenario())
+
+
+# --- concierge MCP protocol --------------------------------------------------
+
+
+def test_mcp_initialize_returns_server_protocol_version() -> None:
+    """The server always returns its own version, not the client's."""
+    from engine.slack_concierge.slack_egress import _mcp_response, _PROTOCOL_VERSION
+
+    async def scenario() -> None:
+        result = await _mcp_response(
+            "127.0.0.1", 0, "tok",
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "1999-01-01",
+                "clientInfo": {"name": "test", "version": "1"},
+            }},
+        )
+        assert result is not None
+        assert result["result"]["protocolVersion"] == _PROTOCOL_VERSION
+
+    asyncio.run(scenario())
+
+
+def test_mcp_tools_list_returns_create_workorder() -> None:
+    from engine.slack_concierge.slack_egress import _mcp_response
+
+    async def scenario() -> None:
+        result = await _mcp_response(
+            "127.0.0.1", 0, "tok",
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+        assert result is not None
+        tools = result["result"]["tools"]
+        assert len(tools) == 1
+        assert tools[0]["name"] == "create_workorder"
+
+    asyncio.run(scenario())
+
+
+def test_mcp_notifications_are_swallowed() -> None:
+    from engine.slack_concierge.slack_egress import _mcp_response
+
+    async def scenario() -> None:
+        result = await _mcp_response(
+            "127.0.0.1", 0, "tok",
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        )
+        assert result is None
+
+    asyncio.run(scenario())
+
+
+def test_mcp_unknown_method_returns_error() -> None:
+    from engine.slack_concierge.slack_egress import _mcp_response
+
+    async def scenario() -> None:
+        result = await _mcp_response(
+            "127.0.0.1", 0, "tok",
+            {"jsonrpc": "2.0", "id": 3, "method": "resources/list"},
+        )
+        assert result is not None
+        assert result["error"]["code"] == -32601
+
+    asyncio.run(scenario())
+
+
+
+
+class FakeACPProvider:
+    name = "fake"
+
+    def __init__(self, text="Hi, how can I help?", fail=False, create=False):
+        self.text, self.fail, self.create = text, fail, create
+        self.clients = []
+
+    async def connect(self):
+        provider = self
+        class Client:
+            closed = False
+            prompts = []
+            async def new_session(self, *, cwd, mcp_servers):
+                self.config = mcp_servers[0]
+                self.prompts = []
+                return self
+            async def prompt(self, prompt):
+                from langgraph_acp.events import ACPEvent, ACPEventType
+                self.prompts.append(prompt)
+                if provider.fail:
+                    provider.fail = False
+                    raise RuntimeError("transient")
+                if provider.create and "new workorder" in prompt:
+                    self.result = await call_mcp(self.config)
+                yield ACPEvent(agent="fake", type=ACPEventType.MESSAGE_DELTA,
+                               data={"content": {"type": "text", "text": provider.text}})
+            async def close(self):
+                self.closed = True
+        client = Client()
+        self.clients.append(client)
+        return client
+
+
+async def call_mcp(config):
+    """Real stdio child -> TCP broker -> injected host callback."""
+    process = await asyncio.create_subprocess_exec(
+        config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "unsupported"}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "create_workorder", "arguments": {"prompt": "Implement it"}}},
+    ]
+    stdout, stderr = await process.communicate("".join(json.dumps(r) + "\n" for r in requests).encode())
+    assert process.returncode == 0, stderr.decode()
+    responses = [json.loads(line) for line in stdout.splitlines()]
+    assert len(responses) == 3
+    assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
+    assert responses[1]["result"]["tools"][0]["name"] == "create_workorder"
+    return responses[2]["result"]
+
+
+def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider(text=" ")
+        replies = []
+        async def reply(origin, text):
+            replies.append(text)
+        async def create(origin, repository, prompt):
+            return "url", "id"
+        agent = SlackConcierge(provider=provider, reply=reply, create_workorder=create, max_threads=1)
+        def message(thread):
+            return IncomingMessage(RunOrigin(channel="C", thread_id=thread, author="U"), "hello")
+        await agent.handle(message("1"))
+        await agent.handle(message("1"))
+        assert len(provider.clients) == 1
+        assert len(provider.clients[0].prompts) == 2
+        assert replies == ["I'm working on that."] * 2
+        await agent.handle(message("2"))
+        assert provider.clients[0].closed
+        assert not agent.has_thread("C", "1")
+        provider.fail = True
+        import pytest
+        with pytest.raises(RuntimeError, match="transient"):
+            await agent.handle(message("2"))
+        assert not agent.has_thread("C", "2")
+        await agent.handle(message("2"))
+        assert len(provider.clients) == 3
+        await agent.close()
+        assert all(c.closed for c in provider.clients)
+    asyncio.run(scenario())
+
+
+def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+    from engine.runtime import WorkflowExecutor
+    async def no_drive(self, event, runner_name):
+        pass
+    monkeypatch.setattr(WorkflowExecutor, "start", no_drive)
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(tmp_path, communications,
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1", runner="default"),
+        _workflow_catalog(), provider=provider)
+    def body(kind, ts, text, **extra):
+        return json.dumps({"type": "event_callback", "event": dict(
+            type=kind, channel="C", user="U", ts=ts, text=text, **extra)}).encode()
+    with TestClient(app) as client:
+        greeting = body("app_mention", "1", "<@BOT>")
+        assert client.post("/api/slack/events", content=greeting, headers=_signed(greeting)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        assert not client.portal.call(capabilities.state_store.list_runs)
+        request = body("message", "2", "new workorder please", thread_ts="1")
+        client.post("/api/slack/events", content=request, headers=_signed(request))
+        client.portal.call(app.state.slack_ingress.drain)
+        # Both Slack event kinds describe the same message; execute only once.
+        duplicate = body("app_mention", "2", "new workorder please", thread_ts="1")
+        client.post("/api/slack/events", content=duplicate, headers=_signed(duplicate))
+        client.portal.call(app.state.slack_ingress.drain)
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        assert runs[0].origin.thread_id == "1"
+        result = provider.clients[0].result
+        assert not result.get("isError"), result
+        assert result["structuredContent"]["url"].startswith("https://engine.example")
+        assert len(provider.clients[0].prompts) == 2
+    assert any(m.links for _, m, _ in communications.posts)
+    assert all(thread == "1" for _, _, thread in communications.posts)
+
+
+def test_concierge_uses_real_langgraph_acp_session(tmp_path):
+    from pathlib import Path
+    import sys
+    from langgraph_acp.agent import StdioACPProvider
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        log = tmp_path / "acp.jsonl"
+        provider = StdioACPProvider(name="fake", command=[sys.executable,
+            str(Path(__file__).resolve().parents[1] / "langgraph-acp/tests/fake_agent.py")],
+            env={"FAKE_AGENT_LOG": str(log)})
+        replies = []
+        async def reply(origin, text):
+            replies.append(text)
+        async def create(origin, repository, prompt):
+            raise AssertionError("greetings must not start work")
+        agent = SlackConcierge(provider=provider, reply=reply, create_workorder=create)
+        message = IncomingMessage(
+            RunOrigin(channel="C", thread_id="1", author="U"), "hello")
+        try:
+            await agent.handle(message)
+            await agent.handle(message)
+        finally:
+            await agent.close()
+        requests = [json.loads(line) for line in log.read_text().splitlines()]
+        new = [r for r in requests if r.get("method") == "session/new"]
+        assert len(new) == 1
+        config = new[0]["params"]["mcpServers"][0]
+        assert config["name"] == "concierge"
+        assert "--token" not in config["args"]
+        assert not Path(config["args"][-1]).exists()
+        assert len([r for r in requests if r.get("method") == "session/prompt"]) == 2
+        assert len(replies) == 2
+    asyncio.run(scenario())
+
+
+def test_ingress_filters_messages_and_bounds_queue():
+    from engine.slack_concierge import SlackIngress
+
+    async def scenario():
+        gate = asyncio.Event()
+        messages = []
+        class Concierge:
+            def has_thread(self, channel, thread_id):
+                return False
+            async def handle(self, message):
+                messages.append(message)
+                await gate.wait()
+            async def close(self):
+                pass
+        ingress = SlackIngress(Concierge(), capacity=1)
+        def payload(kind, ts, **extra):
+            return {"type": "event_callback", "event": dict(type=kind,
+                channel="C", user="U", ts=ts, text="hello", **extra)}
+        assert ingress.accept(payload("message", "0", thread_ts="unknown"))
+        assert ingress.accept(payload("app_mention", "0", bot_id="bot"))
+        assert ingress.accept(payload("message", "0", subtype="message_changed"))
+        assert not messages
+        assert ingress.accept(payload("app_mention", "1"))
+        await asyncio.sleep(0)
+        assert len(messages) == 1  # turn is blocked; accept already returned
+        assert ingress.accept(payload("message", "2", thread_ts="1"))
+        assert not ingress.accept(payload("app_mention", "3"))
+        gate.set()
+        await ingress.drain()
+        assert ingress.accept(payload("app_mention", "3"))  # rejected event can retry
+        await ingress.drain()
+        assert [m.origin.thread_id for m in messages] == ["1", "1", "3"]
+        await ingress.close()
+    asyncio.run(scenario())
+
+
+def test_concierge_permissions_only_allow_the_granted_tool():
+    from engine.slack_concierge.slack_egress import tool_permission
+    from langgraph_acp.permissions import ACPPermissionRequest, ACPPermissionOption
+
+    async def scenario():
+        for name, allowed in [("mcp__concierge__create_workorder", True), ("Bash", False), ({}, False)]:
+            result = await tool_permission(ACPPermissionRequest(agent="codex",
+                tool_call={"name": name}, options=(ACPPermissionOption("yes", kind="allow_once"),)))
+            assert result.granted == allowed
     asyncio.run(scenario())
