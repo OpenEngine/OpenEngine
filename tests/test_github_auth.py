@@ -1,6 +1,7 @@
 """Tests for the GitHub OAuth device flow and credential store."""
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,7 +23,7 @@ from engine.apps.web.github_auth import (
     refresh_access_token,
     start_device_flow,
 )
-
+from engine.apps.web.oauth_lifecycle import oauth_lifecycle_event, token_fingerprint
 
 # ---------------------------------------------------------------------------
 # GitHubCredentialStore
@@ -139,7 +140,7 @@ class TestStartDeviceFlow:
     def test_raises_on_http_error(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(
+            lambda **_: _client_returning(
                 _mock_response(401, {"message": "Bad credentials"})
             ),
         )
@@ -175,7 +176,10 @@ class TestStartDeviceFlow:
             "engine.apps.web.github_auth.httpx.AsyncClient", lambda: Client(response)
         )
         asyncio.run(start_device_flow("client-id"))
-        assert seen["data"] == {"client_id": "client-id", "scope": "repo offline_access"}
+        assert seen["data"] == {
+            "client_id": "client-id",
+            "scope": "repo offline_access",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +191,7 @@ class TestPollDeviceFlow:
     def test_returns_complete_with_token(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(
+            lambda **_: _client_returning(
                 _mock_response(200, {"access_token": "ghs_secret"})
             ),
         )
@@ -228,7 +232,7 @@ class TestRefreshAccessToken:
     def test_returns_rotated_token_pair(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(
+            lambda **_: _client_returning(
                 _mock_response(
                     200,
                     {
@@ -244,10 +248,14 @@ class TestRefreshAccessToken:
             result = asyncio.run(refresh_access_token("cid", "old-refresh"))
         assert result == StoredCredentials("new-access", "new-refresh", 160.0, 220.0)
 
-    def test_preserves_refresh_token_when_provider_does_not_rotate_it(self, monkeypatch):
+    def test_preserves_refresh_token_when_provider_does_not_rotate_it(
+        self, monkeypatch
+    ):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(_mock_response(200, {"access_token": "access"})),
+            lambda **_: _client_returning(
+                _mock_response(200, {"access_token": "access"})
+            ),
         )
         result = asyncio.run(refresh_access_token("cid", "old-refresh"))
         assert result == StoredCredentials("access", "old-refresh")
@@ -255,7 +263,9 @@ class TestRefreshAccessToken:
     def test_raises_a_typed_error_for_invalid_refresh_token(self, monkeypatch):
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: _client_returning(_mock_response(200, {"error": "bad_refresh_token"})),
+            lambda **_: _client_returning(
+                _mock_response(200, {"error": "bad_refresh_token"})
+            ),
         )
         with pytest.raises(GitHubRefreshTokenInvalidError):
             asyncio.run(refresh_access_token("cid", "old-refresh"))
@@ -271,7 +281,7 @@ class TestRefreshAccessToken:
 
         monkeypatch.setattr(
             "engine.apps.web.github_auth.httpx.AsyncClient",
-            lambda: Client(
+            lambda **_: Client(
                 _mock_response(
                     200,
                     {"access_token": "access", "refresh_token": "refresh"},
@@ -287,9 +297,98 @@ class TestRefreshAccessToken:
 
 
 class TestRefreshRecovery:
-    def test_does_not_delete_a_legacy_token_that_cannot_refresh(
-        self, tmp_path
+    def test_stale_refresh_failure_does_not_delete_a_newer_token_pair(
+        self, tmp_path, monkeypatch
     ) -> None:
+        """A second process may rotate the shared pair before our delete path."""
+        from engine.apps.web.composition import Settings, build_capabilities
+
+        monkeypatch.setattr(
+            "engine.apps.web.oauth_lock.user_state_path", lambda _app_name: tmp_path
+        )
+
+        old = StoredCredentials("old-access", "old-refresh")
+        newer = StoredCredentials("new-access", "new-refresh")
+
+        class Store:
+            def __init__(self) -> None:
+                self.reads = 0
+                self.deleted = False
+
+            def get(self) -> str:
+                return "old-access"
+
+            def get_credentials(self) -> StoredCredentials:
+                self.reads += 1
+                return old if self.reads == 1 else newer
+
+            def get_client_id(self) -> str:
+                return "client-id"
+
+            def delete(self) -> None:
+                self.deleted = True
+
+        async def rejected(*_args: object) -> StoredCredentials:
+            raise GitHubRefreshTokenInvalidError("stale refresh token")
+
+        monkeypatch.setattr(
+            "engine.apps.web.composition.refresh_access_token", rejected
+        )
+        store = Store()
+        capabilities = build_capabilities(
+            Settings(workspace_root=str(tmp_path)),
+            credential_store=store,  # type: ignore[arg-type]
+        )
+        callback = capabilities.source_control._transport._on_token_unauthorized
+        assert callback is not None
+        assert asyncio.run(callback("old-access")) is True
+        assert store.deleted is False
+
+    def test_invalid_current_refresh_token_deletes_credentials(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A revoked pair is removed only when it is still the attempted pair."""
+        from engine.apps.web.composition import Settings, build_capabilities
+
+        monkeypatch.setattr(
+            "engine.apps.web.oauth_lock.user_state_path", lambda _app_name: tmp_path
+        )
+
+        credentials = StoredCredentials("old-access", "old-refresh")
+
+        class Store:
+            def __init__(self) -> None:
+                self.deleted = False
+
+            def get(self) -> str:
+                return credentials.access_token
+
+            def get_credentials(self) -> StoredCredentials:
+                return credentials
+
+            def get_client_id(self) -> str:
+                return "client-id"
+
+            def delete(self) -> None:
+                self.deleted = True
+
+        async def rejected(*_args: object) -> StoredCredentials:
+            raise GitHubRefreshTokenInvalidError("revoked refresh token")
+
+        monkeypatch.setattr(
+            "engine.apps.web.composition.refresh_access_token", rejected
+        )
+        store = Store()
+        capabilities = build_capabilities(
+            Settings(workspace_root=str(tmp_path)),
+            credential_store=store,  # type: ignore[arg-type]
+        )
+        callback = capabilities.source_control._transport._on_token_unauthorized
+        assert callback is not None
+        assert asyncio.run(callback("old-access")) is False
+        assert store.deleted is True
+
+    def test_does_not_delete_a_legacy_token_that_cannot_refresh(self, tmp_path) -> None:
         from engine.apps.web.composition import Settings, build_capabilities
 
         class Store:
@@ -311,13 +410,24 @@ class TestRefreshRecovery:
 
         store = Store()
         capabilities = build_capabilities(
-            Settings(workspace_root=str(tmp_path)), credential_store=store  # type: ignore[arg-type]
+            Settings(workspace_root=str(tmp_path)),
+            credential_store=store,  # type: ignore[arg-type]
         )
         callback = capabilities.source_control._transport._on_token_unauthorized
         assert callback is not None
         assert asyncio.run(callback("legacy-token")) is False
         assert store.deleted is False
 
+
+def test_oauth_lifecycle_log_never_contains_token_material(caplog) -> None:
+    token = "token-that-must-not-appear-in-logs"
+    fingerprint = token_fingerprint(token)
+    caplog.set_level(logging.INFO, logger="engine.apps.web.oauth_lifecycle")
+    oauth_lifecycle_event("github_refresh_started", refresh_token=fingerprint)
+    assert token not in caplog.text
+    assert fingerprint in caplog.text
+    assert '"event": "github_refresh_started"' in caplog.text
+    assert '"pid": ' in caplog.text
 
 
 class TestPollDeviceFlowErrors:
@@ -400,7 +510,9 @@ def test_expiring_device_flow_credentials_round_trip_through_keychain(monkeypatc
     saved: dict[str, str] = {}
     monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
     monkeypatch.setattr(
-        keyring, "set_password", lambda _service, _user, value: saved.setdefault("value", value)
+        keyring,
+        "set_password",
+        lambda _service, _user, value: saved.setdefault("value", value),
     )
     monkeypatch.setattr(keyring, "get_password", lambda *_: saved.get("value"))
     with patch("engine.apps.web.github_auth.time.time", return_value=100.0):
@@ -416,7 +528,9 @@ def test_credential_store_ignores_boolean_expiry_values(monkeypatch):
     monkeypatch.setattr(
         keyring,
         "get_password",
-        lambda *_: '{"access_token":"access","expires_at":true,"refresh_token_expires_at":false}',
+        lambda *_: (
+            '{"access_token":"access","expires_at":true,"refresh_token_expires_at":false}'
+        ),
     )
     assert GitHubCredentialStore().get_credentials() == StoredCredentials("access")
 
@@ -595,7 +709,9 @@ class TestPollEndpoint:
 
 
 class TestSourceControlProviderEndpoint:
-    def test_saved_oauth_choice_does_not_probe_gh_cli(self, tmp_path, monkeypatch) -> None:
+    def test_saved_oauth_choice_does_not_probe_gh_cli(
+        self, tmp_path, monkeypatch
+    ) -> None:
         from starlette.testclient import TestClient
 
         from engine.apps.web.source_control import SourceControlPreferences
@@ -611,7 +727,9 @@ class TestSourceControlProviderEndpoint:
 
         assert response.json() == {"provider": "github-oauth", "autoSelected": False}
 
-    def test_selects_provider_and_rejects_obsolete_gitlab_name(self, tmp_path, monkeypatch) -> None:
+    def test_selects_provider_and_rejects_obsolete_gitlab_name(
+        self, tmp_path, monkeypatch
+    ) -> None:
         from starlette.testclient import TestClient
 
         from engine.apps.web.source_control import GhCliStatus
