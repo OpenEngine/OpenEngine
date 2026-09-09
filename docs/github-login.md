@@ -32,7 +32,9 @@ credential store. This follows
 
 When login is configured, the frontend requires a verified session before
 mounting the application. Middleware returns 401 for unauthenticated requests
-to protected `/api/` routes; the four GitHub login endpoints remain public.
+to protected `/api/` routes; the four GitHub login endpoints remain public. Slack events bypass browser
+session checks and retain Slack signature verification. The frontend rechecks
+session status every 30 seconds and unmounts the app if the session is invalid.
 Repository permission checks (#302) remain separate work.
 
 Login state and the PKCE verifier live in a signed, HttpOnly browser cookie that expires after ten minutes;

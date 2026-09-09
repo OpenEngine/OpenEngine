@@ -42,7 +42,7 @@ beforeEach(() => {
   visit("/");
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("AuthGate", () => {
   it("keeps the application unmounted until the status check finishes", async () => {
@@ -71,7 +71,7 @@ describe("AuthGate", () => {
     vi.mocked(getAuthStatus).mockResolvedValue(signedIn);
     renderGate();
     expect(await screen.findByText("Protected application")).toBeVisible();
-    expect(screen.getByText("octocat")).toBeVisible();
+    expect(screen.getByRole("group", { name: "Signed in as octocat" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeVisible();
   });
 
@@ -115,6 +115,30 @@ describe("AuthGate", () => {
     expect(logout).toHaveBeenCalledTimes(1);
     expect(replace).not.toHaveBeenCalled();
     await act(async () => resolve());
+    expect(replace).toHaveBeenCalledWith("/login");
+  });
+
+  it("unmounts the app when a session expires while the page stays open", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAuthStatus).mockResolvedValueOnce(signedIn).mockResolvedValue(signedOut);
+    renderGate();
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("Protected application")).toBeVisible();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sign in with GitHub" })).toBeVisible();
+  });
+
+  it("shows sign-out failure and allows retry without navigating early", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue(signedIn);
+    vi.mocked(logout).mockRejectedValueOnce(new Error("Network failure")).mockResolvedValue(undefined);
+    renderGate();
+    const button = await screen.findByRole("button", { name: "Sign out" });
+    const user = userEvent.setup();
+    await user.click(button);
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not sign out");
+    expect(replace).not.toHaveBeenCalled();
+    await user.click(button);
     expect(replace).toHaveBeenCalledWith("/login");
   });
 

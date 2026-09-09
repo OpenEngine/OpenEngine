@@ -154,17 +154,18 @@ class GitHubLogin:
         owns_cookie = pending is not None and secrets.compare_digest(
             request.query_params.get("state", "").encode(), pending[0].encode()
         )
-        response = await self._callback(request)
+        response = await self._callback(request, pending)
         response.headers.update(_HEADERS)
         if owns_cookie:
             response.delete_cookie(_COOKIE, path=_PATH, httponly=True, samesite="lax",
                                    secure=self._is_secure())
         return response
 
-    async def _callback(self, request: Request) -> Response:
+    async def _callback(
+        self, request: Request, pending: tuple[str, str, int] | None
+    ) -> Response:
         if self.config is None:
             return JSONResponse({"error": "GitHub login is not configured"}, 503)
-        pending = self._login_cookie(request)
         if (pending is None or pending[2] <= time.time()
                 or not secrets.compare_digest(
                     request.query_params.get("state", "").encode(), pending[0].encode()
@@ -246,6 +247,7 @@ _AUTH_EXEMPT = frozenset({
     f"{_PATH}/callback",
     f"{_PATH}/status",
     f"{_PATH}/logout",
+    "/api/slack/events",  # Authenticated by the Slack signature in its handler.
 })
 
 

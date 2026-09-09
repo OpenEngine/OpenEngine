@@ -32,16 +32,32 @@ function LoginPage() {
 }
 
 function UserBadge({ auth }: { auth: AuthStatus }) {
+  const [error, setError] = useState(false);
+  const [pending, setPending] = useState(false);
+  async function signOut() {
+    setError(false);
+    setPending(true);
+    try {
+      await logout();
+      window.location.replace("/login");
+    } catch {
+      setError(true);
+    } finally {
+      setPending(false);
+    }
+  }
   if (!auth.loginRequired || !auth.user) return null;
   return (
-    <div className="user-badge">
+    <div className="user-badge" role="group" aria-label={`Signed in as ${auth.user.login}`}>
       <span className="user-badge-name">{auth.user.login}</span>
       <button
         className="user-badge-logout"
-        onClick={() => void logout().then(() => window.location.replace("/login"))}
+        disabled={pending}
+        onClick={() => void signOut()}
       >
         Sign out
       </button>
+      {error && <p role="alert">Could not sign out. Please try again.</p>}
     </div>
   );
 }
@@ -58,9 +74,26 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState(false);
 
   useEffect(() => {
-    getAuthStatus()
-      .then(setAuth)
-      .catch(() => setAuthError(true));
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function checkSession() {
+      try {
+        const status = await getAuthStatus();
+        if (active) {
+          setAuth(status);
+          setAuthError(false);
+        }
+      } catch {
+        if (active) setAuthError(true);
+      } finally {
+        if (active) timer = setTimeout(checkSession, 30_000);
+      }
+    }
+    void checkSession();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
   }, []);
 
   if (authError)
