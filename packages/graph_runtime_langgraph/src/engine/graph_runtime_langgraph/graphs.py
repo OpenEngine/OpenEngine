@@ -75,6 +75,14 @@ class DescribesItself(Protocol):
     graph that has one -- and a workflow file should not have to repeat it.
     """
 
+    @property
+    def graph_node_always_open(self) -> bool: ...
+    """Whether steering to this node resets the graph when it is not executing.
+
+    False unless the node says otherwise: resetting is destructive, and a
+    node that did not ask for it should not be surprised by one.
+    """
+
 
 @dataclass(frozen=True)
 class LangGraphDefinition:
@@ -132,6 +140,7 @@ class LangGraphDefinition:
                     kind=_kind_of(node),
                     description=_description_of(node),
                     show_in_sidebar=_shown_in_sidebar(node),
+                    always_open=_always_open(node),
                 )
                 for node in drawn.nodes.values()
                 if node.id not in (START, END)
@@ -192,6 +201,15 @@ def _shown_in_sidebar(node: Any) -> bool:
     would hide the run from them.
     """
     return bool(getattr(_described(node), "graph_node_show_in_sidebar", True))
+
+
+def _always_open(node: Any) -> bool:
+    """Whether steering to this node resets the graph when it is not executing.
+
+    Not always-open unless the node says so: resetting is destructive, and the
+    default must be the safe choice.
+    """
+    return bool(getattr(_described(node), "graph_node_always_open", False))
 
 
 __all__ = ["END", "START", "DescribesItself", "LangGraphDefinition"]

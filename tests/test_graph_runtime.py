@@ -348,6 +348,7 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 # A node that says nothing about where it belongs is somewhere
                 # a person can go and read, which is what a client offers.
                 "showInSidebar": True,
+                "alwaysOpen": False,
             },
             {
                 "nodeId": str(REVIEW),
@@ -355,6 +356,7 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 "kind": "agent",
                 "description": "",
                 "showInSidebar": True,
+                "alwaysOpen": False,
             },
         ],
         "edges": [
@@ -886,6 +888,82 @@ def test_steering_a_run_with_nothing_in_flight_is_refused(build: Backend) -> Non
     assert blank.status_code == 400
     assert blank.json() == {"error": "message must be a non-empty string"}
     assert unknown.status_code == 404
+
+
+def test_steering_an_always_open_node_resets_the_graph(build: Backend) -> None:
+    """Steering to a node marked always_open after the graph has moved past it
+    resumes the graph at that node and delivers the message.
+
+    This is the "re-open the workorder" behaviour: a person sends a message to
+    the implementation agent after review has started, and the graph rewinds to
+    implementation with the message already queued.
+    """
+    graph = ScriptedGraph(
+        GRAPH,
+        "Implementation and review",
+        (
+            ScriptedNode(
+                IMPLEMENTATION,
+                (AwaitSteering(), Say("Done.")),
+                next_nodes=(REVIEW,),
+                name="Implementation",
+                always_open=True,
+            ),
+            ScriptedNode(REVIEW, (Say("Looks right."),), name="Review"),
+        ),
+    )
+
+    async def scenario() -> dict[str, object]:
+        async with _server(build(graph)) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            # Wait for implementation to start and steer it the first time.
+            await surface.read(run_id, "node.started")
+            await surface.client.post(
+                f"/api/runs/{run_id}/steering",
+                json={"message": "first instruction", "node": str(IMPLEMENTATION)},
+            )
+            # Let the graph proceed past implementation into review and finish.
+            await surface.read(run_id, "run.finished")
+            # Now steer to implementation again -- the graph should reset.
+            response = await surface.client.post(
+                f"/api/runs/{run_id}/steering",
+                json={"message": "second instruction", "node": str(IMPLEMENTATION)},
+            )
+            assert response.status_code == 200, response.json()
+            # The graph should be running again at implementation.
+            snapshot = response.json()
+            assert snapshot["status"] == "running"
+            # Wait for the run to finish again.
+            events = await surface.read(run_id, "run.finished")
+            return {"events": events, "snapshot": snapshot}
+
+    outcome = asyncio.run(scenario())
+    # The snapshot returned by the steer shows the graph was reset.
+    assert outcome["snapshot"]["status"] == "running"
+    # The run finished, meaning implementation consumed the steering message
+    # and proceeded through review again.
+    finished = _of_kind(outcome["events"], "run.finished")
+    assert len(finished) >= 1
+
+
+def test_steering_a_non_always_open_node_with_nothing_in_flight_is_still_refused(
+    build: Backend,
+) -> None:
+    """A node that is *not* always_open still refuses steering after completion."""
+
+    async def scenario() -> httpx.Response:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
+            run = await _start(surface)
+            run_id = str(run["runId"])
+            await surface.read(run_id, "run.finished")
+            return await surface.client.post(
+                f"/api/runs/{run_id}/steering",
+                json={"message": "wait", "node": str(IMPLEMENTATION)},
+            )
+
+    response = asyncio.run(scenario())
+    assert response.status_code == 409
 
 
 def test_a_controllable_execution_is_all_the_runtime_asks_of_a_node() -> None:
