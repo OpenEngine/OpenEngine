@@ -644,7 +644,6 @@ export function GraphConversationPage({
           </p>
         </div>
         <label className="field">
-          <span>Approvals</span>
           <span className="field-box auto-approve-control">
             <input
               type="checkbox"
