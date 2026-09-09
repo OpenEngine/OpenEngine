@@ -374,16 +374,36 @@ def prompt_text(prompt: ACPPrompt) -> str:
     )
 
 
-def _replay_history(history: Sequence[RuntimeEvent]) -> str:
+_REPLAY_OMITTED = "[Earlier conversation omitted from replay.]\n\n"
+_MAX_REPLAY_PROMPT_CHARS = 1_048_576
+
+
+def _replay_prompt(history: Sequence[RuntimeEvent], opening: str) -> str:
+    """Budget the complete input, preserving the new message verbatim."""
+    prefix = "Continue the previous conversation below, including its tool history.\n\n"
+    suffix = f"\n\nUser: {opening}"
+    available = _MAX_REPLAY_PROMPT_CHARS - len(prefix) - len(suffix)
+    if available < len(_REPLAY_OMITTED):
+        raise ValueError(
+            f"Follow-up message is too large to replay conversation history "
+            f"within {_MAX_REPLAY_PROMPT_CHARS:,} characters "
+            f"(message: {len(opening):,} characters). Shorten the message and retry."
+        )
+    return prefix + _replay_history(history, max_chars=min(512_000, available)) + suffix
+
+
+def _replay_history(
+    history: Sequence[RuntimeEvent], *, max_chars: int = 512_000,
+) -> str:
     """Bound synthetic history, which is sent as one provider input string.
 
     Raw tool events can contain entire file diffs. Keep excerpts and recent
-    context within 512,000 characters, leaving room below the provider's input
-    limit for the new message. The durable event log is never truncated.
+    context within the budget left after reserving space for the new message.
+    The durable event log is never truncated.
     """
-    omitted = "[Earlier conversation omitted from replay.]\n\n"
+    omitted = _REPLAY_OMITTED
     truncated = "\n[Content truncated for replay.]\n"
-    remaining = 512_000 - len(omitted)
+    remaining = max_chars - len(omitted)
     parts: list[str] = []
     for event in reversed(history):
         if event.kind is EventKind.TRANSCRIPT:
@@ -636,11 +656,7 @@ class ACPNode:
                 opening = prompt_text(asked)
                 if not resuming and history and pending_prompts:
                     opening = pending_prompts.popleft()
-                    transcript = _replay_history(history)
-                    asked = (
-                        "Continue the previous conversation below, including its tool history.\n\n"
-                        f"{transcript}\n\nUser: {opening}"
-                    )
+                    asked = _replay_prompt(history, opening)
                 # Published before the turn it starts, because a transcript that
                 # holds only the agent's half is not a conversation: a reader
                 # opening one has to guess what was asked, and cannot tell the work

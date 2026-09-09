@@ -53,7 +53,9 @@ from engine.ports import (
     SourceControl,
     WorkItem,
 )
-from engine.graph_runtime_langgraph.acp import APPROVAL_ID, ACPNode, _replay_history
+from engine.graph_runtime_langgraph.acp import (
+    APPROVAL_ID, ACPNode, _replay_history, _replay_prompt,
+)
 from engine.graph_runtime.events import EventKind
 from engine.runtime import INVALID_COMPLETION_ERROR
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -1858,6 +1860,41 @@ def test_replay_history_bounds_total_size_and_keeps_recent_context(kind: EventKi
     assert "message 99:" in replay
     assert replay.endswith("assistant: Latest answer.")
     assert len(history[0].payload["text"]) > 20_000
+
+
+def test_replay_prompt_reserves_space_for_large_follow_up() -> None:
+    original = "Earlier answer: " + "x" * 600_000 + " end of answer"
+    history = [RuntimeEvent(
+        run_id=RunId("replay"), kind=EventKind.TRANSCRIPT,
+        payload={"role": "assistant", "text": original},
+    )]
+    opening = "Please update: " + "y" * 600_000
+
+    replay = _replay_prompt(history, opening)
+
+    assert len(replay) <= 1_048_576
+    assert "[Content truncated for replay.]" in replay
+    assert "Earlier answer:" in replay
+    assert "end of answer" in replay
+    assert replay.endswith(f"User: {opening}")
+    assert history[0].payload["text"] == original
+
+
+def test_replay_prompt_can_omit_all_history_at_input_boundary() -> None:
+    history = [RuntimeEvent(
+        run_id=RunId("replay"), kind=EventKind.TRANSCRIPT,
+        payload={"text": "earlier answer"},
+    )]
+    # Leave exactly enough space for the framing and omission notice.
+    prefix = "Continue the previous conversation below, including its tool history.\n\n"
+    marker = "[Earlier conversation omitted from replay.]\n\n"
+    opening = "x" * (1_048_576 - len(prefix) - len("\n\nUser: ") - len(marker))
+    replay = _replay_prompt(history, opening)
+    assert len(replay) == 1_048_576
+    assert marker in replay
+    assert replay.endswith(f"User: {opening}")
+    with pytest.raises(ValueError, match="Shorten the message and retry"):
+        _replay_prompt(history, opening + "x")
 
 
 def test_node_runner_override_is_lazy_durable_and_used_on_next_execution(tmp_path: Path) -> None:
