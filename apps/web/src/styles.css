@@ -235,6 +235,13 @@ ul, ol { padding: 0; list-style: none; }
   box-shadow: 0 6px 18px #0004;
 }
 .rail-filter-options label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+/* Projects fills the rail and leaves the WorkOrders header above the footer. */
+@media (min-width: 761px) {
+  .rail-section[data-open] + .rail-section .rail-filter-options {
+    top: auto;
+    bottom: 100%;
+  }
+}
 
 .rail-head {
   display: flex;
