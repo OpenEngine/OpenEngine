@@ -116,10 +116,13 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
         "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
         values.get("ENGINE_GITHUB_LOGIN_CLIENT_SECRET") or "",
     )
+    repository = os.environ.get(
+        "ENGINE_GITHUB_LOGIN_REPOSITORY", loaded.config.github_login_repository
+    )
     if not any((client_id, redirect_uri, secret)):
         return None
     try:
-        return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
+        return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file, repository)
     except ValueError as error:
         raise EngineConfigError(str(error)) from error
 
