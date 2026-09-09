@@ -383,3 +383,83 @@ def test_the_sqlite_store_round_trips_everything_a_restart_needs(
     # race that lost rather than a request that never existed.
     assert found["after"].decision is ApprovalDecision.ACCEPT
     assert found["still_pending"] == ()
+
+
+def test_auto_approve_keeps_human_requests_manual() -> None:
+    from httpx import ASGITransport, AsyncClient
+    from engine.graph_runtime.api import create_app
+
+    async def exercise() -> None:
+        async def ask(_state: dict[str, Any]) -> dict[str, Any]:
+            execution = current_execution()
+            for kind in (
+                ApprovalKind.COMMAND_EXECUTION,
+                ApprovalKind.FILE_CHANGE,
+                ApprovalKind.PLAN_APPROVAL,
+                ApprovalKind.USER_INPUT,
+                ApprovalKind.TOOL_USE,
+            ):
+                await execution.ask(reason=kind.value, kind=kind)
+            return {}
+
+        builder = StateGraph(State)
+        builder.add_node(str(TRIAGE), ask)
+        builder.add_edge(START, str(TRIAGE))
+        builder.add_edge(str(TRIAGE), END)
+        runtime = LangGraphRuntime(LangGraphDefinition(
+            graph_id=GRAPH, name="Triage", graph=builder.compile(checkpointer=InMemorySaver())
+        ))
+        app = create_app(runtime)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            run = await runtime.start(GRAPH, {})
+
+            async def pending(kind: ApprovalKind):
+                async with asyncio.timeout(5):
+                    while True:
+                        snapshot = await runtime.snapshot(run.run_id)
+                        if snapshot.pending_approvals and snapshot.pending_approvals[0].kind == kind:
+                            return snapshot.pending_approvals[0]
+                        await asyncio.sleep(0.001)
+
+            url = f"/api/runs/{run.run_id}/auto-approve"
+            await pending(ApprovalKind.COMMAND_EXECUTION)
+            assert (await client.patch(url, json={"node": str(TRIAGE), "autoApprove": "yes"})).status_code == 400
+            assert (await client.patch(url, json={"node": "missing", "autoApprove": True})).status_code == 400
+            response = await client.patch(url, json={"node": str(TRIAGE), "autoApprove": True})
+            assert response.status_code == 200
+            assert response.json()["autoApproveNodes"] == [str(TRIAGE)]
+            plan = await pending(ApprovalKind.PLAN_APPROVAL)
+            await runtime.decide(run.run_id, plan.approval_id, ApprovalDecision.ACCEPT)
+            question = await pending(ApprovalKind.USER_INPUT)
+            response = await client.patch(url, json={"node": str(TRIAGE), "autoApprove": False})
+            assert response.json()["autoApproveNodes"] == []
+            await runtime.decide(run.run_id, question.approval_id, ApprovalDecision.ACCEPT)
+            await pending(ApprovalKind.TOOL_USE)
+        await runtime.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_auto_approve_preference_survives_store_reopen(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        import sqlite3
+
+        path = tmp_path / "graph.sqlite3"
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "CREATE TABLE runs (run_id TEXT PRIMARY KEY, graph_id TEXT NOT NULL, "
+                "error TEXT NOT NULL DEFAULT '', ordinal INTEGER)"
+            )
+            connection.execute("INSERT INTO runs VALUES ('old', 'triage', '', 0)")
+        store = SqliteGraphRuntimeStore(path)
+        assert (await store.run(RunId("old"))).auto_approve_nodes == ()
+        record = RunRecord(RunId("one"), GRAPH, auto_approve_nodes=(TRIAGE,))
+        await store.remember_run(record)
+        await store.remember_run(RunRecord(RunId("two"), GRAPH))
+        store.close()
+        store = SqliteGraphRuntimeStore(path)
+        assert await store.run(record.run_id) == record
+        assert (await store.run(RunId("two"))).auto_approve_nodes == ()
+        store.close()
+
+    asyncio.run(exercise())

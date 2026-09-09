@@ -200,6 +200,7 @@ class _Run:
         self.pending: dict[ApprovalId, PendingApproval] = {}
         self.answered: set[ApprovalId] = set()
         """Requests that have been resolved, so a repeat is a 409 and not a 404."""
+        self.auto_approve_nodes: tuple[NodeId, ...] = ()
         self.error = ""
         self.executors: set[asyncio.Task[None]] = set()
         """Every task driving this run, which must never be more than one.
@@ -256,6 +257,7 @@ class _Run:
             values=dict(self.values),
             pending_approvals=tuple(self.pending.values()),
             error=self.error,
+            auto_approve_nodes=self.auto_approve_nodes,
         )
 
     def _status(self) -> RunStatus:
@@ -344,6 +346,10 @@ class _Execution:
             execution_id=self.execution_id,
         )
         try:
+            if self.node_id in self._run.auto_approve_nodes and beat.kind in (
+                ApprovalKind.COMMAND_EXECUTION, ApprovalKind.FILE_CHANGE, ApprovalKind.TOOL_USE
+            ):
+                await self._runtime.decide(self._run.run_id, approval.approval_id, ApprovalDecision.ACCEPT)
             decision = await waiting
         finally:
             # `decide` clears the run's copy on the way in; this is for the run
@@ -496,6 +502,22 @@ class ScriptedGraphRuntime:
             node_id=target.node_id,
             execution_id=target.execution_id,
         )
+        return self._snapshot(run)
+
+    async def set_auto_approve(
+        self, run_id: RunId, node_id: NodeId, enabled: bool
+    ) -> RunSnapshot:
+        run = self._require(run_id)
+        if self.topology(run.graph.graph_id).node(node_id) is None:
+            raise UnknownNodeError(f"unknown node: {node_id}")
+        run.auto_approve_nodes = tuple(n for n in run.auto_approve_nodes if n != node_id)
+        if enabled:
+            run.auto_approve_nodes += (node_id,)
+            for approval in tuple(run.pending.values()):
+                if approval.node_id == node_id and approval.kind in (
+                    ApprovalKind.COMMAND_EXECUTION, ApprovalKind.FILE_CHANGE, ApprovalKind.TOOL_USE
+                ):
+                    await self.decide(run_id, approval.approval_id, ApprovalDecision.ACCEPT)
         return self._snapshot(run)
 
     async def decide(

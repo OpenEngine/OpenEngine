@@ -64,6 +64,7 @@ from engine.graph_runtime.control import (
     UnknownApprovalError,
     UnknownCheckpointError,
     UnknownGraphError,
+    UnknownNodeError,
     UnknownRunError,
 )
 from engine.graph_runtime.events import EventKind, EventObserver, RuntimeEvent
@@ -272,6 +273,25 @@ class LangGraphRuntime:
         )
         return await self._snapshot(run_id)
 
+    async def set_auto_approve(
+        self, run_id: RunId, node_id: NodeId, enabled: bool
+    ) -> RunSnapshot:
+        record = await self._require(run_id)
+        if self._definitions[record.graph_id].topology.node(node_id) is None:
+            raise UnknownNodeError(f"unknown node: {node_id}")
+        nodes = tuple(node for node in record.auto_approve_nodes if node != node_id)
+        if enabled:
+            nodes += (node_id,)
+        await self._store.remember_run(replace(record, auto_approve_nodes=nodes))
+        if enabled:
+            for approval in await self._store.pending_approvals(run_id):
+                if approval.node_id == node_id and _auto_approvable(approval.kind):
+                    try:
+                        await self.decide(run_id, approval.approval_id, ApprovalDecision.ACCEPT)
+                    except ApprovalNotPendingError:
+                        pass
+        return await self._snapshot(run_id)
+
     async def decide(
         self, run_id: RunId, approval_id: ApprovalId, decision: ApprovalDecision
     ) -> RunSnapshot:
@@ -464,6 +484,11 @@ class LangGraphRuntime:
             execution.execution_id,
         )
         try:
+            run = await self._require(execution.run_id)
+            if execution.node_id in run.auto_approve_nodes and _auto_approvable(kind):
+                current = await self._store.approval(chosen)
+                if current is not None and current.pending:
+                    await self.decide(execution.run_id, chosen, ApprovalDecision.ACCEPT)
             return await waiting
         finally:
             execution.forget(chosen)
@@ -880,7 +905,16 @@ class LangGraphRuntime:
             values=dict(state.values),
             pending_approvals=tuple(_pending(record_) for record_ in pending),
             error=record.error,
+            auto_approve_nodes=record.auto_approve_nodes,
         )
+
+
+def _auto_approvable(kind: ApprovalKind) -> bool:
+    return kind in (
+        ApprovalKind.COMMAND_EXECUTION,
+        ApprovalKind.FILE_CHANGE,
+        ApprovalKind.TOOL_USE,
+    )
 
 
 def _status(

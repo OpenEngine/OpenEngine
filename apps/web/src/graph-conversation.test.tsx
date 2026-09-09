@@ -827,3 +827,26 @@ describe("GraphConversationPage", () => {
       .toHaveTextContent("1");
   });
 });
+
+it("persists the node's auto-approve checkbox and shows save failures", async () => {
+  const user = userEvent.setup();
+  const run = graphRun({ autoApproveNodes: [NODE] });
+  const fetch = serve([], run);
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  const checkbox = await screen.findByRole("checkbox", { name: /Auto-approve/ });
+  await waitFor(() => expect(checkbox).toBeChecked());
+  fetch.mockImplementationOnce(async () => json({ error: "Save failed" }, { status: 500 }));
+  await user.click(checkbox);
+  expect(await screen.findByText("Save failed")).toBeVisible();
+  expect(checkbox).toBeChecked();
+  run.autoApproveNodes = [];
+  await user.click(checkbox);
+  await waitFor(() => expect(checkbox).not.toBeChecked());
+  expect(fetch).toHaveBeenCalledWith(
+    `/graph/api/runs/${runId}/auto-approve`,
+    expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({ node: NODE, autoApprove: false }),
+    }),
+  );
+});

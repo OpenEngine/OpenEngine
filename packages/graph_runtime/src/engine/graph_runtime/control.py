@@ -141,6 +141,7 @@ class RunSnapshot:
     """The graph's state, as the graph itself would report it."""
     pending_approvals: tuple[PendingApproval, ...] = ()
     error: str = ""
+    auto_approve_nodes: tuple[NodeId, ...] = ()
 
 
 #: Why a cancelled run stopped, as its `error` and as the payload of the
@@ -310,6 +311,12 @@ class GraphRuntime(Protocol):
         `AmbiguousExecutionError` when several do and none was named -- two
         tasks fanned into the same node make even a node name ambiguous.
         """
+        ...
+
+    async def set_auto_approve(
+        self, run_id: RunId, node_id: NodeId, enabled: bool
+    ) -> RunSnapshot:
+        """Persist a node's tool approval preference and settle eligible requests."""
         ...
 
     async def decide(

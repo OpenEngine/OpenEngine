@@ -59,6 +59,7 @@ class RunRecord:
     graph_id: GraphId
     error: str = ""
     """Why it stopped, when it stopped badly. Cleared by a fork."""
+    auto_approve_nodes: tuple[NodeId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,8 +229,7 @@ class InMemoryGraphRuntimeStore:
 
 
 #: The schema, applied on construction. Three tables because there are three
-#: facts; no migrations, because this store is written once per release and a
-#: file that predates a column is a file a fresh runtime can recreate.
+#: facts. Older run tables gain the approval preference column on construction.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -273,6 +273,11 @@ class SqliteGraphRuntimeStore:
         )
         self._connection.row_factory = sqlite3.Row
         self._connection.executescript(_SCHEMA)
+        columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(runs)")}
+        if "auto_approve_nodes" not in columns:
+            self._connection.execute(
+                "ALTER TABLE runs ADD COLUMN auto_approve_nodes TEXT NOT NULL DEFAULT '[]'"
+            )
         self._ordinal = 0
 
     def close(self) -> None:
@@ -284,10 +289,17 @@ class SqliteGraphRuntimeStore:
 
     async def remember_run(self, record: RunRecord) -> None:
         self._connection.execute(
-            "INSERT INTO runs (run_id, graph_id, error, ordinal) VALUES (?, ?, ?, ?) "
+            "INSERT INTO runs (run_id, graph_id, error, ordinal, auto_approve_nodes) "
+            "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT (run_id) DO UPDATE SET graph_id = excluded.graph_id, "
-            "error = excluded.error",
-            (str(record.run_id), str(record.graph_id), record.error, self._next()),
+            "error = excluded.error, auto_approve_nodes = excluded.auto_approve_nodes",
+            (
+                str(record.run_id),
+                str(record.graph_id),
+                record.error,
+                self._next(),
+                json.dumps(record.auto_approve_nodes),
+            ),
         )
 
     async def run(self, run_id: RunId) -> RunRecord | None:
@@ -379,6 +391,9 @@ def _run_from(row: sqlite3.Row) -> RunRecord:
         run_id=RunId(row["run_id"]),
         graph_id=GraphId(row["graph_id"]),
         error=row["error"],
+        auto_approve_nodes=tuple(
+            NodeId(node) for node in json.loads(row["auto_approve_nodes"])
+        ),
     )
 
 
