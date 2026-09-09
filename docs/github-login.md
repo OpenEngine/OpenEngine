@@ -23,19 +23,23 @@ The secret file is reread at each token exchange, so updating it takes effect
 without a restart; changing the client ID or callback URL requires a restart.
 All three values are required when enabling login.
 
-Visit `/api/auth/github/login` to start the browser authorization flow. It
-requests only `read:user`, uses OAuth state and PKCE, and returns the verified
-GitHub numeric ID and login as JSON at the callback. The user token is not
-returned or stored in the server's repository credential store. This follows
+Visit `/login` and select **Sign in with GitHub** to start the browser
+authorization flow. It requests only `read:user`, uses OAuth state and PKCE,
+and issues a signed, HttpOnly session cookie at the callback before redirecting
+to `/`. The user token is not returned or stored in the server's repository
+credential store. This follows
 [GitHub's web OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps).
 
-This is the identity-verification portion of SSO (#300). Session issuance and
-route protection (#301), and repository permission checks (#302), are separate
-work; this feature alone does not protect app access. Login state and the PKCE verifier
-live in a signed, HttpOnly browser cookie that expires after ten minutes;
+When login is configured, the frontend requires a verified session before
+mounting the application. Middleware returns 401 for unauthenticated requests
+to protected `/api/` routes; the four GitHub login endpoints remain public.
+Repository permission checks (#302) remain separate work.
+
+Login state and the PKCE verifier live in a signed, HttpOnly browser cookie that expires after ten minutes;
 abandoned logins reserve no server slots. Replay protection relies on GitHub
 consuming authorization codes once and binding them to the PKCE verifier.
 The cookie signing key lives in one process, so a restart requires a new
 login and multiple workers require sticky routing or a shared signing key.
-Without login configuration the login endpoints return 503.
+Without login configuration the app remains accessible and the status endpoint
+reports `loginRequired: false`; starting the OAuth flow returns 503.
 
