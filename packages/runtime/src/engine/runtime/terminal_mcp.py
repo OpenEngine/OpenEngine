@@ -154,6 +154,7 @@ class TerminalMcpBroker:
         self._server: asyncio.Server | None = None
         self._connections: set[asyncio.Task[None]] = set()
         self._result: asyncio.Future[TerminalEvent] | None = None
+        self._clarifications: asyncio.Queue[None] | None = None
         self._source_control: SourceControl | None = None
         self._repository_tools: tuple[str, ...] = ()
         self._workspace_id: WorkspaceId | None = None
@@ -202,6 +203,7 @@ class TerminalMcpBroker:
 
     async def __aenter__(self) -> TerminalMcpBroker:
         self._result = asyncio.get_running_loop().create_future()
+        self._clarifications = asyncio.Queue()
         self._server = await asyncio.start_server(
             self._handle_connection, "127.0.0.1", 0
         )
@@ -250,6 +252,17 @@ class TerminalMcpBroker:
         if self._result is None:
             raise RuntimeError("terminal MCP broker has not been started")
         return await asyncio.shield(self._result)
+
+    async def clarification(self) -> None:
+        """Wait until this invocation accepts one ``clarify`` call.
+
+        Clarification does not produce a domain terminal event, but graph nodes
+        still need an authoritative signal from the broker so ending the ACP
+        turn alone cannot be mistaken for it.
+        """
+        if self._clarifications is None:
+            raise RuntimeError("terminal MCP broker has not been started")
+        await self._clarifications.get()
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -334,6 +347,8 @@ class TerminalMcpBroker:
                         await self._status_reporter(
                             "answered a question without changing the work order"
                         )
+                assert self._clarifications is not None
+                self._clarifications.put_nowait(None)
                 return {"ok": True, "acknowledgement": "clarified"}
             if name == "complete_step":
                 if "add_comment" in self._repository_tools and not self._comments_added:

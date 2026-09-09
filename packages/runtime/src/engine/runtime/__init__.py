@@ -74,6 +74,7 @@ from engine.runtime.session_grants import (
     session_grant_from,
 )
 from engine.runtime.step_results import (
+    INVALID_COMPLETION_CORRECTIONS,
     INVALID_COMPLETION_ERROR,
     InvalidStepResultError,
     complete_step_tool,
@@ -109,6 +110,7 @@ __all__ = [
     "INTERRUPTED_TOOL_RESULT",
     "INTERRUPTED_TURN_NOTE",
     "INVALID_COMPLETION_ERROR",
+    "INVALID_COMPLETION_CORRECTIONS",
     "BUILT_IN",
     "CODER",
     "CONFIG_ENVIRONMENT_VARIABLE",

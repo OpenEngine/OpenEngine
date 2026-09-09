@@ -127,7 +127,7 @@ def narrate_a_tool_call(session_id: str) -> None:
     )
 
 
-def exercise_mcp(session_id: str) -> None:
+def exercise_mcp(session_id: str, prompt_text: str) -> None:
     """Launch the supplied stdio server and cross its broker boundary."""
     session = load(session_id)
     servers = session.get("mcp_servers") or []
@@ -154,15 +154,22 @@ def exercise_mcp(session_id: str) -> None:
         return json.loads(line)
 
     listed = call({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
-    called = call(
-        {
-            "jsonrpc": "2.0",
-            "id": "clarify",
-            "method": "tools/call",
-            "params": {"name": "clarify", "arguments": {}},
-        }
+    clarified_this_turn = bool(
+        os.environ.get("STUB_ACP_MCP_CLARIFY")
+        and not session.get("mcp_clarified_once")
     )
-    if not session.get("mcp_tools"):
+    if clarified_this_turn:
+        called = call(
+            {
+                "jsonrpc": "2.0",
+                "id": "clarify",
+                "method": "tools/call",
+                "params": {"name": "clarify", "arguments": {}},
+            }
+        )
+        session["mcp_clarified_once"] = True
+        session.setdefault("mcp_clarified", []).append(called)
+    if not clarified_this_turn and not session.get("mcp_tools"):
         review = call(
             {
                 "jsonrpc": "2.0",
@@ -184,9 +191,8 @@ def exercise_mcp(session_id: str) -> None:
     )
     args = server.get("args", [])
     session.setdefault("mcp_ports", []).append(args[args.index("--port") + 1])
-    session.setdefault("mcp_clarified", []).append(called)
     save(session_id, session)
-    if os.environ.get("STUB_ACP_MCP_GIT"):
+    if os.environ.get("STUB_ACP_MCP_GIT") and not session.get("mcp_git"):
         session["mcp_git"] = call(
             {
                 "jsonrpc": "2.0",
@@ -200,7 +206,16 @@ def exercise_mcp(session_id: str) -> None:
         )
         save(session_id, session)
     terminal = os.environ.get("STUB_ACP_MCP_TERMINAL")
-    if terminal:
+    terminal_on_correction = os.environ.get(
+        "STUB_ACP_MCP_TERMINAL_ON_CORRECTION"
+    )
+    terminal_after_grant = os.environ.get("STUB_ACP_MCP_TERMINAL_AFTER_GRANT")
+    if (
+        terminal
+        and not clarified_this_turn
+        and (not terminal_on_correction or "Valid completion states" in prompt_text)
+        and (not terminal_after_grant or session.get("granted"))
+    ):
         session["mcp_terminal"] = terminal
         save(session_id, session)
         arguments = (
@@ -301,7 +316,7 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
     session["turns"].append(prompt_text)
     save(session_id, session)
     if os.environ.get("STUB_ACP_USE_MCP"):
-        exercise_mcp(session_id)
+        exercise_mcp(session_id, prompt_text)
         session = load(session_id)
     if os.environ.get("STUB_ACP_WAIT_FOR_CANCEL") and not session.get("cancelled"):
         save(session_id, session)

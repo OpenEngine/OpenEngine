@@ -41,6 +41,7 @@ from engine.ports import (
 from engine.runtime.capabilities import Capabilities
 from engine.runtime.profiles import with_granted_tools
 from engine.runtime.step_results import (
+    INVALID_COMPLETION_CORRECTIONS,
     INVALID_COMPLETION_ERROR,
     requests_clarification_or_escalation,
     step_result_instructions,
@@ -54,14 +55,6 @@ from engine.runtime.terminal_mcp import (
     ToolCallLookup,
     terminal_tool_names,
 )
-
-
-#: How many times a workflow agent that ended a turn without a terminal result
-#: is told so and asked again. A provider that has ignored the correction twice
-#: will not comply on the third pass, and retrying forever would keep spending
-#: on a run that cannot finish -- so the step fails with a reason a human can
-#: read instead of hanging.
-_TERMINAL_RESULT_CORRECTIONS = 2
 
 
 class UnhandledCommandError(RuntimeError):
@@ -462,7 +455,7 @@ class Dispatcher:
                     transcript.extend(turn.transcript)
                     if requests_clarification_or_escalation(turn):
                         return None, turn, tuple(transcript)
-                    if corrections >= _TERMINAL_RESULT_CORRECTIONS:
+                    if corrections >= INVALID_COMPLETION_CORRECTIONS:
                         failure = RunFailed(
                             run_id=command.run_id,
                             reason=(

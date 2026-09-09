@@ -62,6 +62,7 @@ runtime exists.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, field
@@ -90,6 +91,10 @@ from langgraph_acp import (
 
 from engine.graph_runtime.events import EventKind
 from engine.graph_runtime_langgraph.executions import NodeExecution, current_execution
+from engine.runtime.step_results import (
+    INVALID_COMPLETION_CORRECTIONS,
+    INVALID_COMPLETION_ERROR,
+)
 
 #: Which turn each live ACP conversation belongs to, keyed by the agent's own
 #: session id. Module-level because a provider is configured long before a
@@ -105,6 +110,14 @@ class BoundMcpServer:
 
     config: Mapping[str, Any]
     result: Callable[[], Awaitable[TerminalEvent]] | None = None
+    clarification: Callable[[], Awaitable[None]] | None = None
+
+
+class _Clarified:
+    """An accepted request to pause this node without committing its state."""
+
+
+_CLARIFIED = _Clarified()
 
 
 McpServerBinding = Callable[
@@ -507,6 +520,7 @@ class ACPNode:
         async with AsyncExitStack() as servers:
             mcp_servers = list(self.mcp_servers)
             terminal_results: list[Callable[[], Awaitable[TerminalEvent]]] = []
+            clarifications: list[Callable[[], Awaitable[None]]] = []
             for binding in self.mcp_server_bindings:
                 bound = await servers.enter_async_context(
                     binding(state, execution, approve)
@@ -514,6 +528,8 @@ class ACPNode:
                 mcp_servers.append(bound.config)
                 if bound.result is not None:
                     terminal_results.append(bound.result)
+                if bound.clarification is not None:
+                    clarifications.append(bound.clarification)
             stored = await runtime.store.session(execution.run_id, key)
             resuming = await self._answer_to_apply(runtime, stored)
             client, session = await self._open(
@@ -555,34 +571,49 @@ class ACPNode:
                 # is skipped for the same reason: a turn nobody spoke.
                 if resuming is None and (opening := prompt_text(asked)):
                     await execution.say(opening, role="user")
-                result = await self._speak_or_terminal(
-                    turn, session, asked, terminal_tasks
-                )
-                if isinstance(result, (StepCompleted, RunFailed)):
-                    return self._terminal_update(result)
-                said = result
-                # Steering that arrived while the agent worked is a further turn in
-                # the same conversation rather than a restart: same session id,
-                # same transcript, same tool history.
-                #
-                # Drained until the queue is empty, not once. Answering a message is
-                # itself a turn, and it is the turn a person is most likely to be
-                # watching when they say the next thing -- so a single snapshot,
-                # taken before the first reply, would leave everything said during
-                # that reply queued on an execution the node is about to release.
-                # Nothing anywhere would say so: the run carries on, the agent never
-                # hears it, and the message stays on screen as a turn nobody
-                # answered.
-                while queued := execution.pending_messages():
-                    for message in queued:
-                        await execution.say(message, role="user")
-                        result = await self._speak_or_terminal(
-                            turn, session, message, terminal_tasks
+                corrections = 0
+                said = ""
+                pending_prompts: deque[str] = deque()
+                while True:
+                    result = await self._speak_or_terminal(
+                        turn, session, asked, terminal_tasks, clarifications
+                    )
+                    if isinstance(result, (StepCompleted, RunFailed)):
+                        return self._terminal_update(result)
+                    if result is _CLARIFIED:
+                        # Do not return from the LangGraph node: that would commit
+                        # this superstep and follow its outgoing edge. The live
+                        # execution remains at the same graph position until a
+                        # person steers the next message into this conversation.
+                        pending_prompts.extend(execution.pending_messages())
+                        asked = (
+                            pending_prompts.popleft()
+                            if pending_prompts
+                            else await execution.next_message()
                         )
-                        if isinstance(result, (StepCompleted, RunFailed)):
-                            return self._terminal_update(result)
-                        said = result
-                return {self.output_key or str(execution.node_id): said}
+                        await execution.say(asked, role="user")
+                        continue
+
+                    said = result
+                    pending_prompts.extend(execution.pending_messages())
+                    if pending_prompts:
+                        # Steering that arrived while the agent worked is a further
+                        # turn in this same conversation. Process one at a time; the
+                        # next loop drains anything queued during the reply.
+                        asked = pending_prompts.popleft()
+                        await execution.say(asked, role="user")
+                        continue
+                    if not terminal_tasks:
+                        return {self.output_key or str(execution.node_id): said}
+                    if corrections >= INVALID_COMPLETION_CORRECTIONS:
+                        raise RuntimeError(
+                            f"the {execution.node_id} agent ended "
+                            f"{corrections + 1} turns without reporting a valid "
+                            "terminal result"
+                        )
+                    corrections += 1
+                    asked = INVALID_COMPLETION_ERROR
+                    await execution.say(asked, role="user")
             finally:
                 for task in terminal_tasks:
                     if not task.done():
@@ -688,20 +719,74 @@ class ACPNode:
         session: ACPSession,
         prompt: ACPPrompt,
         terminal_tasks: list[asyncio.Task[TerminalEvent]],
-    ) -> str | TerminalEvent:
-        """Prefer an MCP terminal result over the ACP turn it terminates."""
-        if not terminal_tasks:
+        clarifications: list[Callable[[], Awaitable[None]]],
+    ) -> str | TerminalEvent | _Clarified:
+        """Wait for a turn and its accepted broker result, preferring results."""
+        if not terminal_tasks and not clarifications:
             return await self._speak(turn, session, prompt)
         speaking = asyncio.create_task(self._speak(turn, session, prompt))
-        done, _ = await asyncio.wait(
-            (speaking, *terminal_tasks), return_when=asyncio.FIRST_COMPLETED
-        )
-        completed = next((task for task in terminal_tasks if task in done), None)
-        if completed is None:
-            return await speaking
-        speaking.cancel()
-        await asyncio.gather(speaking, return_exceptions=True)
-        return completed.result()
+        clarification_tasks = [
+            asyncio.create_task(clarification()) for clarification in clarifications
+        ]
+        try:
+            done, _ = await asyncio.wait(
+                (speaking, *terminal_tasks, *clarification_tasks),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            completed = next(
+                (task for task in terminal_tasks if task in done), None
+            )
+            if completed is not None:
+                speaking.cancel()
+                await asyncio.gather(speaking, return_exceptions=True)
+                return completed.result()
+            if any(task in done for task in clarification_tasks):
+                # A clarify call is valid only after its explanatory answer. Let
+                # that turn flush, unless a terminal result supersedes it in the
+                # meantime.
+                done, _ = await asyncio.wait(
+                    (speaking, *terminal_tasks),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                completed = next(
+                    (task for task in terminal_tasks if task in done), None
+                )
+                if completed is not None:
+                    speaking.cancel()
+                    await asyncio.gather(speaking, return_exceptions=True)
+                    return completed.result()
+                # The broker has already accepted the clarification. A provider
+                # that exits or reports cancellation while ending that turn
+                # cannot revoke it.
+                await asyncio.gather(speaking, return_exceptions=True)
+                return _CLARIFIED
+            # Give an already-accepted broker result one scheduling turn to win
+            # a provider cancellation/normal-exit race.
+            await asyncio.sleep(0)
+            completed = next((task for task in terminal_tasks if task.done()), None)
+            if completed is not None:
+                return completed.result()
+            try:
+                return await speaking
+            except Exception:
+                # Some providers close their turn as soon as they submit a
+                # terminal tool, just ahead of the broker accepting it. Give
+                # that in-flight request the same bounded cancellation window
+                # the non-graph executor does before treating the provider exit
+                # as authoritative.
+                if terminal_tasks:
+                    done, _ = await asyncio.wait(terminal_tasks, timeout=1.0)
+                    completed = next(
+                        (task for task in terminal_tasks if task in done), None
+                    )
+                    if completed is not None:
+                        return completed.result()
+                raise
+        finally:
+            for task in clarification_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*clarification_tasks, return_exceptions=True)
 
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         """Turn the broker's terminal result into graph state or a run failure."""
