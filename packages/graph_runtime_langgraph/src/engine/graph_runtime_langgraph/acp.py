@@ -646,17 +646,31 @@ class ACPNode:
                     },
                 )
                 pending_prompts: deque[str] = deque(execution.pending_messages())
-                history = [
+                node_events = [
                     event for event in runtime.store.events_since(execution.run_id)
-                    if event.node_id == execution.node_id and event.kind in (
+                    if event.node_id == execution.node_id
+                ]
+                history = [
+                    event for event in node_events if event.kind in (
                         EventKind.TRANSCRIPT, EventKind.TOOL_CALL, EventKind.TOOL_RESULT
                     )
                 ]
+                last_outcome = next((
+                    event.kind for event in reversed(node_events)
+                    if event.kind in (EventKind.RUN_FAILED, EventKind.NODE_FINISHED)
+                ), None)
                 asked = self.continuation_prompt if resuming else self._prompt(state)
                 opening = prompt_text(asked)
                 if not resuming and history and pending_prompts:
                     opening = pending_prompts.popleft()
                     asked = _replay_prompt(history, opening)
+                elif not resuming and history and last_outcome is EventKind.RUN_FAILED:
+                    # A replacement session must retain the interrupted follow-up
+                    # and tool context, including when the operator changed runners.
+                    asked = _replay_prompt(
+                        history, "Continue from where the conversation failed."
+                    )
+                    opening = ""
                 # Published before the turn it starts, because a transcript that
                 # holds only the agent's half is not a conversation: a reader
                 # opening one has to guess what was asked, and cannot tell the work

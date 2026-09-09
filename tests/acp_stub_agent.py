@@ -319,6 +319,12 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
     session = load(session_id)
     session["turns"].append(prompt_text)
     save(session_id, session)
+    fail_prompt = os.environ.get("STUB_ACP_FAIL_PROMPT")
+    if fail_prompt and prompt_text.endswith(fail_prompt):
+        send({"jsonrpc": "2.0", "id": message_id, "error": {
+            "code": -32603, "message": "You've hit your limit",
+        }})
+        return
     if os.environ.get("STUB_ACP_USE_MCP"):
         exercise_mcp(session_id, prompt_text)
         session = load(session_id)
