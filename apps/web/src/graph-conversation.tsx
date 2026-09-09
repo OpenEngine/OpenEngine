@@ -39,6 +39,7 @@ import {
   messageText,
   retryGraphNode,
   steerGraphRun,
+  stopGraphRun,
   setGraphAutoApprove,
   setGraphRunner,
   type ApiApproval,
@@ -430,7 +431,13 @@ const IDLE_NOTE =
   "Nothing is running here. A message steers an agent while it works, and " +
   "this node has none in flight to take one.";
 
-function GraphComposer() {
+function GraphComposer({
+  working,
+  stop,
+}: {
+  working: boolean;
+  stop: () => void;
+}) {
   const aui = useAui();
   const canSend = useAuiState((state) => state.composer.canSend);
   return (
@@ -441,6 +448,11 @@ function GraphComposer() {
         aria-label="Message the agent"
         rows={1}
       />
+      {working && (
+        <button type="button" className="btn" onClick={stop}>
+          Stop
+        </button>
+      )}
       <button
         type="button"
         className="btn btn-primary"
@@ -456,6 +468,8 @@ function GraphComposer() {
 function GraphDock({
   conversationId,
   canSteer,
+  working,
+  stop,
   workspace,
   error,
   failure,
@@ -467,6 +481,8 @@ function GraphDock({
 }: {
   conversationId: string;
   canSteer: boolean;
+  working: boolean;
+  stop: () => void;
   workspace: string;
   error: string;
   failure: string;
@@ -499,7 +515,7 @@ function GraphDock({
         </div>
       )}
       {retryError && <p className="notice" role="alert">{retryError}</p>}
-      {canSteer ? <GraphComposer /> : <p className="step-note">{IDLE_NOTE}</p>}
+      {canSteer ? <GraphComposer working={working} stop={stop} /> : <p className="step-note">{IDLE_NOTE}</p>}
       {error && <p className="notice">{error}</p>}
       {workspace && (
         <div className="dock-foot">
@@ -556,6 +572,15 @@ export function GraphConversationPage({
       setRetryError(failure instanceof Error ? failure.message : String(failure));
     } finally {
       setRetryBusy(false);
+    }
+  }
+
+  async function stop() {
+    try {
+      setRun(await stopGraphRun(runId));
+      refresh();
+    } catch {
+      // The poll will pick up whatever the run became.
     }
   }
 
@@ -749,6 +774,8 @@ export function GraphConversationPage({
             <GraphDock
               conversationId={conversationId}
               canSteer={canSteer}
+              working={working}
+              stop={() => void stop()}
               workspace={workspace}
               error={steerError}
               failure={conversation.failure}

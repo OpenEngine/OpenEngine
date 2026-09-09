@@ -978,3 +978,38 @@ it("shows a retry failure and lets the operator try again", async () => {
   await user.click(retry);
   await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
 });
+
+it("stops a working node by cancelling the graph run", async () => {
+  const user = userEvent.setup();
+  const run = graphRun();
+  const fetch = serve(
+    [event({ sequence: 1, type: "transcript", payload: { role: "assistant", text: "Working…" } })],
+    run,
+  );
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  await act(async () => {});
+
+  const stopBtn = await screen.findByRole("button", { name: "Stop" });
+  expect(stopBtn).toBeVisible();
+
+  fetch.mockImplementationOnce(async () =>
+    json(graphRun({ status: "failed", activeExecutions: [], error: "cancelled" })),
+  );
+  await user.click(stopBtn);
+
+  await waitFor(() =>
+    expect(fetch).toHaveBeenCalledWith(
+      `/graph/api/runs/${runId}/cancel`,
+      expect.objectContaining({ method: "POST" }),
+    ),
+  );
+});
+
+it("hides the stop button when nothing is running on the node", async () => {
+  await open(
+    [event({ sequence: 1, type: "transcript", payload: { role: "assistant", text: "Done." } })],
+    graphRun({ status: "completed", activeExecutions: [] }),
+  );
+
+  expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+});
