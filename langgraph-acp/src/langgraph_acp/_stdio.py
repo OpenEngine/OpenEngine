@@ -222,7 +222,7 @@ class StdioACPClient:
             "mcpServers": _servers(mcp_servers),
         }
         if session_config:
-            params["sessionConfig"] = copied_mapping(session_config)
+            params["_meta"] = copied_mapping(session_config)
         response = as_mapping(
             await self.call("session/new", params, failure=ACPSessionError),
             field="the session/new result",
@@ -258,7 +258,7 @@ class StdioACPClient:
             "mcpServers": _servers(mcp_servers),
         }
         if session_config:
-            params["sessionConfig"] = copied_mapping(session_config)
+            params["_meta"] = copied_mapping(session_config)
         await self.call(
             "session/load",
             params,

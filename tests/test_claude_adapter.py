@@ -123,7 +123,7 @@ def test_claude_session_config_disables_attribution() -> None:
 
     config = claude_session_config(attribution=False)
     assert config is not None
-    assert config["attribution"] == {"commit": "", "pr": "", "sessionUrl": False}
+    assert config["claudeCode"]["options"]["settings"]["attribution"] == {"commit": "", "pr": "", "sessionUrl": False}
 
 
 def test_claude_session_config_sets_output_style() -> None:
@@ -131,7 +131,7 @@ def test_claude_session_config_sets_output_style() -> None:
 
     config = claude_session_config(output_style=ResponseStyle.CONCISE)
     assert config is not None
-    assert config["outputStyle"] == "Concise"
+    assert config["claudeCode"]["options"]["settings"]["outputStyle"] == "Concise"
 
 
 def test_claude_session_config_combines_settings() -> None:
@@ -139,7 +139,7 @@ def test_claude_session_config_combines_settings() -> None:
 
     config = claude_session_config(attribution=False, output_style=ResponseStyle.LEARNING)
     assert config is not None
-    assert config == {
+    assert config["claudeCode"]["options"]["settings"] == {
         "attribution": {"commit": "", "pr": "", "sessionUrl": False},
         "outputStyle": "Learning",
     }
@@ -855,3 +855,27 @@ def test_a_turn_is_given_no_deadline_by_default(tmp_path, monkeypatch) -> None:
 
     assert deadlines == [None]
     assert turn.message.content == "- agent_runner\n- communications"
+
+
+@pytest.mark.parametrize("interactive", [False, True])
+def test_output_preferences_reach_the_system_prompt(interactive: bool) -> None:
+    runner = ClaudeCodeAgentRunner(attribution=False, output_style=ResponseStyle.CONCISE)
+    command = runner.interactive_command_line if interactive else runner.command_line
+    argv = command(PROFILE)
+    assert argv.count("--append-system-prompt") == 1
+    prompt = argv[argv.index("--append-system-prompt") + 1]
+    assert prompt.startswith(PROFILE.instructions)
+    assert "Do not add AI attribution" in prompt
+    assert "Generated with Claude Code" in prompt
+    assert "descriptions concise" in prompt
+
+
+def test_acp_output_preferences_append_to_the_coding_system_prompt() -> None:
+    from engine.adapters.agent_runner.claude_code import claude_session_config
+
+    config = claude_session_config(attribution=False, output_style=ResponseStyle.CONCISE)
+    prompt = config["claudeCode"]["options"]["systemPrompt"]
+    assert prompt["type"] == "preset"
+    assert prompt["preset"] == "claude_code"
+    assert "Do not add AI attribution" in prompt["append"]
+    assert "descriptions concise" in prompt["append"]
