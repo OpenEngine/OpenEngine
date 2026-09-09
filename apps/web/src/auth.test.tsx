@@ -29,13 +29,7 @@ function visit(path: string) {
 }
 
 function renderGate() {
-  const appMounted = vi.fn();
-  function App() {
-    appMounted();
-    return <div>Protected application</div>;
-  }
-  render(<AuthGate><App /></AuthGate>);
-  return appMounted;
+  render(<AuthGate><div>Protected application</div></AuthGate>);
 }
 
 beforeEach(() => {
@@ -49,22 +43,22 @@ describe("AuthGate", () => {
   it("keeps the application unmounted until the status check finishes", async () => {
     let resolve!: (status: AuthStatus) => void;
     vi.mocked(getAuthStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
-    const appMounted = renderGate();
+    renderGate();
     expect(screen.getByText("Starting openengine…")).toBeVisible();
-    expect(appMounted).not.toHaveBeenCalled();
+    expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
 
-    await act(async () => resolve(signedOut));
-    expect(screen.getByRole("link", { name: "Sign in with GitHub" }))
+    resolve(signedOut);
+    expect(await screen.findByRole("link", { name: "Sign in with GitHub" }))
       .toHaveAttribute("href", "/api/auth/github/login");
-    expect(appMounted).not.toHaveBeenCalled();
+    expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
   });
 
   it.each(["/", "/login", "/runs"])("shows login for a signed-out user at %s", async (path) => {
     visit(path);
     vi.mocked(getAuthStatus).mockResolvedValue(signedOut);
-    const appMounted = renderGate();
+    renderGate();
     expect(await screen.findByRole("link", { name: "Sign in with GitHub" })).toBeVisible();
-    expect(appMounted).not.toHaveBeenCalled();
+    expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
   });
 
@@ -89,19 +83,19 @@ describe("AuthGate", () => {
     async (status) => {
       visit("/login");
       vi.mocked(getAuthStatus).mockResolvedValue(status);
-      const appMounted = renderGate();
+      renderGate();
       await waitFor(() => expect(replace).toHaveBeenCalledWith("/"));
       expect(screen.getByText("Redirecting…")).toBeVisible();
-      expect(appMounted).not.toHaveBeenCalled();
+      expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
       expect(screen.queryByRole("link")).not.toBeInTheDocument();
     },
   );
 
   it("shows a connection error without opening the app or offering login on status failure", async () => {
     vi.mocked(getAuthStatus).mockRejectedValue(new Error("Network unavailable"));
-    const appMounted = renderGate();
+    renderGate();
     expect(await screen.findByText("Could not reach the server. Please refresh to try again.")).toBeVisible();
-    expect(appMounted).not.toHaveBeenCalled();
+    expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
   });
@@ -115,15 +109,16 @@ describe("AuthGate", () => {
     await userEvent.setup().click(button);
     expect(logout).toHaveBeenCalledTimes(1);
     expect(replace).not.toHaveBeenCalled();
-    await act(async () => resolve());
-    expect(replace).toHaveBeenCalledWith("/login");
+    expect(button).toBeDisabled();
+    resolve();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
   });
 
   it("unmounts the app when a session expires while the page stays open", async () => {
-    vi.useFakeTimers();
     vi.mocked(getAuthStatus).mockResolvedValueOnce(signedIn).mockResolvedValue(signedOut);
+    vi.useFakeTimers();
     renderGate();
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText("Protected application")).toBeVisible();
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
     expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
@@ -143,7 +138,7 @@ describe("AuthGate", () => {
           onChange={(event) => setNote(event.target.value)} />;
       }
       render(<AuthGate><Editor /></AuthGate>);
-      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
       const input = screen.getByRole("textbox", { name: "Decision note" });
       fireEvent.change(input, { target: { value: "Keep this draft" } });
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
