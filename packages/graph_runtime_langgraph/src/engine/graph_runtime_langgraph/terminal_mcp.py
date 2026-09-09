@@ -92,6 +92,7 @@ class TerminalMcpServer:
                     "env": [],
                 },
                 result=broker.result,
+                clarification=broker.clarification,
             )
 
 

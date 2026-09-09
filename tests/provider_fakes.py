@@ -233,6 +233,22 @@ def _server_from_mapping(servers: object) -> McpServer | None:
     return None
 
 
+def _acp_mcp_server(servers: object) -> McpServer | None:
+    """ACP's `[{name, command, args}]` form of the same server description."""
+
+    if not isinstance(servers, list):
+        return None
+    for server in servers:
+        if not isinstance(server, Mapping) or not server.get("command"):
+            continue
+        return McpServer(
+            name=str(server.get("name") or "workflow"),
+            command=str(server["command"]),
+            args=tuple(str(argument) for argument in server.get("args") or ()),
+        )
+    return None
+
+
 def _claude_mcp_server(arguments: Sequence[str]) -> McpServer | None:
     """`--mcp-config '{"mcpServers": {"workflow": {...}}}'`, off argv."""
 
@@ -416,11 +432,10 @@ def _close(process: "subprocess.Popen[str]") -> None:
 # wraps one, so a scripted graph run needs an agent that speaks ACP rather than
 # either CLI's own protocol.
 #
-# The same script drives it, minus the step kinds an ACP turn has no equivalent
-# for. A graph node ends by finishing its turn, so there is no `complete_step`
-# to call and no MCP server bound to the invocation -- which is exactly the
-# difference between the two runtimes, and why a `tool` step is refused here
-# rather than quietly skipped.
+# The same script drives it, including calls to the invocation-bound MCP server
+# carried by `session/new` or `session/load`. A graph node advances only after
+# one of those tools reports a terminal result; ending the ACP turn is not a
+# completion signal.
 
 #: The id this agent asks its permission questions under. One outstanding
 #: question at a time, which is all an ACP turn can have.
@@ -489,6 +504,7 @@ def _acp(arguments: Sequence[str]) -> int:
     """
 
     working_directories: dict[str, str] = {}
+    mcp_servers: dict[str, McpServer | None] = {}
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -520,6 +536,7 @@ def _acp(arguments: Sequence[str]) -> int:
                 continue
             session_id = f"acp-{len(working_directories) + 1}"
             working_directories[session_id] = str(params.get("cwd") or "")
+            mcp_servers[session_id] = _acp_mcp_server(params.get("mcpServers"))
             _acp_respond(message_id, {"sessionId": session_id})
         elif method == "session/load":
             refusal = _acp_refusal(params)
@@ -528,6 +545,7 @@ def _acp(arguments: Sequence[str]) -> int:
                 continue
             session_id = str(params.get("sessionId"))
             working_directories[session_id] = str(params.get("cwd") or "")
+            mcp_servers[session_id] = _acp_mcp_server(params.get("mcpServers"))
             _acp_respond(message_id, {})
         elif method == "session/prompt":
             session_id = str(params.get("sessionId"))
@@ -536,6 +554,7 @@ def _acp(arguments: Sequence[str]) -> int:
                 session_id,
                 _acp_prompt(params),
                 working_directories.get(session_id, ""),
+                mcp_servers.get(session_id),
             )
         elif method == "session/cancel":
             continue  # A notification, and this agent has nothing to abandon.
@@ -549,13 +568,29 @@ def _acp(arguments: Sequence[str]) -> int:
             )
 
 
-def _acp_turn(message_id: object, session_id: str, prompt: str, cwd: str) -> None:
+def _acp_turn(
+    message_id: object,
+    session_id: str,
+    prompt: str,
+    cwd: str,
+    server: McpServer | None,
+) -> None:
     """Play this prompt's scenario, then end the turn."""
 
-    for step in _steps(prompt):
+    for index, step in enumerate(_turn_steps(prompt, server), start=1):
         kind = str(step.get("type"))
         if kind == "say":
             _acp_say(session_id, str(step.get("text", "")))
+        elif kind == "tool":
+            called = _require(server, "ACP")
+            name = str(step["name"])
+            call_arguments = step.get("arguments") or {}
+            tool_call_id = f"mcp-{index}"
+            _acp_calling(
+                session_id, tool_call_id, called.name, name, call_arguments
+            )
+            output, failed = _call_tool(called, name, call_arguments)
+            _acp_called(session_id, tool_call_id, output, failed)
         elif kind == "run":
             command = _command(step, prompt)
             if step.get("approval", True) and not _acp_allowed(session_id, command):
@@ -571,10 +606,7 @@ def _acp_turn(message_id: object, session_id: str, prompt: str, cwd: str) -> Non
                 return
             _acp_ran(session_id, command, code, output)
         else:
-            raise SystemExit(
-                f"an ACP turn cannot do a {kind!r} step: a graph node ends by "
-                "finishing its turn, so it has no run-bound MCP server to call"
-            )
+            raise SystemExit(f"ACP cannot play a {kind!r} step")
     _acp_respond(message_id, {"stopReason": "end_turn"})
 
 
@@ -674,6 +706,46 @@ def _acp_say(session_id: str, text: str) -> None:
         {
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": text},
+        },
+    )
+
+
+def _acp_calling(
+    session_id: str,
+    tool_call_id: str,
+    server: str,
+    name: str,
+    arguments: object,
+) -> None:
+    """Report an invocation-bound MCP call before crossing the stdio bridge."""
+
+    _acp_update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": tool_call_id,
+            "title": f"{server}.{name}",
+            "kind": "other",
+            "status": "in_progress",
+            "rawInput": arguments,
+        },
+    )
+
+
+def _acp_called(
+    session_id: str, tool_call_id: str, output: str, failed: bool
+) -> None:
+    """Report the MCP result in the same ACP tool call."""
+
+    _acp_update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": tool_call_id,
+            "status": "failed" if failed else "completed",
+            "content": [
+                {"type": "content", "content": {"type": "text", "text": output}}
+            ],
         },
     )
 

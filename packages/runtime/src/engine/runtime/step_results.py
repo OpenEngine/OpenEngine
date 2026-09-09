@@ -31,6 +31,11 @@ INVALID_COMPLETION_ERROR = (
     "requesting clarification on a step"
 )
 
+#: How many times an agent that ended a turn without a valid result is corrected
+#: before the step is failed. Shared by both workflow executors so moving a step
+#: onto a graph does not change how many chances its agent receives.
+INVALID_COMPLETION_CORRECTIONS = 2
+
 _CLARIFICATION_OR_ESCALATION_TOOLS = frozenset(
     {
         "askuserquestion",
@@ -344,6 +349,7 @@ def run_failed_from_arguments(
 
 __all__ = [
     "INVALID_COMPLETION_ERROR",
+    "INVALID_COMPLETION_CORRECTIONS",
     "InvalidStepResultError",
     "awaits_human_answer",
     "complete_step_tool",

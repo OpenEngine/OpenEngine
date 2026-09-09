@@ -231,6 +231,7 @@ def test_clarify_acknowledges_without_submitting_a_terminal_result() -> None:
             clarified = await broker._submit(
                 _request(broker, "clarify-1", "clarify", {})
             )
+            await broker.clarification()
             assert broker._result is not None
             assert not broker._result.done()
             completed = await broker._submit(
