@@ -1564,9 +1564,33 @@ def create_app(
         )
 
     async def list_runs(_request: Request) -> JSONResponse:
-        return JSONResponse(
-            {"runs": [_run_json(run, listing=True) for run in await run_reader.list()]}
-        )
+        runs = []
+        for run in await run_reader.list():
+            row = _run_json(run, listing=True)
+            # Graph rows have no steps. Carry only the live frontier and
+            # approval owners, not the snapshot's potentially large values.
+            if (
+                not run.workflow_version
+                and run.phase not in {"succeeded", "failed"}
+                and surface.runtime is not None
+            ):
+                snapshot = await surface.runtime.snapshot(run.run_id)
+                if snapshot is not None:
+                    row["graphProgress"] = {
+                        "activeNodeIds": list(
+                            dict.fromkeys(
+                                str(one.node_id) for one in snapshot.active_executions
+                            )
+                        ),
+                        "waitingNodeIds": list(
+                            dict.fromkeys(
+                                str(one.node_id) for one in snapshot.pending_approvals
+                            )
+                        ),
+                        "nextNodeIds": [str(node) for node in snapshot.next_nodes],
+                    }
+            runs.append(row)
+        return JSONResponse({"runs": runs})
 
     async def open_conversations() -> set[AgentInstanceId]:
         """The plans a project row can be linked to.

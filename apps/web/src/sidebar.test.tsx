@@ -572,6 +572,47 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each([
+    { activeNodeIds: ["implementation"], waitingNodeIds: [], nextNodeIds: ["review"], label: "Implementation", live: true },
+    { activeNodeIds: ["implementation"], waitingNodeIds: ["implementation"], nextNodeIds: ["review"], label: "Implementation", live: true },
+    { activeNodeIds: [], waitingNodeIds: ["human-review"], nextNodeIds: ["human-review"], label: "Human review", live: false },
+    { activeNodeIds: [], waitingNodeIds: [], nextNodeIds: ["human-review"], label: "Human review", live: false },
+    { activeNodeIds: ["implementation", "review", "review"], waitingNodeIds: ["review"], nextNodeIds: ["human-review"], label: "Implementation, Review", live: true },
+  ])("shows graph status $label with activity=$live", ({ label, live, ...graphProgress }) => {
+    render(
+      <Sidebar
+        runs={[{ ...graphRun, graphProgress }]}
+        graphNodes={{ [graphRun.workflowId]: nodes }}
+        initialSection="workflows"
+      />,
+    );
+
+    const entry = screen.getByRole("link", { name: /Second run/ });
+    expect(entry).toHaveTextContent(`${label} · ${graphRun.workflowId}`);
+    expect(within(entry).queryByLabelText("WorkOrder is in progress") !== null).toBe(live);
+    for (const name of ["Implementation", "Review"]) {
+      const conversation = screen.getByRole("link", { name: new RegExp(`^${name}( Waiting for input)?$`) });
+      expect(within(conversation).queryByLabelText("Waiting for input") !== null)
+        .toBe(graphProgress.waitingNodeIds.includes(name.toLowerCase()));
+    }
+  });
+
+  it("clears graph activity and approval markers when the run finishes", () => {
+    render(
+      <Sidebar
+        runs={[{ ...graphRun, phase: "succeeded", graphProgress: {
+          activeNodeIds: ["implementation"], waitingNodeIds: ["implementation"], nextNodeIds: [],
+        } }]}
+        graphNodes={{ [graphRun.workflowId]: nodes }}
+        initialSection="workflows"
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: /Second run/ })).toHaveTextContent("succeeded ·");
+    expect(screen.queryByLabelText("WorkOrder is in progress")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Waiting for input")).not.toBeInTheDocument();
+  });
+
   it("marks a workflow conversation that is waiting for input", () => {
     const waiting = {
       ...run,

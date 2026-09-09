@@ -232,6 +232,12 @@ export type ApiWorkflowRunListing = {
   repositoryContext: { repository: string };
   phase: string;
   currentStepId: string | null;
+  /** Live graph frontier supplied by the polled runs list. */
+  graphProgress?: {
+    activeNodeIds: string[];
+    waitingNodeIds: string[];
+    nextNodeIds: string[];
+  };
   terminalOutcome: string | null;
   steps: ApiRunStepListing[];
 };
