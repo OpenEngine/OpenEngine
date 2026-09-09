@@ -18,8 +18,8 @@ Callers:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 
 import httpx
 import keyring
@@ -37,6 +37,7 @@ from engine.apps.web.oauth_credentials import (
 _KEYRING_SERVICE = "openengine"
 _KEYRING_USERNAME = "github-token"
 _KEYRING_CLIENT_ID_USERNAME = "github-client-id"
+GITHUB_CREDENTIAL_IDENTITY = (_KEYRING_SERVICE, _KEYRING_USERNAME)
 
 #: GitHub OAuth endpoints.
 _GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
@@ -47,6 +48,10 @@ _SCOPES = "repo offline_access"
 
 #: Per spec, `slow_down` requires adding this many seconds to the interval.
 _SLOW_DOWN_PENALTY_SECONDS = 5
+
+# This request runs while the cross-process credential lock is held. Keep its
+# upper bound below that lock's acquisition timeout (10 seconds).
+_REFRESH_REQUEST_TIMEOUT_SECONDS = 8.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +197,9 @@ async def poll_device_flow(
     if error == "authorization_pending":
         return DeviceFlowPending(next_interval=current_interval)
     if error == "slow_down":
-        return DeviceFlowPending(next_interval=current_interval + _SLOW_DOWN_PENALTY_SECONDS)
+        return DeviceFlowPending(
+            next_interval=current_interval + _SLOW_DOWN_PENALTY_SECONDS
+        )
     if error:
         raise GitHubAuthError(f"GitHub device flow error: {error}")
     token = body.get("access_token", "")
@@ -209,7 +216,9 @@ async def poll_device_flow(
 async def refresh_access_token(client_id: str, refresh_token: str) -> StoredCredentials:
     """Exchange a Device Flow refresh token for GitHub's rotated token pair."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(
+            timeout=_REFRESH_REQUEST_TIMEOUT_SECONDS
+        ) as client:
             response = await client.post(
                 _GITHUB_TOKEN_URL,
                 data={
@@ -245,9 +254,7 @@ async def refresh_access_token(client_id: str, refresh_token: str) -> StoredCred
         # working token when a successful response does not rotate it.
         refresh_token=_optional_string(body.get("refresh_token")) or refresh_token,
         expires_at=expiry_at(now, body.get("expires_in")),
-        refresh_token_expires_at=expiry_at(
-            now, body.get("refresh_token_expires_in")
-        ),
+        refresh_token_expires_at=expiry_at(now, body.get("refresh_token_expires_in")),
     )
 
 
@@ -262,9 +269,8 @@ def credentials_from_device_flow(result: DeviceFlowComplete) -> StoredCredential
     )
 
 
-
-
 __all__ = [
+    "GITHUB_CREDENTIAL_IDENTITY",
     "DeviceFlowComplete",
     "DeviceFlowPending",
     "DeviceFlowState",

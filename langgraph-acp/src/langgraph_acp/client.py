@@ -138,8 +138,8 @@ class ACPClient(Protocol):
         given; the `MCPServer` type that builds them arrives with its own
         ticket, and inventing half of it here would only have to be undone.
 
-        `session_config` carries provider settings -- attribution, output
-        style -- that the agent adapter translates into its own vocabulary.
+        `session_config` carries provider extension metadata in ACP `_meta`,
+        such as Claude SDK options under `claudeCode.options`.
         Omitted when the caller has nothing to say; present entries are the
         adapter's to interpret or ignore.
         """

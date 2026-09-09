@@ -142,6 +142,7 @@ class RunSnapshot:
     pending_approvals: tuple[PendingApproval, ...] = ()
     error: str = ""
     auto_approve_nodes: tuple[NodeId, ...] = ()
+    runner_overrides: Mapping[NodeId, str] = field(default_factory=dict)
 
 
 #: Why a cancelled run stopped, as its `error` and as the payload of the
@@ -311,6 +312,12 @@ class GraphRuntime(Protocol):
         `AmbiguousExecutionError` when several do and none was named -- two
         tasks fanned into the same node make even a node name ambiguous.
         """
+        ...
+
+    async def set_runner(
+        self, run_id: RunId, node_id: NodeId, runner: str
+    ) -> RunSnapshot:
+        """Override this node's runner for subsequent executions of this run."""
         ...
 
     async def set_auto_approve(

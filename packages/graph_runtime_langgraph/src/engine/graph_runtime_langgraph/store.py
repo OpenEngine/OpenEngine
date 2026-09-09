@@ -64,6 +64,7 @@ class RunRecord:
     error: str = ""
     """Why it stopped, when it stopped badly. Cleared by a fork."""
     auto_approve_nodes: tuple[NodeId, ...] = ()
+    runner_overrides: Mapping[NodeId, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,16 +294,18 @@ class SqliteGraphRuntimeStore:
 
     async def remember_run(self, record: RunRecord) -> None:
         self._connection.execute(
-            "INSERT INTO runs (run_id, graph_id, error, ordinal, auto_approve_nodes) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO runs (run_id, graph_id, error, ordinal, auto_approve_nodes, runner_overrides) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (run_id) DO UPDATE SET graph_id = excluded.graph_id, "
-            "error = excluded.error, auto_approve_nodes = excluded.auto_approve_nodes",
+            "error = excluded.error, auto_approve_nodes = excluded.auto_approve_nodes, "
+            "runner_overrides = excluded.runner_overrides",
             (
                 str(record.run_id),
                 str(record.graph_id),
                 record.error,
                 self._next(),
                 json.dumps(record.auto_approve_nodes),
+                json.dumps(dict(record.runner_overrides)),
             ),
         )
 
@@ -395,6 +398,7 @@ def _run_from(row: sqlite3.Row) -> RunRecord:
         run_id=RunId(row["run_id"]),
         graph_id=GraphId(row["graph_id"]),
         error=row["error"],
+        runner_overrides=json.loads(row["runner_overrides"]),
         auto_approve_nodes=tuple(
             NodeId(node) for node in json.loads(row["auto_approve_nodes"])
         ),

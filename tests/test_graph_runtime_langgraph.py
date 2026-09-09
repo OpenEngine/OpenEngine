@@ -453,7 +453,11 @@ def test_auto_approve_preference_survives_store_reopen(tmp_path: Path) -> None:
             connection.execute("INSERT INTO runs VALUES ('old', 'triage', '', 0)")
         store = SqliteGraphRuntimeStore(path)
         assert (await store.run(RunId("old"))).auto_approve_nodes == ()
-        record = RunRecord(RunId("one"), GRAPH, auto_approve_nodes=(TRIAGE,))
+        assert (await store.run(RunId("old"))).runner_overrides == {}
+        record = RunRecord(
+            RunId("one"), GRAPH, auto_approve_nodes=(TRIAGE,),
+            runner_overrides={TRIAGE: "claude"},
+        )
         await store.remember_run(record)
         await store.remember_run(RunRecord(RunId("two"), GRAPH))
         store.close()

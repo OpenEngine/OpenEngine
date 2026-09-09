@@ -214,7 +214,7 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
         assert tables == {"events", "runs", "sessions", "approvals", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("sqlite_graph_0001",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("26a6a404b5fe",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -283,7 +283,7 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("sqlite_graph_0001",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("26a6a404b5fe",)
 
 
 def test_graph_history_rejects_postgres() -> None:

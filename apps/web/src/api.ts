@@ -264,6 +264,7 @@ export type ApiWorkflowRun = Omit<ApiWorkflowRunListing, "steps"> & {
 
 export type ApiGraphRun = {
   autoApproveNodes?: string[];
+  runnerOverrides?: Record<string, string>;
   runId: string;
   graphId: string;
   status: "running" | "awaiting_approval" | "completed" | "failed";
@@ -296,6 +297,8 @@ export type ApiGraphTopology = {
     showInSidebar?: boolean;
     /** Whether steering can restart this node when it is no longer active. */
     alwaysOpen?: boolean;
+    runner?: string;
+    runners?: string[];
   }[];
 };
 
@@ -350,6 +353,17 @@ export function getGraphRun(
   return api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`, {
     signal,
   });
+}
+
+export function setGraphRunner(
+  runId: string,
+  nodeId: string,
+  runner: string,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/runner`,
+    { method: "PATCH", body: JSON.stringify({ node: nodeId, runner }) },
+  );
 }
 
 export function setGraphAutoApprove(

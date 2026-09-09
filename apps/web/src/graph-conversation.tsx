@@ -39,6 +39,7 @@ import {
   messageText,
   steerGraphRun,
   setGraphAutoApprove,
+  setGraphRunner,
   type ApiApproval,
   type ApiGraphEvent,
   type ApiGraphRun,
@@ -273,6 +274,9 @@ export function graphConversation(
       }
       case "run.failed":
         failure = String(payload.error ?? "");
+        break;
+      case "run.forked":
+        failure = "";
         break;
       default:
         break;
@@ -512,6 +516,29 @@ export function GraphConversationPage({
     return () => controller.abort();
   }, [graphId]);
 
+  const node = topology && topology.graphId === graphId
+    ? topology.nodes.find((node) => node.nodeId === nodeId)
+    : undefined;
+  const runner = run?.runnerOverrides?.[nodeId] ?? node?.runner ?? "";
+  const runners = [...new Set([node?.runner, ...(node?.runners ?? []), runner])]
+    .filter((value): value is string => Boolean(value));
+  const [runnerBusy, setRunnerBusy] = useState(false);
+  const [runnerError, setRunnerError] = useState("");
+
+  async function chooseRunner(next: string) {
+    if (next === runner) return;
+    setRunnerBusy(true);
+    setRunnerError("");
+    try {
+      setRun(await setGraphRunner(runId, nodeId, next));
+      refresh();
+    } catch (failure) {
+      setRunnerError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setRunnerBusy(false);
+    }
+  }
+
   const [autoApproveBusy, setAutoApproveBusy] = useState(false);
   const [autoApproveError, setAutoApproveError] = useState("");
 
@@ -530,7 +557,7 @@ export function GraphConversationPage({
   const conversationId = graphConversationId(runId, nodeId);
 
   const nodeEvents = useMemo(
-    () => events.filter((event) => event.nodeId === nodeId),
+    () => events.filter((event) => event.nodeId === nodeId || event.type === "run.forked"),
     [events, nodeId],
   );
   const pending = useMemo(
@@ -633,7 +660,7 @@ export function GraphConversationPage({
 
   return (
     <main className="panel">
-      <header className="panel-head panel-head-workflow">
+      <header className="panel-head panel-head-workflow panel-head-graph">
         <div className="panel-head-copy">
           <p className="eyebrow">WorkOrder conversation</p>
           <h1>{phaseLabel(nodeId)}</h1>
@@ -643,19 +670,36 @@ export function GraphConversationPage({
               : "A WorkOrder node owns this transcript."}
           </p>
         </div>
-        <label className="field">
-          <span>Approvals</span>
-          <span className="field-box auto-approve-control">
-            <input
-              type="checkbox"
-              checked={run?.autoApproveNodes?.includes(nodeId) ?? false}
-              disabled={!run || autoApproveBusy}
-              onChange={(event) => void chooseAutoApprove(event.target.checked)}
-            />
-            <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
-          </span>
-          {autoApproveError && <span className="field-error">{autoApproveError}</span>}
-        </label>
+        <div className="panel-head-controls">
+          {node?.runner && (
+            <label className="field">
+              <span>Runner</span>
+              <select
+                aria-label="Runner"
+                className="field-box"
+                value={runner}
+                disabled={!run || runnerBusy}
+                onChange={(event) => void chooseRunner(event.target.value)}
+              >
+                {runners.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+              <span className="micro">Applies the next time this node starts.</span>
+              {runnerError && <span className="field-error">{runnerError}</span>}
+            </label>
+          )}
+          <label className="field">
+            <span className="field-box auto-approve-control">
+              <input
+                type="checkbox"
+                checked={run?.autoApproveNodes?.includes(nodeId) ?? false}
+                disabled={!run || autoApproveBusy}
+                onChange={(event) => void chooseAutoApprove(event.target.checked)}
+              />
+              <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
+            </span>
+            {autoApproveError && <span className="field-error">{autoApproveError}</span>}
+          </label>
+        </div>
       </header>
       {error && <p className="notice notice-block">{error}</p>}
       <AssistantRuntimeProvider runtime={runtime}>

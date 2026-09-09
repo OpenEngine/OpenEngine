@@ -106,23 +106,54 @@ OUTPUT_STYLES: dict[ResponseStyle, str] = {
 }
 
 
+def _output_instructions(attribution: bool, output_style: ResponseStyle | None) -> str:
+    instructions = []
+    if not attribution:
+        instructions.append(
+            "Do not add AI attribution to commits, pull requests, or merge requests, "
+            "including Co-authored-by trailers or Generated with Claude Code notices. "
+            "This also applies to titles and descriptions sent through tools."
+        )
+    if output_style is ResponseStyle.CONCISE:
+        instructions.append(
+            "Keep responses and pull request or merge request descriptions concise. "
+            "Lead with the result, include relevant validation, and omit unnecessary "
+            "prefaces and repetition."
+        )
+    return "\n\n".join(instructions)
+
+
+def _claude_settings(attribution: bool, output_style: ResponseStyle | None) -> dict[str, Any]:
+    settings: dict[str, Any] = {}
+    if not attribution:
+        settings["attribution"] = {"commit": "", "pr": "", "sessionUrl": False}
+    if output_style is not None:
+        settings["outputStyle"] = OUTPUT_STYLES[output_style]
+    return settings
+
+
 def claude_session_config(
     *,
     attribution: bool = True,
     output_style: ResponseStyle | None = None,
 ) -> dict[str, Any] | None:
-    """Build a ``sessionConfig`` dict for an ACP ``session/new`` call.
+    """Build ACP session metadata using Claude's SDK options extension.
 
-    Translates Engine's configuration vocabulary into the Claude Code settings
-    the ``claude-agent-acp`` adapter knows how to apply. Returns ``None`` when
-    every setting is at its default, so a node with nothing to say sends nothing.
+    The adapter reads ``_meta.claudeCode.options`` on session/new and
+    session/load. A top-level ``sessionConfig`` is silently ignored.
     """
-    config: dict[str, Any] = {}
-    if not attribution:
-        config["attribution"] = {"commit": "", "pr": "", "sessionUrl": False}
-    if output_style is not None:
-        config["outputStyle"] = OUTPUT_STYLES[output_style]
-    return config or None
+    settings = _claude_settings(attribution, output_style)
+    if not settings:
+        return None
+    options: dict[str, Any] = {"settings": settings}
+    instructions = _output_instructions(attribution, output_style)
+    if instructions:
+        options["systemPrompt"] = {
+            "type": "preset",
+            "preset": "claude_code",
+            "append": instructions,
+        }
+    return {"claudeCode": {"options": options}}
 
 
 class ClaudeUnavailableError(RuntimeError):
@@ -567,17 +598,19 @@ class ClaudeCodeAgentRunner:
         # One `--settings` for every provider setting Engine configures: the
         # flag takes a whole document, so a second occurrence would replace the
         # first rather than add to it.
-        settings: dict[str, Any] = {}
-        if not self._attribution:
-            settings["attribution"] = {"commit": "", "pr": "", "sessionUrl": False}
-        if self._output_style is not None:
-            settings["outputStyle"] = OUTPUT_STYLES[self._output_style]
+        settings = _claude_settings(self._attribution, self._output_style)
         if settings:
             argv += ["--settings", json.dumps(settings, separators=(",", ":"))]
-        if profile.instructions.strip():
-            # A real system-prompt channel, unlike `codex exec` -- so the
-            # instructions never enter the conversation text.
-            argv += ["--append-system-prompt", profile.instructions.strip()]
+        instructions = "\n\n".join(
+            part
+            for part in (
+                profile.instructions.strip(),
+                _output_instructions(self._attribution, self._output_style),
+            )
+            if part
+        )
+        if instructions:
+            argv += ["--append-system-prompt", instructions]
         if mcp_server is not None:
             argv += [
                 "--mcp-config",

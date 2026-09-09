@@ -616,7 +616,15 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             {step.outputs.map((output) => (
               <div key={output.name}>
                 <dt>{output.name}</dt>
-                <dd>{output.value}</dd>
+                <dd>
+                  {/^https?:\/\//.test(output.value) ? (
+                    <a href={output.value} target="_blank" rel="noreferrer">
+                      {output.value} ↗
+                    </a>
+                  ) : (
+                    output.value
+                  )}
+                </dd>
               </div>
             ))}
           </dl>
@@ -759,30 +767,48 @@ export function RunDetailPage({ runId }: { runId: string }) {
       phase: graph.status === "awaiting_approval" ? "awaiting_human_review" : baseRun.phase,
       currentStepId: graph.activeExecutions[0]?.nodeId ?? graph.nextNodes[0] ?? null,
       failureReason: graph.error || baseRun.failureReason,
-      steps: topology.nodes.filter((node) => node.kind !== "workspace").map((node) => ({
-        stepId: node.nodeId,
-        name: node.name,
-        kind: node.kind === "human" ? "human" as const : "agent" as const,
-        status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed" : "pending",
-        outcome: completed.has(node.nodeId) ? "completed" : null,
-        changesRequested: false,
-        agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
-        agentInstanceId: null,
-        agentRunId: null,
-        conversationId: null,
-        conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
-          event.type === "conversation.started" || event.type === "transcript"
-        ))
-          ? graphConversationUrl(runId, node.nodeId) : null,
-        waiting: waiting.has(node.nodeId),
-        summary: typeof graph.values[node.nodeId] === "string" ? String(graph.values[node.nodeId]) : "",
-        outputs: [],
-      })),
+      steps: topology.nodes.filter((node) => node.kind !== "workspace").map((node) => {
+        const value = graph.values[node.nodeId];
+        const fields = value != null && typeof value === "object" && !Array.isArray(value)
+          ? value as Record<string, unknown> : null;
+        return {
+          stepId: node.nodeId,
+          name: node.name,
+          kind: node.kind === "human" ? "human" as const : "agent" as const,
+          status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed" : "pending",
+          outcome: completed.has(node.nodeId) ? "completed" : null,
+          changesRequested: false,
+          agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
+          agentInstanceId: null,
+          agentRunId: null,
+          conversationId: null,
+          conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
+            event.type === "conversation.started" || event.type === "transcript"
+          ))
+            ? graphConversationUrl(runId, node.nodeId) : null,
+          waiting: waiting.has(node.nodeId),
+          summary: typeof value === "string" ? value
+            : typeof fields?.summary === "string" ? fields.summary : "",
+          outputs: fields ? Object.entries(fields)
+            .filter(([key, value]) => key !== "summary" && value != null)
+            .map(([key, value]) => ({
+              name: key,
+              value: typeof value === "string" ? value : JSON.stringify(value),
+            })) : [],
+        };
+      }),
       pendingHumanReview: graph.pendingApprovals[0] ? {
         stepId: graph.pendingApprovals[0].nodeId,
         title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
         summary: "",
-        prUrl: null,
+        prUrl: Object.values(graph.values).reduce<string | null>((found, val) => {
+          if (found) return found;
+          if (val != null && typeof val === "object" && !Array.isArray(val)) {
+            const obj = val as Record<string, unknown>;
+            if (typeof obj.pr_url === "string" && /^https?:\/\//.test(obj.pr_url)) return obj.pr_url;
+          }
+          return null;
+        }, null),
       } : null,
     } satisfies ApiWorkflowRun;
   }, [baseRun, graph, topology, graphEvents, runId]);
@@ -857,6 +883,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
               <h2>{run.pendingHumanReview.title}</h2>
+              {run.pendingHumanReview.prUrl && (
+                <p>
+                  <a href={run.pendingHumanReview.prUrl} target="_blank" rel="noreferrer">
+                    View pull request ↗
+                  </a>
+                </p>
+              )}
               <GraphApprovalDecision
                 runId={runId}
                 approval={graph.pendingApprovals[0]}
