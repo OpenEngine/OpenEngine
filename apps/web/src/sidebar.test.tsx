@@ -587,6 +587,47 @@ describe("Sidebar", () => {
     );
   });
 
+  it("collapses related graph conversations under their node group", async () => {
+    const user = userEvent.setup();
+    const reviewNodes: ApiGraphTopology["nodes"] = [
+      nodes[1],
+      {
+        nodeId: "review-security",
+        name: "Review (Security)",
+        kind: "agent",
+        group: "Review",
+      },
+      {
+        nodeId: "review-performance",
+        name: "Review (Performance)",
+        kind: "agent",
+        group: "Review",
+      },
+    ];
+    render(
+      <Sidebar
+        runs={[graphRun]}
+        graphNodes={{ [graphRun.workflowId]: reviewNodes }}
+        initialSection="workflows"
+      />,
+    );
+
+    const rail = within(body("WorkOrders"));
+    const group = rail.getByText("Review", { selector: "summary" });
+    expect(rail.getByRole("link", { name: "Review (Security)" })).not.toBeVisible();
+
+    await user.click(group);
+
+    expect(rail.getByRole("link", { name: "Review (Security)" })).toHaveAttribute(
+      "href",
+      "/runs/run-2/conversations/graph--review-security",
+    );
+    expect(rail.getByRole("link", { name: "Review (Performance)" })).toHaveAttribute(
+      "href",
+      "/runs/run-2/conversations/graph--review-performance",
+    );
+  });
+
   /** The checkout and the person's own verdict are stages, not conversations,
    *  and each says so about itself. */
   it("leaves out the nodes that say they do not belong in the rail", () => {
