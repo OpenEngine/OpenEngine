@@ -499,9 +499,11 @@ function GraphDock({
 export function GraphConversationPage({
   runId,
   nodeId,
+  workOrderName,
 }: {
   runId: string;
   nodeId: string;
+  workOrderName?: string;
 }) {
   const { events, run, error, loaded, refresh, setRun } = useGraphRun(runId);
   const [steerError, setSteerError] = useState("");
@@ -662,8 +664,8 @@ export function GraphConversationPage({
     <main className="panel">
       <header className="panel-head panel-head-workflow panel-head-graph">
         <div className="panel-head-copy">
-          <p className="eyebrow">WorkOrder conversation</p>
-          <h1>{phaseLabel(nodeId)}</h1>
+          <p className="eyebrow">{phaseLabel(nodeId)}</p>
+          <h1>{workOrderName || "WorkOrder"}</h1>
           <p className="lede">
             {working
               ? "This node's agent is working. What you send reaches the turn it is in the middle of."
