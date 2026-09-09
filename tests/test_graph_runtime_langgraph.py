@@ -463,3 +463,36 @@ def test_auto_approve_preference_survives_store_reopen(tmp_path: Path) -> None:
         store.close()
 
     asyncio.run(exercise())
+
+
+def test_event_log_replays_and_tails_after_store_reopens(tmp_path: Path) -> None:
+    from engine.graph_runtime import RuntimeEvent
+
+    async def scenario() -> None:
+        path = tmp_path / "events.db"
+        store = SqliteGraphRuntimeStore(path)
+        log = EventLog(store)
+        run_id = RunId("conversation")
+        first = await log.append(RuntimeEvent(
+            run_id, EventKind.TRANSCRIPT, {"role": "user", "text": "Remember this"},
+            node_id=NodeId("implementation"),
+        ))
+        await log.append(RuntimeEvent(RunId("other"), EventKind.RUN_STARTED))
+        store.close()
+        store = SqliteGraphRuntimeStore(path)
+        try:
+            log = EventLog(store)
+            assert log.since(run_id) == (first,)
+            stream = log.stream(run_id, first.sequence)
+            pending = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            second = await log.append(RuntimeEvent(
+                run_id, EventKind.TRANSCRIPT, {"role": "assistant", "text": "Remembered"},
+            ))
+            assert await asyncio.wait_for(pending, 1) == second
+            assert log.since(run_id, first.sequence) == (second,)
+            await stream.aclose()
+        finally:
+            store.close()
+
+    asyncio.run(scenario())

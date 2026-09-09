@@ -72,6 +72,7 @@ _STATUS: tuple[tuple[type[Exception], int], ...] = (
 def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Starlette:
     """Build the control surface around an already-composed graph runtime."""
     log = event_log if event_log is not None else EventLog()
+    log.store = getattr(runtime, "store", None)
     # Installed here rather than by the caller: the feed only replays what it
     # was told about, and a runtime whose observer was never wired would answer
     # every subscription with silence and no error to explain it.

@@ -273,7 +273,7 @@ class LangGraphRuntime:
         try:
             target, execution = self._registry.resolve(run_id, execution_id, node_id)
         except (RunNotSteerableError, AmbiguousExecutionError):
-            if node_id is not None and self._is_always_open(run_id, node_id):
+            if node_id is not None and await self._is_always_open(run_id, node_id):
                 return await self._steer_always_open(run_id, node_id, message)
             raise
         await execution.steer(message)
@@ -447,9 +447,7 @@ class LangGraphRuntime:
         node_id: NodeId | None = None,
         execution_id: ExecutionId | None = None,
     ) -> None:
-        if self._observer is None:
-            return
-        await self._observer(
+        event = self._store.append_event(
             RuntimeEvent(
                 run_id=run_id,
                 kind=kind,
@@ -458,6 +456,8 @@ class LangGraphRuntime:
                 execution_id=execution_id,
             )
         )
+        if self._observer is not None:
+            await self._observer(event)
 
     async def raise_approval(
         self,
@@ -832,14 +832,9 @@ class LangGraphRuntime:
 
     # --- always-open helpers ------------------------------------------------
 
-    def _is_always_open(self, run_id: RunId, node_id: NodeId) -> bool:
-        """Whether a node is marked always-open in its graph's topology."""
-        live = self._live.get(run_id)
-        if live is None:
-            return False
-        definition = self._definitions.get(live.graph_id)
-        if definition is None:
-            return False
+    async def _is_always_open(self, run_id: RunId, node_id: NodeId) -> bool:
+        """Read topology from the durable run, including after a restart."""
+        definition = await self._definition_for(run_id)
         graph_node = definition.topology.node(node_id)
         return graph_node is not None and graph_node.always_open
 

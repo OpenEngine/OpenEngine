@@ -61,6 +61,7 @@ runtime exists.
 
 from __future__ import annotations
 
+import json
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -566,7 +567,27 @@ class ACPNode:
                         "resumed": resuming is not None,
                     },
                 )
+                pending_prompts: deque[str] = deque(execution.pending_messages())
+                history = [
+                    event for event in runtime.store.events_since(execution.run_id)
+                    if event.node_id == execution.node_id and event.kind in (
+                        EventKind.TRANSCRIPT, EventKind.TOOL_CALL, EventKind.TOOL_RESULT
+                    )
+                ]
                 asked = self.continuation_prompt if resuming else self._prompt(state)
+                opening = prompt_text(asked)
+                if not resuming and history and pending_prompts:
+                    opening = pending_prompts.popleft()
+                    transcript = "\n\n".join(
+                        f"{event.payload.get('role', 'assistant')}: {event.payload.get('text', '')}"
+                        if event.kind is EventKind.TRANSCRIPT
+                        else f"{event.kind.value}: {json.dumps(dict(event.payload))}"
+                        for event in history
+                    )
+                    asked = (
+                        "Continue the previous conversation below, including its tool history.\n\n"
+                        f"{transcript}\n\nUser: {opening}"
+                    )
                 # Published before the turn it starts, because a transcript that
                 # holds only the agent's half is not a conversation: a reader
                 # opening one has to guess what was asked, and cannot tell the work
@@ -579,11 +600,10 @@ class ACPNode:
                 # sentence on screen as something the reader appears to have typed,
                 # directly beneath the approval they just answered. An empty prompt
                 # is skipped for the same reason: a turn nobody spoke.
-                if resuming is None and (opening := prompt_text(asked)):
+                if resuming is None and opening:
                     await execution.say(opening, role="user")
                 corrections = 0
                 said = ""
-                pending_prompts: deque[str] = deque()
                 while True:
                     result = await self._speak_or_terminal(
                         turn, session, asked, terminal_tasks, clarifications

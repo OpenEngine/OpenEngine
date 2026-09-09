@@ -1782,3 +1782,44 @@ def test_a_node_that_resolves_no_directory_starts_no_agent(tmp_path: Path) -> No
     assert failed.status.value == "failed"
     assert "no working directory" in failed.error
     assert not (tmp_path / "agent.log").exists()
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_finished_node_steering_replays_durable_transcript(tmp_path: Path, restart: bool) -> None:
+    def build(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
+        builder = StateGraph(State)
+        builder.add_node(str(IMPLEMENTATION), ACPNode(
+            agent=AGENT, prompt=PROMPT, registry=agents, cwd=str(where),
+            graph_node_always_open=True,
+        ))
+        builder.add_edge(START, str(IMPLEMENTATION))
+        builder.add_edge(str(IMPLEMENTATION), END)
+        return LangGraphDefinition(
+            graph_id=GRAPH, name="conversation", graph=builder.compile(checkpointer=saver)
+        )
+
+    async def exercise() -> None:
+        agents = registry(tmp_path, narrates=True)
+        async with runtime_over(tmp_path, agents, build=build) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            await until(log, run.run_id, "run.finished")
+            before = runtime.store.events_since(run.run_id)
+            if not restart:
+                await runtime.steer(run.run_id, "Please adjust the implementation.", node_id=IMPLEMENTATION)
+                await until(log, run.run_id, "run.finished", count=2)
+        if restart:
+            async with runtime_over(tmp_path, agents, build=build) as (runtime, log):
+                restored = EventLog(runtime.store)
+                assert restored.since(run.run_id) == before
+                await runtime.steer(run.run_id, "Please adjust the implementation.", node_id=IMPLEMENTATION)
+                await until(log, run.run_id, "run.finished")
+        replay = prompts(tmp_path)[-1]
+        assert PROMPT in replay
+        assert DONE in replay
+        assert NARRATION in replay
+        assert "tool.call:" in replay
+        assert "tool.result:" in replay
+        assert replay.endswith("User: Please adjust the implementation.")
+        assert len(prompts(tmp_path)) == 2
+
+    asyncio.run(exercise())
