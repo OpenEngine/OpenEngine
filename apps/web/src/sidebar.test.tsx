@@ -94,7 +94,7 @@ describe("Sidebar", () => {
     const user = userEvent.setup();
     const runs = [run,
       { ...run, runId: "review", name: "Review run", steps: [{ ...run.steps[0], name: "Review" }] },
-      { ...run, runId: "human", name: "Human run", phase: "awaiting_human_review" },
+      { ...run, runId: "human", name: "Human run", phase: "awaiting_human_review", steps: [{ ...run.steps[0], name: "Human Review" }] },
       { ...run, runId: "failed", name: "Failed run", phase: "failed" },
       { ...run, runId: "succeeded", name: "Succeeded run", phase: "succeeded" },
     ];
@@ -119,6 +119,25 @@ describe("Sidebar", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("group", { name: "WorkOrder filters" })).not.toBeInTheDocument();
     expect(header("Filter WorkOrders")).toHaveFocus();
+  });
+
+  it("derives unique options from history and preserves exclusions across refreshes", async () => {
+    const user = userEvent.setup();
+    const custom = { ...run, steps: [{ ...run.steps[0], name: "Deploy" }] };
+    const { rerender } = render(<Sidebar runs={[]} initialSection="workflows" />);
+    await user.click(header("Filter WorkOrders"));
+    expect(screen.getByText("No WorkOrder history yet.")).toBeVisible();
+    rerender(<Sidebar runs={[custom, { ...custom, runId: "duplicate" }]} initialSection="workflows" />);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    await user.click(screen.getByRole("checkbox", { name: "Deploy" }));
+    expect(screen.queryByRole("link", { name: /First run/ })).not.toBeInTheDocument();
+    const finished = { ...run, runId: "done", name: "Finished run", phase: "succeeded" };
+    rerender(<Sidebar runs={[finished]} initialSection="workflows" />);
+    expect(screen.queryByRole("checkbox", { name: "Deploy" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "succeeded" })).toBeChecked();
+    rerender(<Sidebar runs={[custom, finished]} initialSection="workflows" />);
+    expect(screen.getByRole("checkbox", { name: "Deploy" })).not.toBeChecked();
+    expect(screen.getByRole("link", { name: /Finished run/ })).toBeVisible();
   });
 
   it("filters graph frontiers and gives terminal outcomes priority", async () => {
