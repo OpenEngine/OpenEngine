@@ -130,12 +130,18 @@ class ACPClient(Protocol):
         *,
         cwd: str | os.PathLike[str] | None = None,
         mcp_servers: Sequence[Mapping[str, JSONValue]] = (),
+        session_config: Mapping[str, JSONValue] | None = None,
     ) -> ACPSession:
         """Start a conversation. `cwd` defaults to the current directory.
 
         `mcp_servers` entries are ACP `mcpServers` objects, passed through as
         given; the `MCPServer` type that builds them arrives with its own
         ticket, and inventing half of it here would only have to be undone.
+
+        `session_config` carries provider settings -- attribution, output
+        style -- that the agent adapter translates into its own vocabulary.
+        Omitted when the caller has nothing to say; present entries are the
+        adapter's to interpret or ignore.
         """
         ...
 
@@ -145,6 +151,7 @@ class ACPClient(Protocol):
         *,
         cwd: str | os.PathLike[str] | None = None,
         mcp_servers: Sequence[Mapping[str, JSONValue]] = (),
+        session_config: Mapping[str, JSONValue] | None = None,
     ) -> ACPSession:
         """Continue a conversation the agent already has.
 

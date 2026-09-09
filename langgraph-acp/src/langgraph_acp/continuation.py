@@ -106,6 +106,7 @@ async def resume_continuation(
     registry: ACPAgentRegistry | None = None,
     cwd: str | os.PathLike[str] | None = None,
     mcp_servers: Sequence[Mapping[str, JSONValue]] = (),
+    session_config: Mapping[str, JSONValue] | None = None,
 ) -> tuple[ACPClient, ACPSession]:
     """Reconnect to the agent and reload the conversation `continuation` names.
 
@@ -122,7 +123,10 @@ async def resume_continuation(
     client = await provider.connect()
     try:
         session = await client.resume_session(
-            continuation.session_id, cwd=cwd, mcp_servers=mcp_servers
+            continuation.session_id,
+            cwd=cwd,
+            mcp_servers=mcp_servers,
+            session_config=session_config,
         )
     except BaseException:
         await client.close()

@@ -100,8 +100,19 @@ class WorkflowCatalog:
         return len(self._definitions)
 
 
-def load_workflow_catalog(directory: str | Path) -> WorkflowCatalog:
-    """Import sorted, non-private ``*.py`` definitions from one directory."""
+def load_workflow_catalog(
+    directory: str | Path,
+    *,
+    session_config: Mapping[str, object] | None = None,
+) -> WorkflowCatalog:
+    """Import sorted, non-private ``*.py`` definitions from one directory.
+
+    When ``session_config`` is given, graph workflow modules that export both
+    ``graph_for`` and ``RUNNERS`` are rebuilt with that config rather than
+    using their pre-built ``workflow`` tuple. This lets a composition root
+    wire deployment settings (attribution, output style) into ACP nodes
+    without modifying the workflow definitions themselves.
+    """
 
     root = Path(directory).resolve()
     if not root.is_dir():
@@ -121,7 +132,7 @@ def load_workflow_catalog(directory: str | Path) -> WorkflowCatalog:
         sys.modules[module_name] = module
         try:
             spec.loader.exec_module(module)
-            exported = _exported(module, path)
+            exported = _exported_with_config(module, path, session_config)
         except WorkflowLoadError:
             raise
         except Exception as error:
@@ -176,6 +187,49 @@ def _exported(
             )
         checked.append(value)
     return tuple(checked)
+
+
+def _exported_with_config(
+    module: object,
+    path: Path,
+    session_config: Mapping[str, object] | None,
+) -> tuple[WorkflowDefinition | GraphWorkflow, ...]:
+    """Like `_exported`, but rebuilds graph workflows with session config.
+
+    When a module exports both ``graph_for`` (a callable that accepts
+    ``session_config``) and ``RUNNERS`` (a sequence of runner names), and a
+    non-``None`` session config was requested, the graph workflows are rebuilt
+    through ``graph_for(runner, session_config=...)`` instead of reading the
+    pre-built ``workflow`` tuple. Step workflows are unaffected.
+    """
+    graph_for = getattr(module, "graph_for", None)
+    runners = getattr(module, "RUNNERS", None)
+    if (
+        session_config is not None
+        and callable(graph_for)
+        and isinstance(runners, (list, tuple))
+        and _accepts_session_config(graph_for)
+    ):
+        configured = _exported(module, path)
+        # Keep step workflows as-is; rebuild only the graph workflows.
+        result: list[WorkflowDefinition | GraphWorkflow] = [
+            value for value in configured if isinstance(value, WorkflowDefinition)
+        ]
+        for runner in runners:
+            result.append(graph_for(runner, session_config=session_config))
+        return tuple(result)
+    return _exported(module, path)
+
+
+def _accepts_session_config(func: object) -> bool:
+    """Whether ``func`` has a ``session_config`` keyword parameter."""
+    import inspect
+
+    try:
+        sig = inspect.signature(func)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return False
+    return "session_config" in sig.parameters
 
 
 def _unique_graphs(

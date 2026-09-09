@@ -30,6 +30,7 @@ from engine.adapters.agent_runner.claude_code import (
     WORKSPACE_WRITE_TOOLS,
     ClaudeCodeAgentRunner,
     allowed_tools_for,
+    claude_session_config,
 )
 from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.slack import SlackCommunications, SlackCredentialStore
@@ -359,6 +360,19 @@ def build_graph_runtime(
     )
 
 
+def claude_session_config_for(settings: Settings) -> dict[str, object] | None:
+    """The ACP ``sessionConfig`` that wires Engine's TOML settings to Claude.
+
+    Translates the deployment's ``attribution`` and ``[claude] output_style``
+    into the dict the ``claude-agent-acp`` adapter reads from
+    ``session/new``. Returns ``None`` when every setting is at its default.
+    """
+    return claude_session_config(
+        attribution=settings.engine_config.attribution,
+        output_style=settings.engine_config.claude.output_style,
+    )
+
+
 def build_milestone_scoper(settings: Settings) -> MilestoneScoper:
     """Build scoping from the configured Codex executable and workspace."""
     return codex_milestone_scoper(
@@ -531,4 +545,5 @@ __all__ = [
     "build_runners",
     "build_session",
     "build_workflow_runners",
+    "claude_session_config_for",
 ]

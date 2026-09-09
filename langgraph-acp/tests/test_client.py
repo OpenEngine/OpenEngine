@@ -169,6 +169,25 @@ async def test_mcp_servers_reach_the_agent_as_given(tmp_path: Path) -> None:
 
 
 @asyncio_test
+async def test_session_config_reaches_the_agent_in_session_new(tmp_path: Path) -> None:
+    log = tmp_path / "sent.jsonl"
+    config = {"attribution": {"commit": "", "pr": "", "sessionUrl": False}}
+    async with connected(log=log) as client:
+        await client.new_session(session_config=config)
+
+    assert params_of(log, "session/new")["sessionConfig"] == config
+
+
+@asyncio_test
+async def test_session_config_omitted_when_none(tmp_path: Path) -> None:
+    log = tmp_path / "sent.jsonl"
+    async with connected(log=log) as client:
+        await client.new_session()
+
+    assert "sessionConfig" not in params_of(log, "session/new")
+
+
+@asyncio_test
 async def test_a_session_the_agent_did_not_name_is_an_error() -> None:
     async with connected("--nameless-session") as client:
         with pytest.raises(ACPSessionError, match="without naming it") as caught:
@@ -185,6 +204,16 @@ async def test_resuming_asks_the_agent_to_load_the_session(tmp_path: Path) -> No
         assert session.session_id == "sess_fake_1"
 
     assert params_of(log, "session/load")["sessionId"] == "sess_fake_1"
+
+
+@asyncio_test
+async def test_session_config_reaches_the_agent_in_session_load(tmp_path: Path) -> None:
+    log = tmp_path / "sent.jsonl"
+    config = {"outputStyle": "Concise"}
+    async with connected(log=log) as client:
+        await client.resume_session("sess_fake_1", session_config=config)
+
+    assert params_of(log, "session/load")["sessionConfig"] == config
 
 
 @asyncio_test

@@ -38,6 +38,7 @@ from engine.apps.web.composition import (
     build_runners,
     build_session,
     build_workflow_runners,
+    claude_session_config_for,
 )
 from engine.domain import (
     AgentId,
@@ -326,6 +327,25 @@ def test_engine_config_styles_every_claude_runner_this_process_offers() -> None:
         argv = build(settings)["claude"].command_line(PROFILES[CODER])
         settings_document = json.loads(argv[argv.index("--settings") + 1])
         assert settings_document["outputStyle"] == "Concise"
+
+
+def test_engine_config_produces_claude_session_config_for_acp_runners() -> None:
+    """The same attribution and style settings that reach the CLI runners also
+    produce a session config for the ACP graph runners."""
+    settings = Settings(
+        engine_config=EngineConfig(
+            attribution=False,
+            claude=ClaudeConfig(output_style=ResponseStyle.CONCISE),
+        )
+    )
+    config = claude_session_config_for(settings)
+    assert config is not None
+    assert config["attribution"]["commit"] == ""
+    assert config["outputStyle"] == "Concise"
+
+
+def test_default_engine_config_produces_no_session_config() -> None:
+    assert claude_session_config_for(Settings()) is None
 
 
 def test_workflow_runners_are_write_enabled_only_inside_the_worktree() -> None:

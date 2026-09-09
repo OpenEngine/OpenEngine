@@ -215,13 +215,16 @@ class StdioACPClient:
         *,
         cwd: str | os.PathLike[str] | None = None,
         mcp_servers: Sequence[Mapping[str, JSONValue]] = (),
+        session_config: Mapping[str, JSONValue] | None = None,
     ) -> ACPSession:
+        params: JSONObject = {
+            "cwd": _working_directory(cwd),
+            "mcpServers": _servers(mcp_servers),
+        }
+        if session_config:
+            params["sessionConfig"] = copied_mapping(session_config)
         response = as_mapping(
-            await self.call(
-                "session/new",
-                {"cwd": _working_directory(cwd), "mcpServers": _servers(mcp_servers)},
-                failure=ACPSessionError,
-            ),
+            await self.call("session/new", params, failure=ACPSessionError),
             field="the session/new result",
         )
         session_id = response.get("sessionId")
@@ -239,6 +242,7 @@ class StdioACPClient:
         *,
         cwd: str | os.PathLike[str] | None = None,
         mcp_servers: Sequence[Mapping[str, JSONValue]] = (),
+        session_config: Mapping[str, JSONValue] | None = None,
     ) -> ACPSession:
         if not self._capabilities.load_session:
             raise ACPAgentCapabilityError(
@@ -248,13 +252,16 @@ class StdioACPClient:
                 session_id=session_id,
                 operation="session/load",
             )
+        params: JSONObject = {
+            "sessionId": session_id,
+            "cwd": _working_directory(cwd),
+            "mcpServers": _servers(mcp_servers),
+        }
+        if session_config:
+            params["sessionConfig"] = copied_mapping(session_config)
         await self.call(
             "session/load",
-            {
-                "sessionId": session_id,
-                "cwd": _working_directory(cwd),
-                "mcpServers": _servers(mcp_servers),
-            },
+            params,
             session_id=session_id,
             failure=ACPSessionError,
         )

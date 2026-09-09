@@ -118,6 +118,41 @@ def test_no_configured_style_leaves_claude_s_default_alone() -> None:
     assert "--settings" not in ClaudeCodeAgentRunner().command_line(PROFILE)
 
 
+def test_claude_session_config_disables_attribution() -> None:
+    from engine.adapters.agent_runner.claude_code import claude_session_config
+
+    config = claude_session_config(attribution=False)
+    assert config is not None
+    assert config["attribution"] == {"commit": "", "pr": "", "sessionUrl": False}
+
+
+def test_claude_session_config_sets_output_style() -> None:
+    from engine.adapters.agent_runner.claude_code import claude_session_config
+
+    config = claude_session_config(output_style=ResponseStyle.CONCISE)
+    assert config is not None
+    assert config["outputStyle"] == "Concise"
+
+
+def test_claude_session_config_combines_settings() -> None:
+    from engine.adapters.agent_runner.claude_code import claude_session_config
+
+    config = claude_session_config(attribution=False, output_style=ResponseStyle.LEARNING)
+    assert config is not None
+    assert config == {
+        "attribution": {"commit": "", "pr": "", "sessionUrl": False},
+        "outputStyle": "Learning",
+    }
+
+
+def test_claude_session_config_returns_none_when_all_defaults() -> None:
+    from engine.adapters.agent_runner.claude_code import claude_session_config
+
+    assert claude_session_config() is None
+    assert claude_session_config(attribution=True) is None
+    assert claude_session_config(attribution=True, output_style=None) is None
+
+
 def test_every_engine_style_has_an_exactly_spelled_provider_name() -> None:
     """Claude keeps its default for a style name it does not recognize, so a
     style Engine accepts must never reach the CLI mistranslated."""
