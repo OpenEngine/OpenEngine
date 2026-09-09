@@ -28,6 +28,7 @@ const TASK = "Add a greeting file to the repository.";
 const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";
 const GREETING = "greeting.txt";
+const PULL_REQUEST = "https://github.com/acme/repository/pull/7";
 const IMPLEMENTED = "Wrote the greeting.";
 const REVIEWED = "Read the change; greeting.txt is not covered by a test.";
 
@@ -51,7 +52,21 @@ const ASKING_SCRIPT: Script = {
   scenarios: [
     { when: NAMING_REQUEST, steps: [{ type: "say", text: TITLE }] },
     { when: "Review the implementation", steps: [{ type: "say", text: REVIEWED }] },
-    { when: STEER, steps: [{ type: "say", text: STEERED }] },
+    {
+      when: STEER,
+      steps: [
+        { type: "say", text: STEERED },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: "Added the requested files.",
+            outputs: { pr_url: PULL_REQUEST },
+          },
+        },
+      ],
+    },
     {
       when: "Implement the requested change",
       steps: [
@@ -80,6 +95,15 @@ const SCRIPT: Script = {
         // test in this file.
         { type: "run", command: `echo hello > ${GREETING}`, approval: false },
         { type: "say", text: IMPLEMENTED },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: IMPLEMENTED,
+            outputs: { pr_url: PULL_REQUEST },
+          },
+        },
       ],
     },
   ],
@@ -94,7 +118,18 @@ const STEERING_SCRIPT: Script = {
     },
     {
       when: INTERRUPT_STEERING,
-      steps: [{ type: "say", text: ACKNOWLEDGEMENT }],
+      steps: [
+        { type: "say", text: ACKNOWLEDGEMENT },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: "Applied the human guidance.",
+            outputs: { pr_url: PULL_REQUEST },
+          },
+        },
+      ],
     },
     {
       when: "Review the implementation",
