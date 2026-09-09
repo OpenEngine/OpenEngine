@@ -5,6 +5,7 @@ description = "The GraphRuntime contract, implemented against LangGraph and lang
 requires-python = ">=3.11"
 dependencies = [
     "engine-domain",
+    "engine-migrations",
     "engine-graph-runtime",
     # The capability a workspace component provisions through. The port, not an
     # adapter: which checkout a deployment gets is its own business, and naming
@@ -29,6 +30,7 @@ build-backend = "hatchling.build"
 packages = ["src/engine"]
 
 [tool.uv.sources]
+engine-migrations = { workspace = true }
 engine-domain = { workspace = true }
 engine-graph-runtime = { workspace = true }
 engine-runtime = { workspace = true }

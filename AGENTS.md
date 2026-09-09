@@ -12,3 +12,9 @@
 - If it reports invalid authentication or a network failure, retry that exact command once with sandbox escalation.
 - Ask the user to reauthenticate only if the escalated standalone `gh auth status` also fails.
 - Never run `gh auth login`, `gh auth logout`, expose `gh auth token`, or persist a GitHub token unless explicitly requested.
+
+## Database schema changes
+
+- Generate new table and schema migration revisions with Alembic (`alembic revision`), and implement schema changes in those revisions rather than runtime DDL.
+- Use `migrations/sqlite` for the state store and `migrations/sqlite_graph` for the separate graph runtime database. To generate graph revisions, use `alembic_config(database_url, store="graph")` with `alembic.command.revision`. Apply it with `engine-migrate --store graph <database_url>`.
+- LangGraph owns its checkpoint database schema; leave its migrations to the checkpointer.
