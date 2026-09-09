@@ -8,7 +8,7 @@
  *  again closes it, leaving the two headers stacked and nothing beneath
  *  them. */
 
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   graphConversationUrl,
@@ -69,30 +69,107 @@ function conversationsOf(
     }));
 }
 
+function currentGraphNodes(run: ApiWorkflowRunListing) {
+  const progress = isGraphRun(run) && !runFinished(run) ? run.graphProgress : undefined;
+  return progress ? [...new Set([
+    ...progress.activeNodeIds,
+    ...progress.waitingNodeIds,
+    ...(progress.activeNodeIds.length || progress.waitingNodeIds.length ? [] : progress.nextNodeIds),
+  ])] : [];
+}
+
+function workOrderCategories(run: ApiWorkflowRunListing, nodes: GraphNodes): string[] {
+  if (runFinished(run)) return [run.phase];
+  if (isGraphRun(run)) {
+    const stages = currentGraphNodes(run).map((id) =>
+      nodes[run.workflowId]?.find((node) => node.nodeId === id)?.name ?? id,
+    );
+    if (stages.length) return stages;
+  }
+  return [runStatusLabel(run)];
+}
+
+function WorkOrderFilters({ options, excluded, onChange }: {
+  options: string[];
+  excluded: string[];
+  onChange: (excluded: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!open || !menu) return;
+    const constrainHeight = () => {
+      const bounds = menu.getBoundingClientRect();
+      const opensUp = getComputedStyle(menu).getPropertyValue("--filter-opens-up").trim() === "1";
+      const available = opensUp ? bounds.bottom : window.innerHeight - bounds.top;
+      menu.style.maxHeight = `${Math.max(0, available - 8)}px`;
+    };
+    constrainHeight();
+    window.addEventListener("resize", constrainHeight);
+    return () => window.removeEventListener("resize", constrainHeight);
+  }, [open]);
+  return (
+    <div className="rail-filter" onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+    }} onKeyDown={(event) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        event.currentTarget.querySelector("button")?.focus();
+      }
+    }}>
+      <button type="button" className="rail-filter-toggle" aria-label="Filter WorkOrders"
+        title="Filter WorkOrders" aria-expanded={open} aria-controls="rail-workorder-filters"
+        data-active={options.some((option) => excluded.includes(option)) || undefined}
+        onClick={() => setOpen(!open)}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 4h18l-7 8v7l-4 2v-9z" />
+        </svg>
+      </button>
+      {open && <div ref={menuRef} className="rail-filter-options" id="rail-workorder-filters"
+        role="group" aria-label="WorkOrder filters">
+        {options.length === 0 && <span>No WorkOrder history yet.</span>}
+        {options.map((filter) => <label key={filter}>
+          <input type="checkbox" checked={!excluded.includes(filter)} onChange={(event) =>
+            onChange(event.target.checked ? excluded.filter((item) => item !== filter) : [...excluded, filter])
+          } />
+          {filter}
+        </label>)}
+      </div>}
+    </div>
+  );
+}
+
 function Section({
   id,
   title,
   open,
   onToggle,
   children,
+  action,
 }: {
   id: RailSection;
   title: string;
   open: boolean;
   onToggle: (section: RailSection) => void;
   children: ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <section className="rail-section" data-open={open || undefined}>
-      <button
-        aria-controls={`rail-${id}`}
-        aria-expanded={open}
-        className="rail-head"
-        onClick={() => onToggle(id)}
-        type="button"
-      >
-        {title}
-      </button>
+      <div className="rail-heading">
+        <button
+          aria-controls={`rail-${id}`}
+          aria-expanded={open}
+          className="rail-head"
+          onClick={() => onToggle(id)}
+          type="button"
+        >
+          {title}
+        </button>
+        {action}
+      </div>
       {/* A closed section is laid out at zero height rather than unmounted, so
           the slide has something to move; `inert` is what keeps the Tab key and
           screen readers out of the part of it that is off screen. */}
@@ -233,6 +310,13 @@ export function Sidebar({
   const open = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
   const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Keep exclusions so newly observed stages are selected without resetting user choices.
+  const [excludedFilters, setExcludedFilters] = useState<string[]>([]);
+  const runCategories = runs.map((run) => workOrderCategories(run, graphNodes));
+  const filterOptions = [...new Set(runCategories.flat())].sort((a, b) => a.localeCompare(b));
+  const filteredRuns = runs.filter((_, index) =>
+    runCategories[index].some((category) => !excludedFilters.includes(category)),
+  );
   // A row with nowhere to go is never the page you are reading. Both sides are
   // optional here, so comparing them alone would call two absent URLs a match
   // and mark every such row on every page.
@@ -284,7 +368,8 @@ export function Sidebar({
             )}
           </nav>
         </Section>
-        <Section id="workflows" title="WorkOrders" open={open === "workflows"} onToggle={toggle}>
+        <Section id="workflows" title="WorkOrders" open={open === "workflows"} onToggle={toggle}
+          action={<WorkOrderFilters options={filterOptions} excluded={excludedFilters} onChange={setExcludedFilters} />}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/runs/new">
               + New WorkOrder
@@ -298,19 +383,15 @@ export function Sidebar({
             </a>
           </div>
           <nav className="rail-scroll" aria-label="Recent WorkOrders">
-            {runs.map((run) => {
+            {runs.length > 0 && filteredRuns.length === 0 && (
+              <p className="rail-note">No WorkOrders match the selected filters.</p>
+            )}
+            {filteredRuns.map((run) => {
               const conversations = conversationsOf(run, graphNodes);
               const progress = isGraphRun(run) && !runFinished(run)
                 ? run.graphProgress
                 : undefined;
-              const currentNodes = progress
-                ? [...new Set([
-                    ...progress.activeNodeIds,
-                    ...progress.waitingNodeIds,
-                    ...(progress.activeNodeIds.length || progress.waitingNodeIds.length
-                      ? [] : progress.nextNodeIds),
-                  ])]
-                : [];
+              const currentNodes = currentGraphNodes(run);
               const status = currentNodes.map((id) =>
                 graphNodes[run.workflowId]?.find((node) => node.nodeId === id)?.name ?? id,
               ).join(", ") || runStatusLabel(run);
