@@ -229,17 +229,26 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
     assert nodes["workspace"].graph_node_kind == "workspace"
 
 
-def test_only_implementation_receives_run_bound_workflow_tools() -> None:
+def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     module = definition_module()
     nodes = nodes_of(module.pipeline("codex"))
 
     implementation = nodes[module.IMPLEMENTATION]
     review = nodes[module.REVIEW]
     assert len(implementation.mcp_server_bindings) == 1
-    binding = implementation.mcp_server_bindings[0]
-    assert binding.repository_tools == ("git_subcommand", "open_pull_request")
-    assert binding.required_outputs == ("pr_url",)
-    assert review.mcp_server_bindings == ()
+    impl_binding = implementation.mcp_server_bindings[0]
+    assert impl_binding.repository_tools == ("git_subcommand", "open_pull_request")
+    assert impl_binding.required_outputs == ("pr_url",)
+
+    assert len(review.mcp_server_bindings) == 1
+    review_binding = review.mcp_server_bindings[0]
+    assert review_binding.repository_tools == (
+        "view_change_request",
+        "list_pipeline_status",
+        "get_job_logs",
+        "add_comment",
+    )
+    assert review_binding.required_outputs == ("findings",)
 
 
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:

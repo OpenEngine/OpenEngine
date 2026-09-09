@@ -93,7 +93,12 @@ REVIEW_PROMPT = (
     "exist but do not. Inspect the workspace only: do not edit, revert, commit, "
     "or otherwise modify anything, and do not fix what you find. Report every "
     "finding with the file it is in and why it matters, and say so explicitly "
-    "when you find nothing.\n\n"
+    "when you find nothing. Leave every finding on the pull request with the "
+    "add_comment MCP tool, using file and line for inline comments when "
+    "possible; if there are no findings, leave one general comment saying so. "
+    "Complete the step with your findings even when they are serious; fail it "
+    "only when the review itself could not be carried out. The human reviewer "
+    "decides what happens to this run -- you do not approve or reject it.\n\n"
     "Original task:\n{task}\n\n"
     "What the implementation reported:\n{implementation}"
 )
@@ -173,6 +178,19 @@ def pipeline(
                 implementation=state.get(IMPLEMENTATION, ""),
             ),
             cwd=checkout,
+            mcp_server_bindings=(
+                TerminalMcpServer(
+                    step_id=REVIEW,
+                    agent_id=runner,
+                    required_outputs=("findings",),
+                    repository_tools=(
+                        "view_change_request",
+                        "list_pipeline_status",
+                        "get_job_logs",
+                        "add_comment",
+                    ),
+                ),
+            ),
             output_key=REVIEW,
             graph_node_name="Review",
             graph_node_description="Inspects the change without modifying it.",
