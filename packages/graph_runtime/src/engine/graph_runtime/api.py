@@ -227,6 +227,23 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
+    async def workspace(request: Request) -> JSONResponse:
+        try:
+            state = (
+                await runtime.workspace(_run_id(request))
+                if request.method == "GET"
+                else await runtime.set_workspace_attached(
+                    _run_id(request), request.method == "POST"
+                )
+            )
+        except Exception as error:
+            return _refusal(error)
+        return JSONResponse({
+            "workspaceRef": state.ref,
+            "workspaceRoot": state.root_path,
+            "workspaceAttached": state.attached,
+        })
+
     async def cancel_run(request: Request) -> JSONResponse:
         try:
             run = await runtime.cancel(_run_id(request))
@@ -250,6 +267,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             Route("/api/graphs/{graph_id}", describe_graph),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", get_run),
+            Route("/api/runs/{run_id}/workspace", workspace, methods=["GET", "POST", "DELETE"]),
             Route("/api/runs/{run_id}/runner", set_runner, methods=["PATCH"]),
             Route("/api/runs/{run_id}/auto-approve", set_auto_approve, methods=["PATCH"]),
             Route("/api/runs/{run_id}/checkpoints", get_checkpoints),

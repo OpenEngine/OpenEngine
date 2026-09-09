@@ -36,9 +36,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+import httpx
 
 from engine.domain import ApprovalDecision, ApprovalKind, RunId, WorkspaceId
-from engine.graph_runtime import EventLog, GraphCompilationError, RuntimeEvent
+from engine.graph_runtime import EventLog, GraphCompilationError, RuntimeEvent, create_app
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
     LangGraphRuntime,
@@ -194,6 +195,83 @@ async def until(
 
 
 # --- naming a graph ----------------------------------------------------------
+
+
+def test_graph_workspace_detaches_and_reattaches_across_restart(tmp_path: Path) -> None:
+    class Provider(RecordingWorkspaceProvider):
+        detached: bool = False
+        restored: tuple[WorkspaceId, str, str] | None = None
+
+        async def state(self, workspace_id: WorkspaceId) -> WorkspaceState:
+            state = await super().state(workspace_id)
+            return replace(state, root_path=None) if self.detached else state
+
+        async def detach(self, workspace_id: WorkspaceId) -> None:
+            self.detached = True
+
+        async def attach(
+            self, workspace_id: WorkspaceId, repository: str, base_ref: str
+        ) -> Workspace:
+            self.detached = False
+            self.restored = (workspace_id, repository, base_ref)
+            state = await self.state(workspace_id)
+            return Workspace(workspace_id, state.root_path, repository, base_ref, state.ref)
+
+    async def scenario() -> None:
+        provider = Provider()
+        seen: list[str] = []
+        workflow = assembled(provider, seen)
+        async with running([workflow], tmp_path) as (runtime, _log):
+            app = create_app(runtime)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                run = await runtime.start(workflow.graph_id, {"repository": REPOSITORY})
+                async with asyncio.timeout(PATIENCE):
+                    while not (await runtime.snapshot(run.run_id)).pending_approvals:
+                        await asyncio.sleep(0.01)
+                endpoint = f"/api/runs/{run.run_id}/workspace"
+                attached = (await client.get(endpoint)).json()
+                refused = await client.delete(endpoint)
+                assert refused.status_code == 409
+                assert "stop" in refused.json()["error"]
+                assert not provider.detached
+                await runtime.cancel(run.run_id)
+                history = await runtime.history(run.run_id)
+                checkpoint = next(p for p in history if "work" in p.next_nodes)
+                detached = await client.delete(endpoint)
+                assert detached.status_code == 200
+                assert detached.json()["workspaceAttached"] is False
+                assert detached.json()["workspaceRef"] == attached["workspaceRef"]
+                assert (await client.delete(endpoint)).status_code == 200
+
+        async with running([workflow], tmp_path) as (runtime, _log):
+            app = create_app(runtime)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                assert (await client.get(endpoint)).json()["workspaceAttached"] is False
+                refused = await client.post(
+                    f"/api/runs/{run.run_id}/transitions",
+                    json={"checkpoint": str(checkpoint.checkpoint_id)},
+                )
+                assert refused.status_code == 409
+                assert "reattach" in refused.json()["error"]
+                restored = await client.post(endpoint)
+                assert restored.status_code == 200
+                assert restored.json() == attached
+                assert provider.restored == (
+                    WorkspaceId(checkpoint.values["workspaceId"]), REPOSITORY, "origin/main"
+                )
+                assert len(provider.provisioned) == 1
+                await runtime.resume_from(run.run_id, checkpoint.checkpoint_id)
+                async with asyncio.timeout(PATIENCE):
+                    while len(seen) < 2:
+                        await asyncio.sleep(0.01)
+                assert seen == [attached["workspaceRoot"]] * 2
+                assert (await client.get("/api/runs/missing/workspace")).status_code == 404
+
+    asyncio.run(scenario())
 
 
 def test_a_graph_is_named_the_same_way_either_way() -> None:

@@ -84,6 +84,28 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("offers graph workspace controls in the conversation and shows refusals", async () => {
+  const run = graphRun({ values: { workspaceId: "ws-1", workspace: "/worktrees/ws-1" } });
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === `/graph/api/runs/${runId}/workspace`) {
+      if (init?.method === "DELETE")
+        return json({ error: "stop the run before changing its workspace" }, { status: 409 });
+      return json({ workspaceRoot: "/worktrees/ws-1", workspaceRef: "engine/ws-1", workspaceAttached: true });
+    }
+    if (path === `/graph/api/runs/${runId}`) return json(run);
+    if (path === `/api/runs/${runId}/graph-events`) return json({ events: [] });
+    return json({ graphId: run.graphId, nodes: [] });
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  await user.click(await screen.findByRole("button", { name: "Detach" }));
+  expect(await screen.findByText("stop the run before changing its workspace")).toBeVisible();
+  expect(screen.getByText("cd /worktrees/ws-1")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Detach" })).toBeEnabled();
+});
+
 describe("graphConversation", () => {
   it("opens with what the node was asked, then what it said back", () => {
     const { messages } = graphConversation([

@@ -931,6 +931,43 @@ describe("RunDetailPage", () => {
     expect(container.querySelector(".step[data-live]")).toHaveTextContent("Implementation");
   });
 
+  it("detaches and reattaches a graph workflow's checkout", async () => {
+    const graphRun = run({ workflowId: "graph", workflowVersion: "", steps: [] });
+    let attached = true;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1") return json({
+        runId: "run-1", graphId: "graph", status: "completed",
+        activeExecutions: [], nextNodes: [], pendingApprovals: [], error: "",
+        values: { workspaceId: "ws-1", workspace: "/worktrees/ws-1" },
+      });
+      if (path === "/graph/api/graphs/graph") return json({ graphId: "graph", nodes: [] });
+      if (path === "/graph/api/runs/run-1/workspace") {
+        if (init?.method === "DELETE") attached = false;
+        if (init?.method === "POST") attached = true;
+        return json({
+          workspaceAttached: attached, workspaceRef: "engine/ws-1",
+          workspaceRoot: attached ? "/worktrees/ws-1" : null,
+        });
+      }
+      return json({ events: [] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    const page = render(<RunDetailPage runId="run-1" />);
+    expect(await screen.findByText("cd /worktrees/ws-1")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Detach" }));
+    expect(await screen.findByText("git checkout engine/ws-1")).toBeVisible();
+    page.unmount();
+    render(<RunDetailPage runId="run-1" />);
+    await user.click(await screen.findByRole("button", { name: "Reattach" }));
+    expect(await screen.findByText("cd /worktrees/ws-1")).toBeVisible();
+    expect(fetch).toHaveBeenCalledWith(
+      "/graph/api/runs/run-1/workspace", expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("offers the workflow checkout's detach operation", async () => {
     const terminal = run({
       phase: "succeeded",

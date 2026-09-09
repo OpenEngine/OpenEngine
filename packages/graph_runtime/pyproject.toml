@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 # next package, and it is what will declare the dependency. Neither ACP, Claude
 # nor Codex appear either -- see `engine.graph_runtime.executions` for why the
 # thing a node is driving stays behind a protocol.
-dependencies = ["engine-domain", "starlette>=0.52"]
+dependencies = ["engine-domain", "engine-ports", "starlette>=0.52"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,3 +19,4 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-domain = { workspace = true }
+engine-ports = { workspace = true }
