@@ -33,10 +33,40 @@ const SCRIPT: Script = {
   title: TITLE,
   scenarios: [
     { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
-    { when: "Review the implementation", steps: [{ type: "say", text: "Read it." }] },
+    {
+      when: "Review the implementation",
+      steps: [
+        { type: "say", text: "Read it." },
+        {
+          type: "tool",
+          name: "add_comment",
+          arguments: { pr_url: "https://github.com/acme/api/pull/7", comment: "No issues found." },
+        },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: "Reviewed the greeting.",
+            outputs: { findings: "No issues found." },
+          },
+        },
+      ],
+    },
     {
       when: "Implement the requested change",
-      steps: [{ type: "say", text: "Wrote the greeting." }],
+      steps: [
+        { type: "say", text: "Wrote the greeting." },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: "Added the greeting.",
+            outputs: { pr_url: "https://github.com/acme/api/pull/7" },
+          },
+        },
+      ],
     },
   ],
 };
