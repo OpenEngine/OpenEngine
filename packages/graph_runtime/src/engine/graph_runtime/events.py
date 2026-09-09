@@ -13,14 +13,7 @@ own execution raises -- an ACP session's tool calls, transcript and permission
 requests are translated into this vocabulary by the node that owns the session,
 so a client watching a run does not need to know one is involved.
 
-It is process-local and unbounded, which is a decision and not an oversight, but
-only for as long as the graph behind it is. `apps/web`'s `ApprovalFeed` is the
-shape this ends up: persistence is the source of truth and the condition is only
-a wake-up signal, so a reconnect cannot lose an event and nothing has to be kept
-in memory to make replay work. That needs a store to write to, and which store
-is a question for the binding rather than for the mock -- so the eviction hook
-is deliberately absent rather than guessed at, and every run a process has
-handled is replayable until it restarts.
+A durable store may back replay; conditions remain process-local wake-up signals.
 """
 
 from __future__ import annotations
@@ -29,6 +22,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import Protocol
 
 from engine.domain import RunId
 
@@ -102,10 +96,17 @@ EventObserver = Callable[[RuntimeEvent], Awaitable[None]]
 """Where a graph publishes. `EventLog.append` is the one the server installs."""
 
 
+class EventStore(Protocol):
+    def append_event(self, event: RuntimeEvent) -> RuntimeEvent: ...
+
+    def events_since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]: ...
+
+
 class EventLog:
     """Every event each run has raised, replayable from any cursor."""
 
-    def __init__(self) -> None:
+    def __init__(self, store: EventStore | None = None) -> None:
+        self.store = store
         self._events: dict[RunId, list[RuntimeEvent]] = {}
         self._changed: dict[RunId, asyncio.Condition] = {}
 
@@ -113,9 +114,12 @@ class EventLog:
         """Record one event and wake everyone watching its run."""
         condition = self._condition(event.run_id)
         async with condition:
-            recorded = self._events.setdefault(event.run_id, [])
-            numbered = replace(event, sequence=len(recorded) + 1)
-            recorded.append(numbered)
+            if self.store is not None:
+                numbered = event if event.sequence else self.store.append_event(event)
+            else:
+                recorded = self._events.setdefault(event.run_id, [])
+                numbered = replace(event, sequence=len(recorded) + 1)
+                recorded.append(numbered)
             condition.notify_all()
         return numbered
 
@@ -128,6 +132,8 @@ class EventLog:
         delivers, per subscriber, so a filter would make one long-lived agent
         node quadratic in the number of events it raised.
         """
+        if self.store is not None:
+            return self.store.events_since(run_id, cursor)
         return tuple(self._events.get(run_id, ())[cursor:])
 
     async def stream(
@@ -149,10 +155,10 @@ class EventLog:
                 cursor = event.sequence
                 yield event
             async with condition:
-                # Length rather than `since`, because `Condition.wait_for` calls
-                # this on every `notify_all` and holds the lock `append` needs.
+                # Recheck under the lock so an append between replay and wait
+                # cannot leave the subscriber asleep with unread events.
                 await condition.wait_for(
-                    lambda: len(self._events.get(run_id, ())) > cursor
+                    lambda: bool(self.since(run_id, cursor))
                 )
 
     def _condition(self, run_id: RunId) -> asyncio.Condition:

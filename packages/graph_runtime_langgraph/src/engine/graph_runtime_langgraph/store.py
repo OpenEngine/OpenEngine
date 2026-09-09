@@ -1,15 +1,17 @@
 """What has to outlive the process, and nothing that does not.
 
 LangGraph's checkpointer already persists the only difficult thing: where a run
-is and what its state holds. Three facts sit beside it that a checkpoint has no
-place for, and all three are needed by a process that did not start the run:
+is and what its state holds. Other facts sit beside it that a checkpoint has no
+place for, and they are needed by a process that did not start the run:
 
 * which graph a run is of, so a fresh runtime can load the right compiled graph
   for a thread id it has never seen;
 * what an execution asked a person, so a request raised before a restart is
   still answerable afterwards;
 * how to reach the ACP conversation that asked, so answering it continues the
-  same agent session rather than starting a second one.
+  same agent session rather than starting a second one;
+* the event history, so transcripts and tool results survive a restart and can
+  be supplied when steering reopens a finished conversation.
 
 That last one is the reason this module exists at all. An agent that wants
 permission to run a command is not something to keep a coroutine alive for --
@@ -47,6 +49,7 @@ from engine.domain import (
 )
 from langgraph_acp import ACPContinuation
 
+from engine.graph_runtime.events import EventKind, EventStore, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.topology import GraphId, NodeId
 
@@ -110,8 +113,8 @@ class ApprovalRecord:
 
 
 @runtime_checkable
-class GraphRuntimeStore(Protocol):
-    """The durable half of the runtime, behind three groups of methods."""
+class GraphRuntimeStore(EventStore, Protocol):
+    """The durable half of the runtime, including the event history."""
 
     async def remember_run(self, record: RunRecord) -> None:
         """Record a run, replacing what was known about it."""
@@ -174,9 +177,19 @@ class InMemoryGraphRuntimeStore:
     """
 
     def __init__(self) -> None:
+        self._events: dict[RunId, list[RuntimeEvent]] = {}
         self._runs: dict[RunId, RunRecord] = {}
         self._sessions: dict[tuple[RunId, str], ACPContinuation] = {}
         self._approvals: dict[ApprovalId, ApprovalRecord] = {}
+
+    def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
+        events = self._events.setdefault(event.run_id, [])
+        numbered = replace(event, sequence=len(events) + 1)
+        events.append(numbered)
+        return numbered
+
+    def events_since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]:
+        return tuple(self._events.get(run_id, ())[cursor:])
 
     async def remember_run(self, record: RunRecord) -> None:
         self._runs[record.run_id] = record
@@ -228,9 +241,18 @@ class InMemoryGraphRuntimeStore:
                 )
 
 
-#: The schema, applied on construction. Three tables because there are three
-#: facts. Older run tables gain the approval preference column on construction.
+#: Applied additively on construction, including for existing databases.
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS events (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    node_id TEXT,
+    execution_id TEXT
+);
+CREATE INDEX IF NOT EXISTS events_by_run ON events (run_id, sequence);
+
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     graph_id TEXT NOT NULL,
@@ -279,6 +301,28 @@ class SqliteGraphRuntimeStore:
                 "ALTER TABLE runs ADD COLUMN auto_approve_nodes TEXT NOT NULL DEFAULT '[]'"
             )
         self._ordinal = 0
+
+    def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
+        cursor = self._connection.execute(
+            "INSERT INTO events (run_id, kind, payload, node_id, execution_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(event.run_id), event.kind.value, json.dumps(dict(event.payload)),
+             event.node_id, event.execution_id),
+        )
+        assert cursor.lastrowid is not None
+        return replace(event, sequence=cursor.lastrowid)
+
+    def events_since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence",
+            (str(run_id), cursor),
+        ).fetchall()
+        return tuple(RuntimeEvent(
+            run_id=RunId(row["run_id"]), kind=EventKind(row["kind"]),
+            payload=json.loads(row["payload"]), sequence=row["sequence"],
+            node_id=NodeId(row["node_id"]) if row["node_id"] else None,
+            execution_id=ExecutionId(row["execution_id"]) if row["execution_id"] else None,
+        ) for row in rows)
 
     def close(self) -> None:
         self._connection.close()
