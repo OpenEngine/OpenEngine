@@ -1771,6 +1771,12 @@ def create_app(
             GraphId(str(graph.graph_id)),
             {"task": prompt, "repository": repository},
         )
+        if approval_policy.auto_approve:
+            topology = runtime.topology(GraphId(str(graph.graph_id)))
+            if topology is not None:
+                for node in topology.nodes:
+                    await runtime.set_auto_approve(snapshot.run_id, node.node_id, True)
+                snapshot = await runtime.snapshot(snapshot.run_id) or snapshot
         state = RunState(
             run_id=snapshot.run_id,
             task_id=TaskId(f"task-{uuid4().hex[:12]}"),
