@@ -106,6 +106,25 @@ OUTPUT_STYLES: dict[ResponseStyle, str] = {
 }
 
 
+def claude_session_config(
+    *,
+    attribution: bool = True,
+    output_style: ResponseStyle | None = None,
+) -> dict[str, Any] | None:
+    """Build a ``sessionConfig`` dict for an ACP ``session/new`` call.
+
+    Translates Engine's configuration vocabulary into the Claude Code settings
+    the ``claude-agent-acp`` adapter knows how to apply. Returns ``None`` when
+    every setting is at its default, so a node with nothing to say sends nothing.
+    """
+    config: dict[str, Any] = {}
+    if not attribution:
+        config["attribution"] = {"commit": "", "pr": "", "sessionUrl": False}
+    if output_style is not None:
+        config["outputStyle"] = OUTPUT_STYLES[output_style]
+    return config or None
+
+
 class ClaudeUnavailableError(RuntimeError):
     """The `claude` binary is not on PATH."""
 
@@ -1046,6 +1065,7 @@ __all__ = [
     "ClaudeUnavailableError",
     "allowed_tools_for",
     "approval_request_from_control",
+    "claude_session_config",
     "control_response_for",
     "messages_from_event",
     "parse_events",

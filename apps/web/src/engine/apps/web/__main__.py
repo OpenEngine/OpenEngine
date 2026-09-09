@@ -27,6 +27,7 @@ from engine.apps.web.composition import (
     build_runners,
     build_session,
     build_workflow_runners,
+    claude_session_config_for,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.adapters.communications.slack import SlackCredentialStore
@@ -114,8 +115,12 @@ def read_configuration(
     server watches exactly what this function reads.
     """
     loaded = load_engine_config(config_path)
+    settings = _settings(loaded)
     catalog = (
-        load_workflow_catalog(loaded.workflows_directory)
+        load_workflow_catalog(
+            loaded.workflows_directory,
+            session_config=claude_session_config_for(settings),
+        )
         if loaded.workflows_directory is not None
         else None
     )

@@ -36,6 +36,8 @@ Where the checkouts go is the deployment's business, so it is not named here --
 `pipeline` takes it. See `pipeline`.
 """
 
+from collections.abc import Mapping
+
 from engine.adapters.workspace_provider.git_worktree import (
     DEFAULT_ROOT_DIRECTORY,
     GitWorktreeWorkspaceProvider,
@@ -109,18 +111,20 @@ def pipeline(
     *,
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
+    session_config: Mapping[str, object] | None = None,
 ) -> StateGraph:
     """The five stages, with every agent node run by `runner`.
 
-    The two keyword arguments are the only things a deployment or a test has
-    business replacing: where the checkouts are made, and which agents answer.
+    The three keyword arguments are the only things a deployment or a test has
+    business replacing: where the checkouts are made, which agents answer, and
+    what session settings (attribution, output style) the adapter should apply.
     The rest -- the stages, their order, the prompts, which node is a person --
     is what makes this *the* implementation-review workflow.
 
     They are arguments so that a variant is a call rather than a second copy of
     this file with one line changed:
 
-        pipeline("codex", workspace_provider=..., agents=...)
+        pipeline("codex", workspace_provider=..., agents=..., session_config=...)
 
     Nothing passes either one today: a workflow file is read before any
     composition root has built anything, so what a deployment gets is the
@@ -143,6 +147,7 @@ def pipeline(
             agent=runner,
             registry=agents,
             cwd=checkout,
+            session_config=session_config,
         ),
     )
     builder.add_node(
@@ -167,6 +172,7 @@ def pipeline(
             graph_node_name="Implementation",
             graph_node_always_open=True,
             graph_node_description="Makes the requested change.",
+            session_config=session_config,
         ),
     )
     builder.add_node(
@@ -195,6 +201,7 @@ def pipeline(
             output_key=REVIEW,
             graph_node_name="Review",
             graph_node_description="Inspects the change without modifying it.",
+            session_config=session_config,
         ),
     )
     builder.add_node(HUMAN_REVIEW, HumanReviewNode())
@@ -216,16 +223,23 @@ def graph_for(
     *,
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
+    session_config: Mapping[str, object] | None = None,
 ) -> GraphWorkflow:
     """This workflow, for one agent, named the way everything else names it.
 
     The id and the name are built in one place rather than at each call, so
     that the graph a deployment starts and the graph a test drives are the same
     graph under the same name. What a caller may replace is what `pipeline`
-    accepts: where the checkouts go, and which agents answer.
+    accepts: where the checkouts go, which agents answer, and what session
+    settings the adapter should apply.
     """
     return graph_workflow(
-        pipeline(runner, workspace_provider=workspace_provider, agents=agents),
+        pipeline(
+            runner,
+            workspace_provider=workspace_provider,
+            agents=agents,
+            session_config=session_config,
+        ),
         id=f"implementation-review-{runner}",
         name=f"Implementation review ({runner})",
     )

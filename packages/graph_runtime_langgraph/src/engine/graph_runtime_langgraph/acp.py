@@ -63,7 +63,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
@@ -491,6 +491,13 @@ class ACPNode:
     therefore starts replacement servers while reconnecting the conversation
     the agent already owns.
     """
+    session_config: Mapping[str, object] | None = None
+    """Provider settings sent with ``session/new`` and ``session/load``.
+
+    Attribution, output style, and similar deployment-level knobs that the
+    ACP adapter translates into whatever the underlying agent CLI expects.
+    ``None`` leaves the adapter's own defaults untouched.
+    """
 
     def __post_init__(self) -> None:
         # A literal is checkable now; a resolver is not, and is checked on the
@@ -535,7 +542,8 @@ class ACPNode:
             stored = await runtime.store.session(execution.run_id, key)
             resuming = await self._answer_to_apply(runtime, stored)
             client, session = await self._open(
-                stored if resuming else None, cwd, tuple(mcp_servers)
+                stored if resuming else None, cwd, tuple(mcp_servers),
+                self.session_config,
             )
             turn = _Turn(self, execution, key, session.session_id)
             if resuming is not None:
@@ -640,6 +648,7 @@ class ACPNode:
         stored: ACPContinuation | None,
         cwd: str,
         mcp_servers: tuple[Mapping[str, Any], ...],
+        session_config: Mapping[str, object] | None = None,
     ) -> tuple[Any, ACPSession]:
         """Reach the conversation: the stored one when resuming, else a new one.
 
@@ -653,12 +662,14 @@ class ACPNode:
                 registry=self.registry,
                 cwd=cwd,
                 mcp_servers=mcp_servers,
+                session_config=session_config,
             )
         provider = (self.registry or default_registry()).resolve(self.agent)
         client = await provider.connect()
         try:
             return client, await client.new_session(
-                cwd=cwd, mcp_servers=mcp_servers
+                cwd=cwd, mcp_servers=mcp_servers,
+                session_config=session_config,
             )
         except BaseException:
             await client.close()
