@@ -585,6 +585,20 @@ export type ApiHistory = {
   unstable_resume: boolean;
 };
 
+export type AuthStatus = {
+  authenticated: boolean;
+  user: { id: number; login: string } | null;
+  loginRequired: boolean;
+};
+
+export function getAuthStatus(): Promise<AuthStatus> {
+  return api<AuthStatus>("/api/auth/github/status");
+}
+
+export function logout(): Promise<void> {
+  return api<void>("/api/auth/github/logout", { method: "POST" });
+}
+
 export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
 
 export type SourceControlStatus = {
