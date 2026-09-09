@@ -51,7 +51,21 @@ const ASKING_SCRIPT: Script = {
   title: TITLE,
   scenarios: [
     { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
-    { when: "Review the implementation", steps: [{ type: "say", text: REVIEWED }] },
+    {
+      when: "Review the implementation",
+      steps: [
+        { type: "say", text: REVIEWED },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: REVIEWED,
+            outputs: { findings: REVIEWED },
+          },
+        },
+      ],
+    },
     {
       when: STEER,
       steps: [
@@ -85,7 +99,21 @@ const SCRIPT: Script = {
     // The reviewer is asked about the implementation *and quoted the original
     // task*, so its prompt contains the implementation's own scenario word.
     // The first match wins, so the one only a reviewer can match goes first.
-    { when: "Review the implementation", steps: [{ type: "say", text: REVIEWED }] },
+    {
+      when: "Review the implementation",
+      steps: [
+        { type: "say", text: REVIEWED },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: REVIEWED,
+            outputs: { findings: REVIEWED },
+          },
+        },
+      ],
+    },
     {
       when: "Implement the requested change",
       steps: [
@@ -133,7 +161,18 @@ const STEERING_SCRIPT: Script = {
     },
     {
       when: "Review the implementation",
-      steps: [{ type: "say", text: "The implementation is ready for review." }],
+      steps: [
+        { type: "say", text: "The implementation is ready for review." },
+        {
+          type: "tool",
+          name: "complete_step",
+          arguments: {
+            outcome: "success",
+            summary: "The implementation is ready for review.",
+            outputs: { findings: "Ready for review." },
+          },
+        },
+      ],
     },
     {
       when: INTERRUPT_TASK,
