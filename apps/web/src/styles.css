@@ -409,13 +409,10 @@ ul, ol { padding: 0; list-style: none; }
   padding: 22px var(--gutter);
 }
 .panel-head-workflow {
-  grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(150px, 200px));
+  grid-template-columns: minmax(240px, 1fr) repeat(2, minmax(150px, 200px));
 }
-.panel-head-workflow > .field:last-child {
-  grid-column: -2 / -1;
-  justify-self: end;
-  text-align: right;
-}
+.panel-head-graph { grid-template-columns: minmax(240px, 1fr) minmax(150px, 200px); }
+.panel-head-controls { display: grid; grid-column: -2 / -1; gap: 12px; min-width: 0; }
 .panel-head-copy { display: grid; gap: 10px; min-width: 0; }
 .panel-head h1 {
   font-size: clamp(24px, 2.4vw, 33px);

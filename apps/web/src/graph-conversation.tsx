@@ -657,7 +657,7 @@ export function GraphConversationPage({
 
   return (
     <main className="panel">
-      <header className="panel-head panel-head-workflow">
+      <header className="panel-head panel-head-workflow panel-head-graph">
         <div className="panel-head-copy">
           <p className="eyebrow">WorkOrder conversation</p>
           <h1>{phaseLabel(nodeId)}</h1>
@@ -667,34 +667,36 @@ export function GraphConversationPage({
               : "A WorkOrder node owns this transcript."}
           </p>
         </div>
-        {node?.runner && (
+        <div className="panel-head-controls">
+          {node?.runner && (
+            <label className="field">
+              <span>Runner</span>
+              <select
+                aria-label="Runner"
+                className="field-box"
+                value={runner}
+                disabled={!run || runnerBusy}
+                onChange={(event) => void chooseRunner(event.target.value)}
+              >
+                {runners.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+              <span className="micro">Applies the next time this node starts.</span>
+              {runnerError && <span className="field-error">{runnerError}</span>}
+            </label>
+          )}
           <label className="field">
-            <span>Runner</span>
-            <select
-              aria-label="Runner"
-              className="field-box"
-              value={runner}
-              disabled={!run || runnerBusy}
-              onChange={(event) => void chooseRunner(event.target.value)}
-            >
-              {runners.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
-            <span className="micro">Applies the next time this node starts.</span>
-            {runnerError && <span className="field-error">{runnerError}</span>}
+            <span className="field-box auto-approve-control">
+              <input
+                type="checkbox"
+                checked={run?.autoApproveNodes?.includes(nodeId) ?? false}
+                disabled={!run || autoApproveBusy}
+                onChange={(event) => void chooseAutoApprove(event.target.checked)}
+              />
+              <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
+            </span>
+            {autoApproveError && <span className="field-error">{autoApproveError}</span>}
           </label>
-        )}
-        <label className="field">
-          <span className="field-box auto-approve-control">
-            <input
-              type="checkbox"
-              checked={run?.autoApproveNodes?.includes(nodeId) ?? false}
-              disabled={!run || autoApproveBusy}
-              onChange={(event) => void chooseAutoApprove(event.target.checked)}
-            />
-            <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
-          </span>
-          {autoApproveError && <span className="field-error">{autoApproveError}</span>}
-        </label>
+        </div>
       </header>
       {error && <p className="notice notice-block">{error}</p>}
       <AssistantRuntimeProvider runtime={runtime}>

@@ -257,36 +257,38 @@ function ConversationHeader({
         <span>Agent</span>
         <span className="field-box">{thread?.agentId ?? "…"}</span>
       </div>
-      <label className="field">
-        <span>Runner</span>
-        <select
-          className="field-box"
-          value={runner}
-          onChange={(event) => void choose(event.target.value)}
-        >
-          {availableRunners.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.id}
-            </option>
-          ))}
-        </select>
-        {error && <span className="field-error">{error}</span>}
-      </label>
-      {workflowConversation && (
+      <div className="panel-head-controls">
         <label className="field">
-          <span>Approvals</span>
-          <span className="field-box auto-approve-control">
-            <input
-              type="checkbox"
-              checked={autoApprove}
-              disabled={autoApproveBusy}
-              onChange={(event) => void chooseAutoApprove(event.target.checked)}
-            />
-            <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
-          </span>
+          <span>Runner</span>
+          <select
+            className="field-box"
+            value={runner}
+            onChange={(event) => void choose(event.target.value)}
+          >
+            {availableRunners.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.id}
+              </option>
+            ))}
+          </select>
           {error && <span className="field-error">{error}</span>}
         </label>
-      )}
+        {workflowConversation && (
+          <label className="field">
+            <span>Approvals</span>
+            <span className="field-box auto-approve-control">
+              <input
+                type="checkbox"
+                checked={autoApprove}
+                disabled={autoApproveBusy}
+                onChange={(event) => void chooseAutoApprove(event.target.checked)}
+              />
+              <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
+            </span>
+            {error && <span className="field-error">{error}</span>}
+          </label>
+        )}
+      </div>
     </header>
   );
 }
