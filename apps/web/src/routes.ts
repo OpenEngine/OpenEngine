@@ -2,6 +2,7 @@
  *  an encoded deep link can be tested without rendering the app at import. */
 
 export type Route =
+  | { kind: "login" }
   | { kind: "runs" }
   | { kind: "new-run" }
   | { kind: "run"; runId: string }
@@ -18,6 +19,7 @@ export type Route =
 
 export function routeForPath(pathname: string): Route {
   const path = pathname.replace(/\/$/, "") || "/";
+  if (path === "/login") return { kind: "login" };
   if (path === "/" || path === "/runs") return { kind: "runs" };
   if (path === "/runs/new") return { kind: "new-run" };
   if (path === "/plan") return { kind: "chat", plan: true };

@@ -213,7 +213,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -242,6 +242,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
             catalog if catalog is not None else WorkflowCatalog.from_definitions(())
         ),
         slack_credential_store=slack_store,
+        github_login_config=github_login_config,
         public_url="https://engine.example",
         work_orders=work_orders,
         credential_store=MagicMock(),
@@ -1330,3 +1331,26 @@ def test_concierge_permissions_only_allow_the_granted_tool():
                 tool_call={"name": name}, options=(ACPPermissionOption("yes", kind="allow_once"),)))
             assert result.granted == allowed
     asyncio.run(scenario())
+@pytest.mark.parametrize("valid_signature", [True, False])
+def test_slack_signature_auth_with_github_login_enabled(tmp_path, valid_signature):
+    from starlette.testclient import TestClient
+    from engine.apps.web.github_login import GitHubLoginConfig
+
+    app, _, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.example/api/auth/github/callback"
+        ),
+    )
+    body = json.dumps({"type": "url_verification", "challenge": "abc"}).encode()
+    headers = _signed(body)
+    if not valid_signature:
+        headers["x-slack-signature"] = "v0=invalid"
+    with TestClient(app) as client:
+        assert client.get("/api/config").status_code == 401
+        response = client.post("/api/slack/events", content=body, headers=headers)
+    if valid_signature:
+        assert response.status_code == 200
+        assert response.json() == {"challenge": "abc"}
+    else:
+        assert response.status_code == 401

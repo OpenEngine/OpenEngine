@@ -1,29 +1,43 @@
-"""Per-browser GitHub identity verification, separate from repo credentials.
+"""Per-browser GitHub identity verification with session cookies.
 
-Session issuance and application access control are follow-up work (#301).
 Login cookies use a process-local signing key: a restart requires login again.
+The session cookie is set after a successful OAuth callback and checked by
+the status endpoint so the frontend can gate access.
 """
 
 import base64
 import hashlib
 import hmac
+
 import os
 import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 
 import httpx
 from dotenv import dotenv_values
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 _PATH = "/api/auth/github"
 _COOKIE = "engine_github_login"
+_SESSION_COOKIE = "engine_session"
 _TTL = 600
+_SESSION_TTL = 86400  # 24 hours
 _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+
+
+def _return_to(value: str) -> str:
+    # Reject browser URL normalization tricks as well as external URLs.
+    decoded = unquote(value)
+    if (len(value) > 2048 or not value.startswith("/") or not decoded.startswith("/") or decoded.startswith("//")
+            or "\\" in decoded or any(ord(c) < 32 or ord(c) == 127 for c in decoded)):
+        return "/"
+    return value
 
 
 @dataclass(frozen=True)
@@ -66,14 +80,56 @@ class GitHubLogin:
         return [
             Route(f"{_PATH}/login", self.login),
             Route(f"{_PATH}/callback", self.callback),
+            Route(f"{_PATH}/status", self.status),
+            Route(f"{_PATH}/logout", self.logout, methods=["POST"]),
         ]
+
+    @property
+    def configured(self) -> bool:
+        return self.config is not None
+
+    def _sign(self, payload: str) -> str:
+        return hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
+
+    def _make_session_cookie(self, user_id: int, login: str) -> str:
+        """Build a signed session value: id|login|expires|signature."""
+        expires = int(time.time()) + _SESSION_TTL
+        payload = f"{user_id}|{login}|{expires}"
+        return f"{payload}|{self._sign(payload)}"
+
+    def _read_session(self, request: Request) -> dict[str, object] | None:
+        """Verify and decode the session cookie, or None if invalid/expired."""
+        cookie = request.cookies.get(_SESSION_COOKIE, "")
+        if not cookie or len(cookie) > 512:
+            return None
+        parts = cookie.split("|")
+        if len(parts) != 4:
+            return None
+        user_id_str, login, expires_str, signature = parts
+        payload = "|".join(parts[:3])
+        if not secrets.compare_digest(signature.encode(), self._sign(payload).encode()):
+            return None
+        try:
+            expires = int(expires_str)
+            user_id = int(user_id_str)
+        except ValueError:
+            return None
+        if expires <= time.time() or user_id <= 0 or not login:
+            return None
+        return {"id": user_id, "login": login}
+
+    def _is_secure(self) -> bool:
+        return bool(self.config and self.config.redirect_uri.startswith("https:"))
 
     async def login(self, request: Request) -> Response:
         if self.config is None:
             return JSONResponse({"error": "GitHub login is not configured"}, 503, headers=_HEADERS)
         state, verifier = (secrets.token_urlsafe(32) for _ in range(2))
-        payload = f"{state}.{verifier}.{int(time.time()) + _TTL}"
-        signature = hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
+        destination = base64.urlsafe_b64encode(
+            _return_to(request.query_params.get("return_to", "/")).encode()
+        ).decode()
+        payload = f"{state}.{verifier}.{int(time.time()) + _TTL}.{destination}"
+        signature = self._sign(payload)
         browser = f"{payload}.{signature}"
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         response = RedirectResponse("https://github.com/login/oauth/authorize?" + urlencode({
@@ -85,24 +141,25 @@ class GitHubLogin:
             "code_challenge_method": "S256",
         }), status_code=302, headers=_HEADERS)
         response.set_cookie(_COOKIE, browser, max_age=_TTL, path=_PATH,
-                            secure=self.config.redirect_uri.startswith("https:"),
+                            secure=self._is_secure(),
                             httponly=True, samesite="lax")
         return response
 
-    def _login_cookie(self, request: Request) -> tuple[str, str, int] | None:
+    def _login_cookie(self, request: Request) -> tuple[str, str, int, str] | None:
         cookie = request.cookies.get(_COOKIE, "")
-        if len(cookie) > 256:
+        if len(cookie) > 3072:
             return None
         parts = cookie.split(".")
-        if len(parts) != 4:
+        if len(parts) != 5:
             return None
-        state, verifier, expires, signature = parts
-        payload = ".".join(parts[:3])
-        expected = hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
-        if not secrets.compare_digest(signature.encode(), expected.encode()):
+        state, verifier, expires, destination, signature = parts
+        payload = ".".join(parts[:4])
+        if not secrets.compare_digest(signature.encode(), self._sign(payload).encode()):
             return None
         try:
-            return state, verifier, int(expires)
+            return state, verifier, int(expires), _return_to(
+                base64.urlsafe_b64decode(destination).decode()
+            )
         except ValueError:
             return None
 
@@ -111,27 +168,28 @@ class GitHubLogin:
         owns_cookie = pending is not None and secrets.compare_digest(
             request.query_params.get("state", "").encode(), pending[0].encode()
         )
-        response = await self._callback(request)
+        response = await self._callback(request, pending)
+        if owns_cookie and pending[3] != "/" and response.headers.get("location", "").startswith("/login?error="):
+            response.headers["location"] += "&" + urlencode({"return_to": pending[3]})
         response.headers.update(_HEADERS)
         if owns_cookie:
             response.delete_cookie(_COOKIE, path=_PATH, httponly=True, samesite="lax",
-                                   secure=bool(self.config and self.config.redirect_uri.startswith("https:")))
+                                   secure=self._is_secure())
         return response
 
-    async def _callback(self, request: Request) -> Response:
+    async def _callback(
+        self, request: Request, pending: tuple[str, str, int, str] | None
+    ) -> Response:
         if self.config is None:
             return JSONResponse({"error": "GitHub login is not configured"}, 503)
-        pending = self._login_cookie(request)
         if (pending is None or pending[2] <= time.time()
                 or not secrets.compare_digest(
                     request.query_params.get("state", "").encode(), pending[0].encode()
                 )):
-            return JSONResponse({"error": "Invalid or expired GitHub login state"}, 400)
+            return RedirectResponse("/login?error=expired", status_code=302)
         code = request.query_params.get("code")
         if request.query_params.get("error") or not code:
-            return JSONResponse({"error": "GitHub authorization was not completed"}, 400)
-        # No server-side pending table: abandoned logins cannot reserve capacity.
-        # GitHub consumes codes once and binds them to this cookie's PKCE verifier.
+            return RedirectResponse("/login?error=denied", status_code=302)
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 token_response = await client.post(
@@ -161,8 +219,74 @@ class GitHubLogin:
                         or not user["login"]):
                     raise ValueError("Invalid identity")
         except (httpx.HTTPError, ValueError, OSError):
-            # Never reflect provider responses: they can contain credentials.
-            return JSONResponse({"error": "Could not verify GitHub identity"}, 502)
-        # The token is deliberately neither returned nor persisted. #301 can
-        # issue a session here using this freshly verified, stable GitHub ID.
-        return JSONResponse({"user": {"id": user["id"], "login": user["login"]}})
+            return RedirectResponse("/login?error=failed", status_code=302)
+        # Issue a session cookie and redirect to the app.
+        response = RedirectResponse(pending[3], status_code=302)
+        session_value = self._make_session_cookie(user["id"], user["login"])
+        response.set_cookie(_SESSION_COOKIE, session_value, max_age=_SESSION_TTL,
+                            path="/", secure=self._is_secure(),
+                            httponly=True, samesite="lax")
+        return response
+
+    async def status(self, request: Request) -> Response:
+        """Return the current session state for the frontend auth gate."""
+        user = self._read_session(request)
+        return JSONResponse({
+            "authenticated": user is not None,
+            "user": user,
+            "loginRequired": self.config is not None,
+        }, headers=_HEADERS)
+
+    async def logout(self, request: Request) -> Response:
+        if self._read_session(request) is None:
+            return JSONResponse({"ok": True}, headers=_HEADERS)
+        response = JSONResponse({"ok": True}, headers=_HEADERS)
+        response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
+                               samesite="lax", secure=self._is_secure())
+        return response
+
+    def middleware(self, app: ASGIApp) -> ASGIApp:
+        """ASGI middleware that enforces session auth on the web and graph API routes.
+
+        Unauthenticated requests to protected API endpoints receive a 401.
+        Auth-related endpoints, static assets, and SPA pages are exempt.
+        """
+        if not self.configured:
+            return app
+        return _SessionAuthMiddleware(app, self)
+
+
+# Paths under /api/ that must remain accessible without a session cookie so
+# the login flow itself can work.
+_AUTH_EXEMPT = frozenset({
+    f"{_PATH}/login",
+    f"{_PATH}/callback",
+    f"{_PATH}/status",
+    f"{_PATH}/logout",
+    "/api/slack/events",  # Authenticated by the Slack signature in its handler.
+})
+
+
+class _SessionAuthMiddleware:
+    def __init__(self, app: ASGIApp, login: GitHubLogin) -> None:
+        self.app = app
+        self.login = login
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path: str = scope.get("path", "")
+        if not path.startswith(("/api/", "/graph/api/")) or path in _AUTH_EXEMPT:
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        if self.login._read_session(request) is not None:
+            await self.app(scope, receive, send)
+            return
+        response = JSONResponse(
+            {"error": "authentication required"},
+            status_code=401,
+            headers=_HEADERS,
+        )
+        await response(scope, receive, send)

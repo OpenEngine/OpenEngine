@@ -13,6 +13,7 @@ import {
   type EngineConfig,
   type RunnerOption,
 } from "./api";
+import { AuthGate } from "./auth";
 import { ChatThread, ConversationStats } from "./chat";
 import { GraphConversationPage } from "./graph-conversation";
 import { MilestoneDetailsPage } from "./milestone-details";
@@ -518,6 +519,8 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <AuthGate>
+      <App />
+    </AuthGate>
   </StrictMode>,
 );
