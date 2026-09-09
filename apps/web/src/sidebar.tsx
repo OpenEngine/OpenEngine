@@ -8,7 +8,7 @@
  *  again closes it, leaving the two headers stacked and nothing beneath
  *  them. */
 
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   graphConversationUrl,
@@ -95,6 +95,20 @@ function WorkOrderFilters({ options, excluded, onChange }: {
   onChange: (excluded: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!open || !menu) return;
+    const constrainHeight = () => {
+      const bounds = menu.getBoundingClientRect();
+      const opensUp = getComputedStyle(menu).getPropertyValue("--filter-opens-up").trim() === "1";
+      const available = opensUp ? bounds.bottom : window.innerHeight - bounds.top;
+      menu.style.maxHeight = `${Math.max(0, available - 8)}px`;
+    };
+    constrainHeight();
+    window.addEventListener("resize", constrainHeight);
+    return () => window.removeEventListener("resize", constrainHeight);
+  }, [open]);
   return (
     <div className="rail-filter" onBlur={(event) => {
       if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
@@ -113,7 +127,7 @@ function WorkOrderFilters({ options, excluded, onChange }: {
           <path d="M3 4h18l-7 8v7l-4 2v-9z" />
         </svg>
       </button>
-      {open && <div className="rail-filter-options" id="rail-workorder-filters"
+      {open && <div ref={menuRef} className="rail-filter-options" id="rail-workorder-filters"
         role="group" aria-label="WorkOrder filters">
         {options.length === 0 && <span>No WorkOrder history yet.</span>}
         {options.map((filter) => <label key={filter}>

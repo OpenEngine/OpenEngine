@@ -2,8 +2,10 @@ import { expect, shot, test } from "./harness";
 
 test("WorkOrder filters stay in the viewport with Projects expanded", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 720 });
+  const stages = Array.from({ length: 30 }, (_, index) => `Custom stage ${index + 1}`);
+  const options = ["Implementation", "Review", "Human Review", "failed", "succeeded", ...stages];
   await page.route("**/api/runs", (route) => route.fulfill({ json: {
-    runs: ["Implementation", "Review", "Human Review", "failed", "succeeded"].map((name) => ({
+    runs: options.map((name) => ({
       runId: name, name, workflowId: "work", workflowName: "Work", workflowVersion: "v1",
       taskId: name, workstreamId: null, milestoneId: null, repository: ".",
       repositoryContext: { repository: "." }, terminalOutcome: null,
@@ -23,11 +25,14 @@ test("WorkOrder filters stay in the viewport with Projects expanded", async ({ p
   await page.getByRole("button", { name: "Filter WorkOrders", exact: true }).click();
 
   const menu = page.getByRole("group", { name: "WorkOrder filters" });
-  for (const name of ["Implementation", "Review", "Human Review", "failed", "succeeded"]) {
-    const option = menu.locator("label").filter({ has: page.getByRole("checkbox", { name, exact: true }) });
-    await expect(option).toBeInViewport({ ratio: 1 });
+  await expect(menu).toBeInViewport({ ratio: 1 });
+  expect(await menu.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  for (const name of options) {
+    const checkbox = menu.getByRole("checkbox", { name, exact: true });
+    await checkbox.scrollIntoViewIfNeeded();
+    await expect(checkbox).toBeInViewport({ ratio: 1 });
+    await checkbox.uncheck();
+    await expect(checkbox).not.toBeChecked();
   }
-  await menu.getByRole("checkbox", { name: "succeeded" }).uncheck();
-  await expect(menu.getByRole("checkbox", { name: "succeeded" })).not.toBeChecked();
   await shot(page, testInfo, "filters above collapsed WorkOrders");
 });

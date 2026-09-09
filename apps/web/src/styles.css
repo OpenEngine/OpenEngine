@@ -228,6 +228,8 @@ ul, ol { padding: 0; list-style: none; }
 .rail-filter-toggle:hover, .rail-filter-toggle:focus-visible { border-color: var(--night-ink); }
 .rail-filter-toggle[data-active] { color: var(--white); border-color: var(--night-muted); }
 .rail-filter-options {
+  --filter-opens-up: 0;
+  overflow-y: auto;
   position: absolute; right: 0; top: 100%; z-index: 10;
   display: grid; gap: 10px; min-width: 170px; padding: 12px;
   color: var(--night-ink); background: var(--night);
@@ -240,6 +242,7 @@ ul, ol { padding: 0; list-style: none; }
   .rail-section[data-open] + .rail-section .rail-filter-options {
     top: auto;
     bottom: 100%;
+    --filter-opens-up: 1;
   }
 }
 
