@@ -1,13 +1,7 @@
-"""Concierge MCP broker for Slack thread conversations.
+"""Outbound work-order tool: validated host callback exposed through stdio MCP.
 
-The concierge is a lightweight agent that greets users mentioning the bot
-and can start work orders on their behalf.  It runs outside the workflow
-system -- there is no step to complete, no run to drive -- so it gets its
-own broker that serves only ``create_workorder``.
-
-The broker follows the same TCP bridge pattern as ``PlanningMcpBroker``:
-the provider CLI launches a stdio MCP server that forwards tool calls
-back to this process over a local TCP connection.
+The host binds the Slack origin and posts status and links through its notifier.
+The agent supplies only a repository and task; it cannot redirect those replies.
 """
 
 from __future__ import annotations
@@ -17,10 +11,14 @@ import asyncio
 import json
 import secrets
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+import tempfile
+from pathlib import Path
+from typing import TextIO
+from langgraph_acp.permissions import ACPPermissionRequest, ACPPermissionOutcome
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
-from engine.ports import McpServerConfig
+
 
 #: Given (repository, prompt) create a work order and return (url, run_id).
 CreateWorkorder = Callable[[str, str], Awaitable[tuple[str, str]]]
@@ -80,37 +78,42 @@ class ConciergeBroker:
         self._default_repository = default_repository
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
+        self._credential: TextIO | None = None
 
     async def __aenter__(self) -> ConciergeBroker:
-        self._server = await asyncio.start_server(
-            self._handle_connection, "127.0.0.1", 0
-        )
+        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-")
+        self._credential.write(self._token)
+        self._credential.flush()
+        try:
+            self._server = await asyncio.start_server(
+                self._handle_connection, "127.0.0.1", 0
+            )
+        except BaseException:
+            self._credential.close()
+            raise
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        if self._credential is not None:
+            self._credential.close()
 
     @property
-    def config(self) -> McpServerConfig:
-        if self._server is None or not self._server.sockets:
+    def config(self) -> dict[str, object]:
+        """ACP stdio MCP descriptor; the credential never appears in argv."""
+        if self._server is None or not self._server.sockets or self._credential is None:
             raise RuntimeError("concierge MCP broker has not been started")
-        port = self._server.sockets[0].getsockname()[1]
-        return McpServerConfig(
-            name=_SERVER_NAME,
-            command=sys.executable,
-            args=(
-                "-m",
-                "engine.runtime.concierge_mcp_server",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                "--token",
-                self._token,
-            ),
-        )
+        return {
+            "name": _SERVER_NAME,
+            "command": sys.executable,
+            "args": ["-m", "engine.slack_concierge.slack_egress",
+                     "--host", "127.0.0.1", "--port",
+                     str(self._server.sockets[0].getsockname()[1]),
+                     "--token-file", self._credential.name],
+            "env": [],
+        }
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -139,7 +142,12 @@ class ConciergeBroker:
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return {"ok": False, "error": "prompt must be a non-empty string"}
-        repository = str(arguments.get("repository", "") or self._default_repository)
+        if set(arguments) - {"prompt", "repository"}:
+            return {"ok": False, "error": "unknown work-order arguments"}
+        repository = arguments.get("repository", "") or self._default_repository
+        if not isinstance(repository, str):
+            return {"ok": False, "error": "repository must be a string"}
+        repository = repository.strip()
         if not repository:
             return {
                 "ok": False,
@@ -207,16 +215,10 @@ async def _mcp_response(
     if isinstance(method, str) and method.startswith("notifications/"):
         return None
     if method == "initialize":
-        params = request.get("params")
-        protocol = (
-            params.get("protocolVersion", _PROTOCOL_VERSION)
-            if isinstance(params, dict)
-            else _PROTOCOL_VERSION
-        )
         return _rpc_result(
             request_id,
             {
-                "protocolVersion": protocol,
+                "protocolVersion": _PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "engine-concierge", "version": "1"},
             },
@@ -285,12 +287,28 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", required=True, type=int)
-    parser.add_argument("--token", required=True)
+    parser.add_argument("--token-file", required=True)
     arguments = parser.parse_args()
-    asyncio.run(_serve_stdio(arguments.host, arguments.port, arguments.token))
+    asyncio.run(_serve_stdio(arguments.host, arguments.port, Path(arguments.token_file).read_text()))
 
 
 __all__ = [
     "CONCIERGE_TOOL_NAME",
     "ConciergeBroker",
 ]
+
+
+async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
+    """Approve only the one named MCP grant; decline all other operations."""
+
+    names = {"mcp__concierge__create_workorder", "concierge/create_workorder"}
+    if any(isinstance(value, str) and value in names
+           for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
+        for option in request.options:
+            if option.kind == "allow_once":
+                return ACPPermissionOutcome.selected(option.option_id)
+    return ACPPermissionOutcome.cancelled()
+
+
+if __name__ == "__main__":
+    main()

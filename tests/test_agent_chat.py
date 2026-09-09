@@ -1016,15 +1016,14 @@ def test_an_unknown_runner_stops_before_anything_is_stored() -> None:
 # --- the profiles that ship --------------------------------------------------
 
 
-def test_shipped_profiles_grant_nothing_they_cannot_honour() -> None:
-    """Every shipped grant is backed by a tool in the web composition."""
+def test_shipped_profiles_declare_expected_capabilities() -> None:
+    """Every shipped profile has the expected grants and instructions."""
     from engine.runtime import BUILT_IN
 
-    assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder"), AgentId("planner"), AgentId("concierge")}
+    assert set(BUILT_IN) == {AgentId("foreman"), AgentId("coder"), AgentId("planner")}
     assert BUILT_IN[AgentId("foreman")].capabilities == ()
     assert BUILT_IN[AgentId("coder")].capabilities == ()
     assert BUILT_IN[AgentId("planner")].capabilities == ()
-    assert BUILT_IN[AgentId("concierge")].capabilities == ("create_workorder",)
     assert all(profile.instructions.strip() for profile in BUILT_IN.values())
 
 

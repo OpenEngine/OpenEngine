@@ -63,24 +63,9 @@ PLANNER = AgentProfile(
     read_only=True,
 )
 
-CONCIERGE = AgentProfile(
-    agent_id=AgentId("concierge"),
-    instructions=(
-        "You are OpenEngineBot, a helpful assistant responding to mentions in "
-        "Slack. Greet the user briefly and ask how you can help.\n\n"
-        "When the user asks you to build, fix, implement, or change something, "
-        "use the create_workorder tool to start a work order for them. Status "
-        "updates from the work order will appear in this thread automatically. "
-        "Share the work order URL so they can follow along.\n\n"
-        "Keep responses concise — one or two sentences is enough."
-    ),
-    capabilities=("create_workorder",),
-    description="Greets users in Slack and creates work orders on request.",
-)
-
 #: Every profile the system knows, by id.
 BUILT_IN: Mapping[AgentId, AgentProfile] = {
-    profile.agent_id: profile for profile in (FOREMAN, CODER, PLANNER, CONCIERGE)
+    profile.agent_id: profile for profile in (FOREMAN, CODER, PLANNER)
 }
 
 #: Introduces the tool names appended to a profile's instructions.
@@ -153,7 +138,6 @@ def profile_for(agent_id: AgentId, profiles: Mapping[AgentId, AgentProfile] = BU
 __all__ = [
     "BUILT_IN",
     "CODER",
-    "CONCIERGE",
     "FOREMAN",
     "GRANTED_TOOLS_NOTE",
     "PLANNER",

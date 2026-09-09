@@ -1,69 +1,72 @@
-# Starting a work order by pinging the bot
+# Slack concierge and work orders
 
-Ping the OpenEngine bot in Slack and it starts a WorkOrder, replies in that
-thread with a link to it, and keeps reporting there until a person's decision
-is needed — at which point it says so and names them.
+Mention `@OpenEngineBot` to open a conversation. A greeting or test message gets
+“Hi, how can I help?”. Ask for a new work order in that thread and the concierge
+uses its `create_workorder` tool. The host starts the configured step workflow,
+posts its UI link, and reports progress in the same thread.
 
-```
-you    @openengine add a health endpoint to the API
-bot    ↳ Started a work order on `acme/api`. I will report progress here.
-         View work order
-bot    ↳ *Implementation* started.
-bot    ↳ *Implementation*: reading how the existing routes are registered
-bot    ↳ *Implementation* complete.
-         Added /healthz and a test for it.
-         Open pull request · View work order
-bot    ↳ *Review* started.
-bot    ↳ *Review* complete. …
-bot    ↳ @you Review complete and ready for your decision: …
-         Open pull request · View work order
-```
+## Setup and diagnosis
 
-## What has to be set up
-
-Three things, and each is independently missing-able. `/api/slack/status`
-reports whether all three are in place as `events`.
-
-**1. The Slack app can post.** The existing Connect Slack flow in Settings.
-Reconnect after upgrading: the authorization now also asks for
-`app_mentions:read`, and without it Slack delivers no mentions at all.
-
-Disconnecting does not stop deliveries — the app stays installed, so mentions
-keep arriving. They are ignored while disconnected and the reason is logged,
-because a work order started then would provision a workspace and run an agent
-to completion with every reply, including the one saying it could not reply,
-dropped.
-
-**2. The signing secret is saved.** Settings → Slack → *Slack Signing Secret*,
-from your app's *Basic Information* page. It is how this server tells a real
-delivery from anyone who found the URL, and an unsigned request is refused.
-Without one saved, `/api/slack/events` answers 503 and nothing starts.
-
-A deployment that connected Slack before this existed adds the secret on its
-own, in the field the panel shows once it sees one is missing. It does not
-re-enter the OAuth pair: saving those revokes the bot token and starts the
-authorization over, which is right when the app changes and not a price for
-turning mentions on.
-
-**3. Slack knows where to deliver.** In your Slack app, under *Event
-Subscriptions*, set the request URL to `<public_url>/api/slack/events` and
-subscribe the bot to `app_mention`. Slack verifies the URL once with a
-handshake this endpoint answers, so save the signing secret first.
-
-Then say what a mention should run, in `engine.toml`:
+1. Connect the Slack app in Settings → Slack and save its signing secret.
+   A missing secret returns HTTP 503; an invalid signature returns 401. A missing
+   bot token is logged and the delivery is ignored because no reply can be sent.
+2. Set the Slack Events request URL to `<public_url>/api/slack/events` and
+   subscribe to `app_mention`. Invite the bot to the channel.
+3. For replies without another mention, subscribe to `message.channels` and grant
+   `channels:history`; private channels use `message.groups` and `groups:history`.
+   These are Slack app installation settings: this change does not broaden the
+   OAuth scopes requested by OpenEngine. Update the Slack app and reinstall it
+   when granting additional permissions. See Slack's
+   [message event documentation](https://docs.slack.dev/reference/events/message/).
+4. Install the Codex ACP adapter prerequisites (`npx` and Codex authentication).
+   The web composition defaults to `CodexACPProvider`; tests or another deployment
+   can inject an `ACPAgentProvider` through `create_app(concierge_provider=...)`.
+   The concierge uses an isolated temporary directory, not a repository checkout.
 
 ```toml
-public_url = "https://engine.example"   # what the links in the thread point at
+public_url = "https://engine.example"
 
 [work_orders]
-repository = "acme/api"                 # required; a mention names no repository
-workflow = "implementation-review-v1"   # optional when the deployment has one
-runner = "claude"                       # optional; the executor's default
+repository = "acme/api"                 # optional default; the agent can ask
+workflow = "implementation-review-v1"   # optional if exactly one is installed
+runner = "claude"                       # work-order executor, not concierge
 ```
 
-`repository` is the one with no sensible default. Without it a mention is
-answered with a message saying so rather than with a run against a repository
-nobody named.
+A greeting needs no work-order configuration. Creating work requires a repository
+and a resolvable step workflow. Missing configuration becomes a tool error so the
+concierge can explain what is needed.
+
+## Code boundaries
+
+`packages/slack-concierge` installs `engine-slack-concierge`:
+
+- `slack_concierge.py`: `build_graph()` defines `START → concierge → reply → END`.
+  The conversation node uses the `langgraph-acp` client/session API to inject MCP
+  tools and reuse a live session. `handle(IncomingMessage)` runs a turn;
+  `has_thread`, `forget`, and `close` manage its lifetime.
+- `slack_ingress.py`: `webhook()` verifies the signed request and acknowledges
+  after enqueueing. `accept()` routes mentions and replies in known threads,
+  ignores bots and message edits, and deduplicates by channel/message timestamp
+  across both Slack event types. `drain()` and `close()` support tests/shutdown.
+- `slack_egress.py`: the only granted MCP tool is
+  `create_workorder(prompt, repository?)`. Its host callback returns `(url, run_id)`.
+  The host binds the Slack origin; the model cannot supply a destination channel
+  or thread. The stdio-to-TCP bridge keeps its credential in a mode-0600 temporary
+  file and advertises a fixed supported MCP protocol version.
+
+The web composition supplies the work-order callback and thread reply callback.
+It reuses `start_step_run` and `RunNotifier` for execution, links, and progress.
+The concierge no longer shares `AgentSession` state or appears as a chat profile.
+
+Conversations and delivery deduplication are process-local. The concierge keeps
+at most 32 live sessions, evicting and closing the least recently used session;
+failed turns also close their session. Turns are serialized and limited to 180
+seconds. The queue holds 256 messages and rejects overflow with HTTP 503 so Slack
+can retry. An evicted thread or server restart needs a new mention. Work-order
+records remain in the existing persistent store, and their status updates keep
+the original thread even after its concierge session is evicted. This first
+version is intended for a single web process; durable ingress and multi-worker
+conversation routing are future work.
 
 ## What the agent can say
 
@@ -91,9 +94,8 @@ a different audience. A run started from a conversation always gets its ping,
 or the thread would report the review complete and then go quiet with the run
 parked on a decision nobody was told about.
 
-Answering in the thread does **not** continue the run today. The reply is
-where the WorkOrder reports; the WorkOrder page is where it is answered, which
-is what the link in every message is for.
+Thread replies continue the concierge conversation. Work-order approval or
+clarification questions are still answered on the WorkOrder page.
 
 ## What it will not do
 
@@ -101,9 +103,9 @@ is what the link in every message is for.
   other engine, which has neither the run-bound tools an agent reports through
   nor anywhere to keep where the request came from — so one started from a
   mention would go silent the moment it began. Only step workflows are offered.
-- **Slack redeliveries are ignored.** Slack retries anything it did not hear a
-  prompt 200 for; acting on a retry would start the same work order twice, so a
-  delivery carrying `X-Slack-Retry-Num` is acknowledged and dropped.
+- **Duplicate deliveries are ignored while remembered.** Accepted message identities
+  are bounded to 4096 entries. A retry that was never accepted can be processed;
+  no cross-restart exactly-once guarantee is claimed.
 - **Nothing is reported when the provider is down.** A Slack outage must not
   fail the work it was reporting on, so the runtime's own messages are best
   effort: they are logged and dropped, and the run continues with its record on
