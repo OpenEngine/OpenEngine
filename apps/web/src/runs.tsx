@@ -616,7 +616,15 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             {step.outputs.map((output) => (
               <div key={output.name}>
                 <dt>{output.name}</dt>
-                <dd>{output.value}</dd>
+                <dd>
+                  {/^https?:\/\//.test(output.value) ? (
+                    <a href={output.value} target="_blank" rel="noreferrer">
+                      {output.value} ↗
+                    </a>
+                  ) : (
+                    output.value
+                  )}
+                </dd>
               </div>
             ))}
           </dl>
@@ -775,14 +783,29 @@ export function RunDetailPage({ runId }: { runId: string }) {
         ))
           ? graphConversationUrl(runId, node.nodeId) : null,
         waiting: waiting.has(node.nodeId),
-        summary: typeof graph.values[node.nodeId] === "string" ? String(graph.values[node.nodeId]) : "",
-        outputs: [],
+        summary: typeof graph.values[node.nodeId] === "string"
+          ? String(graph.values[node.nodeId])
+          : (graph.values[node.nodeId] != null && typeof graph.values[node.nodeId] === "object" && typeof (graph.values[node.nodeId] as Record<string, unknown>).summary === "string"
+            ? String((graph.values[node.nodeId] as Record<string, unknown>).summary)
+            : ""),
+        outputs: graph.values[node.nodeId] != null && typeof graph.values[node.nodeId] === "object" && !Array.isArray(graph.values[node.nodeId])
+          ? Object.entries(graph.values[node.nodeId] as Record<string, unknown>)
+              .filter(([key, value]) => key !== "summary" && value != null)
+              .map(([key, value]) => ({ name: key, value: String(value) }))
+          : [],
       })),
       pendingHumanReview: graph.pendingApprovals[0] ? {
         stepId: graph.pendingApprovals[0].nodeId,
         title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
         summary: "",
-        prUrl: null,
+        prUrl: Object.values(graph.values).reduce<string | null>((found, val) => {
+          if (found) return found;
+          if (val != null && typeof val === "object" && !Array.isArray(val)) {
+            const obj = val as Record<string, unknown>;
+            if (typeof obj.pr_url === "string") return obj.pr_url;
+          }
+          return null;
+        }, null),
       } : null,
     } satisfies ApiWorkflowRun;
   }, [baseRun, graph, topology, graphEvents, runId]);
