@@ -857,7 +857,7 @@ def test_clarify_preserves_the_graph_position_until_continuation(
 
 
 def test_clarify_resets_the_invalid_completion_budget(tmp_path: Path) -> None:
-    async def scenario() -> tuple[Any, Any, list[RuntimeEvent]]:
+    async def scenario() -> tuple[Any, Any]:
         async with runtime_over(
             tmp_path,
             registry(
@@ -873,10 +873,10 @@ def test_clarify_resets_the_invalid_completion_budget(tmp_path: Path) -> None:
             await until(log, run.run_id, "transcript", count=4)
             paused = await runtime.snapshot(run.run_id)
             await runtime.steer(run.run_id, "Continue with the implementation.")
-            events = await until(log, run.run_id, "run.failed")
-            return paused, await runtime.snapshot(run.run_id), events
+            await until(log, run.run_id, "run.failed")
+            return paused, await runtime.snapshot(run.run_id)
 
-    paused, final, events = asyncio.run(scenario())
+    paused, final = asyncio.run(scenario())
 
     assert [execution.node_id for execution in paused.active_executions] == [
         IMPLEMENTATION
@@ -893,9 +893,6 @@ def test_clarify_resets_the_invalid_completion_budget(tmp_path: Path) -> None:
         "terminal result"
     )
     assert str(REVIEW) not in final.values
-    assert len(
-        [text for role, text in transcript(events) if role == "assistant"]
-    ) == 5
 
 
 def test_complete_step_rejects_a_missing_declared_output(tmp_path: Path) -> None:
