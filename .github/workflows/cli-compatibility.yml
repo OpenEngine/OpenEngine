@@ -231,3 +231,13 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: uv run --locked pytest -m compatibility -v
+
+      - name: Install Engine for generated Claude output configuration
+        working-directory: .
+        run: uv sync --locked --all-packages
+
+      - name: Claude consumes output settings on new and loaded ACP sessions
+        working-directory: .
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run --locked pytest tests/test_claude_output_compatibility.py -m compatibility -v
