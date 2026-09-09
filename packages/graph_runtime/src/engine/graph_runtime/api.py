@@ -181,6 +181,22 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
+    async def set_auto_approve(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        if not isinstance(body.get("autoApprove"), bool):
+            return _error("autoApprove must be a boolean", 400)
+        try:
+            node = NodeId(_required_string(body, "node"))
+        except ValueError as error:
+            return _error(str(error), 400)
+        try:
+            run = await runtime.set_auto_approve(
+                _run_id(request), node, body["autoApprove"]
+            )
+        except Exception as error:
+            return _refusal(error)
+        return JSONResponse(_snapshot_json(run))
+
     async def decide_approval(request: Request) -> JSONResponse:
         body = await _json_body(request)
         try:
@@ -214,6 +230,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             Route("/api/graphs/{graph_id}", describe_graph),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", get_run),
+            Route("/api/runs/{run_id}/auto-approve", set_auto_approve, methods=["PATCH"]),
             Route("/api/runs/{run_id}/checkpoints", get_checkpoints),
             Route("/api/runs/{run_id}/events", run_events),
             Route("/api/runs/{run_id}/steering", steer_run, methods=["POST"]),
@@ -331,6 +348,7 @@ def _snapshot_json(run: RunSnapshot) -> dict[str, object]:
             _approval_json(approval) for approval in run.pending_approvals
         ],
         "error": run.error,
+        "autoApproveNodes": _nodes_json(run.auto_approve_nodes),
     }
 
 

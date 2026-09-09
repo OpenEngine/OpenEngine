@@ -38,6 +38,7 @@ import {
   getGraphRun,
   messageText,
   steerGraphRun,
+  setGraphAutoApprove,
   type ApiApproval,
   type ApiGraphEvent,
   type ApiGraphRun,
@@ -416,7 +417,7 @@ function useGraphRun(runId: string) {
   // Read again now rather than at the next poll, for the two moments where
   // waiting a second would look like the click did nothing.
   const refresh = useCallback(() => setTick((value) => value + 1), []);
-  return { events, run, error, loaded, refresh };
+  return { events, run, error, loaded, refresh, setRun };
 }
 
 const IDLE_NOTE =
@@ -497,8 +498,23 @@ export function GraphConversationPage({
   runId: string;
   nodeId: string;
 }) {
-  const { events, run, error, loaded, refresh } = useGraphRun(runId);
+  const { events, run, error, loaded, refresh, setRun } = useGraphRun(runId);
   const [steerError, setSteerError] = useState("");
+  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
+  const [autoApproveError, setAutoApproveError] = useState("");
+
+  async function chooseAutoApprove(enabled: boolean) {
+    setAutoApproveBusy(true);
+    setAutoApproveError("");
+    try {
+      setRun(await setGraphAutoApprove(runId, nodeId, enabled));
+      refresh();
+    } catch (failure) {
+      setAutoApproveError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setAutoApproveBusy(false);
+    }
+  }
   const conversationId = graphConversationId(runId, nodeId);
 
   const nodeEvents = useMemo(
@@ -611,6 +627,19 @@ export function GraphConversationPage({
               : "A WorkOrder node owns this transcript."}
           </p>
         </div>
+        <label className="field">
+          <span>Approvals</span>
+          <span className="field-box auto-approve-control">
+            <input
+              type="checkbox"
+              checked={run?.autoApproveNodes?.includes(nodeId) ?? false}
+              disabled={!run || autoApproveBusy}
+              onChange={(event) => void chooseAutoApprove(event.target.checked)}
+            />
+            <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
+          </span>
+          {autoApproveError && <span className="field-error">{autoApproveError}</span>}
+        </label>
       </header>
       {error && <p className="notice notice-block">{error}</p>}
       <AssistantRuntimeProvider runtime={runtime}>

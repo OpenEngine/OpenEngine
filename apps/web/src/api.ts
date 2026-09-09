@@ -257,6 +257,7 @@ export type ApiWorkflowRun = Omit<ApiWorkflowRunListing, "steps"> & {
 };
 
 export type ApiGraphRun = {
+  autoApproveNodes?: string[];
   runId: string;
   graphId: string;
   status: "running" | "awaiting_approval" | "completed" | "failed";
@@ -341,6 +342,17 @@ export function getGraphRun(
   return api<ApiGraphRun>(`/graph/api/runs/${encodeURIComponent(runId)}`, {
     signal,
   });
+}
+
+export function setGraphAutoApprove(
+  runId: string,
+  nodeId: string,
+  autoApprove: boolean,
+): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/auto-approve`,
+    { method: "PATCH", body: JSON.stringify({ node: nodeId, autoApprove }) },
+  );
 }
 
 /** Say something to the agent a node is running, while it runs.
