@@ -1259,6 +1259,7 @@ def _workflow_app(
     workflow_catalog: WorkflowCatalog | None = None,
     workspace_repository: str | None = None,
     graph_runtime=None,
+    approval_policy: ApprovalConfig = ApprovalConfig(),
     communications_channel: str = "",
     public_url: str = "",
     utilization: UtilizationService | None = None,
@@ -1293,6 +1294,7 @@ def _workflow_app(
         review_runners=chat_runners,
         workflow_catalog=workflow_catalog,
         graph_runtime=graph_runtime,
+        approval_policy=approval_policy,
         communications_channel=communications_channel,
         public_url=public_url,
         utilization=utilization,
@@ -4978,7 +4980,11 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path)
 # what this app keeps for it is a row rather than a driver.
 
 
-def _graph_app(store: InMemoryStateStore, *graphs: ScriptedGraph):
+def _graph_app(
+    store: InMemoryStateStore,
+    *graphs: ScriptedGraph,
+    approval_policy: ApprovalConfig = ApprovalConfig(),
+):
     """The web app with a scripted graph engine wired in.
 
     A real `GraphRuntime` with real tasks, exactly as the graph package's own
@@ -5000,6 +5006,7 @@ def _graph_app(store: InMemoryStateStore, *graphs: ScriptedGraph):
             (_catalog_definition(),), graphs
         ),
         graph_runtime=running(),
+        approval_policy=approval_policy,
     )
     return app, runtime
 
@@ -5180,6 +5187,50 @@ def test_graph_run_listing_carries_live_node_and_approval_state() -> None:
         "activeNodeIds": ["implementation"],
         "waitingNodeIds": ["implementation"],
         "nextNodeIds": [],
+    }
+
+
+def test_auto_approve_config_seeds_all_graph_nodes() -> None:
+    """When `auto_approve = true`, every node starts auto-approved."""
+    graph = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (
+            ScriptedNode(
+                NodeId("implementation"),
+                (Say("Changed it."),),
+                next_nodes=(NodeId("review"),),
+            ),
+            ScriptedNode(NodeId("review"), (Say("Looks good."),)),
+        ),
+    )
+    app, runtime = _graph_app(
+        InMemoryStateStore(),
+        graph,
+        approval_policy=ApprovalConfig(auto_approve=True),
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": str(graph.graph_id),
+                        "prompt": "Review it",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                snapshot = await runtime.snapshot(run_id)
+                return snapshot
+
+    snapshot = asyncio.run(scenario())
+    assert set(snapshot.auto_approve_nodes) == {
+        NodeId("implementation"),
+        NodeId("review"),
     }
 
 
