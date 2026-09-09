@@ -538,6 +538,8 @@ def _acp(arguments: Sequence[str]) -> int:
             working_directories[session_id] = str(params.get("cwd") or "")
             mcp_servers[session_id] = _acp_mcp_server(params.get("mcpServers"))
             _acp_respond(message_id, {"sessionId": session_id})
+        elif method == "session/set_config_option":
+            _acp_respond(message_id, {"configOptions": []})
         elif method == "session/load":
             refusal = _acp_refusal(params)
             if refusal is not None:

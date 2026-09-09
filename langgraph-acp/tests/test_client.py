@@ -530,3 +530,24 @@ async def test_events_carry_no_reference_to_the_agent_s_own_containers() -> None
     assert isinstance(payload, dict)
     payload["content"] = "MUTATED"
     assert events[0].data["content"] == {"type": "text", "text": "Looking."}
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@asyncio_test
+async def test_model_is_selected_through_acp_after_open(tmp_path: Path, resume: bool) -> None:
+    log = tmp_path / "sent.jsonl"
+    async with connected(log=log) as client:
+        if resume:
+            await client.resume_session("sess_fake_1", session_config={"model": "gpt-5.6-terra"})
+        else:
+            await client.new_session(session_config={"model": "gpt-5.6-terra"})
+    assert params_of(log, "session/set_config_option") == {
+        "sessionId": "sess_fake_1", "configId": "model", "value": "gpt-5.6-terra",
+    }
+
+
+@asyncio_test
+async def test_unavailable_model_fails_instead_of_using_the_default() -> None:
+    async with connected() as client:
+        with pytest.raises(ACPSessionError, match="Unknown model"):
+            await client.new_session(session_config={"model": "unavailable"})

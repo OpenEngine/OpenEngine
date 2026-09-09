@@ -234,6 +234,7 @@ class StdioACPClient:
                 agent=self._agent,
                 operation="session/new",
             )
+        await self._configure_model(session_id, session_config)
         return StdioACPSession(self, session_id)
 
     async def resume_session(
@@ -265,7 +266,25 @@ class StdioACPClient:
             session_id=session_id,
             failure=ACPSessionError,
         )
+        await self._configure_model(session_id, session_config)
         return StdioACPSession(self, session_id)
+
+    async def _configure_model(
+        self, session_id: str, session_config: Mapping[str, JSONValue] | None
+    ) -> None:
+        # Model selection is an ACP operation, not a session/new extension.
+        # Apply it again after load so resumed reviewers keep their requested tier.
+        if session_config and "model" in session_config:
+            await self.call(
+                "session/set_config_option",
+                {
+                    "sessionId": session_id,
+                    "configId": "model",
+                    "value": session_config["model"],
+                },
+                session_id=session_id,
+                failure=ACPSessionError,
+            )
 
     async def close(self) -> None:
         if self._closed:
