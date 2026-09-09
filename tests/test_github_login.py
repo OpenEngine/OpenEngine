@@ -413,6 +413,7 @@ def test_invalid_session_rejected_at_status_and_api_boundaries(flow, failure):
 @pytest.mark.parametrize("destination, expected", [
     ("/runs/run-123?tab=events#latest", "/runs/run-123?tab=events#latest"),
     ("/conversations/thread-1", "/conversations/thread-1"),
+    ("/projects/project%20with%20spaces/milestones?q=two%20words", "/projects/project%20with%20spaces/milestones?q=two%20words"),
     ("https://evil.test/", "/"), ("//evil.test/", "/"),
     ("/%2fevil.test", "/"), ("/\\evil.test", "/"),
     ("/%0d%0aLocation:evil", "/"), ("javascript:alert(1)", "/"),
@@ -427,3 +428,31 @@ def test_login_returns_to_validated_destination(flow, destination, expected):
         response = callback(client, state, code="code", return_to="//evil.test")
     assert response.headers["location"] == expected
     assert client.get("/api/auth/github/status").json()["authenticated"] is True
+
+@pytest.mark.parametrize("error", ["failed", "denied", "expired"])
+def test_login_retry_preserves_destination(flow, error):
+    client = browser(flow)
+    destination = "/runs/run-123?tab=events#latest"
+    response = client.get("/api/auth/github/login", params={"return_to": destination}, follow_redirects=False)
+    state = parse_qs(urlsplit(response.headers["location"]).query)["state"][0]
+    if error == "failed":
+        http_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+        with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+            response = callback(client, state, code="bad")
+    elif error == "expired":
+        cookie = client.cookies.get("engine_github_login")
+        with patch("engine.apps.web.github_login.time.time", return_value=10**12):
+            response = client.get(
+                "/api/auth/github/callback", params={"state": state, "code": "old"},
+                headers={"cookie": f"engine_github_login={cookie}"}, follow_redirects=False,
+            )
+    else:
+        response = callback(client, state, error="access_denied")
+    query = parse_qs(urlsplit(response.headers["location"]).query)
+    assert query == {"error": [error], "return_to": [destination]}
+    response = client.get("/api/auth/github/login", params={"return_to": query["return_to"][0]}, follow_redirects=False)
+    state = parse_qs(urlsplit(response.headers["location"]).query)["state"][0]
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, state, code="good")
+    assert response.headers["location"] == destination

@@ -35,7 +35,7 @@ def _return_to(value: str) -> str:
     # Reject browser URL normalization tricks as well as external URLs.
     decoded = unquote(value)
     if (len(value) > 2048 or not value.startswith("/") or not decoded.startswith("/") or decoded.startswith("//")
-            or "\\" in decoded or any(ord(c) < 33 or ord(c) == 127 for c in decoded)):
+            or "\\" in decoded or any(ord(c) < 32 or ord(c) == 127 for c in decoded)):
         return "/"
     return value
 
@@ -169,6 +169,8 @@ class GitHubLogin:
             request.query_params.get("state", "").encode(), pending[0].encode()
         )
         response = await self._callback(request, pending)
+        if owns_cookie and pending[3] != "/" and response.headers.get("location", "").startswith("/login?error="):
+            response.headers["location"] += "&" + urlencode({"return_to": pending[3]})
         response.headers.update(_HEADERS)
         if owns_cookie:
             response.delete_cookie(_COOKIE, path=_PATH, httponly=True, samesite="lax",

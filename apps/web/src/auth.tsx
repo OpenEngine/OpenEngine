@@ -7,7 +7,7 @@ function LoginPage() {
   const params = new URLSearchParams(window.location.search);
   const error = params.get("error");
   const destination = window.location.pathname === "/login"
-    ? "/"
+    ? params.get("return_to") || "/"
     : window.location.pathname + window.location.search + window.location.hash;
   const loginUrl = "/api/auth/github/login" + (destination === "/" ? ""
     : "?" + new URLSearchParams({ return_to: destination }).toString());

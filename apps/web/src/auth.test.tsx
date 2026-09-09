@@ -72,6 +72,16 @@ describe("AuthGate", () => {
     expect(url.searchParams.get("return_to")).toBe("/runs/run-123?tab=events#latest");
   });
 
+
+  it("offers the original destination when retrying login", async () => {
+    visit("/login?error=failed&return_to=" + encodeURIComponent("/runs/run-123?tab=events#latest"));
+    vi.mocked(getAuthStatus).mockResolvedValue(signedOut);
+    renderGate();
+    const link = await screen.findByRole("link", { name: "Sign in with GitHub" });
+    const url = new URL(link.getAttribute("href")!, "http://localhost");
+    expect(url.searchParams.get("return_to")).toBe("/runs/run-123?tab=events#latest");
+  });
+
   it("opens the app and displays the authenticated user's name", async () => {
     vi.mocked(getAuthStatus).mockResolvedValue(signedIn);
     renderGate();
