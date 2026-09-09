@@ -347,7 +347,7 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 "description": "",
                 # A node that says nothing about where it belongs is somewhere
                 # a person can go and read, which is what a client offers.
-                "showInSidebar": True,
+                "hidden": False,
                 "alwaysOpen": False,
             },
             {
@@ -355,7 +355,7 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 "name": "Review",
                 "kind": "agent",
                 "description": "",
-                "showInSidebar": True,
+                "hidden": False,
                 "alwaysOpen": False,
             },
         ],

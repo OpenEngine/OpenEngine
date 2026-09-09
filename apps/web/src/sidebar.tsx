@@ -41,7 +41,7 @@ type RailConversation = {
  *  nodes, so those are what it offers, under their own names and from the moment
  *  the run exists rather than once an agent has said something. A node that says
  *  it is not one of the run's conversations -- the checkout, the person's own
- *  verdict -- is left out; see `show_in_sidebar` on `GraphNode`.
+ *  verdict -- is left out; see `hidden` on `GraphNode`.
  *
  *  A graph whose nodes have not been read yet offers nothing, which is the rail
  *  as it read before they were offered at all. */
@@ -51,7 +51,7 @@ function conversationsOf(
 ): RailConversation[] {
   if (isGraphRun(run))
     return (nodes[run.workflowId] ?? [])
-      .filter((node) => node.showInSidebar !== false)
+      .filter((node) => !node.hidden)
       .map((node) => ({
         key: node.nodeId,
         name: node.name,

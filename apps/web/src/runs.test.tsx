@@ -403,7 +403,7 @@ describe("useGraphNodes", () => {
     graphId: "implementation-review-codex",
     nodes: [
       { nodeId: "implementation", name: "Implementation", kind: "agent" },
-      { nodeId: "human-review", name: "Human review", kind: "human", showInSidebar: false },
+      { nodeId: "human-review", name: "Human review", kind: "human", hidden: true },
     ],
   };
 

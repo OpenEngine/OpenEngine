@@ -158,12 +158,12 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     # The implementation and review are the two conversations a person reads
     # and can talk to. The checkout, naming turn, and verdict are stages of the
     # run rather than conversations in it.
-    assert [node.show_in_sidebar for node in codex.nodes] == [
-        False,
-        False,
+    assert [node.hidden for node in codex.nodes] == [
         True,
         True,
         False,
+        False,
+        True,
     ]
     assert str(codex.entry_point) == "workspace"
 
@@ -263,7 +263,7 @@ def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
     )
     assert "at most twelve words" in NAMING_PROMPT
     assert "do not perform the task" in NAMING_PROMPT.lower()
-    assert naming.graph_node_show_in_sidebar is False
+    assert naming.graph_node_hidden is True
 
 
 def test_the_human_stage_is_the_shared_component_rather_than_a_bespoke_node() -> None:

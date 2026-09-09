@@ -759,7 +759,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       phase: graph.status === "awaiting_approval" ? "awaiting_human_review" : baseRun.phase,
       currentStepId: graph.activeExecutions[0]?.nodeId ?? graph.nextNodes[0] ?? null,
       failureReason: graph.error || baseRun.failureReason,
-      steps: topology.nodes.filter((node) => node.kind !== "workspace").map((node) => ({
+      steps: topology.nodes.filter((node) => !node.hidden).map((node) => ({
         stepId: node.nodeId,
         name: node.name,
         kind: node.kind === "human" ? "human" as const : "agent" as const,

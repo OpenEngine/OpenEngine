@@ -38,10 +38,10 @@ class GraphNode:
     describe graphs it can otherwise drive perfectly well.
     """
     description: str = ""
-    show_in_sidebar: bool = True
-    """Whether a client listing this run's conversations should offer this node.
+    hidden: bool = False
+    """Whether a client should leave this node out of navigation and overviews.
 
-    True by default, because a node is normally somewhere a person can go and
+    False by default, because a node is normally somewhere a person can go and
     read what happened. A node says otherwise about itself -- the checkout that
     holds no conversation, the decision that is the reader's own -- so that a
     navigation built from a graph does not have to keep a list of the nodes it

@@ -45,7 +45,7 @@ class NameNode(ACPNode):
     output_key: str = "name"
     graph_node_name: str = "Naming"
     graph_node_description: str = "Gives the WorkOrder a concise display name."
-    graph_node_show_in_sidebar: bool = False
+    graph_node_hidden: bool = True
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         try:

@@ -59,10 +59,10 @@ const graphRun: ApiWorkflowRun = {
 /** Its graph, as the engine describes one: the two agents a person can read,
  *  and the two stages that are not conversations. */
 const nodes: ApiGraphTopology["nodes"] = [
-  { nodeId: "workspace", name: "Workspace", kind: "workspace", showInSidebar: false },
+  { nodeId: "workspace", name: "Workspace", kind: "workspace", hidden: true },
   { nodeId: "implementation", name: "Implementation", kind: "agent" },
-  { nodeId: "review", name: "Review", kind: "agent", showInSidebar: true },
-  { nodeId: "human-review", name: "Human review", kind: "human", showInSidebar: false },
+  { nodeId: "review", name: "Review", kind: "agent", hidden: false },
+  { nodeId: "human-review", name: "Human review", kind: "human", hidden: true },
 ];
 
 function header(name: string) {

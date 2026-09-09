@@ -67,10 +67,10 @@ class DescribesItself(Protocol):
     def graph_node_description(self) -> str: ...
 
     @property
-    def graph_node_show_in_sidebar(self) -> bool: ...
-    """Whether a client's list of this run's conversations should offer it.
+    def graph_node_hidden(self) -> bool: ...
+    """Whether a client should leave this node out of navigation and overviews.
 
-    True unless the node says otherwise, which is the same reasoning as the
+    False unless the node says otherwise, which is the same reasoning as the
     name: the node knows -- a checkout has no conversation to open in any
     graph that has one -- and a workflow file should not have to repeat it.
     """
@@ -139,7 +139,7 @@ class LangGraphDefinition:
                     name=self.names.get(node.id) or _name_of(node) or node.id,
                     kind=_kind_of(node),
                     description=_description_of(node),
-                    show_in_sidebar=_shown_in_sidebar(node),
+                    hidden=_hidden(node),
                     always_open=_always_open(node),
                 )
                 for node in drawn.nodes.values()
@@ -193,14 +193,14 @@ def _description_of(node: Any) -> str:
     return str(getattr(_described(node), "graph_node_description", ""))
 
 
-def _shown_in_sidebar(node: Any) -> bool:
-    """Whether a node belongs in a client's list of this run's conversations.
+def _hidden(node: Any) -> bool:
+    """Whether a client should leave this node out of navigation and overviews.
 
-    Shown unless the node says otherwise: a graph this package did not write
+    Not hidden unless the node says so: a graph this package did not write
     says nothing, and leaving its nodes out of the one navigation a person has
     would hide the run from them.
     """
-    return bool(getattr(_described(node), "graph_node_show_in_sidebar", True))
+    return bool(getattr(_described(node), "graph_node_hidden", False))
 
 
 def _always_open(node: Any) -> bool:

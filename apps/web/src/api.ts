@@ -285,9 +285,9 @@ export type ApiGraphTopology = {
     nodeId: string;
     name: string;
     kind: string;
-    /** Whether the rail should offer this node's conversation. Absent means
-     *  shown: a node that says nothing is one a person can go and read. */
-    showInSidebar?: boolean;
+    /** Whether a client should leave this node out of navigation and overviews.
+     *  Absent means shown: a node that says nothing is one a person can go and read. */
+    hidden?: boolean;
   }[];
 };
 

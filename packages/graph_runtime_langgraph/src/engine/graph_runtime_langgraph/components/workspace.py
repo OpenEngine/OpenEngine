@@ -53,7 +53,7 @@ class WorkspaceNode:
     graph_node_name: str = "Workspace"
     graph_node_kind: str = "workspace"
     graph_node_description: str = "Checks the repository out for this run."
-    graph_node_show_in_sidebar: bool = False
+    graph_node_hidden: bool = True
     """Not a conversation, so it is not offered as one.
 
     A checkout says what it did -- the run's page prints the directory, and the
