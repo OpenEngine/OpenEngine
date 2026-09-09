@@ -385,6 +385,18 @@ export function setGraphAutoApprove(
   );
 }
 
+/** Stop a graph run, cancelling whatever its nodes are doing.
+ *
+ *  The graph engine cancels every execution and settles every open request, so
+ *  nothing is left driving the run afterwards. The snapshot comes back as
+ *  `failed` with a cancellation error. */
+export function stopGraphRun(runId: string): Promise<ApiGraphRun> {
+  return api<ApiGraphRun>(
+    `/graph/api/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+}
+
 /** Steer a node's live agent or reopen a node that allows it.
  *
  *  Addressed to the node rather than to the run: a graph may have several

@@ -227,6 +227,13 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
+    async def cancel_run(request: Request) -> JSONResponse:
+        try:
+            run = await runtime.cancel(_run_id(request))
+        except Exception as error:
+            return _refusal(error)
+        return JSONResponse(_snapshot_json(run))
+
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         # Runs outlive the request that started them, so nothing else would stop
@@ -249,6 +256,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             Route("/api/runs/{run_id}/events", run_events),
             Route("/api/runs/{run_id}/steering", steer_run, methods=["POST"]),
             Route("/api/runs/{run_id}/transitions", transition_run, methods=["POST"]),
+            Route("/api/runs/{run_id}/cancel", cancel_run, methods=["POST"]),
             Route(
                 "/api/runs/{run_id}/approvals/{approval_id}",
                 decide_approval,
