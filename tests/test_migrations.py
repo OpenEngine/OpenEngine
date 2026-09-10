@@ -52,7 +52,40 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0006",)
+    assert revision == ("sqlite_0007",)
+
+
+def test_sqlite_upgrade_removes_runs_with_retired_human_review_phase(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "state.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "sqlite_0006")
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO run_states (run_id, state_json) VALUES (?, ?)",
+            (
+                (
+                    "run-current",
+                    '{"run_id":"run-current","phase":"running_agent"}',
+                ),
+                (
+                    "run-retired",
+                    '{"run_id":"run-retired","phase":"awaiting_human_review"}',
+                ),
+                ("run-malformed", "not json"),
+            ),
+        )
+        connection.commit()
+
+    upgrade(url)
+
+    with sqlite3.connect(database) as connection:
+        runs = connection.execute(
+            "SELECT run_id FROM run_states ORDER BY sequence"
+        ).fetchall()
+
+    assert runs == [("run-current",), ("run-malformed",)]
 
 
 def test_message_conversation_index_is_used_after_upgrade(tmp_path: Path) -> None:
