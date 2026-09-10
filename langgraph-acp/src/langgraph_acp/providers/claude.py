@@ -8,7 +8,7 @@ from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
 from langgraph_acp.permissions import ACPPermissionHandler
 
-CLAUDE_ACP_COMMAND = ("npx", "--yes", "@zed-industries/claude-agent-acp")
+CLAUDE_ACP_COMMAND = ("npx", "--yes", "@agentclientprotocol/claude-agent-acp")
 
 
 @dataclass(frozen=True, slots=True)
