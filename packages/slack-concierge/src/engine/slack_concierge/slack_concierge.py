@@ -20,7 +20,7 @@ from .slack_egress import ConciergeBroker
 CreateWorkorder = Callable[[RunOrigin, str, str], Awaitable[tuple[str, str]]]
 Reply = Callable[[RunOrigin, str], Awaitable[None]]
 
-INSTRUCTIONS = """You are OpenEngineBot, a Slack concierge. For a greeting or test
+INSTRUCTIONS = """You are OpenEngineBot, a conversation concierge. For a greeting or test
 message respond 'Hi, how can I help?'. Only when the user requests work, use
 create_workorder with their task. The repository is chosen automatically.
 Do not claim work started unless the tool succeeds. Work-order progress and its
@@ -34,6 +34,7 @@ class IncomingMessage:
     origin: RunOrigin
     text: str
     message_ts: str = ""
+    repository: str = ""
 
 
 class ConversationState(TypedDict):
@@ -122,7 +123,8 @@ class SlackConcierge:
                 async def create(repository: str, prompt: str) -> tuple[str, str]:
                     return await self.create_workorder(message.origin, repository, prompt)
                 broker = await opened.enter_async_context(ConciergeBroker(
-                    create_workorder=create, default_repository=self.default_repository))
+                    create_workorder=create,
+                    default_repository=message.repository or self.default_repository))
                 client = await self.provider.connect()
                 opened.push_async_callback(client.close)
                 session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])

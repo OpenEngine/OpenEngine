@@ -211,7 +211,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None, github_webhook_secret=""):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -245,6 +245,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         concierge_provider=provider or FakeACPProvider(),
         graph_runtime=graph_runtime,
         github_comment_handler=github_comment_handler,
+        github_webhook_secret=github_webhook_secret,
     ), capabilities, slack_store
 
 def _mention_graph():
@@ -264,13 +265,11 @@ def _github_event_route(app) -> bool:
     return any(getattr(r, "path", None) == "/api/github/events" for r in app.routes)
 
 
-def test_the_github_webhook_route_is_absent_until_something_answers_it(tmp_path):
-    """An endpoint that accepts a delivery it can never act on is a trap: a
-    webhook pointed at it collects failed deliveries until GitHub disables it."""
+def test_the_github_webhook_route_is_mounted_with_the_default_concierge(tmp_path):
     app, _capabilities, _slack_store = _app(
         tmp_path, RecordingCommunications(), WorkOrdersConfig()
     )
-    assert not _github_event_route(app)
+    assert _github_event_route(app)
 
 
 def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
@@ -282,6 +281,72 @@ def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
         github_comment_handler=handle,
     )
     assert _github_event_route(app)
+
+
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+def test_github_comments_drive_concierge_and_create_workorders(tmp_path, monkeypatch, event):
+    from starlette.testclient import TestClient
+    from engine.runtime import WorkflowExecutor
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    monkeypatch.setattr(WorkflowExecutor, "start", AsyncMock())
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1", runner="default"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+    )
+
+    def deliver(client, comment_id, text):
+        payload = _issue_comment(comment_id, text)
+        if event == "pull_request_review_comment":
+            payload["pull_request"] = payload.pop("issue")
+            if comment_id != 1:
+                payload["comment"]["in_reply_to_id"] = 1
+        body = json.dumps(payload).encode()
+        return client.post("/api/github/events", content=body,
+                           headers=dict(github_signed(body), **{"x-github-event": event}))
+
+    with TestClient(app) as client:
+        assert deliver(client, 1, "hello").status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert deliver(client, 2, "new workorder please").status_code == 200
+        assert deliver(client, 2, "new workorder please").status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        assert runs[0].repository == "https://github.com/acme/api.git"
+        thread = "7/review/1" if event == "pull_request_review_comment" else "7"
+        assert runs[0].origin == RunOrigin("github:acme/api", thread, "someone")
+        assert len(provider.clients) == 1
+        assert len(provider.clients[0].prompts) == 2
+        assert not provider.clients[0].result.get("isError")
+    assert provider.clients[0].closed
+    assert communications.posts[0][1].text == provider.text
+    assert all((channel, thread_id) == ("github:acme/api", thread)
+               for channel, _, thread_id in communications.posts)
+
+
+def test_failed_github_concierge_turn_can_be_redelivered(tmp_path):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    provider = FakeACPProvider(fail=True)
+    communications = RecordingCommunications()
+    app, _, _ = _app(tmp_path, communications, WorkOrdersConfig(),
+                     provider=provider, github_webhook_secret=SIGNING_SECRET)
+    body = json.dumps(_issue_comment()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issue_comment"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert not communications.posts
+        assert provider.clients[0].closed
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert len(communications.posts) == 1
+    assert all(c.closed for c in provider.clients)
 
 
 def _workflow_catalog():

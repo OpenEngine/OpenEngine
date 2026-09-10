@@ -15,7 +15,7 @@ later transitions without polling the transcript.
 
 from __future__ import annotations
 
-from engine.slack_concierge import SlackConcierge, SlackIngress
+from engine.slack_concierge import IncomingMessage, SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
 from langgraph_acp.agent import ACPAgentProvider
 from langgraph_acp.providers import CodexACPProvider
@@ -2459,15 +2459,26 @@ def create_app(
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
         react=_slack_comms.add_reaction,
     )
-    # GitHub comments arrive on their own signed route, answered by whatever is
-    # passed in. The route is only mounted when something is: an endpoint that
-    # could accept a delivery but never act on it is a trap, because a webhook
-    # pointed at it collects failed deliveries until GitHub disables the hook.
+    async def github_concierge_turn(comment: GithubComment) -> None:
+        # Issue and PR conversation comments share a thread; inline reviews
+        # have their own thread, identified by the root review comment.
+        thread_id = str(comment.number)
+        if comment.event == "pull_request_review_comment":
+            thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
+        await slack_concierge.handle(IncomingMessage(
+            origin=RunOrigin(
+                channel=f"github:{comment.repository}", thread_id=thread_id,
+                author=comment.author,
+            ),
+            text=comment.body, message_ts=comment.comment_id,
+            repository=f"https://github.com/{comment.repository}.git",
+        ))
+
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         self_login=lambda: github_bot_login,
-        handle=github_comment_handler,
+        handle=github_comment_handler or github_concierge_turn,
     )
 
     def _mentioned_workflow() -> GraphWorkflow | None:
@@ -2604,10 +2615,7 @@ def create_app(
             methods=["POST"],
         ),
     ]
-    if github_comment_handler is not None:
-        routes.append(
-            Route("/api/github/events", github_ingress.webhook, methods=["POST"])
-        )
+    routes.append(Route("/api/github/events", github_ingress.webhook, methods=["POST"]))
     if static_directory is not None and (static_directory / "index.html").is_file():
 
         async def spa_page(_request: Request) -> Response:
