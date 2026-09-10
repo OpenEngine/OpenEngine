@@ -64,7 +64,8 @@ class SlackConcierge:
 
     def __init__(self, *, provider: ACPAgentProvider, create_workorder: CreateWorkorder,
                  reply: Reply, default_repository: str = "", max_threads: int = 32,
-                 timeout_seconds: float = 180) -> None:
+                 timeout_seconds: float = 180,
+                 turn_finished: Callable[[RunOrigin], Awaitable[None]] | None = None) -> None:
         if max_threads < 1:
             raise ValueError("max_threads must be positive")
         self.provider = provider
@@ -73,6 +74,7 @@ class SlackConcierge:
         self.default_repository = default_repository
         self.max_threads = max_threads
         self.timeout_seconds = timeout_seconds
+        self.turn_finished = turn_finished
         self._threads: OrderedDict[tuple[str, str], tuple[AsyncExitStack, ACPSession]] = OrderedDict()
         self._lock = asyncio.Lock()
         self.graph = build_graph(self._turn, self._reply)
@@ -103,6 +105,9 @@ class SlackConcierge:
             except BaseException:
                 await self._forget(key)
                 raise
+            finally:
+                if self.turn_finished is not None:
+                    await self.turn_finished(message.origin)
 
     async def _turn(self, state: ConversationState) -> dict[str, str]:
         message = state["message"]

@@ -1904,6 +1904,7 @@ def create_app(
         workstream_id: WorkstreamId | None = None,
         milestone_id: MilestoneId | None = None,
         origin: RunOrigin | None = None,
+        ready: asyncio.Event | None = None,
     ) -> RunState:
         """Record a step WorkOrder and start driving it, whoever asked for it.
 
@@ -1936,9 +1937,15 @@ def create_app(
         )
         await session.state_store.save(state)
         await session.state_store.append_events(run_id, (event,))
+
+        async def drive() -> None:
+            if ready is not None:
+                await ready.wait()
+            await workflow_executor.start(event, runner_name)
+
         track_workflow(
             run_id,
-            asyncio.create_task(workflow_executor.start(event, runner_name)),
+            asyncio.create_task(drive()),
         )
         return state
 
@@ -2849,13 +2856,22 @@ def create_app(
         _slack_redirect_uri = None
         return Response(status_code=204)
 
-    _pending_announcements: list[tuple[RunOrigin, CommunicationsMessage, RunState]] = []
+    _pending_announcements: list[tuple[RunOrigin, CommunicationsMessage, RunState, asyncio.Event]] = []
 
     async def concierge_reply(origin: RunOrigin, text: str) -> None:
         await run_notifier.post(origin, CommunicationsMessage(text, mention=origin.author))
-        while _pending_announcements:
-            ann_origin, ann_msg, ann_state = _pending_announcements.pop(0)
-            await run_notifier.post(ann_origin, ann_msg, ann_state)
+
+    async def concierge_turn_finished(origin: RunOrigin) -> None:
+        for pending in list(_pending_announcements):
+            ann_origin, ann_msg, ann_state, ready = pending
+            if (ann_origin.channel, ann_origin.thread_id) != (origin.channel, origin.thread_id):
+                continue
+            _pending_announcements.remove(pending)
+            try:
+                await run_notifier.post(ann_origin, ann_msg, ann_state)
+            finally:
+                # A failed reply or announcement must not strand an accepted run.
+                ready.set()
 
     async def concierge_create_workorder(
         origin: RunOrigin, repository: str, prompt: str,
@@ -2866,10 +2882,11 @@ def create_app(
         runner_name = work_orders.runner or workflow_executor.default_runner
         if runner_name not in workflow_executor.runners:
             raise RuntimeError(f"unknown runner: {runner_name}")
+        ready = asyncio.Event()
         state = await start_step_run(
             prompt=prompt, repository=repository,
             workflow_id=definition.workflow_id, definition=definition,
-            runner_name=runner_name, origin=origin,
+            runner_name=runner_name, origin=origin, ready=ready,
         )
         link = run_notifier.work_order_link(state)
         _pending_announcements.append((
@@ -2878,7 +2895,7 @@ def create_app(
                 f"Started a work order on `{repository}`. I will report progress here.",
                 (link,) if link else (), mention=origin.author,
             ),
-            state,
+            state, ready,
         ))
         return link.url if link else "", str(state.run_id)
 
@@ -2886,6 +2903,7 @@ def create_app(
         provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
+        turn_finished=concierge_turn_finished,
     )
     _slack_comms = SlackCommunications(_slack_store)
     slack_ingress = SlackIngress(
