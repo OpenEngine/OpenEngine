@@ -1205,6 +1205,55 @@ def create_app(
                 ),
             )
 
+    pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
+    graph_notification_lock = asyncio.Lock()
+
+    async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
+        """Report lifecycle events without making delivery failure fail the graph."""
+        text = ""
+        mention = False
+        if state.origin is None:
+            return
+        topology = (
+            surface.runtime.topology(GraphId(str(state.workflow_id)))
+            if surface.runtime else None
+        )
+        node = topology.node(event.node_id) if topology and event.node_id else None
+        label = node.name if node else str(event.node_id or "Workflow")
+        if event.kind is EventKind.NODE_STARTED:
+            text = f"*{label}* started."
+        elif event.kind is EventKind.APPROVAL_REQUESTED:
+            if event.payload.get("toolName") == "human_review":
+                text = "Review complete and ready for your decision."
+            else:
+                text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
+            mention = True
+        elif event.kind is EventKind.RUN_FAILED:
+            text = f"Work order failed: {event.payload.get('error', 'Unknown error')}"
+            mention = True
+        elif event.kind is EventKind.RUN_FINISHED:
+            text = "Work order finished."
+        if text:
+            link = run_notifier.work_order_link(state)
+            await run_notifier.announce(
+                state, text, links=(link,) if link else (), mention=mention,
+            )
+
+    async def graph_notifications(event: RuntimeEvent) -> None:
+        if event.kind not in (
+            EventKind.NODE_STARTED, EventKind.APPROVAL_REQUESTED,
+            EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
+        ):
+            return
+        async with graph_notification_lock:
+            state = await session.state_store.load(event.run_id)
+            if state is None:
+                pending_graph_notifications.setdefault(event.run_id, []).append(event)
+                return
+            for pending in pending_graph_notifications.pop(event.run_id, []):
+                await notify_graph_event(state, pending)
+            await notify_graph_event(state, event)
+
     async def graph_event(event: RuntimeEvent) -> None:
         """Everything the graph engine says, kept where two readers can see it.
 
@@ -1219,6 +1268,7 @@ def create_app(
         positions inside the graph, and a row has nowhere to put it.
         """
         await graph_events.append(event)
+        await graph_notifications(event)
         phase = GRAPH_EVENT_PHASES.get(event.kind)
         name = _graph_workorder_name(event.payload.get("values"))
         if phase is None and not name:
@@ -1802,6 +1852,10 @@ def create_app(
             origin=origin,
         )
         await session.state_store.save(state)
+        # Nodes may publish before start() returns and before the origin exists.
+        async with graph_notification_lock:
+            for event in pending_graph_notifications.pop(state.run_id, []):
+                await notify_graph_event(state, event)
         # A very short run can be over before the row above exists, and the
         # ending it announced would then have had nothing to land on -- leaving
         # a WorkOrder that claims to be working forever. So the engine is asked
