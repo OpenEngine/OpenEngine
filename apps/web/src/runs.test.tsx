@@ -640,6 +640,33 @@ describe("RunDetailPage", () => {
     expect(screen.getByText("Implementation review (codex)")).toBeVisible();
   });
 
+  it("says a beta WorkOrder cannot be loaded once its workflow is gone", async () => {
+    // A WorkOrder outlives the workflow it ran. Once that workflow has been
+    // renamed or withdrawn there is no graph to draw its stages from, and the
+    // page has to say so rather than throw the whole WorkOrder away over a 404
+    // or read as one that never started.
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      workflowName: "implementation-review-codex",
+      workflowVersion: "",
+      currentStepId: null,
+      steps: [],
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/api/runs/run-1/graph-events") return json({ events: [] });
+      // Both graph reads answer the same way: no such graph.
+      return json({ error: "graph not found" }, { status: 404 });
+    }));
+
+    render(<RunDetailPage runId="run-1" />);
+
+    expect(await screen.findByText(/no longer has/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: graphRun.name })).toBeVisible();
+    expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
+  });
+
   it("opens a beta conversation before its first transcript arrives", async () => {
     const graphRun = run({
       workflowId: "implementation-review-codex",

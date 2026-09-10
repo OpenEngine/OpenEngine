@@ -4992,12 +4992,30 @@ def _graph_app(
     and no repository is checked out.
     """
     runtime = ScriptedGraphRuntime(*graphs)
+    return (
+        _graph_app_over(store, runtime, *graphs, approval_policy=approval_policy),
+        runtime,
+    )
+
+
+def _graph_app_over(
+    store: InMemoryStateStore,
+    runtime: ScriptedGraphRuntime,
+    *graphs: ScriptedGraph,
+    approval_policy: ApprovalConfig = ApprovalConfig(),
+):
+    """A web app over an engine that already exists, so a restart can be one.
+
+    The lifespan is what picks graph WorkOrders back up, and a context manager
+    is entered once -- so "the server was restarted" is a second app over the
+    same store and the same engine, rather than the same app opened twice.
+    """
 
     @asynccontextmanager
     async def running(_app=None):
         yield runtime
 
-    app = _workflow_app(
+    return _workflow_app(
         store,
         ConcurrentRunner(),
         # The catalog a repository holding both kinds produces: one startable
@@ -5008,7 +5026,6 @@ def _graph_app(
         graph_runtime=running(),
         approval_policy=approval_policy,
     )
-    return app, runtime
 
 
 def _catalog_definition() -> WorkflowDefinition:
@@ -5402,6 +5419,122 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> 
     assert deleted.status_code == 204
     assert asyncio.run(store.load(stranded.run_id)) is None
     assert driving == []
+
+
+def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads() -> None:
+    """A WorkOrder outlives the workflow it ran, and the pages have to cope.
+
+    Renaming a graph -- what #367 did to this one -- or taking it out of the
+    workflow directory leaves rows behind whose graph nothing can describe. The
+    list is every WorkOrder there is, so a refusal let out of one row would take
+    the whole page down, and the transcript is recorded against the run rather
+    than against the graph, so it is still there to be read.
+
+    The engine's own surface says the same thing with a 404: "there is no such
+    graph" is an answer, and it used to be a `KeyError` on the way out.
+    """
+    store = InMemoryStateStore()
+    waiting = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
+    )
+    app, runtime = _graph_app(store, waiting)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                # Waited for rather than assumed: the node is scripted to say
+                # something and then stop, and withdrawing the graph before it
+                # had spoken would test a transcript that was never recorded.
+                for _ in range(200):
+                    feed = await client.get(f"/api/runs/{run_id}/graph-events")
+                    if any(
+                        one["type"] == "transcript" for one in feed.json()["events"]
+                    ):
+                        break
+                    await asyncio.sleep(0.01)
+                # The deployment stops defining the graph, with the run of it
+                # left exactly where it was.
+                runtime.withdraw(GraphId("implementation-review-codex"))
+                return (
+                    await client.get("/api/runs"),
+                    await client.get(f"/api/runs/{run_id}"),
+                    await client.get(f"/api/runs/{run_id}/graph-events"),
+                    await client.get(f"/graph/api/runs/{run_id}"),
+                    await client.get("/graph/api/graphs/implementation-review-codex"),
+                )
+
+    listed, detail, events, snapshot, described = asyncio.run(scenario())
+
+    assert listed.status_code == 200
+    assert [one["workflowId"] for one in listed.json()["runs"]] == [
+        "implementation-review-codex"
+    ]
+    # Listed without a frontier rather than not listed: nothing can say where
+    # the run got to, and that is not a reason to hide it.
+    assert "graphProgress" not in listed.json()["runs"][0]
+    assert detail.status_code == 200
+    # What the run said is still readable, which is the difference between an
+    # old WorkOrder being openable and being a dead link.
+    assert events.status_code == 200
+    assert [one["type"] for one in events.json()["events"]].count("transcript") == 1
+    assert snapshot.status_code == 404
+    assert described.status_code == 404
+
+
+def test_a_restart_fails_a_work_order_whose_workflow_is_gone() -> None:
+    """The row is told, rather than left claiming an agent is working on it.
+
+    Nothing can pick this run back up -- there is no graph to run it -- so the
+    honest ending is a failure naming the workflow that went missing. Left
+    alone it would sit at "working" for as long as the deployment lives.
+    """
+    store = InMemoryStateStore()
+    waiting = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
+    )
+    app, runtime = _graph_app(store, waiting)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Add cancellation handling.",
+                        "repository": "acme/api",
+                    },
+                )
+                run_id = RunId(created.json()["runId"])
+                while not runtime.running():
+                    await asyncio.sleep(0)
+        runtime.withdraw(GraphId("implementation-review-codex"))
+        restarted = _graph_app_over(store, runtime)
+        transport = httpx.ASGITransport(app=restarted)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with restarted.router.lifespan_context(restarted):
+                return await client.get(f"/api/runs/{run_id}")
+
+    detail = asyncio.run(scenario()).json()
+
+    assert detail["phase"] == "failed"
+    assert "implementation-review-codex" in detail["failureReason"]
+    assert "no longer available" in detail["failureReason"]
 
 
 def test_the_graph_engine_answers_under_its_own_prefix() -> None:

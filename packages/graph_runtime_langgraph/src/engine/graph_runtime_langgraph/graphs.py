@@ -106,6 +106,17 @@ class LangGraphDefinition:
     names: dict[str, str] = field(default_factory=dict)
     """Display names per node id, overriding what a node calls itself."""
 
+    previous_ids: tuple[GraphId, ...] = ()
+    """Ids this graph used to be called, still answered to.
+
+    A run remembers the id it was started under, and nothing rewrites it: the
+    graph engine's record of a run is the durable half, and a deployment that
+    renamed a graph would otherwise have every WorkOrder started before the
+    rename pointing at a graph nobody has any more. Naming the old ids here is
+    what keeps those runs readable -- their state, their topology and their
+    transcripts -- rather than turning them into rows that cannot be opened.
+    """
+
     def __post_init__(self) -> None:
         if getattr(self.graph, "checkpointer", None) is None:
             raise ValueError(

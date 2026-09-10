@@ -129,6 +129,7 @@ from engine.graph_runtime import (
     GraphWorkflow,
     RunStatus,
     RuntimeEvent,
+    UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
 from engine.ports import (
@@ -1083,6 +1084,24 @@ def create_app(
     # server starts so that the observer below can be written once.
     graph_events = EventLog()
 
+    def graph_run(state: RunState) -> bool:
+        """Whether the graph engine, rather than the step executor, owns this row.
+
+        Asked of the row rather than of the graphs on offer, because a graph
+        can be renamed or withdrawn and the WorkOrders of it stay: a run that
+        checked the offered list would stop being recognised as a graph run the
+        moment its workflow left, and would then be restarted, refused a
+        transcript and left claiming to be working by the code below.
+
+        A step run always has its definition -- snapshotted on the row when it
+        was created, and in the catalog while the deployment still offers it --
+        and a graph run never does, so that absence is the tell.
+        """
+        return (
+            state.workflow_definition is None
+            and catalog.get(state.workflow_id) is None
+        )
+
     def offered_graphs() -> Mapping[str, GraphWorkflow]:
         """The `[BETA]` entries a person may pick, right now.
 
@@ -1192,7 +1211,7 @@ def create_app(
                 # no steps to pick back up, and looking for a step list a graph
                 # does not have would fail a run that is perfectly healthy.
                 # `restore_graph_runs` is the one that picks these up.
-                or str(state.workflow_id) in graph_workflows
+                or graph_run(state)
             ):
                 continue
             runner_name = await workflow_runner_for(state)
@@ -1312,12 +1331,30 @@ def create_app(
         A run the engine has never heard of is one whose state was deleted from
         under it. It cannot be recovered and cannot be waited for, so the row is
         failed with a reason rather than left claiming to be working.
+
+        So is a run of a workflow this deployment no longer has -- withdrawn,
+        or renamed without retiring the id it had. Nothing can pick that one up
+        either, and a row left mid-flight would say an agent is working on it
+        forever, so it is failed saying which workflow went missing.
         """
         for state in await session.state_store.list_runs():
-            if state.is_terminal or str(state.workflow_id) not in graph_workflows:
+            if state.is_terminal or not graph_run(state):
                 continue
             try:
-                snapshot = await runtime.snapshot(state.run_id)
+                try:
+                    snapshot = await runtime.snapshot(state.run_id)
+                except UnknownGraphError:
+                    await session.state_store.save(
+                        replace(
+                            state,
+                            phase=RunPhase.FAILED,
+                            failure_reason=(
+                                "the workflow this WorkOrder ran, "
+                                f"{state.workflow_id}, is no longer available"
+                            ),
+                        )
+                    )
+                    continue
                 if snapshot is None:
                     await session.state_store.save(
                         replace(
@@ -1634,7 +1671,14 @@ def create_app(
                 and run.phase not in {"succeeded", "failed"}
                 and surface.runtime is not None
             ):
-                snapshot = await surface.runtime.snapshot(run.run_id)
+                # A row of a workflow this deployment no longer has cannot
+                # report a frontier, and the list is every WorkOrder there is:
+                # letting that refusal out would take the whole page down over
+                # one old row, rather than showing it without its progress.
+                try:
+                    snapshot = await surface.runtime.snapshot(run.run_id)
+                except UnknownGraphError:
+                    snapshot = None
                 if snapshot is not None:
                     row["graphProgress"] = {
                         "activeNodeIds": list(
@@ -2052,7 +2096,7 @@ def create_app(
         state = await session.state_store.load(run_id)
         if state is None:
             return _error("run not found", 404)
-        if str(state.workflow_id) in graph_workflows:
+        if graph_run(state):
             await cancel_graph_run(run_id)
         if state.current_agent_run_id is not None:
             await service.approvals.cancel_run(state.current_agent_run_id)
@@ -2102,12 +2146,17 @@ def create_app(
         The graph control surface deliberately exposes a live event stream. The
         WorkOrder page also needs a finite snapshot when it opens after an
         agent has finished, so serve the same recorded events as JSON here.
+
+        Answered for any graph WorkOrder, including one whose workflow this
+        deployment no longer has: what a run said is recorded against the run,
+        not against the graph, so a withdrawn or renamed workflow takes away
+        the ability to draw the graph and not the transcripts underneath it.
         """
         run_id = RunId(request.path_params["run_id"])
         state = await session.state_store.load(run_id)
         if state is None:
             return _error("run not found", 404)
-        if str(state.workflow_id) not in graph_workflows:
+        if not graph_run(state):
             return _error("run is not a graph WorkOrder", 409)
         return JSONResponse(
             {

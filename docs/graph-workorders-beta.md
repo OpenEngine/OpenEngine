@@ -174,6 +174,35 @@ Then this deployment's `workflows` directory holds no graph workflows, so no
 graph engine was started and there is nothing to offer. That is deliberate: an
 entry nobody could start is worse than no entry at all.
 
+## Renaming a workflow
+
+A WorkOrder remembers the id it was started under, and nothing rewrites it. So
+changing a graph's `id` orphans every run made before the change: no graph to
+describe it, no state to read, and a row that cannot be opened.
+
+List the old ids in `previous_ids` instead of dropping them:
+
+```python
+graph_workflow(
+    pipeline(...),
+    id="implementation-review-rerank",
+    name="Implementation review rerank",
+    previous_ids=("implementation-review-codex", "implementation-review-claude"),
+)
+```
+
+The engine then answers for those ids as well as the current one, so older
+WorkOrders keep their stages, their state and their transcripts. New runs are
+started under the current id only; a retired id another graph now claims is
+ignored rather than allowed to shadow it.
+
+A workflow that leaves the directory without being retired this way is not an
+error. Its WorkOrders stay in the list and their transcripts stay readable --
+served under `/api/runs/{run}/graph-events`, which is recorded against the run
+rather than the graph -- and the WorkOrder page says the workflow is no longer
+available instead of drawing stages it cannot read. An unfinished one is failed
+with that reason on the next restart, because nothing can pick it back up.
+
 ## Declaring inputs in a workflow
 
 Pass `inputs` to either spelling of `graph_workflow`. Each `WorkflowInput`

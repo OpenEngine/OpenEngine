@@ -99,8 +99,17 @@ class RunReader:
         # because a graph is not made of steps. Without this its rows would be
         # labelled with its id, which is the sort of thing that makes a list
         # look broken.
+        #
+        # Ids a graph has retired are named here too, so a WorkOrder started
+        # before its workflow was renamed reads as the workflow it ran rather
+        # than as the id nothing answers to any more.
         self._graph_names = {
-            str(graph.graph_id): graph.name for graph in self._catalog.graphs
+            str(identifier): graph.name
+            for graph in self._catalog.graphs
+            for identifier in (
+                *getattr(graph, "previous_ids", ()),
+                graph.graph_id,
+            )
         }
 
     async def list(self) -> tuple[WorkflowRunView, ...]:

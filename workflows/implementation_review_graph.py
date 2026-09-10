@@ -367,6 +367,10 @@ def pipeline(
 
 #: Runner choices for the implementation and review stages.
 RUNNER_CHOICES = ("codex", "claude")
+#: What this workflow was called when the runner was part of its id, before the
+#: stages became creation inputs. WorkOrders started then remember one of these,
+#: so they are retired rather than dropped and go on opening as this workflow.
+PREVIOUS_IDS = ("implementation-review-codex", "implementation-review-claude")
 # The loader rebuilds one default graph with deployment session configuration.
 RUNNERS = ("codex",)
 
@@ -388,6 +392,7 @@ def graph_for(
         ),
         id="implementation-review-rerank",
         name="Implementation review rerank",
+        previous_ids=PREVIOUS_IDS,
         inputs=(
             WorkflowInput(
                 "implementation_runner", "Implementation runner",
