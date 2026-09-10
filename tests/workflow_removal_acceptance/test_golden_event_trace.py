@@ -22,10 +22,10 @@ from engine.domain import (
     WorkspaceId,
     WorkspaceProvisioned,
 )
-from engine.runtime import load_workflow_catalog, resolve_default_branch
+from engine.runtime import resolve_default_branch
+from legacy_workflow import catalog
 
 
-ROOT = Path(__file__).parents[2]
 pytestmark = pytest.mark.workflow_removal_acceptance
 GOLDEN = Path(__file__).parent / "fixtures" / "implementation_review_trace.json"
 WORKFLOW_ID = WorkflowId("implementation-review-v1")
@@ -179,7 +179,7 @@ def test_repository_workflow_matches_pre_dsl_golden_event_trace() -> None:
     golden = json.loads(GOLDEN.read_text())
     assert golden["generated_from"] == "d15456f"
     definition = resolve_default_branch(
-        load_workflow_catalog(ROOT / "workflows").require(WORKFLOW_ID), "main"
+        catalog.require(WORKFLOW_ID), "main"
     )
     actual = []
     for name, events in _trace_scenarios().items():

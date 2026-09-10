@@ -54,7 +54,7 @@ from engine.ports import (
     ApprovalRequest,
     McpServerConfig,
 )
-from engine.runtime import AgentSession, Capabilities, load_workflow_catalog
+from engine.runtime import AgentSession, Capabilities
 from engine.runtime.step_results import (
     INVALID_COMPLETION_ERROR,
     step_completed_from_arguments,
@@ -75,12 +75,8 @@ from provider_fakes import (
 
 _IDENTITY = ("-c", "user.name=Engine Tests", "-c", "user.email=engine@example.test")
 
-#: This checkout's workflows, passed to every app these tests build. Named
-#: rather than left to `create_app`'s fallback, which reads `$ENGINE_CONFIG`
-#: before `./engine.toml`: with that variable pointing at another checkout --
-#: which a worktree setup does readily -- the app would run *those* definitions
-#: while the assertions below describe these ones.
-CATALOG = load_workflow_catalog(Path(__file__).parents[1] / "workflows")
+# Exercise the retained v1 implementation explicitly.
+from legacy_workflow import catalog as CATALOG
 
 #: Read off the checked-in definition rather than restated here: what these
 #: tests are about is that naming asks the task and this prompt together, not

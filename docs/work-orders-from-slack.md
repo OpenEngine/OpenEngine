@@ -2,7 +2,7 @@
 
 Mention `@OpenEngineBot` to open a conversation. A greeting or test message gets
 “Hi, how can I help?”. Ask for a new work order in that thread and the concierge
-uses its `create_workorder` tool. The host starts the configured step workflow,
+uses its `create_workorder` tool. The host starts the configured workflow,
 posts its UI link, and reports progress in the same thread.
 
 ## Setup and diagnosis
@@ -29,11 +29,10 @@ public_url = "https://engine.example"
 
 [work_orders]
 repository = "."                        # local checkout path; defaults to "."
-workflow = "implementation-review-v1"   # optional if exactly one is installed
-runner = "claude"                       # work-order executor, not concierge
+workflow = "implementation-review-codex"   # optional if exactly one is installed
 ```
 
-A greeting needs no work-order configuration. Creating work requires a resolvable step workflow. The repository is a local
+A greeting needs no work-order configuration. Creating work requires a resolvable workflow. The repository is a local
 checkout path, not a GitHub owner/name, and cannot be supplied by the agent. Missing configuration becomes a tool error so the
 concierge can explain what is needed.
 
@@ -56,7 +55,8 @@ concierge can explain what is needed.
   file and advertises a fixed supported MCP protocol version.
 
 The web composition supplies the work-order callback and thread reply callback.
-It reuses `start_step_run` and `RunNotifier` for execution, links, and progress.
+It uses the graph or step start path and `RunNotifier` for links and announcements.
+Graph workflows select their own runner; `work_orders.runner` applies to step workflows.
 The concierge no longer shares `AgentSession` state or appears as a chat profile.
 
 Conversations and delivery deduplication are process-local. The concierge keeps

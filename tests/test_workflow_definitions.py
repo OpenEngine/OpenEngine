@@ -365,8 +365,7 @@ workflow = oe.workflow(
 
 
 def test_checked_in_definition_is_the_implementation_review_source_of_truth() -> None:
-    root = Path(__file__).parents[1]
-    loaded = load_workflow_catalog(root / "workflows")
+    from legacy_workflow import catalog as loaded
     definition = loaded.require(WorkflowId("implementation-review-v1"))
     implementation, review, human = definition.steps
 

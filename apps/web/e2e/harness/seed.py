@@ -1,7 +1,7 @@
 """Create the browser suite's already-populated SQLite database.
 
 The fixture is data, not alternate application behaviour: it uses the real
-SQLite state-store API and the repository's current workflow definition.  The
+SQLite state-store API and the retained v1 workflow definition.  The
 web server opens the completed file in a separate process afterwards, which is
 the restart/cold-start path this fixture exists to cover.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
+from runpy import run_path
 
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.domain import (
@@ -32,7 +33,6 @@ from engine.domain import (
     StepOutput,
     TaskId,
 )
-from engine.runtime import load_workflow_catalog
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -79,10 +79,9 @@ async def _seed_chat(store: SQLiteStateStore) -> None:
 
 
 async def _seed_workflow(store: SQLiteStateStore, repository: str) -> None:
-    catalog = load_workflow_catalog(REPO_ROOT / "workflows")
-    if len(catalog) != 1:
-        raise ValueError("the browser seed expects exactly one repository workflow")
-    definition = next(iter(catalog))
+    definition = run_path(
+        str(REPO_ROOT / "tests" / "legacy_workflow.py")
+    )["workflow"]
     implementation = StepCompleted(
         run_id=RUN_ID,
         step_id=StepId("implementation"),

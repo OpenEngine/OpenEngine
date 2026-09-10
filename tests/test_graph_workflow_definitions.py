@@ -46,7 +46,6 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 #: Started by every composition root under test, and by the interface.
 CONFIG = Path(__file__).resolve().parents[1] / "engine.toml"
 
-STARTABLE = "implementation-review-v1"
 GRAPHS = ("implementation-review-codex", "implementation-review-claude")
 
 
@@ -103,6 +102,9 @@ def nodes_of(builder) -> dict[str, object]:
 
 
 def test_the_repository_offers_the_same_workflow_on_either_engine() -> None:
+    from engine.runtime import load_engine_config
+
+    assert load_engine_config(CONFIG).config.work_orders.workflow == GRAPHS[0]
     loaded = catalog()
 
     assert [str(one.graph_id) for one in loaded.graphs] == list(GRAPHS)
@@ -335,8 +337,9 @@ def test_a_graph_workflow_is_not_one_of_the_step_workflows() -> None:
     """
     loaded = catalog()
 
-    assert [str(one.workflow_id) for one in loaded] == [STARTABLE]
-    assert len(loaded) == 1
+    assert list(loaded) == []
+    assert len(loaded) == 0
+    assert WorkflowId("implementation-review-v1") not in loaded
     for graph_id in GRAPHS:
         assert WorkflowId(graph_id) not in loaded
         assert loaded.get(WorkflowId(graph_id)) is None
@@ -347,8 +350,7 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
 ) -> None:
     """The dropdown itself, through the endpoint the client reads it from.
 
-    Both kinds, in one list: the step workflow as it always read, and the two
-    graphs after it wearing `[BETA]`. The prefix is the warning that these are
+    The two graphs wear `[BETA]`. The prefix is the warning that these are
     new -- picking one runs it on the graph engine, which this deployment
     starts because its workflow directory holds graphs.
 
@@ -373,7 +375,7 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
 
     offered = asyncio.run(ask())["workflows"]
 
-    assert [one["id"] for one in offered] == [STARTABLE, *GRAPHS]
+    assert [one["id"] for one in offered] == list(GRAPHS)
     assert [one["name"] for one in offered if one["id"] in GRAPHS] == [
         "[BETA] Implementation review (codex)",
         "[BETA] Implementation review (claude)",

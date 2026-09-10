@@ -2,7 +2,10 @@
 
 Status: implemented for `apps/web`
 
-There are now two kinds of workflow you can pick when you create a WorkOrder.
+Engine supports two kinds of workflow. This deployment offers the graph variants
+Implementation review (codex) and Implementation review (claude). The legacy v1
+definition is retained in `workflows/_implementation_review.py`, whose private
+filename excludes it from discovery. New Slack work orders default to the Codex variant.
 This page explains what the second kind is, what happens when you pick it, and
 what it cannot do yet — no background in the codebase assumed.
 
@@ -14,7 +17,7 @@ is what this deployment knows how to run.
 - **A step workflow** is a list: do this, then that, then ask a person. The
   part of OpenEngine that has been running for months reads the list and works
   through it. These appear in the dropdown with a version next to them, like
-  `Implementation review · v1`.
+  `Example · v1`.
 - **A graph workflow** is a drawing: boxes with arrows between them. A
   different engine — LangGraph — runs those. These appear in the dropdown with
   `[BETA]` in front of their name and no version.

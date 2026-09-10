@@ -34,14 +34,15 @@ from engine.adapters.workspace_provider.git_worktree import (  # noqa: E402
     GitWorktreeWorkspaceProvider,
 )
 from engine.graph_runtime_langgraph import agent_registry  # noqa: E402
-from engine.runtime import WorkflowCatalog, load_workflow_catalog  # noqa: E402
+from engine.runtime import WorkflowCatalog  # noqa: E402
 from implementation_review_graph import RUNNERS, graph_for  # noqa: E402
 from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider  # noqa: E402
 from provider_fakes import fake_acp  # noqa: E402
+from legacy_workflow import workflow as legacy_workflow  # noqa: E402
 
 
 def scripted_catalog(workspace_root: str, binaries: Path) -> WorkflowCatalog:
-    """Every workflow this repository ships, ready to run against fakes.
+    """Graph workflows and the retained v1 fixture, ready to run against fakes.
 
     The step workflows are loaded as they are -- their agents are CLIs, and a
     server composed for a test is already running fake ones. Only the graphs
@@ -54,9 +55,8 @@ def scripted_catalog(workspace_root: str, binaries: Path) -> WorkflowCatalog:
             ClaudeACPProvider(name="claude", command=[agent]),
         ]
     )
-    loaded = load_workflow_catalog(_ROOT / "workflows")
     return WorkflowCatalog.from_definitions(
-        tuple(loaded),
+        (legacy_workflow,),
         tuple(
             graph_for(
                 runner,

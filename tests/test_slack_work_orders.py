@@ -213,7 +213,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -247,6 +247,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         work_orders=work_orders,
         credential_store=MagicMock(),
         concierge_provider=provider or FakeACPProvider(),
+        graph_runtime=graph_runtime,
     ), capabilities, slack_store
 
 
@@ -1247,7 +1248,8 @@ def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
 
 
 @pytest.mark.parametrize("fail_after_create", [False, True])
-def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch, fail_after_create):
+@pytest.mark.parametrize("graph_workflow", [False, True])
+def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch, fail_after_create, graph_workflow):
     from starlette.testclient import TestClient
     from engine.runtime import WorkflowExecutor
     posts_at_start = []
@@ -1256,9 +1258,31 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch,
     monkeypatch.setattr(WorkflowExecutor, "start", no_drive)
     provider = FakeACPProvider(create=True, fail_after_create=fail_after_create)
     communications = RecordingCommunications()
+    catalog = _workflow_catalog()
+    workflow_id = "implementation-review-v1"
+    graph_runtime = None
+    if graph_workflow:
+        from contextlib import asynccontextmanager
+        from engine.graph_runtime import GraphId, NodeId
+        from engine.runtime import WorkflowCatalog
+        from graph_runtime_fakes import ScriptedGraph, ScriptedGraphRuntime, ScriptedNode, AwaitSteering
+
+        workflow_id = "implementation-review-codex"
+        graph = ScriptedGraph(
+            GraphId(workflow_id), "Implementation review (codex)",
+            (ScriptedNode(NodeId("implementation"), (AwaitSteering(),)),),
+        )
+        runtime = ScriptedGraphRuntime(graph)
+
+        @asynccontextmanager
+        async def running():
+            yield runtime
+
+        graph_runtime = running()
+        catalog = WorkflowCatalog.from_definitions((), (graph,))
     app, capabilities, _ = _app(tmp_path, communications,
-        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1", runner="default"),
-        _workflow_catalog(), provider=provider)
+        WorkOrdersConfig(repository="acme/api", workflow=workflow_id, runner="default"),
+        catalog, provider=provider, graph_runtime=graph_runtime)
     def body(kind, ts, text, **extra):
         return json.dumps({"type": "event_callback", "event": dict(
             type=kind, channel="C", user="U", ts=ts, text=text, **extra)}).encode()
@@ -1277,15 +1301,20 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch,
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert len(runs) == 1
         assert runs[0].origin.thread_id == "1"
+        assert str(runs[0].workflow_id) == workflow_id
+        if graph_workflow:
+            snapshot = client.portal.call(runtime.snapshot, runs[0].run_id)
+            assert str(snapshot.graph_id) == workflow_id
         result = provider.clients[0].result
         assert not result.get("isError"), result
         assert result["structuredContent"]["url"].startswith("https://engine.example")
         assert len(provider.clients[0].prompts) == 2
-    assert len(posts_at_start) == 1
-    announcements = [m for _, m, _ in posts_at_start[0] if m.text.startswith("Started a work order")]
+    assert len(posts_at_start) == (0 if graph_workflow else 1)
+    announcement_posts = communications.posts if graph_workflow else posts_at_start[0]
+    announcements = [m for _, m, _ in announcement_posts if m.text.startswith("Started a work order")]
     assert len(announcements) == 1
     assert announcements[0].links
-    if not fail_after_create:
+    if not fail_after_create and not graph_workflow:
         assert posts_at_start[0][-2][1].text == provider.text
     assert any(m.links for _, m, _ in communications.posts)
     assert all(thread == "1" for _, _, thread in communications.posts)

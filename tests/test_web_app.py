@@ -1269,6 +1269,9 @@ def _workflow_app(
     `workflow_runners` implement and may write; the chat runner registered under
     the same name reviews, and is the one that may not.
     """
+    if workflow_catalog is None:
+        from legacy_workflow import catalog as workflow_catalog
+
     unused = object()
     implementers = dict(workflow_runners or {"test": runner})
     chat_runners: dict[str, ConcurrentRunner] = dict(

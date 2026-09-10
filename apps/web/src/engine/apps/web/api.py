@@ -1749,7 +1749,8 @@ def create_app(
         repository: str,
         workstream_id: WorkstreamId | None,
         milestone_id: MilestoneId | None,
-    ) -> JSONResponse:
+        origin: RunOrigin | None = None,
+    ) -> RunState:
         """Hand a `[BETA]` WorkOrder to the graph engine and keep a row for it.
 
         What actually starts the work is one call: the graph engine is given
@@ -1795,6 +1796,7 @@ def create_app(
             phase=GRAPH_PHASES[snapshot.status],
             prompt=prompt,
             repository=repository,
+            origin=origin,
         )
         await session.state_store.save(state)
         # A very short run can be over before the row above exists, and the
@@ -1816,9 +1818,7 @@ def create_app(
                 failure_reason=latest.error,
             )
             await session.state_store.save(state)
-        run = await run_reader.get(state.run_id)
-        assert run is not None
-        return JSONResponse(_run_json(run), status_code=201)
+        return state
 
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
@@ -1872,7 +1872,7 @@ def create_app(
             # `offered_graphs` only answers with a graph while the engine is
             # running, so this cannot be `None` here.
             assert surface.runtime is not None
-            return await start_graph_run(
+            state = await start_graph_run(
                 surface.runtime,
                 graph,
                 prompt=prompt,
@@ -1880,6 +1880,9 @@ def create_app(
                 workstream_id=workstream_id,
                 milestone_id=direct_milestone_id,
             )
+            run = await run_reader.get(state.run_id)
+            assert run is not None
+            return JSONResponse(_run_json(run), status_code=201)
 
         state = await start_step_run(
             prompt=prompt,
@@ -2877,17 +2880,24 @@ def create_app(
         origin: RunOrigin, repository: str, prompt: str,
     ) -> tuple[str, str]:
         definition = _mentioned_workflow()
-        if definition is None:
-            raise RuntimeError("no step workflow is configured under `work_orders.workflow`")
-        runner_name = work_orders.runner or workflow_executor.default_runner
-        if runner_name not in workflow_executor.runners:
-            raise RuntimeError(f"unknown runner: {runner_name}")
         ready = asyncio.Event()
-        state = await start_step_run(
-            prompt=prompt, repository=repository,
-            workflow_id=definition.workflow_id, definition=definition,
-            runner_name=runner_name, origin=origin, ready=ready,
-        )
+        if isinstance(definition, WorkflowDefinition):
+            runner_name = work_orders.runner or workflow_executor.default_runner
+            if runner_name not in workflow_executor.runners:
+                raise RuntimeError(f"unknown runner: {runner_name}")
+            state = await start_step_run(
+                prompt=prompt, repository=repository,
+                workflow_id=definition.workflow_id, definition=definition,
+                runner_name=runner_name, origin=origin, ready=ready,
+            )
+        elif definition is not None:
+            assert surface.runtime is not None
+            state = await start_graph_run(
+                surface.runtime, definition, prompt=prompt, repository=repository,
+                workstream_id=None, milestone_id=None, origin=origin,
+            )
+        else:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
         link = run_notifier.work_order_link(state)
         _pending_announcements.append((
             origin,
@@ -2912,11 +2922,15 @@ def create_app(
         react=_slack_comms.add_reaction,
     )
 
-    def _mentioned_workflow() -> WorkflowDefinition | None:
+    def _mentioned_workflow() -> WorkflowDefinition | GraphWorkflow | None:
         """Which workflow a mention runs: the configured one, or the only one."""
+        available: dict[str, WorkflowDefinition | GraphWorkflow] = {
+            str(item.workflow_id): item for item in catalog
+        }
+        available.update(offered_graphs())
         if work_orders.workflow:
-            return catalog.get(WorkflowId(work_orders.workflow))
-        return next(iter(catalog)) if len(catalog) == 1 else None
+            return available.get(work_orders.workflow)
+        return next(iter(available.values())) if len(available) == 1 else None
 
     # --- runner utilization ---------------------------------------------------
 
