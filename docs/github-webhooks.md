@@ -1,7 +1,11 @@
 # GitHub comment webhooks
 
-Engine reads comments from GitHub over a signed webhook. Point a GitHub app or a
-repository webhook at `<public_url>/api/github/events`, subscribe it to the
+Engine reads comments from GitHub over a signed webhook. The route only exists
+once something is wired to answer a comment, so configure the webhook after that
+is in place: an endpoint that accepted deliveries it could never act on would
+collect failures until GitHub disabled the hook.
+
+Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, subscribe it to the
 `issue_comment` and `pull_request_review_comment` events, and give it a secret.
 Start Engine with the same secret:
 
@@ -30,8 +34,7 @@ A verified comment is queued and acknowledged immediately, because GitHub gives
 a webhook ten seconds before it considers the delivery failed. Each comment is
 handled once no matter how often GitHub redelivers it.
 
-The route answers 503 while no secret is set, while nothing is wired to answer a
-comment, or while the queue is full. In each case the comment is not lost: the
+The route answers 503 while no secret is set or while the queue is full. In each case the comment is not lost: the
 delivery stays visible as failed in the webhook's delivery log and can be
 redelivered. If handling a comment fails after the delivery was acknowledged,
 the comment is forgotten rather than remembered, so redelivering it from the

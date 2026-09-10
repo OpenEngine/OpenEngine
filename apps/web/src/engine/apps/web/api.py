@@ -42,7 +42,7 @@ from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
-from engine.apps.web.github_ingress import GithubIngress
+from engine.apps.web.github_ingress import GithubComment, GithubIngress
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -1049,6 +1049,7 @@ def create_app(
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: str = "",
     github_bot_login: str = "",
+    github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
@@ -3039,13 +3040,14 @@ def create_app(
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
         react=_slack_comms.add_reaction,
     )
-    # GitHub comments arrive on their own signed route. What answers them is
-    # wired separately; until then the route verifies a delivery and refuses it,
-    # so an unanswered comment stays a failed delivery GitHub can redeliver
-    # rather than a 200 that lost it.
+    # GitHub comments arrive on their own signed route, answered by whatever is
+    # passed in. The route is only mounted when something is: an endpoint that
+    # could accept a delivery but never act on it is a trap, because a webhook
+    # pointed at it collects failed deliveries until GitHub disables the hook.
     github_ingress = GithubIngress(
         webhook_secret=lambda: github_webhook_secret,
         self_login=lambda: github_bot_login,
+        handle=github_comment_handler,
     )
 
     def _mentioned_workflow() -> WorkflowDefinition | None:
@@ -3096,7 +3098,6 @@ def create_app(
         Route("/api/github/connect", github_connect, methods=["POST"]),
         Route("/api/github/connect/poll", github_connect_poll, methods=["POST"]),
         Route("/api/github/disconnect", github_disconnect, methods=["POST"]),
-        Route("/api/github/events", github_ingress.webhook, methods=["POST"]),
         Route("/api/gitlab/status", gitlab_status),
         Route("/api/gitlab/client-id", gitlab_set_client_id, methods=["POST"]),
         Route("/api/gitlab/connect", gitlab_connect, methods=["POST"]),
@@ -3182,6 +3183,10 @@ def create_app(
             methods=["POST"],
         ),
     ]
+    if github_comment_handler is not None:
+        routes.append(
+            Route("/api/github/events", github_ingress.webhook, methods=["POST"])
+        )
     if static_directory is not None and (static_directory / "index.html").is_file():
 
         async def spa_page(_request: Request) -> Response:
