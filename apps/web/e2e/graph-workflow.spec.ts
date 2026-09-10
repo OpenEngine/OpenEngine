@@ -29,7 +29,6 @@ const GREETING = "greeting.txt";
 const PULL_REQUEST = "https://github.com/acme/repository/pull/7";
 const IMPLEMENTED = "Wrote the greeting.";
 const REVIEWED = "Read the change; greeting.txt is not covered by a test.";
-const DECISION = "The finding can wait; ship the greeting.";
 
 const STEER = "Also write a licence file.";
 const STEERED = "Wrote the licence.";
@@ -543,7 +542,6 @@ test("a graph run waiting on a person says so, and can be answered", async ({
   // What a person is shown, and what they press. Pressing one of these is the
   // only thing in the browser that can end a run.
   await expect(page.locator(".callout-action")).toContainText("Action required");
-  await page.getByLabel("Decision note").fill(DECISION);
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
   await shot(page, testInfo, "6 approved");
