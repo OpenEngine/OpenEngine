@@ -12,11 +12,12 @@ posts its UI link, and reports progress in the same thread.
    bot token is logged and the delivery is ignored because no reply can be sent.
 2. Set the Slack Events request URL to `<public_url>/api/slack/events` and
    subscribe to `app_mention`. Invite the bot to the channel.
-3. For replies without another mention, subscribe to `message.channels` and grant
-   `channels:history`; private channels use `message.groups` and `groups:history`.
-   These are Slack app installation settings: this change does not broaden the
-   OAuth scopes requested by OpenEngine. Update the Slack app and reinstall it
-   when granting additional permissions. See Slack's
+3. For replies without another mention, subscribe to `message.channels`, and to
+   `message.groups` as well for private channels. OpenEngine's authorization
+   request already asks for the `channels:history` and `groups:history` scopes
+   those events require, so a workspace connected before they were requested has
+   to be reconnected in Settings → Slack for Slack to start delivering them. See
+   Slack's
    [message event documentation](https://docs.slack.dev/reference/events/message/).
 4. Install the Codex ACP adapter prerequisites (`npx` and Codex authentication).
    The web composition defaults to `CodexACPProvider`; tests or another deployment
@@ -27,13 +28,13 @@ posts its UI link, and reports progress in the same thread.
 public_url = "https://engine.example"
 
 [work_orders]
-repository = "acme/api"                 # optional default; the agent can ask
+repository = "."                        # local checkout path; defaults to "."
 workflow = "implementation-review-v1"   # optional if exactly one is installed
 runner = "claude"                       # work-order executor, not concierge
 ```
 
-A greeting needs no work-order configuration. Creating work requires a repository
-and a resolvable step workflow. Missing configuration becomes a tool error so the
+A greeting needs no work-order configuration. Creating work requires a resolvable step workflow. The repository is a local
+checkout path, not a GitHub owner/name, and cannot be supplied by the agent. Missing configuration becomes a tool error so the
 concierge can explain what is needed.
 
 ## Code boundaries
@@ -49,7 +50,7 @@ concierge can explain what is needed.
   ignores bots and message edits, and deduplicates by channel/message timestamp
   across both Slack event types. `drain()` and `close()` support tests/shutdown.
 - `slack_egress.py`: the only granted MCP tool is
-  `create_workorder(prompt, repository?)`. Its host callback returns `(url, run_id)`.
+  `create_workorder(prompt)`. Its host callback returns `(url, run_id)`.
   The host binds the Slack origin; the model cannot supply a destination channel
   or thread. The stdio-to-TCP bridge keeps its credential in a mode-0600 temporary
   file and advertises a fixed supported MCP protocol version.

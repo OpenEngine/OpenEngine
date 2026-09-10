@@ -49,8 +49,8 @@ from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
-from engine.ports import SourceControl
+from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
+from engine.ports import SourceControl, WorkspaceState
 from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
@@ -208,6 +208,41 @@ class LangGraphRuntime:
         # interleaved with it.
         return tuple(self._checkpoint(definition, state) for state in reversed(saved))
 
+    async def workspace(self, run_id: RunId) -> WorkspaceState:
+        definition = await self._definition_for(run_id)
+        state = await self._state(definition, run_id)
+        node = definition.workspace_node
+        workspace_id = state.values.get("workspaceId")
+        if node is None or not isinstance(workspace_id, str) or not workspace_id:
+            raise NoSuchPositionError("this run has no workspace to attach or detach")
+        return await node.provider.state(WorkspaceId(workspace_id))
+
+    async def set_workspace_attached(
+        self, run_id: RunId, attached: bool
+    ) -> WorkspaceState:
+        definition = await self._definition_for(run_id)
+        live = self._live.setdefault(run_id, _Live(run_id, definition.graph_id))
+        async with live.control:
+            snapshot = await self._snapshot(run_id)
+            if snapshot.status in (RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL):
+                raise RunNotSteerableError("stop the run before changing its workspace")
+            if live.task is not None and not live.task.done():
+                raise RunNotSteerableError("the run is still stopping; try again")
+            workspace = await self.workspace(run_id)
+            node = definition.workspace_node
+            try:
+                if attached:
+                    await node.provider.attach(
+                        workspace.workspace_id,
+                        node.repository or str(snapshot.values.get("repository") or "."),
+                        node.base_ref,
+                    )
+                else:
+                    await node.provider.detach(workspace.workspace_id)
+            except (RuntimeError, ValueError, OSError) as error:
+                raise RunNotSteerableError(str(error)) from error
+            return await self.workspace(run_id)
+
     async def resume_from(
         self, run_id: RunId, checkpoint_id: CheckpointId
     ) -> RunSnapshot:
@@ -223,6 +258,16 @@ class LangGraphRuntime:
         # once are serialised rather than dropped: both are honoured, and the
         # second one's first act is stopping the driver the first one started.
         async with live.control:
+            position = await definition.graph.aget_state(at)
+            workspace_id = position.values.get("workspaceId")
+            if workspace_id and definition.workspace_node is not None:
+                workspace = await definition.workspace_node.provider.state(
+                    WorkspaceId(workspace_id)
+                )
+                if not workspace.attached:
+                    raise RunNotSteerableError(
+                        "this run's worktree is detached; reattach it to run the agent"
+                    )
             await self._stop(live)
             # Questions raised by the attempt being replaced can never be
             # answered: the executions that asked them are gone. Recorded as

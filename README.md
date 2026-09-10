@@ -11,14 +11,16 @@ OpenEngine uses your locally installed codex and claude CLI. This means that it 
 
 First, clone the repo:
 ```bash
+cd OpenEngine
 uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
 ```
-Then, run it by pointing it at your project:
+Then, run it by pointing it at your directory:
 ```bash
 uv run \
-  --project /path/to/your/project \
+  --project /path/to/openengine \
+  --directory /path/to/your/project \
   --all-packages \
   engine-web
 ```
@@ -37,9 +39,10 @@ While we use sensible defaults, if you need to configure engine, point it at a n
 `engine.toml` file.
 ```
 uv run \
-  --project /path/to/your/project \
+  --project /path/to/openengine \
+  --directory /path/to/your/project \
   --all-packages \
-  engine-web
+  engine-web \
   --config /path/to/engine.toml
 ```
 

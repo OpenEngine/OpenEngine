@@ -579,12 +579,14 @@ version = "0.0.0"
 source = { editable = "packages/graph_runtime" }
 dependencies = [
     { name = "engine-domain" },
+    { name = "engine-ports" },
     { name = "starlette" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "engine-domain", editable = "packages/domain" },
+    { name = "engine-ports", editable = "packages/ports" },
     { name = "starlette", specifier = ">=0.52" },
 ]
 

@@ -154,12 +154,59 @@ def test_slack_communications_reports_a_disconnected_workspace() -> None:
         )
 
 
+def test_add_reaction_happy_path() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": True}
+
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
+        client = client_type.return_value.__aenter__.return_value
+        client.post = AsyncMock(return_value=response)
+        __import__("asyncio").run(
+            SlackCommunications(store).add_reaction("C123", "1700.0001", "eyes")
+        )
+
+    client.post.assert_awaited_once_with(
+        "https://slack.com/api/reactions.add",
+        headers={"Authorization": "Bearer xoxb-token"},
+        json={"channel": "C123", "timestamp": "1700.0001", "name": "eyes"},
+    )
+
+
+def test_add_reaction_tolerates_already_reacted() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": False, "error": "already_reacted"}
+
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
+        client_type.return_value.__aenter__.return_value.post = AsyncMock(
+            return_value=response
+        )
+        # Should not raise
+        __import__("asyncio").run(
+            SlackCommunications(store).add_reaction("C123", "1700.0001", "eyes")
+        )
+
+
+def test_add_reaction_reports_a_disconnected_workspace() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = None
+
+    with pytest.raises(SlackAuthError, match="not connected"):
+        __import__("asyncio").run(
+            SlackCommunications(store).add_reaction("C123", "1700.0001", "eyes")
+        )
+
+
 def test_authorization_url_requests_notification_scope_and_state() -> None:
     url = authorization_url("123", "http://localhost/api/slack/callback", "nonce")
     assert url.startswith("https://slack.com/oauth/v2/authorize?")
     assert (
         "scope=app_mentions%3Aread%2Cchat%3Awrite%2Cchat%3Awrite.public"
-        "%2Cchannels%3Aread" in url
+        "%2Cchannels%3Aread%2Cchannels%3Ahistory%2Cgroups%3Ahistory"
+        "%2Creactions%3Awrite" in url
     )
     assert "state=nonce" in url
 

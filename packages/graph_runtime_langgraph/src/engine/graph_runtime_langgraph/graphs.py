@@ -115,6 +115,16 @@ class LangGraphDefinition:
             )
 
     @cached_property
+    def workspace_node(self) -> Any:
+        """The workspace component that owns this graph's checkout, if unambiguous."""
+        nodes = [
+            _described(node)
+            for node in self.graph.get_graph().nodes.values()
+            if _kind_of(node) == "workspace"
+        ]
+        return nodes[0] if len(nodes) == 1 else None
+
+    @cached_property
     def topology(self) -> GraphTopology:
         """The graph as a client is shown it.
 
