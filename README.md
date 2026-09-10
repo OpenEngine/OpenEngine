@@ -18,10 +18,15 @@ npm --prefix apps/web run build
 Then, run it by pointing it at your project:
 ```bash
 uv run \
-  --project /path/to/your/project \
+  --project /path/to/openengine \
+  --directory /path/to/your/project \
   --all-packages \
   engine-web
 ```
+
+`--project` selects OpenEngine's uv environment; it does not change the
+command's working directory. `--directory` makes the target project the working
+directory that `engine-web` and its agents see.
 
 `engine-web` serves the client built into `apps/web/dist` and reads its
 configuration once, so a source edit needs a rebuild, a Ctrl-C, or both. While
@@ -37,9 +42,10 @@ While we use sensible defaults, if you need to configure engine, point it at a n
 `engine.toml` file.
 ```
 uv run \
-  --project /path/to/your/project \
+  --project /path/to/openengine \
+  --directory /path/to/your/project \
   --all-packages \
-  engine-web
+  engine-web \
   --config /path/to/engine.toml
 ```
 
