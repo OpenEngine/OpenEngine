@@ -27,7 +27,6 @@ from engine.apps.web.composition import (
     build_read_only_runners,
     build_runners,
     build_session,
-    build_workflow_runners,
     claude_session_config_for,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
@@ -53,7 +52,6 @@ def report_wiring(settings: Settings) -> None:
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
-    workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
     print(
         describe_loaded_config(
@@ -66,17 +64,7 @@ def report_wiring(settings: Settings) -> None:
     print(f"agents: {', '.join(sorted(session.profiles))}")
     print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
     print(
-        "workflow runners: "
-        + ", ".join(
-            f"{name} ({type(runner).__name__})"
-            for name, runner in workflow_runners.items()
-        )
-    )
-    # Named for what they are and what uses them: an operator reading this has
-    # to be able to see that a planning chat runs on these too, not only a
-    # workflow's review step.
-    print(
-        "read-only runners (workflow reviews, read-only agents): "
+        "read-only runners (read-only agents): "
         + ", ".join(
             f"{name} ({type(runner).__name__})"
             for name, runner in read_only_runners.items()
@@ -165,9 +153,8 @@ def compose_app(
     )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
-    workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
-    # The second engine, for the graph workflows in the same directory. It
+    # The runtime for the workflows in the configured directory. It
     # is `None` when that directory holds no graphs, and then the interface
     # offers none of them.
     graph_runtime = build_graph_runtime(
@@ -179,19 +166,15 @@ def compose_app(
         session,
         runners,
         STATIC_DIRECTORY,
-        workflow_runners=workflow_runners,
-        review_runners=read_only_runners,
         workflow_catalog=workflow_catalog,
         graph_runtime=graph_runtime,
         approval_policy=loaded.config.approvals,
-        default_branch=loaded.config.default_branch,
         credential_store=credential_store,
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
         github_login_config=github_login_config,
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
-        communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         milestone_scoper=build_milestone_scoper(settings),
         work_orders=loaded.config.work_orders,

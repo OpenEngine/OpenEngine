@@ -11,7 +11,7 @@ import warnings
 
 from migrations.migration import upgrade_connection
 
-from engine.domain.agents import AgentInstance, AgentProfile, AgentRun, AgentRunStatus
+from engine.domain.agents import AgentInstance, AgentRun, AgentRunStatus
 from engine.domain.approvals import (
     ApprovalDecision,
     ApprovalDecisionSource,
@@ -21,19 +21,6 @@ from engine.domain.approvals import (
     SessionGrant,
 )
 from engine.domain.chat import Conversation, Message, Role, ToolCall
-from engine.domain.events import (
-    AgentRunCompleted,
-    AgentStepPaused,
-    ChangesPublished,
-    Event,
-    HumanReviewCompleted,
-    RunFailed,
-    RunNamed,
-    RunRequested,
-    StepCompleted,
-    StepReactivated,
-    WorkspaceProvisioned,
-)
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
@@ -45,7 +32,6 @@ from engine.domain.ids import (
     ProjectId,
     RunId,
     SessionGrantId,
-    StepId,
     TaskId,
     WorkflowId,
     WorkstreamId,
@@ -53,21 +39,6 @@ from engine.domain.ids import (
 )
 from engine.domain.planning import Milestone, Project, Workstream
 from engine.domain.state import RunOrigin, RunPhase, RunState
-from engine.domain.workflow import (
-    AgentStep,
-    HumanReviewNotification,
-    HumanReviewStep,
-    OutcomeTransition,
-    StepOutput,
-    TemplateBinding,
-    TerminalOutcome,
-    Transition,
-    ValueReference,
-    WorkflowDefinition,
-    WorkflowTemplate,
-    WorkspaceAccess,
-    WorkspaceSpec,
-)
 
 
 class SQLiteStateStore:
@@ -154,28 +125,10 @@ class SQLiteStateStore:
 
     async def delete_run(self, run_id: RunId) -> bool:
         with self._lock, self._connection:
-            self._connection.execute(
-                "DELETE FROM run_events WHERE run_id = ?", (run_id,)
-            )
             cursor = self._connection.execute(
                 "DELETE FROM run_states WHERE run_id = ?", (run_id,)
             )
         return cursor.rowcount > 0
-
-    async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
-        with self._lock, self._connection:
-            self._connection.executemany(
-                "INSERT INTO run_events (run_id, event_json) VALUES (?, ?)",
-                ((run_id, json.dumps(_event_to_dict(event))) for event in events),
-            )
-
-    async def history(self, run_id: RunId) -> Sequence[Event]:
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT event_json FROM run_events WHERE run_id = ? ORDER BY sequence",
-                (run_id,),
-            ).fetchall()
-        return tuple(_event_from_dict(json.loads(row["event_json"])) for row in rows)
 
     # --- planning hierarchy ---------------------------------------------
 
@@ -359,8 +312,6 @@ class SQLiteStateStore:
         *,
         instance_id: AgentInstanceId | None = None,
         conversation_id: ConversationId | None = None,
-        workflow_run_id: RunId | None = None,
-        workflow_step_id: StepId | None = None,
     ) -> AgentInstance:
         instance = AgentInstance(
             instance_id=instance_id or AgentInstanceId(f"agi-{uuid4().hex[:12]}"),
@@ -370,8 +321,6 @@ class SQLiteStateStore:
             task_id=task_id,
             workspace_id=workspace_id,
             runner=runner,
-            workflow_run_id=workflow_run_id,
-            workflow_step_id=workflow_step_id,
         )
         with self._lock, self._connection:
             existing = self._connection.execute(
@@ -386,8 +335,8 @@ class SQLiteStateStore:
                 """
                 INSERT INTO agent_instances (
                     instance_id, agent_id, conversation_id, task_id,
-                    workspace_id, runner, workflow_run_id, workflow_step_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    workspace_id, runner
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     instance.instance_id,
@@ -396,8 +345,6 @@ class SQLiteStateStore:
                     instance.task_id,
                     instance.workspace_id,
                     instance.runner,
-                    instance.workflow_run_id,
-                    instance.workflow_step_id,
                 ),
             )
         return instance
@@ -408,16 +355,15 @@ class SQLiteStateStore:
         title: str,
         archived: bool,
         runner: str,
-        auto_approve: bool = False,
     ) -> AgentInstance:
         with self._lock, self._connection:
             updated = self._connection.execute(
                 """
                 UPDATE agent_instances
-                SET title = ?, archived = ?, runner = ?, auto_approve = ?
+                SET title = ?, archived = ?, runner = ?
                 WHERE instance_id = ?
                 """,
-                (title, archived, runner, auto_approve, instance_id),
+                (title, archived, runner, instance_id),
             ).rowcount
             if not updated:
                 raise KeyError(f"no agent instance {instance_id!r}")
@@ -430,8 +376,7 @@ class SQLiteStateStore:
             row = self._connection.execute(
                 """
                 SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                       title, archived, runner, auto_approve,
-                       workflow_run_id, workflow_step_id
+                       title, archived, runner
                 FROM agent_instances WHERE instance_id = ?
                 """,
                 (instance_id,),
@@ -453,27 +398,17 @@ class SQLiteStateStore:
         return instance
 
     async def list_instances(
-        self,
-        agent_id: AgentId | None = None,
-        *,
-        workflow_run_id: RunId | None = None,
+        self, agent_id: AgentId | None = None
     ) -> Sequence[AgentInstance]:
         query = """
             SELECT instance_id, agent_id, conversation_id, task_id, workspace_id,
-                   title, archived, runner, auto_approve,
-                   workflow_run_id, workflow_step_id
+                   title, archived, runner
             FROM agent_instances
         """
-        filters: list[str] = []
         parameters: list[str] = []
         if agent_id is not None:
-            filters.append("agent_id = ?")
+            query += " WHERE agent_id = ?"
             parameters.append(agent_id)
-        if workflow_run_id is not None:
-            filters.append("workflow_run_id = ?")
-            parameters.append(workflow_run_id)
-        if filters:
-            query += " WHERE " + " AND ".join(filters)
         query += " ORDER BY sequence DESC"
         with self._lock:
             rows = self._connection.execute(query, tuple(parameters)).fetchall()
@@ -801,17 +736,6 @@ def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
         title=row["title"],
         archived=bool(row["archived"]),
         runner=row["runner"],
-        auto_approve=bool(row["auto_approve"]),
-        workflow_run_id=(
-            RunId(row["workflow_run_id"])
-            if row["workflow_run_id"] is not None
-            else None
-        ),
-        workflow_step_id=(
-            StepId(row["workflow_step_id"])
-            if row["workflow_step_id"] is not None
-            else None
-        ),
     )
 
 
@@ -897,56 +821,6 @@ def _message_from_row(row: sqlite3.Row) -> Message:
     )
 
 
-def _output_to_dict(output: StepOutput) -> dict[str, str]:
-    return {"name": output.name, "value": output.value}
-
-
-def _step_to_dict(step: StepCompleted) -> dict[str, object]:
-    return {
-        "run_id": step.run_id,
-        "step_id": step.step_id,
-        "agent_run_id": step.agent_run_id,
-        "outcome": step.outcome,
-        "summary": step.summary,
-        "outputs": [_output_to_dict(output) for output in step.outputs],
-        "mcp_request_id": step.mcp_request_id,
-    }
-
-
-def _step_from_dict(value: dict[str, object]) -> StepCompleted:
-    return StepCompleted(
-        run_id=RunId(str(value["run_id"])),
-        step_id=StepId(str(value["step_id"])),
-        agent_run_id=AgentRunId(str(value["agent_run_id"])),
-        outcome=str(value["outcome"]),
-        summary=str(value["summary"]),
-        outputs=tuple(
-            StepOutput(name=str(output["name"]), value=str(output["value"]))
-            for output in value.get("outputs", [])
-            if isinstance(output, dict)
-        ),
-        mcp_request_id=value.get("mcp_request_id"),
-    )
-
-
-def _review_to_dict(review: HumanReviewCompleted) -> dict[str, object]:
-    return {
-        "run_id": review.run_id,
-        "step_id": review.step_id,
-        "approved": review.approved,
-        "summary": review.summary,
-    }
-
-
-def _review_from_dict(value: dict[str, object]) -> HumanReviewCompleted:
-    return HumanReviewCompleted(
-        run_id=RunId(str(value["run_id"])),
-        step_id=StepId(str(value["step_id"])),
-        approved=bool(value["approved"]),
-        summary=str(value.get("summary", "")),
-    )
-
-
 def _state_to_dict(state: RunState) -> dict[str, object]:
     return {
         "run_id": state.run_id,
@@ -958,26 +832,7 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "repository": state.repository,
         "prompt": state.prompt,
         "name": state.name,
-        "workspace_id": state.workspace_id,
-        "agent_runs": list(state.agent_runs),
-        "max_agent_runs": state.max_agent_runs,
-        "current_step_id": state.current_step_id,
-        "current_agent_run_id": state.current_agent_run_id,
-        "agent_paused": state.agent_paused,
-        "runner_name": state.runner_name,
-        "step_results": [_step_to_dict(step) for step in state.step_results],
-        "human_review": (
-            _review_to_dict(state.human_review) if state.human_review else None
-        ),
-        "human_reviews": [
-            _review_to_dict(review) for review in state.human_reviews
-        ],
         "failure_reason": state.failure_reason,
-        "workflow_definition": (
-            _workflow_to_dict(state.workflow_definition)
-            if state.workflow_definition is not None
-            else None
-        ),
         "origin": (
             {
                 "channel": state.origin.channel,
@@ -991,19 +846,6 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
 
 
 def _state_from_dict(value: dict[str, object]) -> RunState:
-    review = value.get("human_review")
-    raw_reviews = value.get("human_reviews")
-    reviews = (
-        tuple(
-            _review_from_dict(item)
-            for item in raw_reviews
-            if isinstance(item, dict)
-        )
-        if isinstance(raw_reviews, list)
-        else (_review_from_dict(review),)
-        if isinstance(review, dict)
-        else ()
-    )
     return RunState(
         run_id=RunId(str(value["run_id"])),
         task_id=TaskId(str(value["task_id"])),
@@ -1022,43 +864,7 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         repository=str(value.get("repository", "")),
         prompt=str(value.get("prompt", "")),
         name=str(value.get("name", "")),
-        workspace_id=(
-            WorkspaceId(str(value["workspace_id"]))
-            if value.get("workspace_id") is not None
-            else None
-        ),
-        agent_runs=tuple(
-            AgentRunId(str(agent_run_id))
-            for agent_run_id in value.get("agent_runs", [])
-        ),
-        max_agent_runs=int(value.get("max_agent_runs", 3)),
-        current_step_id=(
-            StepId(str(value["current_step_id"]))
-            if value.get("current_step_id") is not None
-            else None
-        ),
-        current_agent_run_id=(
-            AgentRunId(str(value["current_agent_run_id"]))
-            if value.get("current_agent_run_id") is not None
-            else None
-        ),
-        agent_paused=bool(value.get("agent_paused", False)),
-        runner_name=str(value.get("runner_name", "")),
-        step_results=tuple(
-            _step_from_dict(step)
-            for step in value.get("step_results", [])
-            if isinstance(step, dict)
-        ),
-        human_review=(
-            _review_from_dict(review) if isinstance(review, dict) else None
-        ),
-        human_reviews=reviews,
         failure_reason=str(value.get("failure_reason", "")),
-        workflow_definition=(
-            _workflow_from_dict(value["workflow_definition"])
-            if isinstance(value.get("workflow_definition"), dict)
-            else None
-        ),
         origin=_origin_from_dict(value.get("origin")),
     )
 
@@ -1071,350 +877,6 @@ def _origin_from_dict(value: object) -> RunOrigin | None:
         thread_id=str(value.get("thread_id", "")),
         author=str(value.get("author", "")),
     )
-
-
-def _profile_to_dict(profile: AgentProfile) -> dict[str, object]:
-    return {
-        "agent_id": profile.agent_id,
-        "instructions": profile.instructions,
-        "capabilities": list(profile.capabilities),
-        "model": profile.model,
-        "description": profile.description,
-        "read_only": profile.read_only,
-    }
-
-
-def _profile_from_dict(value: dict[str, object]) -> AgentProfile:
-    return AgentProfile(
-        agent_id=AgentId(str(value["agent_id"])),
-        instructions=str(value["instructions"]),
-        capabilities=tuple(str(item) for item in value.get("capabilities", [])),
-        model=str(value.get("model", "")),
-        description=str(value.get("description", "")),
-        read_only=bool(value.get("read_only", False)),
-    )
-
-
-def _template_to_dict(template: WorkflowTemplate) -> dict[str, object]:
-    return {
-        "text": template.text,
-        "bindings": [
-            {
-                "name": binding.name,
-                "source": binding.reference.source,
-                "step_id": binding.reference.step_id,
-                "field": binding.reference.field,
-            }
-            for binding in template.bindings
-        ],
-    }
-
-
-def _template_from_dict(value: dict[str, object]) -> WorkflowTemplate:
-    return WorkflowTemplate(
-        text=str(value["text"]),
-        bindings=tuple(
-            TemplateBinding(
-                name=str(binding["name"]),
-                reference=ValueReference(
-                    source=str(binding["source"]),
-                    step_id=(
-                        StepId(str(binding["step_id"]))
-                        if binding.get("step_id") is not None
-                        else None
-                    ),
-                    field=str(binding.get("field", "")),
-                ),
-            )
-            for binding in value.get("bindings", [])
-            if isinstance(binding, dict)
-        ),
-    )
-
-
-def _transition_to_dict(transition: Transition) -> dict[str, object]:
-    return {
-        "step_id": transition.step_id,
-        "terminal": transition.terminal.value if transition.terminal else None,
-    }
-
-
-def _transition_from_dict(value: dict[str, object]) -> Transition:
-    return Transition(
-        step_id=(StepId(str(value["step_id"])) if value.get("step_id") else None),
-        terminal=(
-            TerminalOutcome(str(value["terminal"]))
-            if value.get("terminal")
-            else None
-        ),
-    )
-
-
-def _workflow_to_dict(definition: WorkflowDefinition) -> dict[str, object]:
-    steps: list[dict[str, object]] = []
-    for step in definition.steps:
-        if isinstance(step, AgentStep):
-            steps.append(
-                {
-                    "kind": "agent",
-                    "step_id": step.step_id,
-                    "name": step.name,
-                    "profile": _profile_to_dict(step.profile),
-                    "prompt": _template_to_dict(step.prompt),
-                    "transitions": [
-                        {
-                            "outcome": edge.outcome,
-                            "transition": _transition_to_dict(edge.transition),
-                        }
-                        for edge in step.transitions
-                    ],
-                    "required_outputs": list(step.required_outputs),
-                    "editable": step.editable,
-                    "workspace_access": step.workspace_access.value,
-                }
-            )
-        else:
-            steps.append(
-                {
-                    "kind": "human_review",
-                    "step_id": step.step_id,
-                    "name": step.name,
-                    "title": _template_to_dict(step.title),
-                    "summary": _template_to_dict(step.summary),
-                    "approved": _transition_to_dict(step.approved),
-                    "rejected": _transition_to_dict(step.rejected),
-                    "notification": (
-                        {
-                            "channel": step.notification.channel,
-                            "public_url": step.notification.public_url,
-                        }
-                        if step.notification is not None
-                        else None
-                    ),
-                }
-            )
-    return {
-        "workflow_id": definition.workflow_id,
-        "name": definition.name,
-        "version": definition.version,
-        "workspace": {"base_ref": definition.workspace.base_ref},
-        "steps": steps,
-        "naming_profile": (
-            _profile_to_dict(definition.naming_profile)
-            if definition.naming_profile is not None
-            else None
-        ),
-        "naming_prompt": definition.naming_prompt,
-    }
-
-
-def _workflow_from_dict(value: dict[str, object]) -> WorkflowDefinition:
-    steps = []
-    for raw in value.get("steps", []):
-        if not isinstance(raw, dict):
-            continue
-        if raw.get("kind") == "agent":
-            steps.append(
-                AgentStep(
-                    step_id=StepId(str(raw["step_id"])),
-                    name=str(raw["name"]),
-                    profile=_profile_from_dict(raw["profile"]),
-                    prompt=_template_from_dict(raw["prompt"]),
-                    transitions=tuple(
-                        OutcomeTransition(
-                            outcome=str(edge["outcome"]),
-                            transition=_transition_from_dict(edge["transition"]),
-                        )
-                        for edge in raw.get("transitions", [])
-                        if isinstance(edge, dict)
-                    ),
-                    required_outputs=tuple(
-                        str(item) for item in raw.get("required_outputs", [])
-                    ),
-                    editable=bool(raw.get("editable", False)),
-                    workspace_access=WorkspaceAccess(
-                        str(raw.get("workspace_access", "read"))
-                    ),
-                )
-            )
-        else:
-            notification = raw.get("notification")
-            steps.append(
-                HumanReviewStep(
-                    step_id=StepId(str(raw["step_id"])),
-                    name=str(raw["name"]),
-                    title=_template_from_dict(raw["title"]),
-                    summary=_template_from_dict(raw["summary"]),
-                    approved=_transition_from_dict(raw["approved"]),
-                    rejected=_transition_from_dict(raw["rejected"]),
-                    notification=(
-                        HumanReviewNotification(
-                            channel=str(notification["channel"]),
-                            public_url=str(notification["public_url"]),
-                        )
-                        if isinstance(notification, dict)
-                        else None
-                    ),
-                )
-            )
-    workspace = value.get("workspace", {})
-    naming = value.get("naming_profile")
-    return WorkflowDefinition(
-        workflow_id=WorkflowId(str(value["workflow_id"])),
-        name=str(value["name"]),
-        version=str(value["version"]),
-        steps=tuple(steps),
-        workspace=WorkspaceSpec(
-            base_ref=str(workspace.get("base_ref", "origin/main"))
-            if isinstance(workspace, dict)
-            else "origin/main"
-        ),
-        naming_profile=(
-            _profile_from_dict(naming) if isinstance(naming, dict) else None
-        ),
-        naming_prompt=str(value.get("naming_prompt", "")),
-    )
-
-
-def _event_to_dict(event: Event) -> dict[str, object]:
-    if isinstance(event, StepCompleted):
-        return {"type": "StepCompleted", **_step_to_dict(event)}
-    if isinstance(event, AgentStepPaused):
-        return {
-            "type": "AgentStepPaused",
-            "run_id": event.run_id,
-            "step_id": event.step_id,
-            "agent_run_id": event.agent_run_id,
-        }
-    if isinstance(event, StepReactivated):
-        return {
-            "type": "StepReactivated",
-            "run_id": event.run_id,
-            "step_id": event.step_id,
-        }
-    if isinstance(event, HumanReviewCompleted):
-        return {"type": "HumanReviewCompleted", **_review_to_dict(event)}
-    if isinstance(event, RunRequested):
-        return {
-            "type": "RunRequested",
-            "run_id": event.run_id,
-            "task_id": event.task_id,
-            "prompt": event.prompt,
-            "repository": event.repository,
-            "workflow_id": event.workflow_id,
-            "workstream_id": event.workstream_id,
-            "milestone_id": event.milestone_id,
-        }
-    if isinstance(event, RunNamed):
-        return {
-            "type": "RunNamed",
-            "run_id": event.run_id,
-            "name": event.name,
-        }
-    if isinstance(event, WorkspaceProvisioned):
-        return {
-            "type": "WorkspaceProvisioned",
-            "run_id": event.run_id,
-            "workspace_id": event.workspace_id,
-            "root_path": event.root_path,
-        }
-    if isinstance(event, AgentRunCompleted):
-        return {
-            "type": "AgentRunCompleted",
-            "run_id": event.run_id,
-            "agent_run_id": event.agent_run_id,
-            "succeeded": event.succeeded,
-            "summary": event.summary,
-            "changed_files": list(event.changed_files),
-        }
-    if isinstance(event, ChangesPublished):
-        return {
-            "type": "ChangesPublished",
-            "run_id": event.run_id,
-            "review_url": event.review_url,
-        }
-    if isinstance(event, RunFailed):
-        return {
-            "type": "RunFailed",
-            "run_id": event.run_id,
-            "reason": event.reason,
-            "agent_run_id": event.agent_run_id,
-            "mcp_request_id": event.mcp_request_id,
-        }
-    raise TypeError(f"cannot persist event {type(event).__name__}")
-
-
-def _event_from_dict(value: dict[str, object]) -> Event:
-    kind = value["type"]
-    if kind == "StepCompleted":
-        return _step_from_dict(value)
-    if kind == "AgentStepPaused":
-        return AgentStepPaused(
-            run_id=RunId(str(value["run_id"])),
-            step_id=StepId(str(value["step_id"])),
-            agent_run_id=AgentRunId(str(value["agent_run_id"])),
-        )
-    if kind == "StepReactivated":
-        return StepReactivated(
-            run_id=RunId(str(value["run_id"])),
-            step_id=StepId(str(value["step_id"])),
-        )
-    if kind == "HumanReviewCompleted":
-        return _review_from_dict(value)
-    if kind == "RunRequested":
-        return RunRequested(
-            run_id=RunId(str(value["run_id"])),
-            task_id=TaskId(str(value["task_id"])),
-            prompt=str(value["prompt"]),
-            repository=str(value["repository"]),
-            workflow_id=WorkflowId(str(value["workflow_id"])),
-            workstream_id=(
-                WorkstreamId(str(value["workstream_id"]))
-                if value.get("workstream_id") is not None
-                else None
-            ),
-            milestone_id=(
-                MilestoneId(str(value["milestone_id"]))
-                if value.get("milestone_id") is not None
-                else None
-            ),
-        )
-    if kind == "RunNamed":
-        return RunNamed(
-            run_id=RunId(str(value["run_id"])),
-            name=str(value["name"]),
-        )
-    if kind == "WorkspaceProvisioned":
-        return WorkspaceProvisioned(
-            run_id=RunId(str(value["run_id"])),
-            workspace_id=WorkspaceId(str(value["workspace_id"])),
-            root_path=str(value["root_path"]),
-        )
-    if kind == "AgentRunCompleted":
-        return AgentRunCompleted(
-            run_id=RunId(str(value["run_id"])),
-            agent_run_id=AgentRunId(str(value["agent_run_id"])),
-            succeeded=bool(value["succeeded"]),
-            summary=str(value["summary"]),
-            changed_files=tuple(str(path) for path in value.get("changed_files", [])),
-        )
-    if kind == "ChangesPublished":
-        return ChangesPublished(
-            run_id=RunId(str(value["run_id"])),
-            review_url=str(value["review_url"]),
-        )
-    if kind == "RunFailed":
-        return RunFailed(
-            run_id=RunId(str(value["run_id"])),
-            reason=str(value["reason"]),
-            agent_run_id=(
-                AgentRunId(str(value["agent_run_id"]))
-                if value.get("agent_run_id") is not None
-                else None
-            ),
-            mcp_request_id=value.get("mcp_request_id"),
-        )
-    raise ValueError(f"unknown persisted event type {kind!r}")
 
 
 __all__ = ["SQLiteStateStore"]

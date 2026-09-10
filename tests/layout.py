@@ -17,14 +17,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: Layers, innermost first. A package may import its own layer and any layer
 #: listed before it -- except adapters and apps, which get extra rules below.
 DOMAIN = "domain"
-ENGINE = "engine"
 PORTS = "ports"
 RUNTIME = "runtime"
 ADAPTER = "adapter"
 APP = "app"
 
 #: The layers that make up the dependency-free core of the system.
-CORE_LAYERS = frozenset({DOMAIN, ENGINE, PORTS, RUNTIME})
+CORE_LAYERS = frozenset({DOMAIN, PORTS, RUNTIME})
 
 #: Adapters are grouped by capability, so a distribution sits two levels under
 #: here: `packages/adapters/<capability>/<vendor>`.
@@ -36,14 +35,13 @@ ADAPTERS_ROOT = REPO_ROOT / "packages" / "adapters"
 #: with `ast` rather than imported, so this module stays static analysis.
 CAPABILITIES_SOURCE = REPO_ROOT / "packages/runtime/src/engine/runtime/capabilities.py"
 
-#: Acceptance criterion: these two must not pull in any third-party code.
-NO_THIRD_PARTY_LAYERS = frozenset({DOMAIN, ENGINE})
+#: Acceptance criterion: this layer must not pull in any third-party code.
+NO_THIRD_PARTY_LAYERS = frozenset({DOMAIN})
 
 #: Which `engine.*` module prefixes each layer is allowed to import.
 #: Adapters additionally import their own module; apps may import anything.
 ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
     DOMAIN: ("engine.domain",),
-    ENGINE: ("engine.domain", "engine.core"),
     PORTS: ("engine.domain", "engine.ports"),
     # `engine.graph_runtime` is here because it is a contract rather than an
     # implementation: a runtime-layer package may be written against it, which
@@ -51,13 +49,12 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
     # so depending on it is not depending on a concrete anything.
     RUNTIME: (
         "engine.domain",
-        "engine.core",
         "engine.ports",
         "engine.runtime",
         "engine.graph_runtime",
         "engine.orchestrator",
     ),
-    ADAPTER: ("engine.domain", "engine.core", "engine.ports", "engine.runtime"),
+    ADAPTER: ("engine.domain", "engine.ports", "engine.runtime"),
     # The graph packages are here for the same reason `engine.adapters` is: an
     # app is where the pieces are wired together, and one of the pieces it can
     # wire now is the engine that runs graph workflows. The contract and its
@@ -65,7 +62,6 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
     # place allowed to name a concrete implementation.
     APP: (
         "engine.domain",
-        "engine.core",
         "engine.ports",
         "engine.runtime",
         "engine.adapters",
@@ -111,8 +107,6 @@ def _layer_for(root: Path) -> str:
             return APP
         case ("packages", "domain"):
             return DOMAIN
-        case ("packages", "engine"):
-            return ENGINE
         case ("packages", "scoper" | "slack-concierge"):
             return RUNTIME
         case ("packages", "graph_runtime"):

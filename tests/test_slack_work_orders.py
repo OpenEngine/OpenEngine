@@ -27,16 +27,14 @@ from engine.domain import (
     AgentRunId,
     RunId,
     RunOrigin,
-    RunRequested,
     RunState,
     StepId,
     StepSpec,
     TaskId,
     WorkflowId,
-    WorkspaceId,
 )
 from engine.domain.chat import Message
-from engine.ports import AgentTurn, Message as CommunicationsMessage, McpServerConfig
+from engine.ports import AgentTurn, Message as CommunicationsMessage
 from engine.runtime import RunNotifier, WorkOrdersConfig
 from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
@@ -236,10 +234,8 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
     return create_app(
         session,
         runners,
-        workflow_runners=runners,
-        review_runners=runners,
         workflow_catalog=(
-            catalog if catalog is not None else WorkflowCatalog.from_definitions(())
+            catalog if catalog is not None else WorkflowCatalog.from_graphs(())
         ),
         slack_credential_store=slack_store,
         github_login_config=github_login_config,
@@ -251,29 +247,25 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
     ), capabilities, slack_store
 
 
+def _mention_graph():
+    """The workflow these mentions name, doing nothing in particular."""
+    from engine.graph_runtime_langgraph import State, graph_workflow
+    from langgraph.graph import END, START, StateGraph
+
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {})
+    builder.add_edge(START, "work")
+    builder.add_edge("work", END)
+    return graph_workflow(
+        builder, id="implementation-review-v1", name="Implementation review"
+    )
+
+
 def _workflow_catalog():
-    import openengine as oe
+    """A catalog holding the workflow these mentions name."""
     from engine.runtime import WorkflowCatalog
 
-    coder = oe.agent(id="coder", instructions="Implement it.")
-    return WorkflowCatalog.from_definitions(
-        [
-            oe.workflow(
-                id="implementation-review-v1",
-                name="Implementation review",
-                version="v1",
-                steps=[
-                    oe.agent_step(
-                        id="implementation",
-                        name="Implementation",
-                        agent=coder,
-                        prompt=oe.template("{task}", task=oe.task.prompt),
-                        transitions={"*": oe.succeed()},
-                    )
-                ],
-            )
-        ]
-    )
+    return WorkflowCatalog.from_graphs((_mention_graph(),))
 
 
 def test_handshake_is_answered_with_the_challenge(tmp_path) -> None:
@@ -582,231 +574,6 @@ def test_a_run_from_the_web_is_never_announced() -> None:
     )
     asyncio.run(notifier.announce(state, "half way there"))
     assert communications.posts == []
-
-
-class CompletingMcpRunner:
-    """A runner that completes each step through the real run-bound server.
-
-    Enough of an agent to exercise the reporting path end to end: it posts one
-    status, then completes, declaring `pr_url` on the step that has it.
-    """
-
-    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
-
-    def __init__(self, pull_request_url: str) -> None:
-        self._pull_request_url = pull_request_url
-
-    async def run_turn(self, *_args, **_kwargs):  # pragma: no cover
-        raise AssertionError("this test drives the MCP path")
-
-    async def run_turn_with_mcp(
-        self,
-        agent_run_id,
-        profile,
-        messages,
-        mcp_server,
-        workspace_id=None,
-    ):
-        from engine.domain import Message as ChatMessage
-
-        outputs = (
-            {"pr_url": self._pull_request_url}
-            if "implementation" in str(agent_run_id)
-            else {}
-        )
-        await _call_bound_tool(
-            mcp_server, "update_status", {"status": "reading the code"}, "call-1"
-        )
-        await _call_bound_tool(
-            mcp_server,
-            "complete_step",
-            {"outcome": "success", "summary": "Done.", "outputs": outputs},
-            "call-2",
-        )
-        await asyncio.sleep(0)
-        return AgentTurn(ChatMessage.assistant("Completed."))
-
-    async def cancel(self, _agent_run_id) -> None:
-        return None
-
-
-async def _call_bound_tool(mcp_server, name, arguments, request_id):
-    host = mcp_server.args[mcp_server.args.index("--host") + 1]
-    port = int(mcp_server.args[mcp_server.args.index("--port") + 1])
-    token = mcp_server.args[mcp_server.args.index("--token") + 1]
-    reader, writer = await asyncio.open_connection(host, port)
-    writer.write(
-        json.dumps(
-            {
-                "token": token,
-                "request_id": request_id,
-                "name": name,
-                "arguments": arguments,
-            }
-        ).encode()
-        + b"\n"
-    )
-    await writer.drain()
-    response = json.loads(await reader.readline())
-    writer.close()
-    await writer.wait_closed()
-    assert response["ok"] is True, response
-    return response
-
-
-class OneWorkspaceProvider:
-    async def provision(self, repository: str, base_ref: str):
-        from engine.ports import Workspace
-
-        return Workspace(
-            workspace_id=WorkspaceId("ws-1"),
-            root_path="/tmp/ws-1",
-            repository=repository,
-            base_ref=base_ref,
-        )
-
-
-def _reporting_workflow(*, notification: bool = True):
-    import openengine as oe
-
-    coder = oe.agent(id="coder", instructions="Implement it.")
-    reviewer = oe.agent(id="reviewer", instructions="Review it.")
-    implementation = oe.result("implementation")
-    return oe.workflow(
-        id="implementation-review-v1",
-        name="Implementation review",
-        version="v1",
-        workspace=oe.workspace(base_ref="origin/main"),
-        steps=[
-            oe.agent_step(
-                id="implementation",
-                name="Implementation",
-                agent=coder,
-                prompt=oe.template("{task}", task=oe.task.prompt),
-                required_outputs=["pr_url"],
-                workspace_access="write",
-                transitions={"success": oe.goto("review"), "*": oe.fail()},
-            ),
-            oe.agent_step(
-                id="review",
-                name="Review",
-                agent=reviewer,
-                prompt=oe.template("Review {pr}", pr=implementation.outputs),
-                workspace_access="read",
-                transitions={"*": oe.goto("human-review")},
-            ),
-            oe.human_review_step(
-                id="human-review",
-                name="Human review",
-                title=oe.template("Review {task_id}", task_id=oe.task.id),
-                summary=oe.template("done"),
-                approved=oe.succeed(),
-                rejected=oe.fail(),
-                notification=oe.slack_notification() if notification else None,
-            ),
-        ],
-    )
-
-
-PULL_REQUEST = "https://example.invalid/pr/9"
-DRIVEN_RUN = RunId("run-1")
-
-
-def _drive_to_human_review(definition) -> RecordingCommunications:
-    """Run a work order with an origin until it parks on a human decision."""
-    from engine.runtime import Capabilities, WorkflowCatalog, WorkflowExecutor
-
-    communications = RecordingCommunications()
-    store = InMemoryStateStore()
-    runner = CompletingMcpRunner(PULL_REQUEST)
-    capabilities = Capabilities(
-        workflow_runtime=object(),
-        source_control=object(),
-        agent_runner=runner,
-        communications=communications,
-        workspace_provider=OneWorkspaceProvider(),
-        state_store=store,
-    )
-    executor = WorkflowExecutor(
-        capabilities,
-        {"default": runner},
-        review_runners={"default": runner},
-        catalog=WorkflowCatalog.from_definitions([definition]),
-        public_url="https://engine.example",
-    )
-    run_id = DRIVEN_RUN
-    origin = RunOrigin(channel="C123", thread_id="1700.0001", author="U777")
-
-    async def scenario() -> None:
-        await store.save(
-            RunState(
-                run_id=run_id,
-                task_id=TaskId("task-1"),
-                workflow_id=definition.workflow_id,
-                prompt="add a health endpoint",
-                repository="acme/api",
-                origin=origin,
-            )
-        )
-        await executor.start(
-            RunRequested(
-                run_id=run_id,
-                task_id=TaskId("task-1"),
-                prompt="add a health endpoint",
-                repository="acme/api",
-                workflow_id=definition.workflow_id,
-            ),
-            "default",
-        )
-
-    asyncio.run(scenario())
-    return communications
-
-
-def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
-    pull_request = PULL_REQUEST
-    communications = _drive_to_human_review(_reporting_workflow())
-
-    said = [message.text for _channel, message, _thread in communications.posts]
-    assert all(thread == "1700.0001" for _c, _m, thread in communications.posts)
-    assert "*Implementation* started." in said
-    assert "*Implementation*: reading the code" in said
-    assert any(text.startswith("*Implementation* complete.") for text in said)
-    # The review stage announces itself, which is the point of announcing on
-    # entry rather than only on ending.
-    assert "*Review* started." in said
-
-    completion = next(
-        message
-        for _channel, message, _thread in communications.posts
-        if message.text.startswith("*Implementation* complete.")
-    )
-    assert [link.url for link in completion.links] == [
-        pull_request,
-        f"https://engine.example/runs/{DRIVEN_RUN}",
-    ]
-
-    # The last word is addressed to whoever asked, because it is their decision
-    # the run is now waiting on.
-    ready = communications.posts[-1][1]
-    assert ready.mention == "U777"
-    assert "ready for your decision" in ready.text.lower()
-    assert pull_request in [link.url for link in ready.links]
-
-
-def test_the_author_is_pinged_even_without_an_operator_notification() -> None:
-    """`notification` configures the operators' channel, not this.
-
-    A workflow that omits it must still ping whoever asked, or their thread
-    reports the review complete and then goes silent forever with the run
-    parked on a decision nobody was told about.
-    """
-    communications = _drive_to_human_review(_reporting_workflow(notification=False))
-
-    ready = communications.posts[-1][1]
-    assert ready.mention == "U777"
-    assert "ready for your decision" in ready.text.lower()
-    assert PULL_REQUEST in [link.url for link in ready.links]
 
 
 def test_the_signing_secret_can_be_added_without_reconnecting(tmp_path) -> None:
@@ -1155,8 +922,6 @@ def test_mcp_unknown_method_returns_error() -> None:
     asyncio.run(scenario())
 
 
-
-
 class FakeACPProvider:
     name = "fake"
 
@@ -1248,18 +1013,17 @@ def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
 
 
 @pytest.mark.parametrize("fail_after_create", [False, True])
-def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch, fail_after_create):
+def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, fail_after_create):
     from starlette.testclient import TestClient
-    from engine.runtime import WorkflowExecutor
-    posts_at_start = []
-    async def no_drive(self, event, runner_name):
-        posts_at_start.append(list(communications.posts))
-    monkeypatch.setattr(WorkflowExecutor, "start", no_drive)
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+
+    graph = _mention_graph()
     provider = FakeACPProvider(create=True, fail_after_create=fail_after_create)
     communications = RecordingCommunications()
     app, capabilities, _ = _app(tmp_path, communications,
         WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1", runner="default"),
-        _workflow_catalog(), provider=provider)
+        _workflow_catalog(), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"))
     def body(kind, ts, text, **extra):
         return json.dumps({"type": "event_callback", "event": dict(
             type=kind, channel="C", user="U", ts=ts, text=text, **extra)}).encode()
@@ -1282,22 +1046,21 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch,
         assert not result.get("isError"), result
         assert result["structuredContent"]["url"].startswith("https://engine.example")
         assert len(provider.clients[0].prompts) == 2
-    assert len(posts_at_start) == 1
-    announcements = [m for _, m, _ in posts_at_start[0] if m.text.startswith("Started a work order")]
+    announcements = [
+        m for _, m, _ in communications.posts
+        if m.text.startswith("Started a work order")
+    ]
     assert len(announcements) == 1
     assert announcements[0].links
-    if not fail_after_create:
-        assert posts_at_start[0][-2][1].text == provider.text
     assert any(m.links for _, m, _ in communications.posts)
     assert all(thread == "1" for _, _, thread in communications.posts)
     # The work-order announcement (with the link) must follow the conversational
     # reply so that messages appear in the expected order in the thread.
-    link_indices = [i for i, (_, m, _) in enumerate(communications.posts) if m.links]
-    reply_indices = [i for i, (_, m, _) in enumerate(communications.posts) if not m.links]
-    assert reply_indices and link_indices
-    assert fail_after_create or max(reply_indices) < min(link_indices), (
-        "announcement with link should appear after the conversational reply"
-    )
+    texts = [m.text for _, m, _ in communications.posts]
+    if not fail_after_create:
+        assert texts.index(provider.text) < texts.index(announcements[0].text), (
+            "announcement with link should appear after the conversational reply"
+        )
 
 
 def test_concierge_uses_real_langgraph_acp_session(tmp_path):
@@ -1542,7 +1305,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     communications = RecordingCommunications()
     app, capabilities, _ = _app(
         tmp_path, communications, configured.config.work_orders,
-        WorkflowCatalog.from_definitions((), (graph,)), provider=provider,
+        WorkflowCatalog.from_graphs((graph,)), provider=provider,
         graph_runtime=runtime_before_row(),
     )
     body = json.dumps({"type": "event_callback", "event": {

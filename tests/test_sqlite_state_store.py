@@ -1,6 +1,7 @@
 """SQLite conversation persistence."""
 
 import asyncio
+import json
 import sqlite3
 
 import pytest
@@ -12,20 +13,14 @@ from engine.domain import (
     AgentRun,
     AgentRunId,
     AgentRunStatus,
-    AgentStepPaused,
     ApprovalId,
     ConversationId,
-    HumanReviewCompleted,
     Message,
     Role,
     RunId,
-    RunNamed,
+    RunOrigin,
     RunPhase,
     RunState,
-    StepCompleted,
-    StepReactivated,
-    StepId,
-    StepOutput,
     TaskId,
     ToolCall,
     WorkflowId,
@@ -110,7 +105,6 @@ def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
             title="Durable title",
             archived=True,
             runner="claude",
-            auto_approve=True,
         )
     )
     first.close()
@@ -125,7 +119,6 @@ def test_instance_metadata_survives_reopening_the_database(tmp_path) -> None:
     assert loaded.title == "Durable title"
     assert loaded.archived is True
     assert loaded.runner == "claude"
-    assert loaded.auto_approve is True
 
 
 def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
@@ -163,7 +156,6 @@ def test_existing_database_gets_default_instance_metadata(tmp_path) -> None:
     assert loaded.title == "New chat"
     assert loaded.archived is False
     assert loaded.runner == ""
-    assert loaded.auto_approve is False
 
 
 def test_approvals_written_before_grants_existed_still_load(tmp_path) -> None:
@@ -293,54 +285,28 @@ def test_agent_runs_are_upserted() -> None:
     assert recorded.changed_files == ("README.md",)
 
 
-def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
+def test_a_work_order_and_its_conversations_survive_reopening(tmp_path) -> None:
     path = tmp_path / "runs.sqlite3"
     run_id = RunId("run-durable")
-    review = HumanReviewCompleted(
-        run_id=run_id,
-        step_id=StepId("human-review"),
-        approved=False,
-        summary="The risk is not acceptable yet.",
-    )
-    result = StepCompleted(
-        run_id=run_id,
-        step_id=StepId("review"),
-        agent_run_id=AgentRunId("review-execution"),
-        outcome="changes_requested",
-        summary="Add a regression test.",
-        outputs=(StepOutput("findings", "Missing coverage"),),
-        mcp_request_id="request-17",
-    )
     state = RunState(
         run_id=run_id,
         task_id=TaskId("task-durable"),
-        workflow_id=WorkflowId("durability-test-v1"),
+        workflow_id=WorkflowId("durability-test"),
         phase=RunPhase.FAILED,
         repository="acme/api",
         prompt="Fix the race.",
         name="Fix shared counter race",
-        current_step_id=StepId("human-review"),
-        step_results=(result,),
-        human_review=review,
+        failure_reason="the reviewer could not reach the repository",
+        origin=RunOrigin(channel="C1", thread_id="17.5", author="U9"),
     )
 
     first = SQLiteStateStore(path)
     asyncio.run(first.save(state))
-    named = RunNamed(run_id=run_id, name=state.name)
-    paused = AgentStepPaused(
-        run_id=run_id,
-        step_id=StepId("implementation"),
-        agent_run_id=AgentRunId("implementation-execution"),
-    )
-    reactivated = StepReactivated(run_id=run_id, step_id=StepId("implementation"))
-    asyncio.run(first.append_events(run_id, (named, paused, reactivated)))
     asyncio.run(
         first.create_instance(
             AgentId("review-agent"),
             instance_id=AgentInstanceId("review-instance"),
             conversation_id=ConversationId("review-conversation"),
-            workflow_run_id=run_id,
-            workflow_step_id=StepId("review"),
         )
     )
     first.close()
@@ -349,15 +315,56 @@ def test_workflow_run_and_step_conversation_survive_reopening(tmp_path) -> None:
     try:
         loaded = asyncio.run(second.load(run_id))
         runs = asyncio.run(second.list_runs())
-        history = asyncio.run(second.history(run_id))
-        instances = asyncio.run(second.list_instances(workflow_run_id=run_id))
+        instances = asyncio.run(second.list_instances())
     finally:
         second.close()
 
     assert loaded == state
     assert runs == (state,)
-    assert history == (named, paused, reactivated)
     assert instances[0].instance_id == "review-instance"
     assert instances[0].conversation_id == "review-conversation"
-    assert instances[0].workflow_run_id == run_id
-    assert instances[0].workflow_step_id == "review"
+
+
+def test_a_row_this_build_cannot_read_is_skipped_rather_than_hiding_the_rest(
+    tmp_path,
+) -> None:
+    """A run left by a build with phases this one no longer has.
+
+    Reading the list is how every screen finds its WorkOrders, so one row it
+    cannot make sense of must not take the others with it -- or the startup
+    that reads the same list. It is warned about and left where it is.
+    """
+    path = tmp_path / "runs.sqlite3"
+    current = RunState(
+        run_id=RunId("run-current"),
+        task_id=TaskId("task-current"),
+        workflow_id=WorkflowId("implementation-review-rerank"),
+    )
+
+    store = SQLiteStateStore(path)
+    try:
+        asyncio.run(store.save(current))
+        store._connection.execute(
+            "INSERT INTO run_states (run_id, state_json) VALUES (?, ?)",
+            (
+                "run-legacy",
+                json.dumps(
+                    {
+                        "run_id": "run-legacy",
+                        "task_id": "task-legacy",
+                        "workflow_id": "implementation-review-v1",
+                        "phase": "awaiting_human_review",
+                    }
+                ),
+            ),
+        )
+        store._connection.commit()
+
+        with pytest.raises(ValueError, match="awaiting_human_review"):
+            asyncio.run(store.load(RunId("run-legacy")))
+        with pytest.warns(RuntimeWarning, match="skipping incompatible workflow run"):
+            runs = tuple(asyncio.run(store.list_runs()))
+    finally:
+        store.close()
+
+    assert runs == (current,)

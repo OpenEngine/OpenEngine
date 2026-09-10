@@ -5,7 +5,7 @@ description = "Dispatches engine commands to capability implementations."
 requires-python = ">=3.11"
 # `engine-graph-runtime` is the contract, not an engine. The loader only needs
 # to recognise a graph workflow, which is two attributes.
-dependencies = ["engine-domain", "engine-core", "engine-ports", "engine-graph-runtime"]
+dependencies = ["engine-domain", "engine-ports", "engine-graph-runtime"]
 
 [build-system]
 requires = ["hatchling"]
@@ -16,6 +16,5 @@ packages = ["src/engine"]
 
 [tool.uv.sources]
 engine-domain = { workspace = true }
-engine-core = { workspace = true }
 engine-ports = { workspace = true }
 engine-graph-runtime = { workspace = true }

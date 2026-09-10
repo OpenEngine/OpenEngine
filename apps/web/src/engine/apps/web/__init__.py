@@ -9,7 +9,6 @@ from engine.apps.web.composition import (
     build_read_only_runners,
     build_runners,
     build_session,
-    build_workflow_runners,
 )
 
 __all__ = [
@@ -18,5 +17,4 @@ __all__ = [
     "build_read_only_runners",
     "build_runners",
     "build_session",
-    "build_workflow_runners",
 ]

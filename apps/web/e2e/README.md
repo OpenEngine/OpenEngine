@@ -59,36 +59,10 @@ scenario's word too, and the one only a reviewer can match has to be listed
 first. A turn run without the approval transport -- the runtime naming a chat or
 a workflow -- is answered with `title` instead of a scenario.
 
-A workflow step ends only when the agent calls `complete_step` or `fail_step` on
-the run-bound MCP server the runtime attached to that turn, so the fakes are MCP
-*clients* too:
-
-```ts
-{ type: "tool", name: "complete_step",
-  arguments: { outcome: "success", summary: "Added the greeting.",
-               outputs: { pr_url: "https://github.com/acme/api/pull/7" } } }
-```
-
-They read the server off argv the way each provider encodes it -- `--mcp-config`
-for Claude, `-c mcp_servers.workflow.*` or the app-server thread config for
-Codex -- spawn it as given, and make a real JSON-RPC `tools/call`. A completion
-missing a declared output is refused by the runtime and the turn is corrected,
-which `tests/test_workflow_integration.py` covers at the faster tier.
-
-**End a workflow scenario on its terminal call.** That is the shape the step
-instructions ask for, and it used to be the one that broke: the runtime cancels
-the CLI as soon as it accepts a terminal result, but when the CLI finishes first
-both adapters assemble the turn with its *last spoken text* as the answer, which
-moves narration to the end. The runtime compared that against what it had
-streamed by position and refused a step it had already accepted
-(`streamed workflow transcript does not match completed turn`). It now matches
-streamed messages by identity, so reassembly order is not load-bearing -- see
-`test_a_turn_ending_in_its_terminal_call_is_kept_in_streamed_order` in
-`tests/test_workflow_mcp_execution.py`, which covers it without the race.
-
-Scenarios here used to carry a closing `say` to keep that race out of the tests.
-They no longer do, and adding one back would hide the shape this tier is best
-placed to exercise.
+Graph workflow scenarios use fake ACP agents and the run-bound MCP tools. The
+harness rebuilds the shipped graph with those agents through `graph_for`.
+Graph approvals and transcripts are covered by `graph-workflow.spec.ts`; chat
+approval placement is covered by `chat-approvals.spec.ts`.
 
 A failing test keeps its directory and prints the path, and attaches whatever
 the server said to the report. `npx playwright show-trace test-results/…` opens
@@ -122,16 +96,6 @@ unzip it, and point `show-report` at the directory.
   it is still running, the approval it pauses on reaches the browser, approving
   it is recorded as an approval, the turn carries on, and the file the command
   was allowed to write exists in that chat's worktree.
-* `approval-placement.spec.ts` -- *where* a request is shown, on each runner: a
-  graph's implementation node runs three `git_subcommand` calls through the
-  run-bound MCP server -- two different commands and then a repeat of the first
-  -- and each pause has to render beside the call that raised it, with nothing
-  collecting in the end-of-turn slot, before the decision, after it, and after a
-  reload. The pairing is the provider's own id for the call, which that server
-  is the one place that has to look up rather than know; the lookup itself is
-  pinned at speed in `tests/test_workflow_mcp_execution.py`, and what only a
-  browser can say is that the pairing survives everything between the broker and
-  the page.
 * `graph-workflow.spec.ts` -- the WorkOrder this repository ships, end to end,
   split into the states a run passes through so a broken one is reported by
   name. See below.
@@ -146,14 +110,12 @@ unzip it, and point `show-report` at the directory.
   them too; this is the one that proves they reach the server.
 * `persisted-navigation.spec.ts` -- cold starts over both a SQLite file populated
   through the current production state-store adapter and the frozen
-  `fixtures/v0.0.0.sqlite3` artifact. Both hold a *step* run, which is what the
-  history in a real deployment's database looks like: this repository used to
-  ship a step workflow and now ships only a graph, and a run started before that
-  still has to open. The run list, run detail, implementation and review
-  transcripts, and a multi-turn standalone chat are followed through their
-  browser links. Each case then starts another chat and a graph WorkOrder in the
-  same database and confirms the older history remains listed. The frozen
-  artifact makes opening the database exercise migrations added after v0.0.0.
+  `fixtures/v0.0.0.sqlite3` artifact. Both retain the WorkOrder's identity and
+  lifecycle after its workflow is withdrawn, and keep the standalone chat's
+  complete history. Each case starts a graph WorkOrder in the same database and
+  confirms the existing rows remain listed. Retired step-workflow transcripts
+  and decisions are no longer rendered. The frozen artifact exercises migrations
+  added after v0.0.0.
 
 ## The graph WorkOrder
 
@@ -187,23 +149,9 @@ that offered it. What that spec was the only cover for moved into the last test
 here: the reviewer's comment leaving through `gh`, and the approved run
 surviving a reload.
 
-Three things it covered have no graph equivalent on the page yet:
-
-* **A node's declared outputs.** A step card showed the `pr_url` and `findings`
-  a step declared through `complete_step`. A graph node's card shows the text
-  the agent finished with; the graph's state keeps the node's spoken output, not
-  the outputs the run-bound server took, so there is nothing for the page to
-  draw. The last test asserts the summary instead.
-* **The human decision, kept.** A finished step run read `approved` in its stats
-  and showed the decision note on its human-review card. A graph run's row
-  records that it succeeded and nothing about who ended it. The last test
-  asserts the finished run instead: `succeeded`, every stage behind it, and the
-  question gone.
-* **Inline approval placement.** A graph node's conversation collects its
-  requests in the end-of-turn slot rather than beside the call that raised each.
-  `approval-placement.spec.ts` still covers that placement, over the step
-  workflow in `tests/fixtures/workflows` -- see the note at the top of it, and
-  the harness note in `tests/graph_workflow_fakes.py`.
+The human decision completes the run and removes the pending question. The graph
+approval API accepts the decision itself; the page does not offer a note field.
+Structured node outputs and safe pull-request links are covered in `runs.test.tsx`.
 
 The agents are scripted the same way as everywhere else here, but over a third
 protocol. `ACPNode` talks ACP to an adapter that wraps a CLI, not to the CLI, so

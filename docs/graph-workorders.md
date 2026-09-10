@@ -5,34 +5,15 @@ Status: implemented for `apps/web`
 This page explains what a graph WorkOrder is, what happens when you create one,
 and what it cannot do yet — no background in the codebase assumed.
 
-## The two kinds
+## Workflows
 
-Every workflow lives as a file in the `workflows` directory, and that directory
-is what this deployment knows how to run.
+Every workflow lives as a file in the configured `workflows` directory. A
+workflow defines a graph of nodes and edges, and LangGraph runs it. The
+creation dropdown shows each available workflow under its own name.
 
-- **A step workflow** is a list: do this, then that, then ask a person. The
-  part of OpenEngine that has been running for months reads the list and works
-  through it. These appear in the dropdown with a version next to them, like
-  `Implementation review · v1`.
-- **A graph workflow** is a drawing: boxes with arrows between them. A
-  different engine — LangGraph — runs those. These appear in the dropdown under
-  their own name and with no version.
-
-This repository ships one workflow and it is a graph. The step executor is
-still shipped, so a deployment that installs a step definition of its own gets
-both kinds in the same dropdown; nothing here installs one.
-
-Both kinds do roughly the same job for the implementation-review workflow: make
-a checkout, let an agent change the code, let an agent review the change, then
-stop and wait for a person to say yes or no. They differ in what the engine
-underneath can do, which is the reason the graph one exists:
-
-- The checkout is one of the boxes. If the checkout fails, the run stops
-  *there*, visibly, instead of the whole thing failing before it ever started.
-- Waiting for a person does not end the agent's turn. It sits there, holding
-  the conversation, and carries on when you answer — so answering is a reply
-  rather than a fresh start.
-- The same is true when an agent asks permission mid-task.
+The shipped workflow makes a checkout, implements the task, reviews the change,
+and waits for a human decision. Its nodes can run concurrently, and approvals
+pause an agent's turn until a person answers.
 
 ## What happens when you pick one
 
