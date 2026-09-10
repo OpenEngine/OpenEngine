@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from engine.domain import (
     AgentRunId,
@@ -29,7 +30,13 @@ from engine.domain import (
     StepSpec,
 )
 from engine.domain.ids import WorkspaceId
-from engine.ports import ApprovalHandler, ApprovalRequest, McpServerConfig, SourceControl
+from engine.ports import (
+    ApprovalHandler,
+    ApprovalRequest,
+    CommentResult,
+    McpServerConfig,
+    SourceControl,
+)
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -50,6 +57,12 @@ ToolCallLookup = Callable[[str, str], str | None]
 #: Given a line of progress the agent wants a person to see, put it in front of
 #: them. Bound by whoever knows where the run is being watched.
 StatusReporter = Callable[[str], Awaitable[None]]
+
+#: Given the change request a comment was posted on and what the forge made of
+#: it, write it down somewhere that outlives the run. Bound by whoever owns the
+#: durable store; a broker without one still posts comments, it just keeps no
+#: record of them.
+CommentRecorder = Callable[[int, CommentResult], Awaitable[None]]
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -162,6 +175,7 @@ class TerminalMcpBroker:
         self._tool_call_ids: ToolCallLookup | None = None
         self._comments_added = 0
         self._status_reporter: StatusReporter | None = None
+        self._comment_recorder: CommentRecorder | None = None
 
     def enable_status_updates(self, report: StatusReporter) -> None:
         """Serve `update_status`, delivering what it is told to `report`.
@@ -171,6 +185,16 @@ class TerminalMcpBroker:
         than offered one whose updates go nowhere.
         """
         self._status_reporter = report
+
+    def enable_comment_records(self, record: CommentRecorder) -> None:
+        """Keep a durable record of every comment `add_comment` posts.
+
+        Only bound when the run has a store to keep one in. A comment is
+        posted whether or not anything is recording, so this is bookkeeping
+        rather than part of the tool: what it enables is a later run being
+        able to find the comments an earlier one left.
+        """
+        self._comment_recorder = record
 
     def enable_repository_tools(
         self,
@@ -406,6 +430,7 @@ class TerminalMcpBroker:
             except Exception as error:
                 return {"ok": False, "error": f"could not add comment: {error}"}
             self._comments_added += 1
+            await self._record_comment(pr_url, result)
             return {
                 "ok": True,
                 "acknowledgement": "comment added",
@@ -496,6 +521,22 @@ class TerminalMcpBroker:
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _record_comment(self, pr_url: str, result: CommentResult) -> None:
+        """Write down a comment that is already posted, if anyone is keeping it.
+
+        Failures here are swallowed rather than reported, unlike everything
+        else in `_repository_call`. The comment exists on the forge by now, so
+        the only thing the agent could do with the bad news is call
+        `add_comment` again and post it twice.
+        """
+        if self._comment_recorder is None:
+            return
+        number = _change_request_number(pr_url)
+        if number is None:
+            return
+        with suppress(Exception):
+            await self._comment_recorder(number, result)
 
     async def _approve_git(
         self, arguments: tuple[str, ...], request_id: McpRequestId
@@ -904,6 +945,19 @@ def _comment_arguments(
         if file is not None or line is not None:
             raise ValueError("in_reply_to_id cannot be combined with file or line")
     return pr_url, comment, file, line, in_reply_to_id
+
+
+def _change_request_number(pr_url: str) -> int | None:
+    """Which change request a review URL is about, or `None` if it cannot say.
+
+    Forge-neutral on purpose: GitHub ends the path with `pull/<n>` and GitLab
+    with `merge_requests/<n>`, so the number is the last segment of the path
+    that is one -- and a `/files` or a fragment after it is not.
+    """
+    for segment in reversed(urlsplit(pr_url).path.split("/")):
+        if segment.isdigit():
+            return int(segment)
+    return None
 
 
 async def _forward_call(

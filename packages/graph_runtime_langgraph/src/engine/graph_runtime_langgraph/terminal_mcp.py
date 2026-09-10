@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from engine.domain import AgentId, AgentRunId, StepId, StepSpec
 from engine.domain.ids import WorkspaceId
-from engine.ports import ApprovalHandler, SourceControl
+from engine.ports import ApprovalHandler, CommentResult, SourceControl
 from engine.runtime.terminal_mcp import (
     REPOSITORY_TOOL_METHODS,
     TerminalMcpBroker,
@@ -17,6 +18,7 @@ from engine.runtime.terminal_mcp import (
 
 from engine.graph_runtime_langgraph.acp import BoundMcpServer
 from engine.graph_runtime_langgraph.executions import NodeExecution
+from engine.graph_runtime_langgraph.store import CommentRecord
 
 WORKSPACE_ID = "workspaceId"
 
@@ -65,18 +67,35 @@ class TerminalMcpServer:
             ),
             registry=TerminalResultRegistry(),
         )
+        served = tuple(
+            name
+            for name in self.repository_tools
+            if callable(
+                getattr(source_control, REPOSITORY_TOOL_METHODS.get(name, ""), None)
+            )
+        )
         broker.enable_repository_tools(
             source_control,
-            tuple(
-                name
-                for name in self.repository_tools
-                if callable(
-                    getattr(source_control, REPOSITORY_TOOL_METHODS.get(name, ""), None)
-                )
-            ),
+            served,
             WorkspaceId(workspace),
             approve,
         )
+        if "add_comment" in served:
+            store = execution.runtime.store
+
+            async def record(pr_number: int, comment: CommentResult) -> None:
+                await store.remember_comment(
+                    CommentRecord(
+                        comment_id=comment.id,
+                        pr_number=pr_number,
+                        run_id=execution.run_id,
+                        posted_at=datetime.now(UTC).isoformat(),
+                        node_id=execution.node_id,
+                        url=comment.url,
+                    )
+                )
+
+            broker.enable_comment_records(record)
         async with broker:
             config = broker.config
             yield BoundMcpServer(

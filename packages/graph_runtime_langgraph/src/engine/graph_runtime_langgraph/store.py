@@ -114,6 +114,27 @@ class ApprovalRecord:
         return self.status is ApprovalStatus.PENDING
 
 
+@dataclass(frozen=True, slots=True)
+class CommentRecord:
+    """One comment a run left on a change request.
+
+    Kept outside the event history because it is about the forge rather than
+    about this run: what a later run needs is "which comments are already on
+    this pull request", and answering that from a run's own transcript would
+    mean replaying every run that ever touched it.
+    """
+
+    comment_id: int
+    """The forge's id for the comment, which is also what identifies the row."""
+    pr_number: int
+    run_id: RunId
+    posted_at: str
+    """When it was posted, ISO 8601, as the caller that posted it saw the clock."""
+    node_id: NodeId | None = None
+    """Which node posted it. `None` outside a graph."""
+    url: str = ""
+
+
 @runtime_checkable
 class GraphRuntimeStore(EventStore, Protocol):
     """The durable half of the runtime, including the event history."""
@@ -154,6 +175,14 @@ class GraphRuntimeStore(EventStore, Protocol):
         """Write the answer down before anyone acts on it."""
         ...
 
+    async def remember_comment(self, record: CommentRecord) -> None:
+        """Record a comment a run posted, replacing what was known about it."""
+        ...
+
+    async def comments(self, run_id: RunId) -> tuple[CommentRecord, ...]:
+        """Every comment this run posted, oldest first."""
+        ...
+
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         """Settle every open request this run raised, without deciding one.
 
@@ -183,6 +212,7 @@ class InMemoryGraphRuntimeStore:
         self._runs: dict[RunId, RunRecord] = {}
         self._sessions: dict[tuple[RunId, str], ACPContinuation] = {}
         self._approvals: dict[ApprovalId, ApprovalRecord] = {}
+        self._comments: dict[int, CommentRecord] = {}
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
         events = self._events.setdefault(event.run_id, [])
@@ -234,6 +264,14 @@ class InMemoryGraphRuntimeStore:
             self._approvals[approval_id] = replace(
                 record, status=ApprovalStatus.DECIDED, decision=decision
             )
+
+    async def remember_comment(self, record: CommentRecord) -> None:
+        self._comments[record.comment_id] = record
+
+    async def comments(self, run_id: RunId) -> tuple[CommentRecord, ...]:
+        return tuple(
+            record for record in self._comments.values() if record.run_id == run_id
+        )
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         for approval_id, record in tuple(self._approvals.items()):
@@ -382,6 +420,31 @@ class SqliteGraphRuntimeStore:
             (ApprovalStatus.DECIDED.value, decision.value, str(approval_id)),
         )
 
+    async def remember_comment(self, record: CommentRecord) -> None:
+        self._connection.execute(
+            "INSERT INTO github_comments "
+            "(comment_id, pr_number, run_id, node_id, posted_at, url) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (comment_id) DO UPDATE SET "
+            "pr_number = excluded.pr_number, run_id = excluded.run_id, "
+            "node_id = excluded.node_id, posted_at = excluded.posted_at, "
+            "url = excluded.url",
+            (
+                record.comment_id,
+                record.pr_number,
+                str(record.run_id),
+                None if record.node_id is None else str(record.node_id),
+                record.posted_at,
+                record.url,
+            ),
+        )
+
+    async def comments(self, run_id: RunId) -> tuple[CommentRecord, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM github_comments WHERE run_id = ? ORDER BY posted_at, comment_id",
+            (str(run_id),),
+        ).fetchall()
+        return tuple(_comment_from(row) for row in rows)
+
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         self._connection.execute(
             "UPDATE approvals SET status = ? WHERE run_id = ? AND status = ?",
@@ -402,6 +465,17 @@ def _run_from(row: sqlite3.Row) -> RunRecord:
         auto_approve_nodes=tuple(
             NodeId(node) for node in json.loads(row["auto_approve_nodes"])
         ),
+    )
+
+
+def _comment_from(row: sqlite3.Row) -> CommentRecord:
+    return CommentRecord(
+        comment_id=row["comment_id"],
+        pr_number=row["pr_number"],
+        run_id=RunId(row["run_id"]),
+        posted_at=row["posted_at"],
+        node_id=NodeId(row["node_id"]) if row["node_id"] else None,
+        url=row["url"] or "",
     )
 
 
@@ -456,6 +530,7 @@ def _approval_from(row: sqlite3.Row) -> ApprovalRecord:
 
 __all__ = [
     "ApprovalRecord",
+    "CommentRecord",
     "GraphRuntimeStore",
     "InMemoryGraphRuntimeStore",
     "RunRecord",

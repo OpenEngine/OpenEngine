@@ -2109,3 +2109,84 @@ def test_retry_after_follow_up_failure_preserves_context_on_new_runner(
                 await retry(runtime, log, run.run_id)
 
     asyncio.run(scenario())
+
+
+def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
+    tmp_path: Path,
+) -> None:
+    """The binding, end to end: MCP call -> forge -> the store the run keeps."""
+
+    from engine.ports import CommentResult
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    class CommentingSourceControl:
+        async def add_comment(
+            self,
+            _pr_url: str,
+            _comment: str,
+            _file: str | None = None,
+            _line: int | None = None,
+            _in_reply_to_id: int | None = None,
+        ) -> CommentResult:
+            return CommentResult(123, "https://github.com/acme/api/pull/42#c123")
+
+    class Runtime:
+        def __init__(self, store: Any) -> None:
+            self.store = store
+            self.source_control = CommentingSourceControl()
+
+    class Execution:
+        def __init__(self, store: Any) -> None:
+            self.runtime = Runtime(store)
+            self.run_id = RunId("run-1")
+            self.execution_id = "task-1"
+            self.node_id = NodeId("reranker")
+
+    async def refuse(_request: Any) -> ApprovalDecision:
+        raise AssertionError("a comment is not approved through the broker")
+
+    async def scenario() -> tuple[Any, ...]:
+        store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        server = TerminalMcpServer(
+            step_id="reranker",
+            agent_id=AGENT,
+            required_outputs=("findings",),
+            repository_tools=("add_comment",),
+        )
+        async with server(
+            {"workspaceId": "ws-graph-run"}, Execution(store), refuse  # type: ignore[arg-type]
+        ) as bound:
+            arguments = list(bound.config["args"])
+            answer = await _mcp_response(
+                arguments[arguments.index("--host") + 1],
+                int(arguments[arguments.index("--port") + 1]),
+                arguments[arguments.index("--token") + 1],
+                {
+                    "jsonrpc": "2.0",
+                    "id": "comment-1",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "add_comment",
+                        "arguments": {
+                            "pr_url": "https://github.com/acme/api/pull/42",
+                            "comment": "Looks good.",
+                        },
+                    },
+                },
+                repository_tools=("add_comment",),
+            )
+        assert json.loads(answer["result"]["content"][0]["text"]) == {
+            "id": 123,
+            "url": "https://github.com/acme/api/pull/42#c123",
+        }
+        found = await store.comments(RunId("run-1"))
+        store.close()
+        return found
+
+    found = asyncio.run(scenario())
+
+    assert len(found) == 1
+    assert (found[0].comment_id, found[0].pr_number) == (123, 42)
+    assert found[0].node_id == NodeId("reranker")
+    assert found[0].url == "https://github.com/acme/api/pull/42#c123"
+    assert found[0].posted_at

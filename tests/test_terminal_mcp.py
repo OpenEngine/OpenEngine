@@ -868,3 +868,111 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         source.add_comment.assert_awaited_once_with("https://github.com/acme/api/pull/42", "Fixed", None, None, 123)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "pr_url, expected",
+    [
+        ("https://github.com/acme/api/pull/42", 42),
+        ("https://github.com/acme/api/pull/42/files", 42),
+        ("https://github.com/acme/api/pull/42#issuecomment-9", 42),
+        ("https://gitlab.com/acme/api/-/merge_requests/7", 7),
+        ("https://github.com/acme/api", None),
+    ],
+)
+def test_change_request_number_is_read_off_the_review_url(
+    pr_url: str, expected: int | None
+) -> None:
+    from engine.runtime.terminal_mcp import _change_request_number
+
+    assert _change_request_number(pr_url) == expected
+
+
+def test_posted_comments_are_recorded_against_the_change_request() -> None:
+    class RecordingSourceControl:
+        async def add_comment(self, *_arguments: object) -> CommentResult:
+            return CommentResult(123, "https://example.com/comment/123")
+
+    async def scenario() -> list[tuple[int, CommentResult]]:
+        recorded: list[tuple[int, CommentResult]] = []
+
+        async def record(pr_number: int, comment: CommentResult) -> None:
+            recorded.append((pr_number, comment))
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(RecordingSourceControl(), ("add_comment",))  # type: ignore[arg-type]
+        broker.enable_comment_records(record)
+        answer = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "comment-1",
+                "name": "add_comment",
+                "arguments": {
+                    "pr_url": "https://github.com/acme/api/pull/42",
+                    "comment": "Looks good.",
+                },
+            }
+        )
+        assert answer["ok"] is True
+        return recorded
+
+    assert asyncio.run(scenario()) == [
+        (42, CommentResult(123, "https://example.com/comment/123"))
+    ]
+
+
+def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted() -> None:
+    """The comment is on the forge by now; retrying would post it twice."""
+
+    class RecordingSourceControl:
+        async def add_comment(self, *_arguments: object) -> CommentResult:
+            return CommentResult(123, "https://example.com/comment/123")
+
+    async def scenario() -> dict[str, object]:
+        async def record(_pr_number: int, _comment: CommentResult) -> None:
+            raise RuntimeError("the store is gone")
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(RecordingSourceControl(), ("add_comment",))  # type: ignore[arg-type]
+        broker.enable_comment_records(record)
+        broker._result = asyncio.get_running_loop().create_future()
+        answer = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "comment-1",
+                "name": "add_comment",
+                "arguments": {
+                    "pr_url": "https://github.com/acme/api/pull/42",
+                    "comment": "Looks good.",
+                },
+            }
+        )
+        # And the comment still counts towards finishing the review.
+        completed = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "complete-1",
+                "name": "complete_step",
+                "arguments": {
+                    "outcome": "success",
+                    "summary": "Done.",
+                    "outputs": {"revision": "abc123"},
+                },
+            }
+        )
+        assert completed["ok"] is True
+        return answer
+
+    answer = asyncio.run(scenario())
+    assert answer["ok"] is True
+    assert answer["acknowledgement"] == "comment added"
