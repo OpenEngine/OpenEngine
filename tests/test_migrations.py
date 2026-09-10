@@ -213,8 +213,8 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
-        assert tables == {"events", "runs", "sessions", "approvals", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("26a6a404b5fe",)
+        assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "sqlite_sequence", "alembic_version"}
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("c7c9f42f4747",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -283,7 +283,76 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("26a6a404b5fe",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("c7c9f42f4747",)
+
+
+def test_github_comments_migration_preserves_graph_data_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "graph.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "26a6a404b5fe", store="graph")
+    with sqlite3.connect(database) as connection:
+        connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
+        connection.execute(
+            "INSERT INTO events (run_id, kind, payload) VALUES ('run', 'started', '{}')"
+        )
+        events = connection.execute("SELECT * FROM events").fetchall()
+        event_columns = connection.execute("PRAGMA table_info(events)").fetchall()
+
+    upgrade(url, store="graph")
+    upgrade(url, store="graph")
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO github_comments
+                (comment_id, pr_number, run_id, node_id, posted_at, url)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (12345, 42, "run", "review", "2026-09-10T18:00:00Z", "https://example.com/comment"),
+        )
+        connection.execute(
+            """
+            INSERT INTO github_comments (comment_id, pr_number, run_id, posted_at)
+            VALUES (12346, 42, 'run', '2026-09-10T18:01:00Z')
+            """
+        )
+        assert connection.execute(
+            "SELECT node_id, url FROM github_comments WHERE comment_id = 12346"
+        ).fetchone() == (None, None)
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO github_comments SELECT * FROM github_comments WHERE comment_id = 12345"
+            )
+        for column in ("pr_number", "run_id", "posted_at"):
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    f"UPDATE github_comments SET {column} = NULL WHERE comment_id = 12345"
+                )
+        for column, value, index in (
+            ("run_id", "run", "github_comments_by_run"),
+            ("pr_number", 42, "github_comments_by_pr"),
+        ):
+            plan = connection.execute(
+                f"EXPLAIN QUERY PLAN SELECT * FROM github_comments WHERE {column} = ?",
+                (value,),
+            ).fetchall()
+            assert any(index in row[3] for row in plan)
+        assert connection.execute("SELECT * FROM events").fetchall() == events
+        assert connection.execute("PRAGMA table_info(events)").fetchall() == event_columns
+
+    command.downgrade(alembic_config(url, store="graph"), "26a6a404b5fe")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'github_comments%'"
+        ).fetchall() == []
+        assert connection.execute("SELECT run_id, graph_id FROM runs").fetchall() == [("run", "graph")]
+        assert connection.execute("SELECT * FROM events").fetchall() == events
+
+    upgrade(url, store="graph")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM github_comments").fetchone() == (0,)
 
 
 def test_graph_history_rejects_postgres() -> None:
