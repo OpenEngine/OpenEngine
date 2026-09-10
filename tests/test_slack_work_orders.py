@@ -411,11 +411,14 @@ def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path,
     assert not communications.posts
 
 
-def test_github_feedback_steers_the_matching_graph_workorder(tmp_path):
+@pytest.mark.parametrize("stale_position", [None, "before", "after"])
+def test_github_feedback_steers_the_matching_graph_workorder(tmp_path, stale_position):
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
+
+    from engine.graph_runtime import UnknownGraphError
 
     runtime = MagicMock()
     runtime.snapshot = AsyncMock(return_value=SimpleNamespace(
@@ -433,17 +436,31 @@ def test_github_feedback_steers_the_matching_graph_workorder(tmp_path):
     object.__setattr__(capabilities, "source_control", MagicMock(add_comment=AsyncMock()))
     state = RunState(run_id=RunId("graph-work"), task_id=TaskId("task"),
                      workflow_id=WorkflowId("graph-workflow"))
+    stale = RunState(run_id=RunId("stale-work"), task_id=TaskId("stale-task"),
+                     workflow_id=WorkflowId("removed-graph"))
+    snapshot = runtime.snapshot.return_value
+
+    async def snapshot_for(run_id):
+        if run_id == stale.run_id:
+            raise UnknownGraphError("removed-graph")
+        return snapshot
+
+    runtime.snapshot.side_effect = snapshot_for
     payload = _issue_comment(1, "new workorder please")
     payload["issue"]["pull_request"] = {}
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
+        if stale_position == "before":
+            client.portal.call(capabilities.state_store.save, stale)
         client.portal.call(capabilities.state_store.save, state)
+        if stale_position == "after":
+            client.portal.call(capabilities.state_store.save, stale)
         assert client.post("/api/github/events", content=body, headers=dict(
             github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
         assert not provider.clients[0].result.get("isError")
-        assert len(client.portal.call(capabilities.state_store.list_runs)) == 1
+        assert len(client.portal.call(capabilities.state_store.list_runs)) == (1 if stale_position is None else 2)
 
 
 def _workflow_catalog():

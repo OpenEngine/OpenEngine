@@ -2478,7 +2478,11 @@ def create_app(
             raise RuntimeError("could not identify an existing work order: graph runtime unavailable")
         matches = []
         for state in await session.state_store.list_runs():
-            snapshot = await runtime.snapshot(state.run_id)
+            try:
+                snapshot = await runtime.snapshot(state.run_id)
+            except UnknownGraphError:
+                # Saved work orders can outlive their registered graph.
+                continue
             if snapshot is not None and snapshot.values.get("pr_url") == pr_url:
                 matches.append(state)
         if len(matches) != 1:
