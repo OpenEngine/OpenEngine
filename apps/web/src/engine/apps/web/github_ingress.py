@@ -27,6 +27,13 @@ log = logging.getLogger(__name__)
 #: configuration this route tolerates rather than an error it reports.
 HANDLED_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
 
+#: Who may direct Engine from a comment. A signature proves GitHub sent the
+#: delivery, not that its author is entitled to spend Engine's time: on a public
+#: repository anyone can comment, so the association GitHub reports for the
+#: author is the trust boundary, and it belongs here rather than in whatever
+#: eventually consumes a comment.
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
 #: How many comment identities are remembered for deduplication.
 _SEEN_LIMIT = 4096
 
@@ -64,7 +71,8 @@ def comment_from_payload(event: str, payload: Mapping[str, object]) -> GithubCom
     """The comment in a delivery, or ``None`` for anything not worth an agent.
 
     Edits and deletions are excluded with everything else: only a new comment
-    is somebody asking for something.
+    is somebody asking for something, and only from someone with write access
+    to the repository it is on.
     """
     if event not in HANDLED_EVENTS or payload.get("action") != "created":
         return None
@@ -77,6 +85,13 @@ def comment_from_payload(event: str, payload: Mapping[str, object]) -> GithubCom
     if not isinstance(user, dict) or user.get("type") == "Bot":
         # A bot's comment includes this process's own replies, and answering
         # those is how a webhook talks to itself forever.
+        return None
+    association = comment.get("author_association")
+    if association not in TRUSTED_ASSOCIATIONS:
+        log.info(
+            "ignored a GitHub comment from %s, whose association with the repository is %s",
+            user.get("login"), association,
+        )
         return None
     author, full_name = user.get("login"), repository.get("full_name")
     number, comment_id = subject.get("number"), comment.get("id")
@@ -139,8 +154,18 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub signature"}, status_code=401)
         event = request.headers.get("x-github-event", "")
         if event == "ping":
-            # The one-off delivery GitHub sends when the webhook is saved.
+            # The one-off delivery GitHub sends when the webhook is saved. It
+            # is answered even with nothing wired behind the route, so that the
+            # webhook can be configured before whatever answers it exists.
             return JSONResponse({"ok": True})
+        if self._handle is None:
+            log.warning(
+                "a GitHub event was delivered but nothing is wired to answer it; "
+                "refusing the delivery rather than acknowledging and dropping it"
+            )
+            return JSONResponse(
+                {"error": "GitHub comment handling is not configured"}, status_code=503
+            )
         try:
             payload = json.loads(body)
         except ValueError:
@@ -152,12 +177,15 @@ class GithubIngress:
     def accept(self, event: str, payload: Mapping[str, object]) -> bool:
         """Whether the delivery is settled -- queued, or deliberately ignored.
 
-        False only when the queue is full, which is the one case where GitHub
-        retrying the delivery later is what this process wants.
+        False when there is nothing to queue into or nowhere to queue it: a
+        full queue, or no handler wired. Those are the cases where a failed
+        delivery GitHub can redeliver beats a 200 that loses the comment.
         """
         comment = comment_from_payload(event, payload)
         if comment is None:
             return True
+        if self._handle is None:
+            return False
         identity = (comment.event, comment.comment_id)
         if identity in self._seen:
             return True
@@ -175,13 +203,8 @@ class GithubIngress:
         while True:
             comment = await self._queue.get()
             try:
-                if self._handle is None:
-                    log.info(
-                        "no GitHub handler is wired; dropped comment %s on %s#%s",
-                        comment.comment_id, comment.repository, comment.number,
-                    )
-                else:
-                    await self._handle(comment)
+                assert self._handle is not None  # nothing is queued without one
+                await self._handle(comment)
             except Exception:
                 log.exception("GitHub comment handling failed")
             finally:

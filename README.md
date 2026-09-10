@@ -160,7 +160,10 @@ GITHUB_WEBHOOK_SECRET=... uv run engine-web
 ```
 
 Deliveries that are not signed with that secret are refused, and the route
-answers 503 while no secret is set.
+answers 503 while no secret is set or while nothing is wired to answer a
+comment, so an undelivered comment stays visible in GitHub's delivery log and
+can be redelivered. Only comments from a repository's owners, members, and
+collaborators are acted on.
 
 To diagnose interactive runner protocol incompatibilities, set
 `ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and

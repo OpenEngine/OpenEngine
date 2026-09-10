@@ -3039,7 +3039,9 @@ def create_app(
         react=_slack_comms.add_reaction,
     )
     # GitHub comments arrive on their own signed route. What answers them is
-    # wired separately; until then a verified comment is queued and dropped.
+    # wired separately; until then the route verifies a delivery and refuses it,
+    # so an unanswered comment stays a failed delivery GitHub can redeliver
+    # rather than a 200 that lost it.
     github_ingress = GithubIngress(webhook_secret=lambda: github_webhook_secret)
 
     def _mentioned_workflow() -> WorkflowDefinition | None:

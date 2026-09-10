@@ -35,7 +35,7 @@ def _issue_comment(comment_id: int = 1, body: str = "please fix it", **comment) 
         "issue": {"number": 7},
         "comment": dict(
             {"id": comment_id, "body": body, "html_url": "https://github.com/acme/api/issues/7#c",
-             "user": {"login": "someone", "type": "User"}},
+             "user": {"login": "someone", "type": "User"}, "author_association": "COLLABORATOR"},
             **comment,
         ),
         "repository": {"full_name": "acme/api"},
@@ -66,7 +66,8 @@ def test_a_review_thread_reply_keeps_the_comment_it_answers() -> None:
         "action": "created",
         "pull_request": {"number": 12},
         "comment": {"id": 99, "body": "and this line", "in_reply_to_id": 98,
-                    "user": {"login": "someone", "type": "User"}},
+                    "user": {"login": "someone", "type": "User"},
+                    "author_association": "MEMBER"},
         "repository": {"full_name": "acme/api"},
     }
     comment = comment_from_payload("pull_request_review_comment", payload)
@@ -82,6 +83,10 @@ def test_a_review_thread_reply_keeps_the_comment_it_answers() -> None:
         ("issue_comment", dict(_issue_comment(), action="edited")),
         ("issue_comment", dict(_issue_comment(), action="deleted")),
         ("issue_comment", _issue_comment(user={"login": "engine[bot]", "type": "Bot"})),
+        ("issue_comment", _issue_comment(author_association="NONE")),
+        ("issue_comment", _issue_comment(author_association="CONTRIBUTOR")),
+        ("issue_comment", _issue_comment(author_association="FIRST_TIME_CONTRIBUTOR")),
+        ("issue_comment", _issue_comment(author_association=None)),
         ("issue_comment", {"action": "created", "comment": {"id": 1}}),
         ("issue_comment", dict(_issue_comment(), repository={})),
         ("issue_comment", dict(_issue_comment(), issue={"number": "7"})),
@@ -89,6 +94,12 @@ def test_a_review_thread_reply_keeps_the_comment_it_answers() -> None:
 )
 def test_deliveries_that_are_not_somebody_asking_for_something(event, payload) -> None:
     assert comment_from_payload(event, payload) is None
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+def test_the_people_who_can_write_to_a_repository_can_direct_engine(association) -> None:
+    payload = _issue_comment(author_association=association)
+    assert comment_from_payload("issue_comment", payload) is not None
 
 
 def test_only_our_secret_signs_a_delivery() -> None:
@@ -149,6 +160,13 @@ def test_a_full_queue_asks_github_to_redeliver() -> None:
     asyncio.run(scenario())
 
 
+def test_nothing_is_queued_with_nothing_to_answer_it() -> None:
+    ingress = GithubIngress(webhook_secret=lambda: WEBHOOK_SECRET)
+    assert not ingress.accept("issue_comment", _issue_comment())
+    # A delivery this route never acts on is still settled, handler or not.
+    assert ingress.accept("issues", _issue_comment())
+
+
 def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
     async def scenario():
         handled = []
@@ -171,11 +189,20 @@ def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
 # --- the route ---------------------------------------------------------------
 
 
+_UNWIRED = object()
+
+
 def _client(secret: str = WEBHOOK_SECRET, handle=None):
+    """A test client over the route. Handles comments into nowhere by default;
+    pass ``handle=_UNWIRED`` for the app as it stands with nothing wired."""
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
 
+    if handle is _UNWIRED:
+        handle = None
+    elif handle is None:
+        handle = _record([])
     ingress = GithubIngress(webhook_secret=lambda: secret, handle=handle)
     app = Starlette(routes=[Route("/api/github/events", ingress.webhook, methods=["POST"])])
     return TestClient(app), ingress
@@ -194,6 +221,24 @@ def test_without_a_secret_the_route_reports_it_is_not_configured() -> None:
     client, _ingress = _client(secret="")
     body = json.dumps(_issue_comment()).encode()
     assert client.post("/api/github/events", content=body, headers=_signed(body)).status_code == 503
+
+
+def test_a_comment_is_refused_while_nothing_is_wired_to_answer_it() -> None:
+    """The window before a handler lands loses no comment: GitHub records the
+    delivery as failed, and it can be redelivered once one is wired."""
+    client, _ingress = _client(handle=_UNWIRED)
+    body = json.dumps(_issue_comment()).encode()
+    headers = dict(_signed(body), **{"x-github-event": "issue_comment"})
+    assert client.post("/api/github/events", content=body, headers=headers).status_code == 503
+
+
+def test_the_webhook_can_be_saved_before_anything_answers_it() -> None:
+    client, _ingress = _client(handle=_UNWIRED)
+    body = json.dumps({"zen": "Design for failure."}).encode()
+    response = client.post(
+        "/api/github/events", content=body, headers=dict(_signed(body), **{"x-github-event": "ping"})
+    )
+    assert response.status_code == 200
 
 
 def test_the_ping_that_saves_the_webhook_is_answered() -> None:
