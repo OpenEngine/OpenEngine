@@ -11,7 +11,7 @@ which constructs the same application again in every fresh child process.
 import argparse
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import uvicorn
@@ -31,6 +31,7 @@ from engine.apps.web.composition import (
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.apps.web.github_login import GitHubLoginConfig
+from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
 from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
@@ -74,6 +75,16 @@ def report_wiring(settings: Settings) -> None:
         agent_id for agent_id, profile in session.profiles.items() if profile.read_only
     )
     print(f"read-only agents: {', '.join(read_only_agents) or 'none'}")
+    webhook = settings.github_webhook
+    print(
+        "github webhooks: "
+        + (
+            "not configured"
+            if webhook is None
+            else f"{webhook.repository or 'no repository named'}, "
+            + ("secret saved" if webhook.current_secret() else "secret missing")
+        )
+    )
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
@@ -87,8 +98,22 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
         github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+        github_webhook=github_webhook_config(loaded),
         source_control_preferences=SourceControlPreferences(),
     )
+
+
+def _webhook_secret_reader(webhook: GitHubWebhookConfig | None) -> Callable[[], str]:
+    """How the route reads the webhook secret, rather than the secret itself.
+
+    A reader instead of a string so that rotating the secret on disk takes
+    effect on the next delivery: the route asks per delivery, and the process
+    outlives any one value of it.
+    """
+
+    if webhook is None:
+        return lambda: ""
+    return webhook.current_secret
 
 
 def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None:
@@ -175,7 +200,8 @@ def compose_app(
         github_login_config=github_login_config,
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
-        github_webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET", ""),
+        github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
+        github_repository=settings.github_webhook.repository if settings.github_webhook else "",
         github_bot_login=os.environ.get("GITHUB_BOT_LOGIN", ""),
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,

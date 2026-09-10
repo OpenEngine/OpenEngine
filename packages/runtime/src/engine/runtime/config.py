@@ -84,6 +84,25 @@ class CommunicationsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubConfig:
+    """Which repository on GitHub this deployment answers events from.
+
+    The shared secret that signs those deliveries is deliberately absent: like
+    the login client secret it belongs in a server-local `.env` beside this
+    file, because `engine.toml` is checked in and a secret in it is published
+    the moment it is committed. Naming the repository here is what keeps the
+    two out of the handler's source.
+    """
+
+    repository: str = ""
+    """`owner/name` of the repository whose webhooks are accepted, or empty.
+
+    Empty leaves the webhook route unconfigured rather than open: a deployment
+    that never named a repository has nothing to compare a delivery against.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class WorkOrdersConfig:
     """What a work order gets when nobody filled in a form to ask for one.
 
@@ -111,6 +130,7 @@ class EngineConfig:
     github_login_redirect_uri: str = ""
     github_token: str = ""
     public_url: str = ""
+    github: GitHubConfig = GitHubConfig()
     communications: CommunicationsConfig = CommunicationsConfig()
     work_orders: WorkOrdersConfig = WorkOrdersConfig()
     approvals: ApprovalConfig = ApprovalConfig()
@@ -196,6 +216,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "claude",
             "communications",
             "default_branch",
+            "github",
             "github_client_id",
             "github_login_client_id",
             "github_login_redirect_uri",
@@ -222,6 +243,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         document.get("github_token", ""), "github_token"
     )
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
+
+    github = _table(document.get("github", {}), "github")
+    _reject_unknown(github, {"repository"}, "github")
+    github_repository = _repository_slug(
+        github.get("repository", ""), "github.repository"
+    )
 
     communications = _table(document.get("communications", {}), "communications")
     _reject_unknown(communications, {"channel", "provider"}, "communications")
@@ -315,6 +342,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
+        github=GitHubConfig(repository=github_repository),
         communications=CommunicationsConfig(
             provider=communications_provider,
             channel=communications_channel,
@@ -351,6 +379,25 @@ def _optional_nonblank_string(value: object, name: str) -> str:
     if value and not value.strip():
         raise EngineConfigError(f"{name} must not be blank")
     return value.strip()
+
+
+def _repository_slug(value: object, name: str) -> str:
+    """A repository is named the way GitHub names it, or not accepted at all.
+
+    A misspelled slug would not fail loudly: every delivery would simply be
+    answered as if it came from somewhere else, which is the silence a strict
+    configuration file exists to prevent.
+    """
+
+    slug = _optional_nonblank_string(value, name)
+    if not slug:
+        return ""
+    owner, separator, repository = slug.partition("/")
+    if not separator or not owner or not repository or "/" in repository:
+        raise EngineConfigError(f'{name} must be "owner/name": {slug!r}')
+    if any(character.isspace() for character in slug):
+        raise EngineConfigError(f'{name} must be "owner/name": {slug!r}')
+    return slug
 
 
 def _nonblank_string(value: object, name: str) -> str:
@@ -450,6 +497,7 @@ __all__ = [
     "DEFAULT_CONFIG_NAME",
     "EngineConfig",
     "EngineConfigError",
+    "GitHubConfig",
     "LoadedEngineConfig",
     "ResponseStyle",
     "WorkOrdersConfig",

@@ -64,6 +64,7 @@ from engine.apps.web.gitlab_auth import (
 from engine.apps.web.gitlab_auth import (
     refresh_access_token as refresh_gitlab_access_token,
 )
+from engine.apps.web.github_webhook import GitHubWebhookConfig
 from engine.apps.web.oauth_lifecycle import oauth_lifecycle_event, token_fingerprint
 from engine.apps.web.oauth_lock import credential_lock
 from engine.apps.web.source_control import (
@@ -129,6 +130,12 @@ class Settings:
     temporal_host: str = "localhost:7233"
     github_token: str = ""
     github_client_id: str = ""
+    github_webhook: GitHubWebhookConfig | None = None
+    """Which repository's webhook deliveries are answered, and their secret.
+
+    ``None`` when the deployment named neither, which is what leaves the
+    webhook route refusing deliveries instead of trusting unsigned ones.
+    """
     source_control_preferences: SourceControlPreferences | None = None
     workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"

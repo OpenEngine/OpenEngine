@@ -2,6 +2,12 @@ attribution = false
 default_branch = "main"
 public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 
+# Whose GitHub events this deployment answers. The secret that signs those
+# deliveries is not written here -- engine.toml is committed -- it lives in a
+# server-local `.env` beside it. See docs/github-webhooks.md.
+[github]
+repository = "OpenEngine/OpenEngine"
+
 [communications]
 provider = "slack"
 # #openengine-bot, by id so the post skips the name lookup.
