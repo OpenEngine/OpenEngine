@@ -150,20 +150,8 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 ```
 
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
-
-To receive GitHub comment webhooks, point a GitHub app or repository webhook at
-`<public_url>/api/github/events` with the `issue_comment` and
-`pull_request_review_comment` events, and start Engine with the same secret:
-
-```bash
-GITHUB_WEBHOOK_SECRET=... uv run engine-web
-```
-
-Deliveries that are not signed with that secret are refused, and the route
-answers 503 while no secret is set or while nothing is wired to answer a
-comment, so an undelivered comment stays visible in GitHub's delivery log and
-can be redelivered. Only comments from a repository's owners, members, and
-collaborators are acted on.
+To receive comments from GitHub, see the
+[GitHub webhooks guide](docs/github-webhooks.md).
 
 To diagnose interactive runner protocol incompatibilities, set
 `ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and
