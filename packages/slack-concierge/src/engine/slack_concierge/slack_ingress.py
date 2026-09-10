@@ -34,6 +34,7 @@ class SlackIngress:
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._worker: asyncio.Task[None] | None = None
         self._pending: set[tuple[str, str]] = set()
+        self._background: set[asyncio.Task[None]] = set()
 
     async def webhook(self, request: Request) -> Response:
         """Authenticate, enqueue, and acknowledge without waiting for an agent."""
@@ -69,7 +70,9 @@ class SlackIngress:
             return Response(status_code=503)
         if isinstance(result, tuple) and self._react:
             channel, ts = result
-            asyncio.create_task(self._fire_react(channel, ts))
+            task = asyncio.create_task(self._fire_react(channel, ts))
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
         return Response(status_code=200)
 
     def accept(self, payload: dict) -> bool | tuple[str, str]:
@@ -114,7 +117,7 @@ class SlackIngress:
         try:
             await self._react(channel, ts, "eyes")
         except Exception:
-            log.exception("Could not add eyes reaction")
+            log.exception("Could not add eyes reaction to %s/%s (the workspace may need to be re-authorized to grant reactions:write)", channel, ts)
 
     async def _run(self) -> None:
         while True:
