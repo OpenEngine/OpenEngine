@@ -474,6 +474,65 @@ def test_the_sqlite_store_round_trips_everything_a_restart_needs(
     assert found["still_pending"] == ()
 
 
+@pytest.mark.parametrize("store_factory", ["memory", "sqlite"])
+def test_comments_a_run_posted_are_kept_for_the_runs_after_it(
+    tmp_path: Path, store_factory: str
+) -> None:
+    from engine.graph_runtime_langgraph.store import CommentRecord
+
+    posted = CommentRecord(
+        comment_id=123,
+        repository="acme/api",
+        kind="issue",
+        pr_number=42,
+        run_id=RunId("run-1"),
+        posted_at="2026-09-10T18:00:00+00:00",
+        node_id=NodeId("reranker"),
+        url="https://github.com/acme/api/pull/42#issuecomment-123",
+    )
+    # Same number, another id space: GitHub hands review comments out from a
+    # counter of their own, and this is a different comment.
+    inline = CommentRecord(
+        comment_id=123,
+        repository="acme/api",
+        kind="review",
+        pr_number=42,
+        run_id=RunId("run-1"),
+        posted_at="2026-09-10T18:00:30+00:00",
+        url="https://github.com/acme/api/pull/42#discussion_r123",
+    )
+    elsewhere = CommentRecord(
+        comment_id=124,
+        repository="acme/web",
+        kind="issue",
+        pr_number=7,
+        run_id=RunId("run-2"),
+        posted_at="2026-09-10T18:01:00+00:00",
+    )
+
+    async def scenario() -> tuple[CommentRecord, ...]:
+        path = tmp_path / "runtime.db"
+        store = (
+            InMemoryGraphRuntimeStore()
+            if store_factory == "memory"
+            else SqliteGraphRuntimeStore(path)
+        )
+        await store.remember_comment(posted)
+        await store.remember_comment(inline)
+        await store.remember_comment(elsewhere)
+        if store_factory == "sqlite":
+            store.close()
+            store = SqliteGraphRuntimeStore(path)
+        found = await store.comments(RunId("run-1"))
+        # A comment posted twice is one comment: the forge's id owns the row.
+        await store.remember_comment(posted)
+        assert await store.comments(RunId("run-1")) == found
+        assert await store.comments(RunId("run-2")) == (elsewhere,)
+        return found
+
+    assert asyncio.run(scenario()) == (posted, inline)
+
+
 def test_auto_approve_keeps_human_requests_manual() -> None:
     from httpx import ASGITransport, AsyncClient
     from engine.graph_runtime.api import create_app

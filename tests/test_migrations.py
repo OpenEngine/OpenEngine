@@ -214,7 +214,7 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
         assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("c7c9f42f4747",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("b41d9c0f5a3e",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -283,7 +283,7 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("c7c9f42f4747",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("b41d9c0f5a3e",)
 
 
 def test_github_comments_migration_preserves_graph_data_and_downgrades(
@@ -307,36 +307,45 @@ def test_github_comments_migration_preserves_graph_data_and_downgrades(
         connection.execute(
             """
             INSERT INTO github_comments
-                (comment_id, pr_number, run_id, node_id, posted_at, url)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (comment_id, repository, kind, pr_number, run_id, node_id, posted_at, url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (12345, 42, "run", "review", "2026-09-10T18:00:00Z", "https://example.com/comment"),
+            (12345, "acme/api", "issue", 42, "run", "review", "2026-09-10T18:00:00Z", "https://example.com/comment"),
         )
         connection.execute(
             """
-            INSERT INTO github_comments (comment_id, pr_number, run_id, posted_at)
-            VALUES (12346, 42, 'run', '2026-09-10T18:01:00Z')
+            INSERT INTO github_comments (comment_id, repository, kind, pr_number, run_id, posted_at)
+            VALUES (12346, 'acme/api', 'issue', 42, 'run', '2026-09-10T18:01:00Z')
             """
         )
         assert connection.execute(
             "SELECT node_id, url FROM github_comments WHERE comment_id = 12346"
         ).fetchone() == (None, None)
+        # One id in two id spaces, and in two repositories, is three comments.
+        connection.execute(
+            """
+            INSERT INTO github_comments (comment_id, repository, kind, pr_number, run_id, posted_at)
+            VALUES (12345, 'acme/api', 'review', 42, 'run', '2026-09-10T18:02:00Z'),
+                   (12345, 'acme/web', 'issue', 42, 'run', '2026-09-10T18:03:00Z')
+            """
+        )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
-                "INSERT INTO github_comments SELECT * FROM github_comments WHERE comment_id = 12345"
+                "INSERT INTO github_comments SELECT * FROM github_comments "
+                "WHERE comment_id = 12345 AND repository = 'acme/api' AND kind = 'issue'"
             )
-        for column in ("pr_number", "run_id", "posted_at"):
+        for column in ("repository", "kind", "pr_number", "run_id", "posted_at"):
             with pytest.raises(sqlite3.IntegrityError):
                 connection.execute(
-                    f"UPDATE github_comments SET {column} = NULL WHERE comment_id = 12345"
+                    f"UPDATE github_comments SET {column} = NULL WHERE comment_id = 12346"
                 )
-        for column, value, index in (
-            ("run_id", "run", "github_comments_by_run"),
-            ("pr_number", 42, "github_comments_by_pr"),
+        for where, values, index in (
+            ("run_id = ?", ("run",), "github_comments_by_run"),
+            ("repository = ? AND pr_number = ?", ("acme/api", 42), "github_comments_by_pr"),
         ):
             plan = connection.execute(
-                f"EXPLAIN QUERY PLAN SELECT * FROM github_comments WHERE {column} = ?",
-                (value,),
+                f"EXPLAIN QUERY PLAN SELECT * FROM github_comments WHERE {where}",
+                values,
             ).fetchall()
             assert any(index in row[3] for row in plan)
         assert connection.execute("SELECT * FROM events").fetchall() == events
