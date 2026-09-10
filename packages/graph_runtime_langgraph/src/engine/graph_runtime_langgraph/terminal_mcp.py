@@ -9,9 +9,10 @@ from datetime import UTC, datetime
 
 from engine.domain import AgentId, AgentRunId, StepId, StepSpec
 from engine.domain.ids import WorkspaceId
-from engine.ports import ApprovalHandler, CommentResult, SourceControl
+from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.terminal_mcp import (
     REPOSITORY_TOOL_METHODS,
+    PostedComment,
     TerminalMcpBroker,
     TerminalResultRegistry,
 )
@@ -83,15 +84,17 @@ class TerminalMcpServer:
         if "add_comment" in served:
             store = execution.runtime.store
 
-            async def record(pr_number: int, comment: CommentResult) -> None:
+            async def record(posted: PostedComment) -> None:
                 await store.remember_comment(
                     CommentRecord(
-                        comment_id=comment.id,
-                        pr_number=pr_number,
+                        comment_id=posted.result.id,
+                        repository=posted.repository,
+                        kind=posted.kind,
+                        pr_number=posted.pr_number,
                         run_id=execution.run_id,
                         posted_at=datetime.now(UTC).isoformat(),
                         node_id=execution.node_id,
-                        url=comment.url,
+                        url=posted.result.url,
                     )
                 )
 

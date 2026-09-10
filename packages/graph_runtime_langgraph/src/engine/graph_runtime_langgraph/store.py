@@ -116,16 +116,29 @@ class ApprovalRecord:
 
 @dataclass(frozen=True, slots=True)
 class CommentRecord:
-    """One comment a run left on a change request.
+    """One comment a run left on a GitHub pull request.
 
     Kept outside the event history because it is about the forge rather than
     about this run: what a later run needs is "which comments are already on
     this pull request", and answering that from a run's own transcript would
     mean replaying every run that ever touched it.
+
+    GitHub only, as the table name says. Another forge numbers its notes from
+    its own counter, so filing them here would let two unrelated comments claim
+    one row; a forge that needs remembering gets a table of its own.
     """
 
     comment_id: int
-    """The forge's id for the comment, which is also what identifies the row."""
+    """GitHub's id for the comment, unique only within `repository` and `kind`."""
+    repository: str
+    """`owner/repo` the pull request belongs to."""
+    kind: str
+    """`issue` or `review`: which of GitHub's two id spaces `comment_id` is in.
+
+    GitHub numbers conversation comments and inline review comments from
+    separate sequences, so the two can hand out the same id for different
+    comments; together with `repository` this is what keeps them apart.
+    """
     pr_number: int
     run_id: RunId
     posted_at: str
@@ -212,7 +225,7 @@ class InMemoryGraphRuntimeStore:
         self._runs: dict[RunId, RunRecord] = {}
         self._sessions: dict[tuple[RunId, str], ACPContinuation] = {}
         self._approvals: dict[ApprovalId, ApprovalRecord] = {}
-        self._comments: dict[int, CommentRecord] = {}
+        self._comments: dict[tuple[str, str, int], CommentRecord] = {}
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
         events = self._events.setdefault(event.run_id, [])
@@ -266,7 +279,7 @@ class InMemoryGraphRuntimeStore:
             )
 
     async def remember_comment(self, record: CommentRecord) -> None:
-        self._comments[record.comment_id] = record
+        self._comments[(record.repository, record.kind, record.comment_id)] = record
 
     async def comments(self, run_id: RunId) -> tuple[CommentRecord, ...]:
         return tuple(
@@ -423,13 +436,16 @@ class SqliteGraphRuntimeStore:
     async def remember_comment(self, record: CommentRecord) -> None:
         self._connection.execute(
             "INSERT INTO github_comments "
-            "(comment_id, pr_number, run_id, node_id, posted_at, url) "
-            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (comment_id) DO UPDATE SET "
+            "(comment_id, repository, kind, pr_number, run_id, node_id, posted_at, url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (repository, kind, comment_id) DO UPDATE SET "
             "pr_number = excluded.pr_number, run_id = excluded.run_id, "
             "node_id = excluded.node_id, posted_at = excluded.posted_at, "
             "url = excluded.url",
             (
                 record.comment_id,
+                record.repository,
+                record.kind,
                 record.pr_number,
                 str(record.run_id),
                 None if record.node_id is None else str(record.node_id),
@@ -471,6 +487,8 @@ def _run_from(row: sqlite3.Row) -> RunRecord:
 def _comment_from(row: sqlite3.Row) -> CommentRecord:
     return CommentRecord(
         comment_id=row["comment_id"],
+        repository=row["repository"],
+        kind=row["kind"],
         pr_number=row["pr_number"],
         run_id=RunId(row["run_id"]),
         posted_at=row["posted_at"],

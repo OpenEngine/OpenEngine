@@ -22,6 +22,7 @@ from engine.domain import (
 from engine.ports import ApprovalRequest, GitResult
 from engine.runtime.terminal_mcp import (
     DEFAULT_BASE_REF,
+    PostedComment,
     TerminalMcpBroker,
     TerminalResultRegistry,
     _mcp_response,
@@ -873,19 +874,23 @@ def test_comment_provenance_reaches_mcp_client() -> None:
 @pytest.mark.parametrize(
     "pr_url, expected",
     [
-        ("https://github.com/acme/api/pull/42", 42),
-        ("https://github.com/acme/api/pull/42/files", 42),
-        ("https://github.com/acme/api/pull/42#issuecomment-9", 42),
-        ("https://gitlab.com/acme/api/-/merge_requests/7", 7),
+        ("https://github.com/acme/api/pull/42", ("acme/api", 42)),
+        ("https://github.com/acme/api/pull/42/files", ("acme/api", 42)),
+        ("https://github.com/acme/api/pull/42#issuecomment-9", ("acme/api", 42)),
+        ("https://github.example.com/acme/api/pull/42", ("acme/api", 42)),
+        # Another forge numbers its notes from its own counter, so it is left
+        # out rather than filed under a GitHub comment's name.
+        ("https://gitlab.com/acme/api/-/merge_requests/7", None),
+        ("https://github.com/acme/api/issues/42", None),
         ("https://github.com/acme/api", None),
     ],
 )
-def test_change_request_number_is_read_off_the_review_url(
-    pr_url: str, expected: int | None
+def test_a_github_pull_request_is_read_off_the_review_url(
+    pr_url: str, expected: tuple[str, int] | None
 ) -> None:
-    from engine.runtime.terminal_mcp import _change_request_number
+    from engine.runtime.terminal_mcp import _github_pull_request
 
-    assert _change_request_number(pr_url) == expected
+    assert _github_pull_request(pr_url) == expected
 
 
 def test_posted_comments_are_recorded_against_the_change_request() -> None:
@@ -893,11 +898,11 @@ def test_posted_comments_are_recorded_against_the_change_request() -> None:
         async def add_comment(self, *_arguments: object) -> CommentResult:
             return CommentResult(123, "https://example.com/comment/123")
 
-    async def scenario() -> list[tuple[int, CommentResult]]:
-        recorded: list[tuple[int, CommentResult]] = []
+    async def scenario() -> list[PostedComment]:
+        recorded: list[PostedComment] = []
 
-        async def record(pr_number: int, comment: CommentResult) -> None:
-            recorded.append((pr_number, comment))
+        async def record(posted: PostedComment) -> None:
+            recorded.append(posted)
 
         broker = TerminalMcpBroker(
             run_id=RunId("run-1"),
@@ -922,7 +927,9 @@ def test_posted_comments_are_recorded_against_the_change_request() -> None:
         return recorded
 
     assert asyncio.run(scenario()) == [
-        (42, CommentResult(123, "https://example.com/comment/123"))
+        PostedComment(
+            "acme/api", 42, "issue", CommentResult(123, "https://example.com/comment/123")
+        )
     ]
 
 
@@ -934,7 +941,7 @@ def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted() -> None
             return CommentResult(123, "https://example.com/comment/123")
 
     async def scenario() -> dict[str, object]:
-        async def record(_pr_number: int, _comment: CommentResult) -> None:
+        async def record(_posted: PostedComment) -> None:
             raise RuntimeError("the store is gone")
 
         broker = TerminalMcpBroker(

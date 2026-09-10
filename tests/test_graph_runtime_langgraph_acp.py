@@ -2187,6 +2187,7 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 
     assert len(found) == 1
     assert (found[0].comment_id, found[0].pr_number) == (123, 42)
+    assert (found[0].repository, found[0].kind) == ("acme/api", "issue")
     assert found[0].node_id == NodeId("reranker")
     assert found[0].url == "https://github.com/acme/api/pull/42#c123"
     assert found[0].posted_at

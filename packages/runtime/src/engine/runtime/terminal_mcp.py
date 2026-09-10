@@ -17,7 +17,7 @@ import sys
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from engine.domain import (
@@ -58,11 +58,10 @@ ToolCallLookup = Callable[[str, str], str | None]
 #: them. Bound by whoever knows where the run is being watched.
 StatusReporter = Callable[[str], Awaitable[None]]
 
-#: Given the change request a comment was posted on and what the forge made of
-#: it, write it down somewhere that outlives the run. Bound by whoever owns the
-#: durable store; a broker without one still posts comments, it just keeps no
-#: record of them.
-CommentRecorder = Callable[[int, CommentResult], Awaitable[None]]
+#: Given a comment that is now on the forge, write it down somewhere that
+#: outlives the run. Bound by whoever owns the durable store; a broker without
+#: one still posts comments, it just keeps no record of them.
+CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -105,6 +104,23 @@ READ_ONLY_REPOSITORY_TOOLS: frozenset[str] = frozenset(
 
 #: What `open_pull_request` proposes against when the agent names no base.
 DEFAULT_BASE_REF = "main"
+
+
+@dataclass(frozen=True, slots=True)
+class PostedComment:
+    """A comment that is on the forge, named the way a later run can find it.
+
+    `repository` and `kind` are part of the name because `comment_id` alone is
+    not one: GitHub numbers issue comments and pull-request review comments
+    from separate sequences, and every repository has its own #1 of each.
+    """
+
+    repository: str
+    """`owner/repo`, as the pull-request URL spells it."""
+    pr_number: int
+    kind: Literal["issue", "review"]
+    """Which of GitHub's two comment id spaces `result.id` was drawn from."""
+    result: CommentResult
 
 
 class TerminalResultAlreadySubmittedError(RuntimeError):
@@ -430,7 +446,12 @@ class TerminalMcpBroker:
             except Exception as error:
                 return {"ok": False, "error": f"could not add comment: {error}"}
             self._comments_added += 1
-            await self._record_comment(pr_url, result)
+            # Which id space GitHub drew the id from follows from how the
+            # comment was addressed, the same way the adapter routes it.
+            kind: Literal["issue", "review"] = (
+                "review" if file is not None or in_reply_to_id is not None else "issue"
+            )
+            await self._record_comment(pr_url, kind, result)
             return {
                 "ok": True,
                 "acknowledgement": "comment added",
@@ -522,7 +543,9 @@ class TerminalMcpBroker:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
 
-    async def _record_comment(self, pr_url: str, result: CommentResult) -> None:
+    async def _record_comment(
+        self, pr_url: str, kind: Literal["issue", "review"], result: CommentResult
+    ) -> None:
         """Write down a comment that is already posted, if anyone is keeping it.
 
         Failures here are swallowed rather than reported, unlike everything
@@ -532,11 +555,14 @@ class TerminalMcpBroker:
         """
         if self._comment_recorder is None:
             return
-        number = _change_request_number(pr_url)
-        if number is None:
+        pull_request = _github_pull_request(pr_url)
+        if pull_request is None:
             return
+        repository, number = pull_request
         with suppress(Exception):
-            await self._comment_recorder(number, result)
+            await self._comment_recorder(
+                PostedComment(repository, number, kind, result)
+            )
 
     async def _approve_git(
         self, arguments: tuple[str, ...], request_id: McpRequestId
@@ -947,17 +973,19 @@ def _comment_arguments(
     return pr_url, comment, file, line, in_reply_to_id
 
 
-def _change_request_number(pr_url: str) -> int | None:
-    """Which change request a review URL is about, or `None` if it cannot say.
+def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
+    """The `owner/repo` and number a GitHub pull-request URL names.
 
-    Forge-neutral on purpose: GitHub ends the path with `pull/<n>` and GitLab
-    with `merge_requests/<n>`, so the number is the last segment of the path
-    that is one -- and a `/files` or a fragment after it is not.
+    `None` for anything that is not one, GitLab's `-/merge_requests/<n>`
+    included. What a record is keyed on is GitHub's id spaces, and a note from
+    another forge cannot be told apart from a GitHub comment that happens to
+    have been given the same number, so it is left out rather than filed under
+    a name that is not its own. Trailing `/files` and a fragment are noise.
     """
-    for segment in reversed(urlsplit(pr_url).path.split("/")):
-        if segment.isdigit():
-            return int(segment)
-    return None
+    segments = urlsplit(pr_url).path.strip("/").split("/")
+    if len(segments) < 4 or segments[2] != "pull" or not segments[3].isdigit():
+        return None
+    return f"{segments[0]}/{segments[1]}", int(segments[3])
 
 
 async def _forward_call(
@@ -1161,7 +1189,9 @@ def main() -> None:
 
 
 __all__ = [
+    "CommentRecorder",
     "DEFAULT_BASE_REF",
+    "PostedComment",
     "READ_ONLY_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",
     "REPOSITORY_TOOL_NAMES",
