@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import re
 from collections import OrderedDict
 
@@ -23,10 +23,12 @@ class SlackIngress:
     def __init__(self, concierge: SlackConcierge, *, capacity: int = 256,
                  signing_secret: Callable[[], str] = lambda: "",
                  verify_signature: Callable[[str, str, str, bytes], bool] = lambda *args: False,
-                 connected: Callable[[], bool] = lambda: True) -> None:
+                 connected: Callable[[], bool] = lambda: True,
+                 react: Callable[[str, str, str], Awaitable[None]] | None = None) -> None:
         self._signing_secret = signing_secret
         self._verify_signature = verify_signature
         self._connected = connected
+        self._react = react
         self.concierge = concierge
         self._queue: asyncio.Queue[IncomingMessage] = asyncio.Queue(maxsize=capacity)
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
@@ -87,7 +89,7 @@ class SlackIngress:
         if self._queue.full():
             return False
         text = re.sub(r"<@[^>]+>", "", str(event.get("text", ""))).strip()
-        message = IncomingMessage(RunOrigin(channel=channel, thread_id=thread, author=author), text or "Hello")
+        message = IncomingMessage(RunOrigin(channel=channel, thread_id=thread, author=author), text or "Hello", message_ts=ts)
         self._queue.put_nowait(message)
         self._pending.add(key)
         self._seen[identity] = None
@@ -101,6 +103,11 @@ class SlackIngress:
         while True:
             message = await self._queue.get()
             try:
+                if self._react and message.message_ts:
+                    try:
+                        await self._react(message.origin.channel, message.message_ts, "eyes")
+                    except Exception:
+                        log.exception("Could not add eyes reaction")
                 await self.concierge.handle(message)
             except Exception:
                 log.exception("Slack concierge turn failed")
