@@ -589,8 +589,12 @@ class ACPNode:
         # overrides apply only to fresh executions, after this recovery finishes.
         if stored is not None and resuming is not None:
             runner = stored.agent
-        node = self if runner == self.agent else replace(self, agent=runner)
+        node = self._for_runner(runner)
         return await node._run(state, cwd, stored, resuming)
+
+    def _for_runner(self, runner: str) -> ACPNode:
+        """Configure the effective runner after overrides and recovery resolve."""
+        return self if runner == self.agent else replace(self, agent=runner)
 
     async def _run(
         self,

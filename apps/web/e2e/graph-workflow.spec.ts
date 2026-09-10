@@ -23,7 +23,7 @@ import type { Page } from "@playwright/test";
 import { expect, shot, test, type Script } from "./harness";
 
 /** What the workflow dropdown calls the graph. */
-const WORKFLOW = "[BETA] Implementation review (codex)";
+const WORKFLOW = "[BETA] Implementation review rerank";
 const TASK = "Add a greeting file to the repository.";
 const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";
@@ -287,6 +287,14 @@ test("@beta a graph workflow accepts independent stage runners", async ({
     implementation_runner: "claude",
     review_runner: "codex",
   });
+  await openConversation(page, runUrl);
+  await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("claude");
+  await page.getByLabel("Runner", { exact: true }).selectOption("codex");
+  await expect.poll(async () =>
+    (await graphRun(page, runUrl)).runnerOverrides?.implementation ?? "codex"
+  ).toBe("codex");
+  await page.reload();
+  await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("codex");
 });
 
 test("@beta a graph WorkOrder provisions a checkout and runs its agents", async ({

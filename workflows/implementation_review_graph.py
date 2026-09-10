@@ -144,16 +144,15 @@ RERANKER_PROMPT = (
 class _RunnerInput:
     """Resolve the stage's runner per invocation, including its MCP identity."""
 
-    input_name = "implementation_runner"
+    graph_node_runner_input = "implementation_runner"
 
-    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
-        runner = state.get("inputs", {}).get(self.input_name, self.agent)
+    def _for_runner(self, runner: str) -> ACPNode:
         config = self.session_config
         if isinstance(self, ReviewNode):
             facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
             model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
             config = _with_model(config, model)
-        node = replace(
+        return replace(
             self,
             agent=runner,
             session_config=config,
@@ -163,7 +162,6 @@ class _RunnerInput:
                 for binding in self.mcp_server_bindings
             ),
         )
-        return await super(_RunnerInput, node).__call__(state)
 
 
 class InputImplementationNode(_RunnerInput, ACPNode):
@@ -175,7 +173,7 @@ class InputNameNode(_RunnerInput, NameNode):
 
 
 class InputReviewNode(_RunnerInput, ReviewNode):
-    input_name = "review_runner"
+    graph_node_runner_input = "review_runner"
 
 
 class InputRerankerNode(_RunnerInput, RerankerNode):
@@ -367,8 +365,10 @@ def pipeline(
     return builder
 
 
-#: Keep existing workflow ids and defaults; inputs can override either stage.
-RUNNERS = ("codex", "claude")
+#: Runner choices for the implementation and review stages.
+RUNNER_CHOICES = ("codex", "claude")
+# The loader rebuilds one default graph with deployment session configuration.
+RUNNERS = ("codex",)
 
 
 def graph_for(
@@ -378,7 +378,7 @@ def graph_for(
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
 ) -> GraphWorkflow:
-    """This workflow, for one agent, named the way everything else names it."""
+    """Build the workflow with the requested initial implementation runner."""
     return graph_workflow(
         pipeline(
             runner,
@@ -386,20 +386,20 @@ def graph_for(
             agents=agents,
             session_config=session_config,
         ),
-        id=f"implementation-review-{runner}",
-        name=f"Implementation review ({runner})",
+        id="implementation-review-rerank",
+        name="Implementation review rerank",
         inputs=(
             WorkflowInput(
                 "implementation_runner", "Implementation runner",
-                default=runner, required=True, choices=RUNNERS,
+                default=runner, required=True, choices=RUNNER_CHOICES,
             ),
             WorkflowInput(
                 "review_runner", "Review runner",
                 default={"codex": "claude", "claude": "codex"}[runner],
-                required=True, choices=RUNNERS,
+                required=True, choices=RUNNER_CHOICES,
             ),
         ),
     )
 
 
-workflow = tuple(graph_for(runner) for runner in RUNNERS)
+workflow = graph_for("codex")

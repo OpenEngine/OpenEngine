@@ -175,7 +175,10 @@ class LangGraphRuntime:
         if definition is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
         run_id = RunId(f"run-{uuid4().hex[:12]}")
-        await self._store.remember_run(RunRecord(run_id, graph_id))
+        await self._store.remember_run(RunRecord(
+            run_id, graph_id,
+            runner_overrides=definition.initial_runner_overrides(values),
+        ))
         live = _Live(run_id, graph_id)
         self._live[run_id] = live
         await self.publish(run_id, EventKind.RUN_STARTED, {"values": dict(values)})

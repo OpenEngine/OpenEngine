@@ -213,7 +213,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -247,6 +247,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         work_orders=work_orders,
         credential_store=MagicMock(),
         concierge_provider=provider or FakeACPProvider(),
+        graph_runtime=graph_runtime,
     ), capabilities, slack_store
 
 
@@ -1482,3 +1483,50 @@ def test_checked_in_slack_repository_is_current_checkout():
 
     config = tomllib.loads((Path(__file__).resolve().parents[1] / "engine.toml").read_text())
     assert config["work_orders"]["repository"] == "."
+
+
+def test_slack_starts_configured_graph_with_input_defaults(tmp_path):
+    from starlette.testclient import TestClient
+    from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+    from engine.runtime import WorkflowCatalog
+    from engine.runtime.config import load_engine_config
+    from langgraph.graph import START, END, StateGraph
+    from pathlib import Path
+
+    configured = load_engine_config(Path(__file__).resolve().parents[1] / "engine.toml")
+    assert configured.config.work_orders.workflow == "implementation-review-rerank"
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {"received": state["inputs"]})
+    builder.add_edge(START, "work")
+    builder.add_edge("work", END)
+    graph = graph_workflow(
+        builder, id="implementation-review-rerank", name="Implementation review rerank",
+        inputs=(WorkflowInput("implementation_runner", "Implementation runner", "codex"),
+                WorkflowInput("review_runner", "Review runner", "claude")),
+    )
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications, configured.config.work_orders,
+        WorkflowCatalog.from_definitions((), (graph,)), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        result = provider.clients[0].result
+        assert not result.get("isError"), result
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        assert str(runs[0].workflow_id) == graph.graph_id
+        assert runs[0].origin.thread_id == "1"
+        snapshot = client.get(f"/graph/api/runs/{runs[0].run_id}").json()
+        assert snapshot["values"]["inputs"] == {
+            "implementation_runner": "codex", "review_runner": "claude",
+        }
+    assert any(message.links for _, message, _ in communications.posts)

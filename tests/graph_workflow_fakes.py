@@ -35,7 +35,7 @@ from engine.adapters.workspace_provider.git_worktree import (  # noqa: E402
 )
 from engine.graph_runtime_langgraph import agent_registry  # noqa: E402
 from engine.runtime import WorkflowCatalog, load_workflow_catalog  # noqa: E402
-from implementation_review_graph import RUNNERS, graph_for  # noqa: E402
+from implementation_review_graph import graph_for  # noqa: E402
 from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider  # noqa: E402
 from provider_fakes import fake_acp  # noqa: E402
 
@@ -57,13 +57,12 @@ def scripted_catalog(workspace_root: str, binaries: Path) -> WorkflowCatalog:
     loaded = load_workflow_catalog(_ROOT / "workflows")
     return WorkflowCatalog.from_definitions(
         tuple(loaded),
-        tuple(
+        (
             graph_for(
-                runner,
+                "codex",
                 workspace_provider=GitWorktreeWorkspaceProvider(workspace_root),
                 agents=scripted,
-            )
-            for runner in RUNNERS
+            ),
         ),
     )
 
