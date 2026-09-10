@@ -771,6 +771,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
         const value = graph.values[node.nodeId];
         const fields = value != null && typeof value === "object" && !Array.isArray(value)
           ? value as Record<string, unknown> : null;
+        const outputs = fields?.outputs != null && typeof fields.outputs === "object" && !Array.isArray(fields.outputs)
+          ? fields.outputs as Record<string, unknown>
+          : fields && Object.fromEntries(Object.entries(fields).filter(([key]) => key !== "summary"));
         return {
           stepId: node.nodeId,
           name: node.name,
@@ -789,8 +792,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
           waiting: waiting.has(node.nodeId),
           summary: typeof value === "string" ? value
             : typeof fields?.summary === "string" ? fields.summary : "",
-          outputs: fields ? Object.entries(fields)
-            .filter(([key, value]) => key !== "summary" && value != null)
+          outputs: outputs ? Object.entries(outputs)
+            .filter(([, value]) => value != null)
             .map(([key, value]) => ({
               name: key,
               value: typeof value === "string" ? value : JSON.stringify(value),
@@ -805,7 +808,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
           if (found) return found;
           if (val != null && typeof val === "object" && !Array.isArray(val)) {
             const obj = val as Record<string, unknown>;
-            if (typeof obj.pr_url === "string" && /^https?:\/\//.test(obj.pr_url)) return obj.pr_url;
+            const outputs = obj.outputs != null && typeof obj.outputs === "object" && !Array.isArray(obj.outputs)
+              ? obj.outputs as Record<string, unknown> : obj;
+            if (typeof outputs.pr_url === "string" && /^https?:\/\//.test(outputs.pr_url)) return outputs.pr_url;
           }
           return null;
         }, null),

@@ -512,12 +512,15 @@ describe("RunDetailPage", () => {
       planning: "Plan complete",
       implementation: {
         summary: "Implemented the change",
-        pr_url: prUrl,
-        metadata: { checks: { passed: true } },
-        artifacts: ["report", { name: "build" }],
-        count: 0,
-        approved: false,
-        omitted: null,
+        outputs: {
+          pr_url: prUrl,
+          report: "All checks passed.",
+          metadata: { checks: { passed: true } },
+          artifacts: ["report", { name: "build" }],
+          count: 0,
+          approved: false,
+          omitted: null,
+        },
       },
       later: { pr_url: "javascript:alert(2)" },
     };
@@ -549,6 +552,8 @@ describe("RunDetailPage", () => {
     const heading = await screen.findByRole("heading", { name: "implementation" });
     const step = within(heading.closest("article")!);
     expect(step.getByText("Implemented the change")).toBeVisible();
+    expect(step.getByText("report")).toBeVisible();
+    expect(step.getByText("All checks passed.")).toBeVisible();
     expect(step.getByText('{"checks":{"passed":true}}')).toBeVisible();
     expect(step.getByText('["report",{"name":"build"}]')).toBeVisible();
     expect(step.getByText("0")).toBeVisible();

@@ -489,7 +489,11 @@ class ACPNode:
     session_key: str = ""
     """Which conversation within the run. The node's own id when empty."""
     output_key: str = ""
-    """The state key the agent's message is written to. The node id when empty."""
+    """State key for the result; the node id when empty.
+
+    Terminal MCP completion stores a mapping with `summary` and named `outputs`.
+    An ordinary agent message is stored as a string.
+    """
     kind: ApprovalKind = ApprovalKind.COMMAND_EXECUTION
     """Fallback kind for permission requests that do not require human input."""
     continuation_prompt: str = (
@@ -928,10 +932,14 @@ class ACPNode:
         """Turn the broker's terminal result into graph state or a run failure."""
         if isinstance(event, RunFailed):
             raise RuntimeError(event.reason)
-        update: dict[str, object] = {
-            self.output_key or str(current_execution().node_id): event.summary
+        outputs = {output.name: output.value for output in event.outputs}
+        # Keep outputs addressable by existing graph consumers, and retain
+        # their owning phase so the overview can display every named result.
+        update: dict[str, object] = dict(outputs)
+        update[self.output_key or str(current_execution().node_id)] = {
+            "summary": event.summary,
+            "outputs": outputs,
         }
-        update.update({output.name: output.value for output in event.outputs})
         return update
 
     async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:

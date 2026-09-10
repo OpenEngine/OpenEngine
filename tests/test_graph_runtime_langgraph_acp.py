@@ -760,7 +760,12 @@ def test_complete_step_carries_declared_outputs_into_graph_state(
     values, session = asyncio.run(scenario())
 
     assert session["mcp_terminal"] == "complete_step"
-    assert values[str(IMPLEMENTATION)] == "Implemented through MCP."
+    assert values[str(IMPLEMENTATION)] == {
+        "summary": "Implemented through MCP.",
+        "outputs": {
+            "pr_url": "https://github.com/acme/repository/pull/7",
+        },
+    }
     assert values["pr_url"] == "https://github.com/acme/repository/pull/7"
     assert values[str(REVIEW)] == "Looks right."
 
