@@ -784,10 +784,6 @@ function GraphApprovalDecision({
 
   return (
     <div className="decision">
-      <label>
-        <span>Decision note</span>
-        <textarea rows={3} />
-      </label>
       {error && <p className="notice">Could not record decision: {error}</p>}
       <div className="decision-actions">
         {approval.allowedDecisions.includes("accept") && (
