@@ -59,7 +59,7 @@ def test_review_rejects_invalid_output(value):
 
 
 @pytest.mark.parametrize("runner,reviewer,default,security", [
-    ("codex", "claude", "claude-sonnet-5", "claude-opus-5"),
+    ("codex", "claude", "claude-sonnet-4-6", "claude-opus-4-6"),
     ("claude", "codex", "gpt-5.6-terra", "gpt-5.6-sol"),
 ])
 def test_cross_provider_and_model_tiers(runner, reviewer, default, security):
