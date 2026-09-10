@@ -489,7 +489,11 @@ class ACPNode:
     session_key: str = ""
     """Which conversation within the run. The node's own id when empty."""
     output_key: str = ""
-    """The state key the agent's message is written to. The node id when empty."""
+    """The state key for the agent's result. The node id when empty.
+
+    Terminal results with declared outputs contain those fields and `summary`;
+    results without outputs remain plain text.
+    """
     kind: ApprovalKind = ApprovalKind.COMMAND_EXECUTION
     """Fallback kind for permission requests that do not require human input."""
     continuation_prompt: str = (
@@ -928,10 +932,13 @@ class ACPNode:
         """Turn the broker's terminal result into graph state or a run failure."""
         if isinstance(event, RunFailed):
             raise RuntimeError(event.reason)
-        update: dict[str, object] = {
-            self.output_key or str(current_execution().node_id): event.summary
-        }
-        update.update({output.name: output.value for output in event.outputs})
+        outputs = {output.name: output.value for output in event.outputs}
+        update: dict[str, object] = dict(outputs)
+        # Keep outputs with their phase so result cards and downstream prompts
+        # can show the artifacts alongside the summary.
+        update[self.output_key or str(current_execution().node_id)] = (
+            {**outputs, "summary": event.summary} if outputs else event.summary
+        )
         return update
 
     async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:
