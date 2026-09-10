@@ -49,7 +49,8 @@ _TOOL_SPEC: dict[str, object] = {
                 "type": "string",
                 "description": (
                     "The repository to work in, as owner/name. "
-                    "Optional when a default is configured."
+                    "Omit this when a default is already configured; "
+                    "the configured default always takes precedence."
                 ),
             },
         },
@@ -144,7 +145,7 @@ class ConciergeBroker:
             return {"ok": False, "error": "prompt must be a non-empty string"}
         if set(arguments) - {"prompt", "repository"}:
             return {"ok": False, "error": "unknown work-order arguments"}
-        repository = arguments.get("repository", "") or self._default_repository
+        repository = self._default_repository or arguments.get("repository", "")
         if not isinstance(repository, str):
             return {"ok": False, "error": "repository must be a string"}
         repository = repository.strip()
