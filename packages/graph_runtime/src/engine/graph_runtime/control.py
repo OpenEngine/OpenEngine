@@ -254,7 +254,13 @@ class GraphRuntime(Protocol):
         ...
 
     async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
-        """What this run is doing now, or `None` when there is no such run."""
+        """What this run is doing now, or `None` when there is no such run.
+
+        Raises `UnknownGraphError` for a run whose graph is not registered.
+        A deployment may stop offering a graph while runs of it remain, and
+        that is a different answer from "no such run": the run is there, and
+        nothing here can say what it is doing.
+        """
         ...
 
     async def history(self, run_id: RunId) -> tuple[Checkpoint, ...]:

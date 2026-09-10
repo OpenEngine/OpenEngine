@@ -448,7 +448,25 @@ class ScriptedGraphRuntime:
 
     async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
         run = self._runs.get(run_id)
-        return self._snapshot(run) if run is not None else None
+        if run is None:
+            return None
+        if run.graph.graph_id not in self._graphs:
+            raise UnknownGraphError(
+                f"run {run_id} is of graph {run.graph.graph_id}, which this "
+                "runtime does not have"
+            )
+        return self._snapshot(run)
+
+    def withdraw(self, graph_id: GraphId) -> None:
+        """Stop defining a graph, keeping the runs already made of it.
+
+        What a deployment does when a workflow leaves its directory, or is
+        renamed without retiring the id it had: the runs are in the store and
+        the graph is not, so nothing can say where they got to. Modelled here
+        because it is the state an old WorkOrder is in, and every reader of one
+        has to survive it.
+        """
+        self._graphs.pop(graph_id, None)
 
     async def history(self, run_id: RunId) -> tuple[Checkpoint, ...]:
         return tuple(self._require(run_id).checkpoints)

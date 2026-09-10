@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   api,
+  ApiError,
   completeHumanReview,
   decideGraphApproval,
   deleteRun,
@@ -824,11 +825,30 @@ function GraphApprovalDecision({
   );
 }
 
+/** A read the engine answered with "there is no such thing", as distinct from
+ *  one that failed.
+ *
+ *  What a `[BETA]` WorkOrder's workflow leaving the deployment looks like from
+ *  here: the run is still on the rail and still has its transcripts, but there
+ *  is no graph to describe it with. That is worth saying on the page rather
+ *  than throwing, which would replace the whole WorkOrder with an error. */
+async function ifPresent<T>(read: Promise<T>): Promise<T | undefined> {
+  try {
+    return await read;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404) return undefined;
+    throw reason;
+  }
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
   const [baseRun, setRun] = useState<ApiWorkflowRun>();
   const [graph, setGraph] = useState<ApiGraphRun>();
   const [topology, setTopology] = useState<ApiGraphTopology>();
   const [graphEvents, setGraphEvents] = useState<ApiGraphEvent[]>([]);
+  // Set once a poll has been told there is no such graph, so the page says why
+  // it has no progress to show instead of drawing an empty WorkOrder.
+  const [workflowGone, setWorkflowGone] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
@@ -844,14 +864,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
         setRun(value);
         if (isGraphRun(value)) {
           const [nextGraph, nextTopology, eventLog] = await Promise.all([
-            getGraphRun(runId),
-            getGraphTopology(value.workflowId),
+            ifPresent(getGraphRun(runId)),
+            ifPresent(getGraphTopology(value.workflowId)),
             getGraphEvents(runId),
           ]);
           if (cancelled) return;
           setGraph(nextGraph);
           setTopology(nextTopology);
           setGraphEvents(eventLog.events);
+          setWorkflowGone(nextTopology === undefined);
         }
         setError("");
       } catch (reason) {
@@ -980,15 +1001,27 @@ export function RunDetailPage({ runId }: { runId: string }) {
           {/* A [BETA] WorkOrder's stages are the graph's nodes, so having none
               means the graph engine could not be read -- not that the run has
               no stages. Saying so beats a page that looks like a WorkOrder
-              which never started. */}
+              which never started.
+
+              Two reasons it could not be read, and the second is permanent: a
+              WorkOrder outlives the workflow it ran, so one started before its
+              workflow was withdrawn has nothing left to draw its stages from.
+              That one is named, because "try again" is not the advice. */}
           {run.steps.length === 0 && !run.workflowVersion && (
             <section className="callout">
               <p className="eyebrow">Beta workflow</p>
-              <p>
-                This WorkOrder runs on the graph engine, and its stages could not
-                be read from it. They are served under{" "}
-                <code>/graph/api/runs/{run.runId}</code>.
-              </p>
+              {workflowGone ? (
+                <p>
+                  This WorkOrder ran <code>{run.workflowId}</code>, a workflow
+                  this deployment no longer has, so its stages cannot be loaded.
+                </p>
+              ) : (
+                <p>
+                  This WorkOrder runs on the graph engine, and its stages could not
+                  be read from it. They are served under{" "}
+                  <code>/graph/api/runs/{run.runId}</code>.
+                </p>
+              )}
             </section>
           )}
           {run.pendingHumanReview && graph?.pendingApprovals[0] ? (

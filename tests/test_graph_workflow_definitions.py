@@ -32,7 +32,7 @@ from engine.apps.web.composition import Settings
 from engine.apps.worker.__main__ import main as worker
 from engine.apps.worker.composition import Settings as WorkerSettings
 from engine.domain import WorkflowId, WorkspaceId
-from engine.graph_runtime import GraphWorkflow
+from engine.graph_runtime import GraphId, GraphWorkflow
 from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode
 from engine.graph_runtime_langgraph.components.name import NAMING_PROMPT
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
@@ -111,6 +111,36 @@ def test_the_repository_offers_the_same_workflow_on_either_engine() -> None:
     ]
     # One graph exposes both runner selections as creation inputs.
     assert all(isinstance(one, GraphWorkflow) for one in loaded.graphs)
+
+
+def test_the_workflow_retires_the_ids_it_used_to_have(tmp_path: Path) -> None:
+    """The rename in #367 left WorkOrders behind, and this is what keeps them.
+
+    The runner used to be part of the id -- one graph per agent -- and became a
+    creation input instead. Every WorkOrder started before that remembers the
+    id it began with, so the engine goes on answering for those ids: a run of
+    one still has a topology to be drawn with, which is the difference between
+    an old WorkOrder opening and an old WorkOrder failing to load.
+    """
+    graphs = catalog().graphs
+    assert [str(one) for one in graphs[0].previous_ids] == [
+        "implementation-review-codex",
+        "implementation-review-claude",
+    ]
+
+    async def scenario():
+        async with sqlite_runtime(graphs, tmp_path / "state") as runtime:
+            return [
+                runtime.topology(GraphId(retired))
+                for retired in ("implementation-review-codex", "unheard-of")
+            ]
+
+    retired, unheard = asyncio.run(scenario())
+
+    assert retired is not None and str(retired.graph_id) == GRAPHS[0]
+    # Retiring an id is not answering for every id: a graph this deployment
+    # never had is still nothing.
+    assert unheard is None
 
 
 def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
