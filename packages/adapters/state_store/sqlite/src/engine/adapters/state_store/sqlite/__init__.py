@@ -860,13 +860,22 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
             if value.get("milestone_id") is not None
             else None
         ),
-        phase=RunPhase(str(value["phase"])),
+        phase=_run_phase_from_value(value["phase"]),
         repository=str(value.get("repository", "")),
         prompt=str(value.get("prompt", "")),
         name=str(value.get("name", "")),
         failure_reason=str(value.get("failure_reason", "")),
         origin=_origin_from_dict(value.get("origin")),
     )
+
+
+def _run_phase_from_value(value: object) -> RunPhase:
+    phase = str(value)
+    if phase == "awaiting_human_review":
+        # The graph runtime now owns this finer-grained status. Its durable
+        # WorkOrder projection represents every active graph phase as running.
+        return RunPhase.RUNNING_AGENT
+    return RunPhase(phase)
 
 
 def _origin_from_dict(value: object) -> RunOrigin | None:

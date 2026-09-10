@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sqlite3
+import warnings
 
 import pytest
 
@@ -325,10 +326,48 @@ def test_a_work_order_and_its_conversations_survive_reopening(tmp_path) -> None:
     assert instances[0].conversation_id == "review-conversation"
 
 
+def test_legacy_human_review_phase_loads_as_running_without_a_warning(tmp_path) -> None:
+    path = tmp_path / "runs.sqlite3"
+    expected = RunState(
+        run_id=RunId("run-legacy"),
+        task_id=TaskId("task-legacy"),
+        workflow_id=WorkflowId("implementation-review-v1"),
+        phase=RunPhase.RUNNING_AGENT,
+    )
+
+    store = SQLiteStateStore(path)
+    try:
+        store._connection.execute(
+            "INSERT INTO run_states (run_id, state_json) VALUES (?, ?)",
+            (
+                "run-legacy",
+                json.dumps(
+                    {
+                        "run_id": "run-legacy",
+                        "task_id": "task-legacy",
+                        "workflow_id": "implementation-review-v1",
+                        "phase": "awaiting_human_review",
+                    }
+                ),
+            ),
+        )
+        store._connection.commit()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            loaded = asyncio.run(store.load(RunId("run-legacy")))
+            runs = asyncio.run(store.list_runs())
+    finally:
+        store.close()
+
+    assert loaded == expected
+    assert runs == (expected,)
+
+
 def test_a_row_this_build_cannot_read_is_skipped_rather_than_hiding_the_rest(
     tmp_path,
 ) -> None:
-    """A run left by a build with phases this one no longer has.
+    """A run left by a build with a phase this one has never known.
 
     Reading the list is how every screen finds its WorkOrders, so one row it
     cannot make sense of must not take the others with it -- or the startup
@@ -353,14 +392,14 @@ def test_a_row_this_build_cannot_read_is_skipped_rather_than_hiding_the_rest(
                         "run_id": "run-legacy",
                         "task_id": "task-legacy",
                         "workflow_id": "implementation-review-v1",
-                        "phase": "awaiting_human_review",
+                        "phase": "future_phase",
                     }
                 ),
             ),
         )
         store._connection.commit()
 
-        with pytest.raises(ValueError, match="awaiting_human_review"):
+        with pytest.raises(ValueError, match="future_phase"):
             asyncio.run(store.load(RunId("run-legacy")))
         with pytest.warns(RuntimeWarning, match="skipping incompatible workflow run"):
             runs = tuple(asyncio.run(store.list_runs()))
