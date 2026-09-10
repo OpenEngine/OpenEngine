@@ -97,7 +97,7 @@ def test_claude_is_reached_through_its_acp_adapter() -> None:
     assert CLAUDE_ACP_COMMAND == (
         "npx",
         "--yes",
-        "@zed-industries/claude-agent-acp",
+        "@agentclientprotocol/claude-agent-acp",
     )
     assert ClaudeACPProvider().command == CLAUDE_ACP_COMMAND
     assert isinstance(ClaudeACPProvider(), ACPAgentProvider)
