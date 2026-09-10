@@ -110,6 +110,7 @@ from engine.runtime import (
     EngineConfig,
     ResponseStyle,
     WorkflowCatalog,
+    load_workflow_catalog,
 )
 from engine.graph_runtime import (
     CANCELLED,
@@ -134,6 +135,16 @@ from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
 WORKFLOW_ID = WorkflowId("implementation-review-v1")
+
+#: The step workflow the tests below run. Named rather than left to
+#: `create_app`'s fallback, which reads `$ENGINE_CONFIG` before `./engine.toml`:
+#: with that variable pointing at another checkout -- which a worktree setup
+#: does readily -- the app would offer *those* definitions, and these tests
+#: would pass or fail on what some other directory happens to hold.
+#:
+#: A fixture rather than `workflows/`: this repository ships a graph and no step
+#: workflow, and the step half of the API is what most of this file is about.
+STEP_CATALOG = load_workflow_catalog(Path(__file__).parent / "fixtures" / "workflows")
 IMPLEMENTATION_STEP = StepId("implementation")
 REVIEW_STEP = StepId("review")
 HUMAN_REVIEW_STEP = StepId("human-review")
@@ -1292,7 +1303,7 @@ def _workflow_app(
         chat_runners,
         workflow_runners=implementers,
         review_runners=chat_runners,
-        workflow_catalog=workflow_catalog,
+        workflow_catalog=workflow_catalog if workflow_catalog is not None else STEP_CATALOG,
         graph_runtime=graph_runtime,
         approval_policy=approval_policy,
         communications_channel=communications_channel,
@@ -4972,7 +4983,7 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path)
     assert "immutable" in asset.headers["cache-control"]
 
 
-# --- graph WorkOrders (the [BETA] entries in the dropdown) ---------------------
+# --- graph WorkOrders (the graph entries in the dropdown) ---------------------
 #
 # A second kind of workflow can be picked from the same dropdown. It is run by
 # the graph engine rather than by the step executor, and these are the three
@@ -5054,12 +5065,12 @@ def _review_graph() -> ScriptedGraph:
     )
 
 
-def test_a_graph_workflow_is_offered_as_a_beta_choice() -> None:
+def test_a_graph_workflow_is_offered_beside_the_step_ones() -> None:
     """The dropdown, which is where a person meets this at all.
 
-    Both kinds in one list -- steps first, then the graphs wearing `[BETA]` --
-    because a person choosing what to run is choosing what should happen, not
-    which engine should do it.
+    Both kinds in one list -- steps first, then the graphs, each under its own
+    name -- because a person choosing what to run is choosing what should
+    happen, not which engine should do it.
 
     Asked of a started server, because that is when a graph is offerable: the
     engine that would run one is opened on startup.
@@ -5078,7 +5089,7 @@ def test_a_graph_workflow_is_offered_as_a_beta_choice() -> None:
         {"id": "steps-v1", "name": "Steps", "version": "v1", "kind": "steps"},
         {
             "id": "implementation-review-codex",
-            "name": "[BETA] Implementation review (codex)",
+            "name": "Implementation review (codex)",
             "version": "",
             # Said rather than left to be guessed: the form reads this to
             # decide whether to ask which runner to use.
@@ -5088,7 +5099,7 @@ def test_a_graph_workflow_is_offered_as_a_beta_choice() -> None:
 
 
 def test_a_graph_workflow_is_not_offered_without_an_engine_to_run_it() -> None:
-    """No graph engine composed, no `[BETA]` entries.
+    """No graph engine composed, no graph entries.
 
     The alternative is a choice that fails after somebody made it, which is
     worse than a choice that was never there.
@@ -5329,7 +5340,7 @@ def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
 
 
 def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
-    """The rail's x on a `[BETA]` row has to reach the other engine.
+    """The rail's x on a graph row has to reach the other engine.
 
     None of what stops a step WorkOrder touches a graph one: its driver is a
     task inside the graph engine rather than in this app's `workflow_tasks`,
@@ -5538,7 +5549,7 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone() -> None:
 
 
 def test_the_graph_engine_answers_under_its_own_prefix() -> None:
-    """Where a `[BETA]` run is watched and approved today.
+    """Where a graph run is watched and approved today.
 
     This app's pages cannot do either yet, and the graph engine's own API can,
     so it is served from here rather than left unreachable. Behind `/graph`
@@ -5686,7 +5697,7 @@ def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded() -> None
     assert created.status_code == 201
 
 
-# --- a `[BETA]` WorkOrder across a restart -------------------------------------
+# --- a graph WorkOrder across a restart ----------------------------------------
 #
 # What a graph run keeps in the engine's files is where it got to. What it does
 # not keep is the *driver* -- the task working through the graph -- because that
@@ -5905,7 +5916,7 @@ def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
 def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Everything else that can go wrong stays inside the `[BETA]` feature.
+    """Everything else that can go wrong stays inside the graph feature.
 
     Opening the engine also creates a directory and opens two SQLite files, and
     those fail for reasons that are about this machine rather than about any

@@ -59,7 +59,7 @@ class WorkflowCatalog:
     Set aside rather than mixed in: a graph has no steps, so anything that
     iterates this catalog to run something must never be handed one. Whoever
     can run a graph asks for them here by name -- `apps/web` does, and offers
-    them in its dropdown behind a `[BETA]` label.
+    them in its dropdown alongside the step workflows.
     """
 
     @classmethod

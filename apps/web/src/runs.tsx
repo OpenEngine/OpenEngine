@@ -73,7 +73,7 @@ export function conversationCount(run: ApiWorkflowRunListing) {
   return run.steps.filter((step) => step.conversationUrl).length;
 }
 
-/** Whether the graph engine runs this WorkOrder: the `[BETA]` kind.
+/** Whether the graph engine runs this WorkOrder: the graph kind.
  *
  *  A graph has no version yet, and that absence is the only tell the runs list
  *  carries. Written down once so the two readers of it agree. */
@@ -83,7 +83,7 @@ export function isGraphRun(run: Pick<ApiWorkflowRunListing, "workflowVersion">) 
 
 /** The nodes of every graph the WorkOrders on screen run.
  *
- *  A `[BETA]` WorkOrder keeps no steps in the runs list -- a graph is not made
+ *  A graph WorkOrder keeps no steps in the runs list -- a graph is not made
  *  of them -- so what it offers instead is its graph's nodes, which exist from
  *  the moment the run does. Read once per graph rather than per run or per
  *  poll: a compiled graph's shape does not change while the server is up, and
@@ -362,7 +362,7 @@ export function NewWorkflowPage({
               setInputValues({});
             }}
           >
-            {/* The version is only shown when there is one. A [BETA] graph
+            {/* The version is only shown when there is one. A graph
                 workflow has no version yet, and "name · " reads like something
                 failed to load. */}
             {config.workflows.map((workflow) => (
@@ -828,7 +828,7 @@ function GraphApprovalDecision({
 /** A read the engine answered with "there is no such thing", as distinct from
  *  one that failed.
  *
- *  What a `[BETA]` WorkOrder's workflow leaving the deployment looks like from
+ *  What a graph WorkOrder's workflow leaving the deployment looks like from
  *  here: the run is still on the rail and still has its transcripts, but there
  *  is no graph to describe it with. That is worth saying on the page rather
  *  than throwing, which would replace the whole WorkOrder with an error. */
@@ -998,7 +998,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </section>
           )}
           <StageProgress run={run} />
-          {/* A [BETA] WorkOrder's stages are the graph's nodes, so having none
+          {/* A graph WorkOrder's stages are the graph's nodes, so having none
               means the graph engine could not be read -- not that the run has
               no stages. Saying so beats a page that looks like a WorkOrder
               which never started.

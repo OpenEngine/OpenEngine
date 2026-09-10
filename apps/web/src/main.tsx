@@ -372,7 +372,7 @@ function App() {
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
   const { runs, error: runsError, loaded: runsLoaded, remove: deleteRun } = useRuns();
-  // What a [BETA] WorkOrder offers in the rail: its graph's nodes, since a
+  // What a graph WorkOrder offers in the rail: its graph's nodes, since a
   // graph run has no steps for the list to carry.
   const graphNodes = useGraphNodes(runs);
   const { projects, archive: archiveProject } = useProjects();

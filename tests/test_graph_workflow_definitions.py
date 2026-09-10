@@ -7,9 +7,9 @@ Two things can go wrong with `workflows/implementation_review_graph.py`:
 * it breaks something that reads the workflow directory, which is every app
   here. A directory that refuses to load takes the deployment down.
 
-The interface now offers these graphs, marked `[BETA]`, and picking one starts
-it on the graph engine. That is checked here at `/api/config` -- the dropdown a
-person actually meets -- and end to end in `tests/test_web_app.py`.
+The interface offers these graphs and picking one starts it on the graph
+engine. That is checked here at `/api/config` -- the dropdown a person actually
+meets -- and end to end in `tests/test_web_app.py`.
 """
 
 from __future__ import annotations
@@ -46,7 +46,6 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 #: Started by every composition root under test, and by the interface.
 CONFIG = Path(__file__).resolve().parents[1] / "engine.toml"
 
-STARTABLE = "implementation-review-v1"
 GRAPHS = ("implementation-review-rerank",)
 
 
@@ -360,31 +359,34 @@ def test_a_graph_workflow_is_not_one_of_the_step_workflows() -> None:
     The catalog is what the step executor reads, and it must never find a graph
     in there: a graph has no steps for it to run. Offering one is the
     interface's decision, made once in `/api/config` -- which is the next test.
+
+    This repository ships no step workflow at all now, so the catalog it loads
+    is empty of them -- and falsy, which is why nothing here asks it a yes/no
+    question about itself.
     """
     loaded = catalog()
 
-    assert [str(one.workflow_id) for one in loaded] == [STARTABLE]
-    assert len(loaded) == 1
+    assert list(loaded) == []
+    assert len(loaded) == 0
     for graph_id in GRAPHS:
         assert WorkflowId(graph_id) not in loaded
         assert loaded.get(WorkflowId(graph_id)) is None
 
 
-def test_the_interface_offers_the_graphs_as_beta_choices(
+def test_the_interface_offers_the_graphs_by_their_own_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The dropdown itself, through the endpoint the client reads it from.
 
-    Both kinds, in one list: the step workflow as it always read, and the two
-    graphs after it wearing `[BETA]`. The prefix is the warning that these are
-    new -- picking one runs it on the graph engine, which this deployment
-    starts because its workflow directory holds graphs.
+    Every entry here is a graph, under the name its definition gives it: this
+    deployment ships no step workflow, and the graphs no longer wear a `[BETA]`
+    prefix warning that they are new.
 
     Asked of a *started* application, which is the whole condition for a graph
     being offered: the engine that runs one is opened on startup, and an engine
-    that did not open means no `[BETA]` entries rather than entries nothing can
-    start. Starting it here also compiles every graph in the directory against
-    real files, so a graph this repository could not actually run fails this.
+    that did not open means no entries rather than entries nothing can start.
+    Starting it here also compiles every graph in the directory against real
+    files, so a graph this repository could not actually run fails this.
     """
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
     monkeypatch.chdir(tmp_path)
@@ -401,10 +403,8 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
 
     offered = asyncio.run(ask())["workflows"]
 
-    assert [one["id"] for one in offered] == [STARTABLE, *GRAPHS]
-    assert [one["name"] for one in offered if one["id"] in GRAPHS] == [
-        "[BETA] Implementation review rerank",
-    ]
+    assert [one["id"] for one in offered] == list(GRAPHS)
+    assert [one["name"] for one in offered] == ["Implementation review rerank"]
     # A graph has no version, and the client leaves the version out rather than
     # printing a trailing separator.
     assert [one["version"] for one in offered if one["id"] in GRAPHS] == [""]

@@ -7,8 +7,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
     "test": "vitest run",
-    "test:e2e": "playwright test --grep-invert @beta",
-    "test:e2e:beta": "playwright test --grep @beta",
+    "test:e2e": "playwright test",
     "build": "vite build"
   },
   "dependencies": {

@@ -89,7 +89,7 @@ function ConversationLink({ conversation, activeUrl }: {
 /** What one WorkOrder offers beneath its name.
  *
  *  A step run offers the conversations its steps have started, named after the
- *  step that owns each. A `[BETA]` run has no steps: its stages are its graph's
+ *  step that owns each. A graph run has no steps: its stages are its graph's
  *  nodes, so those are what it offers, under their own names and from the moment
  *  the run exists rather than once an agent has said something. A node that says
  *  it is not one of the run's conversations -- the checkout, the person's own
@@ -329,7 +329,7 @@ export function Sidebar({
 }: {
   projects?: ApiProject[];
   runs: ApiWorkflowRunListing[];
-  /** The graphs behind the `[BETA]` WorkOrders listed, which is where their
+  /** The graphs behind the graph WorkOrders listed, which is where their
    *  conversations are named. Empty until they have been read, and for a rail
    *  whose owner does not follow them. */
   graphNodes?: GraphNodes;

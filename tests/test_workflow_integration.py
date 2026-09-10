@@ -75,12 +75,18 @@ from provider_fakes import (
 
 _IDENTITY = ("-c", "user.name=Engine Tests", "-c", "user.email=engine@example.test")
 
-#: This checkout's workflows, passed to every app these tests build. Named
+#: The step workflow these tests run, passed to every app they build. Named
 #: rather than left to `create_app`'s fallback, which reads `$ENGINE_CONFIG`
 #: before `./engine.toml`: with that variable pointing at another checkout --
 #: which a worktree setup does readily -- the app would run *those* definitions
-#: while the assertions below describe these ones.
-CATALOG = load_workflow_catalog(Path(__file__).parents[1] / "workflows")
+#: while the assertions below describe this one.
+#:
+#: A fixture rather than `workflows/`: this repository ships a graph and no
+#: step workflow, and what is under test here is the step runtime it still
+#: ships for a deployment that installs one of its own.
+CATALOG = load_workflow_catalog(
+    Path(__file__).parent / "fixtures" / "workflows"
+)
 
 #: Read off the checked-in definition rather than restated here: what these
 #: tests are about is that naming asks the task and this prompt together, not
