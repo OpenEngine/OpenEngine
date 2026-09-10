@@ -956,13 +956,16 @@ def test_concierge_broker_creates_a_work_order() -> None:
     asyncio.run(scenario())
 
 
-def test_concierge_broker_requires_repository() -> None:
-    """Without a default or explicit repository the tool refuses."""
+def test_concierge_broker_falls_back_to_dot_when_no_default() -> None:
+    """Without a configured default the broker uses '.' (current directory)."""
     from engine.slack_concierge.slack_egress import ConciergeBroker
 
     async def scenario() -> None:
+        created: list[tuple[str, str]] = []
+
         async def create(repository: str, prompt: str) -> tuple[str, str]:
-            raise AssertionError("should not be called")
+            created.append((repository, prompt))
+            return "https://engine.example/runs/run-1", "run-1"
 
         broker = ConciergeBroker(create_workorder=create, default_repository="")
         async with broker:
@@ -973,14 +976,14 @@ def test_concierge_broker_requires_repository() -> None:
                     "arguments": {"prompt": "do something"},
                 }
             )
-        assert result["ok"] is False
-        assert "repository" in result["error"]
+        assert result["ok"] is True
+        assert created == [(".", "do something")]
 
     asyncio.run(scenario())
 
 
-def test_concierge_broker_default_repository_wins_over_explicit() -> None:
-    """The configured default repository takes precedence over an explicit one."""
+def test_concierge_broker_uses_configured_default_repository() -> None:
+    """The configured default repository is always used."""
     from engine.slack_concierge.slack_egress import ConciergeBroker
 
     async def scenario() -> None:
@@ -1001,7 +1004,6 @@ def test_concierge_broker_default_repository_wins_over_explicit() -> None:
                     "name": "create_workorder",
                     "arguments": {
                         "prompt": "fix the bug",
-                        "repository": "acme/frontend",
                     },
                 }
             )
@@ -1011,16 +1013,13 @@ def test_concierge_broker_default_repository_wins_over_explicit() -> None:
     asyncio.run(scenario())
 
 
-def test_concierge_broker_uses_explicit_repository_when_no_default() -> None:
-    """An explicit repository is used when no default is configured."""
+def test_concierge_broker_rejects_unknown_arguments() -> None:
+    """Extra arguments (like repository) are rejected."""
     from engine.slack_concierge.slack_egress import ConciergeBroker
 
     async def scenario() -> None:
-        created: list[tuple[str, str]] = []
-
         async def create(repository: str, prompt: str) -> tuple[str, str]:
-            created.append((repository, prompt))
-            return "https://engine.example/runs/run-1", "run-1"
+            raise AssertionError("should not be called")
 
         broker = ConciergeBroker(
             create_workorder=create,
@@ -1037,8 +1036,8 @@ def test_concierge_broker_uses_explicit_repository_when_no_default() -> None:
                     },
                 }
             )
-        assert result["ok"] is True
-        assert created == [("acme/frontend", "fix the bug")]
+        assert result["ok"] is False
+        assert "unknown" in result["error"]
 
     asyncio.run(scenario())
 
