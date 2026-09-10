@@ -31,8 +31,19 @@ HANDLED_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
 #: delivery, not that its author is entitled to spend Engine's time: on a public
 #: repository anyone can comment, so the association GitHub reports for the
 #: author is the trust boundary, and it belongs here rather than in whatever
-#: eventually consumes a comment.
+#: eventually consumes a comment. An association describes affiliation rather
+#: than the role it was granted, so a read-only collaborator or an organization
+#: member without write access passes; narrowing that further means asking the
+#: permissions API per comment, which is a request per delivery this route does
+#: not yet make.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+#: The most a delivery may weigh. The route is reachable without a session, so
+#: a body is buffered before anything about it is trusted: without a ceiling,
+#: unsigned requests are a way to spend this process's memory. GitHub caps its
+#: own payloads at 25 MB, and a comment event is orders of magnitude smaller
+#: than this limit.
+MAX_BODY_BYTES = 2 * 1024 * 1024
 
 #: How many comment identities are remembered for deduplication.
 _SEEN_LIMIT = 4096
@@ -140,19 +151,47 @@ class GithubIngress:
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         self_login: Callable[[], str] = lambda: "",
         capacity: int = 256,
+        max_body_bytes: int = MAX_BODY_BYTES,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
     ) -> None:
         self._webhook_secret = webhook_secret
         self._self_login = self_login
         self._handle = handle
         self._verify_signature = verify_signature
+        self._max_body_bytes = max_body_bytes
         self._queue: asyncio.Queue[GithubComment] = asyncio.Queue(maxsize=capacity)
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._worker: asyncio.Task[None] | None = None
 
+    async def _read_body(self, request: Request) -> bytes | None:
+        """The delivery's body, or ``None`` if it outgrows what one may weigh.
+
+        ``Request.body()`` buffers whatever arrives, so the ceiling is enforced
+        here rather than after: a declared length is refused before a byte is
+        read, and a chunked body is abandoned as soon as it passes the limit.
+        """
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > self._max_body_bytes:
+                    return None
+            except ValueError:
+                return None
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > self._max_body_bytes:
+                return None
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     async def webhook(self, request: Request) -> Response:
         """Authenticate, enqueue, and acknowledge without waiting for an agent."""
-        body = await request.body()
+        body = await self._read_body(request)
+        if body is None:
+            log.warning("refused a GitHub delivery larger than %s bytes", self._max_body_bytes)
+            return JSONResponse({"error": "GitHub event is too large"}, status_code=413)
         webhook_secret = self._webhook_secret()
         if not webhook_secret:
             log.warning(

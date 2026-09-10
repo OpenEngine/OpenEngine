@@ -21,6 +21,11 @@ is checked separately: only comments from a repository's owners, members, and
 collaborators are acted on, and a bot's own comments are ignored so Engine does
 not answer itself.
 
+The route is reachable without a session, so a delivery larger than 2 MB is
+refused with 413 before its body is buffered or its signature checked. GitHub
+caps its own payloads at 25 MB and a comment event is far smaller than either
+figure.
+
 A verified comment is queued and acknowledged immediately, because GitHub gives
 a webhook ten seconds before it considers the delivery failed. Each comment is
 handled once no matter how often GitHub redelivers it.

@@ -297,6 +297,60 @@ def test_the_webhook_can_be_saved_before_anything_answers_it() -> None:
     assert response.status_code == 200
 
 
+def test_a_delivery_too_large_to_buffer_is_refused_before_it_is_read() -> None:
+    """The route is reachable without a session, so an unsigned body cannot be
+    a way to spend this process's memory."""
+    client, _ingress = _client()
+    body = b'{"padding": "' + b"x" * (2 * 1024 * 1024) + b'"}'
+    response = client.post(
+        "/api/github/events", content=body, headers=dict(_signed(body), **{"x-github-event": "issue_comment"})
+    )
+    assert response.status_code == 413
+
+
+def test_a_body_larger_than_it_declares_is_refused() -> None:
+    """A chunked body has no declared length to check, so the limit is also
+    enforced while the body streams in."""
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    ingress = GithubIngress(
+        webhook_secret=lambda: WEBHOOK_SECRET, handle=_record([]), max_body_bytes=64
+    )
+    app = Starlette(routes=[Route("/api/github/events", ingress.webhook, methods=["POST"])])
+    client = TestClient(app)
+
+    def chunks():
+        for _ in range(8):
+            yield b"x" * 32
+
+    # httpx sends a generator body with Transfer-Encoding: chunked, so no
+    # Content-Length is declared and the streaming limit is what catches it.
+    assert client.post("/api/github/events", content=chunks()).status_code == 413
+
+
+def test_a_lying_content_length_is_refused() -> None:
+    client, _ingress = _client()
+    body = json.dumps(_issue_comment()).encode()
+    headers = dict(_signed(body), **{"x-github-event": "issue_comment"})
+    assert client.post(
+        "/api/github/events", content=body, headers=dict(headers, **{"content-length": "not a number"})
+    ).status_code == 413
+
+
+def test_an_ordinary_comment_is_well_under_the_limit() -> None:
+    handled = []
+    client, ingress = _client(handle=_record(handled))
+    body = json.dumps(_issue_comment(comment_id=11)).encode()
+    headers = dict(_signed(body), **{"x-github-event": "issue_comment"})
+    with client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert [c.comment_id for c in handled] == ["11"]
+
+
 def test_the_ping_that_saves_the_webhook_is_answered() -> None:
     client, _ingress = _client()
     body = json.dumps({"zen": "Design for failure."}).encode()
