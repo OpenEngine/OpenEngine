@@ -136,31 +136,58 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "workspace",
         "naming",
         "implementation",
-        "review",
+        "review-security",
+        "review-bugs",
+        "review-performance",
+        "review-conciseness",
+        "reranker",
         "human-review",
     ]
     assert [node.name for node in codex.nodes] == [
         "Workspace",
         "Naming",
         "Implementation",
-        "Review",
+        "Review (Security)",
+        "Review (Bugs & task adherence)",
+        "Review (Performance)",
+        "Review (Conciseness)",
+        "Reranker",
         "Human review",
     ]
-    # The kinds a client would draw differently: a checkout, three agents, and
-    # the one stage that is a person.
+    assert [node.group for node in codex.nodes] == [
+        "",
+        "",
+        "",
+        "Review",
+        "Review",
+        "Review",
+        "Review",
+        "",
+        "",
+    ]
+    # The kinds: a checkout, seven agents (implementation + 4 reviewers +
+    # reranker + naming), and the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
         "workspace",
         "agent",
         "agent",
         "agent",
+        "agent",
+        "agent",
+        "agent",
+        "agent",
         "human",
     ]
-    # The implementation and review are the two conversations a person reads
-    # and can talk to. The checkout, naming turn, and verdict are stages of the
-    # run rather than conversations in it.
+    # The implementation, review facets, and reranker are conversations a
+    # person reads and can talk to. The checkout, naming turn, and verdict
+    # are stages of the run rather than conversations in it.
     assert [node.show_in_sidebar for node in codex.nodes] == [
         False,
         False,
+        True,
+        True,
+        True,
+        True,
         True,
         True,
         False,
@@ -227,7 +254,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 3
+    assert len(agents) == 7
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
@@ -238,21 +265,34 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     nodes = nodes_of(module.pipeline("codex"))
 
     implementation = nodes[module.IMPLEMENTATION]
-    review = nodes[module.REVIEW]
     assert len(implementation.mcp_server_bindings) == 1
     impl_binding = implementation.mcp_server_bindings[0]
     assert impl_binding.repository_tools == ("git_subcommand", "open_pull_request")
     assert impl_binding.required_outputs == ("pr_url",)
 
-    assert len(review.mcp_server_bindings) == 1
-    review_binding = review.mcp_server_bindings[0]
-    assert review_binding.repository_tools == (
+    # Each review facet gets read-only repository tools (no add_comment).
+    for facet in module.REVIEW_FACETS:
+        facet_node = nodes[f"review-{facet.id}"]
+        assert len(facet_node.mcp_server_bindings) == 1
+        binding = facet_node.mcp_server_bindings[0]
+        assert binding.repository_tools == (
+            "view_change_request",
+            "list_pipeline_status",
+            "get_job_logs",
+        )
+        assert binding.required_outputs == ("findings",)
+
+    # The reranker gets add_comment so it can post the final findings.
+    reranker = nodes[module.RERANKER]
+    assert len(reranker.mcp_server_bindings) == 1
+    reranker_binding = reranker.mcp_server_bindings[0]
+    assert reranker_binding.repository_tools == (
         "view_change_request",
         "list_pipeline_status",
         "get_job_logs",
         "add_comment",
     )
-    assert review_binding.required_outputs == ("findings",)
+    assert reranker_binding.required_outputs == ("findings",)
 
 
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:

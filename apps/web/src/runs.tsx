@@ -495,7 +495,7 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
       name: run.phase === "pending" ? "Queued" : "Workspace",
       status: preparing ? "in_progress" : "completed",
     },
-    ...run.steps.map((step) => ({ id: step.stepId, name: step.name, status: step.status })),
+    ...collapseStepGroups(run.steps),
   ];
   return (
     <ol className="stages" aria-label="Current WorkOrder stage">
@@ -515,6 +515,50 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
       ))}
     </ol>
   );
+}
+
+type StepGroupEntry = {
+  id: string;
+  name: string;
+  status: string;
+  steps: ApiRunStep[];
+  grouped: boolean;
+};
+
+function groupedStatus(steps: Pick<ApiRunStep, "status">[]): string {
+  for (const status of ["action_required", "in_progress", "failed"])
+    if (steps.some((step) => step.status === status)) return status;
+  if (steps.every((step) => step.status === "completed")) return "completed";
+  return "pending";
+}
+
+/** Collapse nodes sharing a group into one item at their first position. */
+function collapseStepGroups(steps: ApiRunStep[]): StepGroupEntry[] {
+  const emitted = new Set<string>();
+  const entries: StepGroupEntry[] = [];
+  for (const step of steps) {
+    if (!step.group) {
+      entries.push({
+        id: step.stepId,
+        name: step.name,
+        status: step.status,
+        steps: [step],
+        grouped: false,
+      });
+      continue;
+    }
+    if (emitted.has(step.group)) continue;
+    emitted.add(step.group);
+    const members = steps.filter((candidate) => candidate.group === step.group);
+    entries.push({
+      id: `group-${step.group}`,
+      name: step.group,
+      status: groupedStatus(members),
+      steps: members,
+      grouped: true,
+    });
+  }
+  return entries;
 }
 
 /** The decision that ends a run, on the run it ends.
@@ -643,6 +687,32 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
         )}
       </div>
     </article>
+  );
+}
+
+function StepGroup({ name, status, steps, currentStepId }: {
+  name: string;
+  status: string;
+  steps: ApiRunStep[];
+  currentStepId: string | null;
+}) {
+  return (
+    <details className="step-group">
+      <summary className="step-group-summary">
+        <span>
+          <span className="eyebrow">agent group</span>
+          <strong>{name}</strong>
+        </span>
+        <span className={`chip ${status === "action_required" ? "chip-flame" : ""}`}>
+          {phaseLabel(status)}
+        </span>
+      </summary>
+      <div className="step-group-items">
+        {steps.map((step) => (
+          <StepCard key={step.stepId} step={step} current={step.stepId === currentStepId} />
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -787,6 +857,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           ))
             ? graphConversationUrl(runId, node.nodeId) : null,
           waiting: waiting.has(node.nodeId),
+          group: node.group || undefined,
           summary: typeof value === "string" ? value
             : typeof fields?.summary === "string" ? fields.summary : "",
           outputs: fields ? Object.entries(fields)
@@ -929,13 +1000,23 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </p>
           )}
           <section className="timeline" aria-label="WorkOrder steps">
-            {run.steps.map((step) => (
-              <StepCard
-                key={step.stepId}
-                step={step}
-                current={run.currentStepId === step.stepId}
-              />
-            ))}
+            {collapseStepGroups(run.steps).map((entry) =>
+              entry.grouped ? (
+                <StepGroup
+                  currentStepId={run.currentStepId}
+                  key={entry.id}
+                  name={entry.name}
+                  status={entry.status}
+                  steps={entry.steps}
+                />
+              ) : (
+                <StepCard
+                  current={run.currentStepId === entry.id}
+                  key={entry.id}
+                  step={entry.steps[0]}
+                />
+              ),
+            )}
           </section>
         </>
       )}

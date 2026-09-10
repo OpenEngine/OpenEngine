@@ -32,6 +32,13 @@ the only thing the split would have bought.
 """
 
 from engine.graph_runtime_langgraph.acp import ACPNode, NoWorkingDirectoryError
+from engine.graph_runtime_langgraph.components.findings import (
+    REVIEW_FACETS,
+    Finding,
+    RerankerNode,
+    ReviewFacet,
+    ReviewNode,
+)
 from engine.graph_runtime_langgraph.components.human_review import HumanReviewNode
 from engine.graph_runtime_langgraph.components.name import NameNode
 from engine.graph_runtime_langgraph.components.workspace import (
@@ -41,6 +48,11 @@ from engine.graph_runtime_langgraph.components.workspace import (
 
 __all__ = [
     "ACPNode",
+    "Finding",
+    "REVIEW_FACETS",
+    "ReviewFacet",
+    "ReviewNode",
+    "RerankerNode",
     "HumanReviewNode",
     "NameNode",
     "NoWorkingDirectoryError",

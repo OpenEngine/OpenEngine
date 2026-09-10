@@ -62,6 +62,12 @@ class GraphNode:
     False by default, because resetting a graph is a destructive action and a
     node should opt in to it deliberately.
     """
+    group: str = ""
+    """Optional display group for related nodes.
+
+    Clients may collapse nodes that share a non-empty group while keeping each
+    node independently addressable. An empty group leaves the node on its own.
+    """
 
     runner: str = ""
     """The node's default runner, empty when it cannot be overridden."""

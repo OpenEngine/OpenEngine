@@ -54,6 +54,14 @@ const ASKING_SCRIPT: Script = {
     {
       when: "Review the implementation",
       steps: [
+        { type: "tool", name: "complete_step", arguments: {
+          outcome: "success", summary: "Facet reviewed.", outputs: { findings: "[]" },
+        } },
+      ],
+    },
+    {
+      when: "You are a senior reviewer consolidating findings",
+      steps: [
         { type: "say", text: REVIEWED },
         {
           type: "tool",
@@ -66,7 +74,7 @@ const ASKING_SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: REVIEWED,
-            outputs: { findings: REVIEWED },
+            outputs: { findings: "[]" },
           },
         },
       ],
@@ -107,6 +115,14 @@ const SCRIPT: Script = {
     {
       when: "Review the implementation",
       steps: [
+        { type: "tool", name: "complete_step", arguments: {
+          outcome: "success", summary: "Facet reviewed.", outputs: { findings: "[]" },
+        } },
+      ],
+    },
+    {
+      when: "You are a senior reviewer consolidating findings",
+      steps: [
         { type: "say", text: REVIEWED },
         {
           type: "tool",
@@ -119,7 +135,7 @@ const SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: REVIEWED,
-            outputs: { findings: REVIEWED },
+            outputs: { findings: "[]" },
           },
         },
       ],
@@ -172,6 +188,14 @@ const STEERING_SCRIPT: Script = {
     {
       when: "Review the implementation",
       steps: [
+        { type: "tool", name: "complete_step", arguments: {
+          outcome: "success", summary: "Facet reviewed.", outputs: { findings: "[]" },
+        } },
+      ],
+    },
+    {
+      when: "You are a senior reviewer consolidating findings",
+      steps: [
         { type: "say", text: "The implementation is ready for review." },
         {
           type: "tool",
@@ -184,7 +208,7 @@ const STEERING_SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "The implementation is ready for review.",
-            outputs: { findings: "Ready for review." },
+            outputs: { findings: "[]" },
           },
         },
       ],
@@ -305,6 +329,7 @@ test("@beta the WorkOrder page shows a graph run's stages", async ({ page, engin
     "Naming",
     "Implementation",
     "Review",
+    "Reranker",
     "Human review",
   ]);
 });
@@ -331,13 +356,23 @@ test("@beta the rail offers a graph WorkOrder's conversations by node", async ({
   const runUrl = await create(page, engine.repository);
   await page.goto(runUrl);
 
-  // The two nodes a person can read, from the moment the run exists: the
+  // The nodes a person can read, from the moment the run exists: the
   // checkout and the human verdict are stages of the run rather than
-  // conversations in it, and say so about themselves.
+  // conversations in it, and say so about themselves. The review agents are
+  // available under their shared group rather than filling the rail at once.
   const conversations = page.getByLabel(/^Conversations for /);
   await expect(conversations.getByRole("link")).toHaveText([
     "Implementation",
-    "Review",
+    "Reranker",
+  ]);
+  await conversations.getByText("Review", { exact: true }).click();
+  await expect(conversations.getByRole("link")).toHaveText([
+    "Implementation",
+    "Review (Security)",
+    "Review (Bugs & task adherence)",
+    "Review (Performance)",
+    "Review (Conciseness)",
+    "Reranker",
   ]);
 
   await conversations.getByRole("link", { name: "Implementation" }).click();
