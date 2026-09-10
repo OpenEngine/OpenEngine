@@ -446,3 +446,27 @@ def test_invalid_reply_is_rejected_before_api_call(monkeypatch: pytest.MonkeyPat
     with pytest.raises(ValueError):
         asyncio.run(source.add_comment("https://github.com/acme/api/pull/42", "Fixed.", **arguments))
     api.assert_not_awaited()
+
+
+@pytest.mark.parametrize("permission, allowed", [
+    ("write", True), ("admin", True), ("read", False), ("none", False),
+    (None, False), ("unexpected", False),
+])
+def test_effective_repository_write_permission(monkeypatch, permission, allowed):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    api = AsyncMock(return_value={"permission": permission, "role_name": "custom-role"})
+    monkeypatch.setattr(source, "_api", api)
+    assert asyncio.run(source.can_write_repository(
+        "https://github.com/acme/api/pull/42", "someone")) is allowed
+    api.assert_awaited_once_with("GET", "/repos/acme/api/collaborators/someone/permission")
+
+
+def test_repository_permission_lookup_failure_propagates(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", AsyncMock(side_effect=RuntimeError("HTTP 403")))
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        asyncio.run(source.can_write_repository("https://github.com/acme/api/pull/42", "someone"))

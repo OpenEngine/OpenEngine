@@ -240,6 +240,9 @@ class RecordingSourceControl:
     async def publish(self, _workspace_id: WorkspaceId, _branch: str) -> None:
         pass
 
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        return False
+
     async def add_comment(
         self,
         _pr_url: str,

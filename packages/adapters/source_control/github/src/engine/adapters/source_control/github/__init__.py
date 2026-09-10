@@ -17,7 +17,7 @@ import io
 import os
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.github.transports import (
     GitHubApiTransport,
@@ -185,6 +185,16 @@ class GitHubSourceControl:
         if not url:
             raise GitHubSourceControlError("GitHub API returned no pull-request URL")
         return url
+
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        """Check effective access, including team and organization grants."""
+        owner, repo, _ = _pull_request_parts(pr_url)
+        response = await self._api(
+            "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
+        )
+        # GitHub maps maintain to write and triage to read, including custom
+        # roles' base permissions. Unknown/missing permissions never grant access.
+        return response.get("permission") in ("write", "admin")
 
     async def add_comment(
         self,

@@ -59,6 +59,9 @@ class GitLabSourceControl:
         if not url: raise GitLabSourceControlError("GitLab returned no merge-request URL")
         return url
 
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        raise NotImplementedError("GitLab repository permission checks are not supported")
+
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")

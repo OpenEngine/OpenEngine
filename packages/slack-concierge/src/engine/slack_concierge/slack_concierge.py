@@ -70,6 +70,7 @@ class SlackConcierge:
         if max_threads < 1:
             raise ValueError("max_threads must be positive")
         self.continue_existing = continue_existing
+        self._current_origin: RunOrigin | None = None
         self.provider = provider
         self.create_workorder = create_workorder
         self.reply = reply
@@ -108,11 +109,13 @@ class SlackConcierge:
                 await self._forget(key)
                 raise
             finally:
+                self._current_origin = None
                 if self.turn_finished is not None:
                     await self.turn_finished(message.origin)
 
     async def _turn(self, state: ConversationState) -> dict[str, str]:
         message = state["message"]
+        self._current_origin = message.origin
         key = (message.origin.channel, message.origin.thread_id)
         fresh = key not in self._threads
         if fresh:
@@ -122,7 +125,11 @@ class SlackConcierge:
             try:
                 cwd = opened.enter_context(TemporaryDirectory(prefix="slack-concierge-"))
                 async def create(repository: str, prompt: str) -> tuple[str, str]:
-                    return await self.create_workorder(message.origin, repository, prompt)
+                    origin = self._current_origin
+                    if origin is None or (origin.channel, origin.thread_id) != key:
+                        raise RuntimeError("no active turn for this conversation")
+                    # Sessions are reused across authors; turns are serialized.
+                    return await self.create_workorder(origin, repository, prompt)
                 broker = await opened.enter_async_context(ConciergeBroker(
                     create_workorder=create,
                     default_repository=message.repository or self.default_repository,

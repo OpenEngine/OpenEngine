@@ -2473,6 +2473,10 @@ def create_app(
     ) -> tuple[str, str]:
         number = origin.thread_id.partition("/review/")[0]
         pr_url = f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}"
+        if not await session.capabilities.source_control.can_write_repository(
+            pr_url, origin.author
+        ):
+            raise RuntimeError("repository write permission is required to send feedback")
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not identify an existing work order: graph runtime unavailable")

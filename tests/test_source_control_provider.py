@@ -197,3 +197,18 @@ def test_router_forwards_comment_reply_and_provenance(tmp_path: Path) -> None:
     router = RoutingSourceControl(preferences, source, source)
     assert asyncio.run(router.add_comment("https://github.com/acme/api/pull/1", "Fixed", in_reply_to_id=123)) == result
     source.add_comment.assert_awaited_once_with("https://github.com/acme/api/pull/1", "Fixed", None, None, 123)
+
+
+@pytest.mark.parametrize("selected", ["gh-cli", "github-oauth"])
+def test_router_checks_permissions_with_selected_github_credentials(tmp_path, selected):
+    cli, oauth = AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set(selected)
+    router = RoutingSourceControl(preferences, cli, oauth)
+    source, unused = (cli, oauth) if selected == "gh-cli" else (oauth, cli)
+    source.can_write_repository.return_value = False
+    assert asyncio.run(router.can_write_repository(
+        "https://github.com/acme/api/pull/1", "someone")) is False
+    source.can_write_repository.assert_awaited_once_with(
+        "https://github.com/acme/api/pull/1", "someone")
+    unused.can_write_repository.assert_not_awaited()

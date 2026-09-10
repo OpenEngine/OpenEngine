@@ -27,15 +27,8 @@ log = logging.getLogger(__name__)
 #: configuration this route tolerates rather than an error it reports.
 HANDLED_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
 
-#: Who may direct Engine from a comment. A signature proves GitHub sent the
-#: delivery, not that its author is entitled to spend Engine's time: on a public
-#: repository anyone can comment, so the association GitHub reports for the
-#: author is the trust boundary, and it belongs here rather than in whatever
-#: eventually consumes a comment. An association describes affiliation rather
-#: than the role it was granted, so a read-only collaborator or an organization
-#: member without write access passes; narrowing that further means asking the
-#: permissions API per comment, which is a request per delivery this route does
-#: not yet make.
+#: Initial affiliation filter. These labels do not prove write access; the
+#: concierge checks effective repository permissions before steering a run.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 #: The most a delivery may weigh. The route is reachable without a session, so
@@ -84,8 +77,7 @@ def comment_from_payload(
     """The comment in a delivery, or ``None`` for anything not worth an agent.
 
     Edits and deletions are excluded with everything else: only a new comment
-    is somebody asking for something, and only from someone with write access
-    to the repository it is on.
+    is somebody asking for something, and only from an affiliated author.
 
     ``self_login`` is the GitHub account Engine posts as, whose own comments are
     never answered. A GitHub app is recognisable by its ``Bot`` user type, but a

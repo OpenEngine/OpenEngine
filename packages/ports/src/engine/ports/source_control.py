@@ -186,6 +186,10 @@ class SourceControl(Protocol):
         """
         ...
 
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        """Whether the user has effective write access to this request's repository."""
+        ...
+
     async def add_comment(
         self,
         pr_url: str,

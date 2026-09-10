@@ -188,6 +188,11 @@ class RoutingSourceControl:
             )
         )
 
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        return await self._call(
+            lambda source: source.can_write_repository(pr_url, username)
+        )
+
     async def add_comment(
         self,
         pr_url: str,

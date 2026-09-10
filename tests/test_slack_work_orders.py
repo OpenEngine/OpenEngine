@@ -285,7 +285,8 @@ def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
 
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-def test_github_comments_continue_existing_workorders(tmp_path, event):
+@pytest.mark.parametrize("access", ["write", "read", "error"])
+def test_github_comments_continue_existing_workorders(tmp_path, event, access):
     from starlette.testclient import TestClient
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
@@ -311,7 +312,11 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
 
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
     object.__setattr__(capabilities, "source_control", source_control)
+    source_control.can_write_repository.return_value = access == "write"
+    if access == "error":
+        source_control.can_write_repository.side_effect = RuntimeError("permission API unavailable")
     state = RunState(
         run_id=RunId("existing"), task_id=TaskId("task"),
         workflow_id=WorkflowId("implementation-review-v1"),
@@ -320,6 +325,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     def deliver(client, comment_id, text):
         payload = _issue_comment(comment_id, text)
         payload["issue"]["pull_request"] = {}
+        payload["comment"]["user"]["login"] = "first" if comment_id == 1 else "second"
         if event == "pull_request_review_comment":
             payload["pull_request"] = payload.pop("issue")
             if comment_id != 1:
@@ -338,11 +344,16 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert len(runs) == 1
         assert runs[0].run_id == state.run_id
-        runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
+        source_control.can_write_repository.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/7", "second")
+        if access == "write":
+            runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
+        else:
+            runtime.steer.assert_not_awaited()
         assert runs[0].origin is None
         assert len(provider.clients) == 1
         assert len(provider.clients[0].prompts) == 2
-        assert not provider.clients[0].result.get("isError")
+        assert bool(provider.clients[0].result.get("isError")) == (access != "write")
     assert provider.clients[0].closed
     assert not communications.posts
     assert source_control.add_comment.await_count == 2
@@ -363,6 +374,7 @@ def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
                      provider=provider, github_webhook_secret=SIGNING_SECRET)
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
     object.__setattr__(capabilities, "source_control", source_control)
     payload = _issue_comment()
     payload["issue"]["pull_request"] = {}
@@ -391,7 +403,7 @@ def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path,
     communications = RecordingCommunications()
     app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
                                provider=provider, github_webhook_secret=SIGNING_SECRET)
-    source = MagicMock(add_comment=AsyncMock())
+    source = MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True))
     object.__setattr__(capabilities, "source_control", source)
     payload = _issue_comment(1, "new workorder please")
     if is_pr:
@@ -433,7 +445,7 @@ def test_github_feedback_steers_the_matching_graph_workorder(tmp_path, stale_pos
     app, capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig(),
                                provider=provider, github_webhook_secret=SIGNING_SECRET,
                                graph_runtime=opened_runtime())
-    object.__setattr__(capabilities, "source_control", MagicMock(add_comment=AsyncMock()))
+    object.__setattr__(capabilities, "source_control", MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True)))
     state = RunState(run_id=RunId("graph-work"), task_id=TaskId("task"),
                      workflow_id=WorkflowId("graph-workflow"))
     stale = RunState(run_id=RunId("stale-work"), task_id=TaskId("stale-task"),
