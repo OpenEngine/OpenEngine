@@ -9,7 +9,7 @@ from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport, GitLabTransportError
 from engine.domain.ids import WorkspaceId
-from engine.ports.source_control import ChangeRequest, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
+from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
 from engine.ports.workspace_provider import WorkspaceProvider
 
 _MAX_LOG_CHARACTERS = 48_000
@@ -59,15 +59,17 @@ class GitLabSourceControl:
         if not url: raise GitLabSourceControlError("GitLab returned no merge-request URL")
         return url
 
-    async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None) -> None:
+    async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
+        if in_reply_to_id is not None:
+            raise NotImplementedError("GitLab comment replies are not supported")
         project, iid = self._mr_url(pr_url)
         if not comment.strip():
             raise ValueError("comment must not be empty")
         if (file is None) != (line is None):
             raise ValueError("file and line must be provided together")
         if file is None:
-            await self._api("POST", f"/projects/{project}/merge_requests/{iid}/notes", json={"body": comment})
-            return
+            note = await self._api("POST", f"/projects/{project}/merge_requests/{iid}/notes", json={"body": comment})
+            return self._comment_result(note, pr_url)
         if not file.strip() or not isinstance(line, int) or isinstance(line, bool) or line < 1:
             raise ValueError("file must be non-empty and line must be positive")
         changes = await self._api("GET", f"/projects/{project}/merge_requests/{iid}/changes")
@@ -77,10 +79,21 @@ class GitLabSourceControl:
         base_sha, start_sha, head_sha = (self._str(refs, key) for key in ("base_sha", "start_sha", "head_sha"))
         if not all((base_sha, start_sha, head_sha)):
             raise GitLabSourceControlError("GitLab returned incomplete merge-request diff references")
-        await self._api(
+        discussion = await self._api(
             "POST", f"/projects/{project}/merge_requests/{iid}/discussions",
             json={"body": comment, "position": {"position_type": "text", "base_sha": base_sha, "start_sha": start_sha, "head_sha": head_sha, "new_path": file, "new_line": line}},
         )
+        notes = discussion.get("notes", [])
+        if not isinstance(notes, list) or not notes or not isinstance(notes[0], dict):
+            raise GitLabSourceControlError("GitLab returned no created discussion note")
+        return self._comment_result(notes[0], pr_url)
+
+    @staticmethod
+    def _comment_result(note: dict, pr_url: str) -> CommentResult:
+        comment_id = note.get("id")
+        if not isinstance(comment_id, int) or isinstance(comment_id, bool) or comment_id < 1:
+            raise GitLabSourceControlError("GitLab returned no valid comment id")
+        return CommentResult(comment_id, f"{pr_url.split('#', 1)[0]}#note_{comment_id}")
 
     async def view_change_request(self, workspace_id: WorkspaceId, number: int) -> ChangeRequest:
         project = await self._project(workspace_id); mr = await self._api("GET", f"/projects/{project}/merge_requests/{number}")

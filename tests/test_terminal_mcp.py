@@ -3,6 +3,8 @@
 import asyncio
 import json
 
+import pytest
+
 from engine.domain import (
     AgentId,
     AgentRunId,
@@ -329,13 +331,17 @@ def test_a_session_with_no_step_lists_only_the_repository_tools() -> None:
     assert asyncio.run(scenario()) == ["view_work_item"]
 
 
-def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
+@pytest.mark.parametrize("reply_id", [None, 123])
+def test_repo_comment_is_forwarded_before_review_can_complete(reply_id) -> None:
+    from engine.ports.source_control import CommentResult
+
     class RecordingSourceControl:
         def __init__(self) -> None:
             self.comments: list[tuple[object, ...]] = []
 
-        async def add_comment(self, *arguments: object) -> None:
+        async def add_comment(self, *arguments: object) -> CommentResult:
             self.comments.append(arguments)
+            return CommentResult(456, "https://github.com/acme/api/pull/42#discussion_r456")
 
     async def scenario() -> None:
         source_control = RecordingSourceControl()
@@ -366,16 +372,21 @@ def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
             "file": "src/worker.py",
             "line": 17,
         }
+        if reply_id is not None:
+            request["arguments"].pop("file")
+            request["arguments"].pop("line")
+            request["arguments"]["in_reply_to_id"] = reply_id
         accepted = await broker._submit(request)
 
         assert refused["ok"] is False
-        assert accepted == {"ok": True, "acknowledgement": "comment added"}
+        assert accepted == {"ok": True, "acknowledgement": "comment added", "id": 456, "url": "https://github.com/acme/api/pull/42#discussion_r456"}
         assert source_control.comments == [
             (
                 "https://github.com/acme/api/pull/42",
                 "This can race.",
-                "src/worker.py",
-                17,
+                "src/worker.py" if reply_id is None else None,
+                17 if reply_id is None else None,
+                reply_id,
             )
         ]
 
@@ -810,3 +821,15 @@ def test_stdio_bridge_returns_a_small_acknowledgement() -> None:
         }
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("arguments", [
+    {"in_reply_to_id": 0}, {"in_reply_to_id": True}, {"in_reply_to_id": "123"},
+    {"in_reply_to_id": 1.5}, {"in_reply_to_id": -1},
+    {"in_reply_to_id": 123, "file": "app.py", "line": 1},
+])
+def test_comment_reply_arguments_are_validated(arguments) -> None:
+    from engine.runtime.terminal_mcp import _comment_arguments
+
+    with pytest.raises(ValueError, match="in_reply_to_id"):
+        _comment_arguments({"pr_url": "https://github.com/acme/api/pull/1", "comment": "Fixed.", **arguments})

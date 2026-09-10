@@ -398,13 +398,19 @@ class TerminalMcpBroker:
 
         assert self._source_control is not None
         if name == "add_comment":
-            pr_url, comment, file, line = _comment_arguments(arguments)
+            pr_url, comment, file, line, in_reply_to_id = _comment_arguments(arguments)
             try:
-                await self._source_control.add_comment(pr_url, comment, file, line)
+                result = await self._source_control.add_comment(
+                    pr_url, comment, file, line, in_reply_to_id
+                )
             except Exception as error:
                 return {"ok": False, "error": f"could not add comment: {error}"}
             self._comments_added += 1
-            return {"ok": True, "acknowledgement": "comment added"}
+            return {
+                "ok": True,
+                "acknowledgement": "comment added",
+                **dataclasses.asdict(result),
+            }
 
         if self._workspace_id is None:
             return {"ok": False, "error": f"{name} needs a workspace and this step has none"}
@@ -701,7 +707,9 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
         "name": "add_comment",
         "description": (
             "Add a comment to a pull request. Provide file and line together "
-            "for an inline comment; omit both for a general comment."
+            "for an inline comment; omit both for a general comment. "
+            "On GitHub, use in_reply_to_id to reply to a root review comment, "
+            "without file or line. Returns the created comment id and URL."
         ),
         "inputSchema": {
             "type": "object",
@@ -710,9 +718,14 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
                 "comment": {"type": "string", "minLength": 1},
                 "file": {"type": "string", "minLength": 1},
                 "line": {"type": "integer", "minimum": 1},
+                "in_reply_to_id": {"type": "integer", "minimum": 1},
             },
             "required": ["pr_url", "comment"],
             "dependentRequired": {"file": ["line"], "line": ["file"]},
+            "not": {
+                "required": ["in_reply_to_id"],
+                "anyOf": [{"required": ["file"]}, {"required": ["line"]}],
+            },
             "additionalProperties": False,
         },
     },
@@ -857,10 +870,10 @@ def _review_arguments(arguments: object) -> tuple[str, str, str, str]:
 
 def _comment_arguments(
     arguments: object,
-) -> tuple[str, str, str | None, int | None]:
+) -> tuple[str, str, str | None, int | None, int | None]:
     if not isinstance(arguments, dict):
         raise ValueError("add_comment arguments must be an object")
-    unexpected = set(arguments) - {"pr_url", "comment", "file", "line"}
+    unexpected = set(arguments) - {"pr_url", "comment", "file", "line", "in_reply_to_id"}
     if unexpected:
         names = ", ".join(sorted(str(name) for name in unexpected))
         raise ValueError(f"unexpected add_comment arguments: {names}")
@@ -880,7 +893,17 @@ def _comment_arguments(
         raise ValueError("line must be a positive integer")
     if (file is None) != (line is None):
         raise ValueError("file and line must be provided together")
-    return pr_url, comment, file, line
+    in_reply_to_id = arguments.get("in_reply_to_id")
+    if in_reply_to_id is not None:
+        if (
+            not isinstance(in_reply_to_id, int)
+            or isinstance(in_reply_to_id, bool)
+            or in_reply_to_id < 1
+        ):
+            raise ValueError("in_reply_to_id must be a positive integer")
+        if file is not None or line is not None:
+            raise ValueError("in_reply_to_id cannot be combined with file or line")
+    return pr_url, comment, file, line, in_reply_to_id
 
 
 async def _forward_call(

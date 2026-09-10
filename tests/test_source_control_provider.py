@@ -184,3 +184,23 @@ def test_router_identifies_the_provider_in_a_source_control_failure(
 
     with pytest.raises(RuntimeError, match="GH CLI provider failed"):
         asyncio.run(router.add_comment("https://github.com/acme/api/pull/1", "Hello"))
+
+
+def test_router_forwards_comment_reply_and_result(tmp_path: Path) -> None:
+    from engine.ports.source_control import CommentResult
+
+    result = CommentResult(456, "https://github.com/acme/api/pull/1#discussion_r456")
+
+    class RecordingSourceControl:
+        add_comment = AsyncMock(return_value=result)
+
+    source = RecordingSourceControl()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gh-cli")
+    router = RoutingSourceControl(preferences, source, source)  # type: ignore[arg-type]
+    assert asyncio.run(router.add_comment(
+        "https://github.com/acme/api/pull/1", "Fixed.", in_reply_to_id=123,
+    )) == result
+    source.add_comment.assert_awaited_once_with(
+        "https://github.com/acme/api/pull/1", "Fixed.", None, None, 123,
+    )

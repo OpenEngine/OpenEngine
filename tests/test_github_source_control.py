@@ -9,6 +9,7 @@ import pytest
 from engine.adapters.source_control.github import (
     GitGlobalOptionError,
     GitHubSourceControl,
+    GitHubSourceControlError,
     GitOutsideWorkspaceError,
     InternalBranchPublicationError,
 )
@@ -342,16 +343,18 @@ def test_general_comment_posts_to_the_issues_comments_endpoint(
 
     async def fake_api(self_inner, method: str, path: str, **kwargs: object) -> dict:
         api_calls.append((method, path, kwargs.get("json", {})))
-        return {}
+        return {"id": 123, "html_url": "https://github.com/acme/api/pull/42#comment-123"}
 
     monkeypatch.setattr(type(source_control), "_api", fake_api)
 
-    asyncio.run(
+    result = asyncio.run(
         source_control.add_comment(
             "https://github.com/acme/api/pull/42", "Looks good."
         )
     )
 
+    assert result.id == 123
+    assert result.url == "https://github.com/acme/api/pull/42#comment-123"
     assert len(api_calls) == 1
     method, path, payload = api_calls[0]
     assert method == "POST"
@@ -369,11 +372,11 @@ def test_inline_comment_resolves_head_and_posts_review_comment(
         api_calls.append((method, path, kwargs.get("json", {})))
         if method == "GET" and path.endswith("/pulls/42"):
             return {"head": {"sha": "abc123"}}
-        return {}
+        return {"id": 123, "html_url": "https://github.com/acme/api/pull/42#comment-123"}
 
     monkeypatch.setattr(type(source_control), "_api", fake_api)
 
-    asyncio.run(
+    result = asyncio.run(
         source_control.add_comment(
             "https://github.com/acme/api/pull/42",
             "This can race.",
@@ -382,6 +385,8 @@ def test_inline_comment_resolves_head_and_posts_review_comment(
         )
     )
 
+    assert result.id == 123
+    assert result.url == "https://github.com/acme/api/pull/42#comment-123"
     assert len(api_calls) == 2
     # First call fetches the PR to get the head SHA.
     get_method, get_path, _ = api_calls[0]
@@ -410,3 +415,46 @@ def test_inline_comment_requires_a_valid_file_and_line(
                 "https://github.com/acme/api/pull/42", "Finding.", file, line
             )
         )
+
+
+def test_reply_posts_to_existing_review_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    async def fake_api(self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"id": 456, "html_url": "https://github.com/acme/api/pull/42#discussion_r456"}
+
+    monkeypatch.setattr(GitHubSourceControl, "_api", fake_api)
+    result = asyncio.run(GitHubSourceControl("").add_comment(
+        "https://github.com/acme/api/pull/42", "Fixed.", in_reply_to_id=123,
+    ))
+    assert result.id == 456
+    assert result.url.endswith("#discussion_r456")
+    assert calls == [("POST", "/repos/acme/api/pulls/42/comments/123/replies", {"json": {"body": "Fixed."}})]
+
+
+@pytest.mark.parametrize("reply_id", [0, -1, True, "123", 1.5])
+def test_reply_requires_positive_integer_id(reply_id) -> None:
+    with pytest.raises(ValueError, match="in_reply_to_id"):
+        asyncio.run(GitHubSourceControl("").add_comment(
+            "https://github.com/acme/api/pull/42", "Fixed.", in_reply_to_id=reply_id,
+        ))
+
+
+def test_reply_rejects_inline_location() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        asyncio.run(GitHubSourceControl("").add_comment(
+            "https://github.com/acme/api/pull/42", "Fixed.", "app.py", 1, 123,
+        ))
+
+
+@pytest.mark.parametrize("response", [{}, {"id": True, "html_url": "url"}, {"id": 1}])
+def test_comment_requires_provenance(monkeypatch: pytest.MonkeyPatch, response) -> None:
+    async def fake_api(self, *args, **kwargs):
+        return response
+
+    monkeypatch.setattr(GitHubSourceControl, "_api", fake_api)
+    with pytest.raises(GitHubSourceControlError, match="comment id or URL"):
+        asyncio.run(GitHubSourceControl("").add_comment(
+            "https://github.com/acme/api/pull/42", "Fixed.",
+        ))

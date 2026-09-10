@@ -27,6 +27,7 @@ from engine.adapters.source_control.github.transports import (
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
     ChangeRequest,
+    CommentResult,
     Discussion,
     GitResult,
     JobLogs,
@@ -191,8 +192,9 @@ class GitHubSourceControl:
         comment: str,
         file: str | None = None,
         line: int | None = None,
-    ) -> None:
-        """Add a general or inline pull-request comment via the GitHub API."""
+        in_reply_to_id: int | None = None,
+    ) -> CommentResult:
+        """Add a general comment, inline comment, or review-thread reply."""
 
         if not pr_url.strip():
             raise ValueError("pr_url must not be empty")
@@ -207,15 +209,28 @@ class GitHubSourceControl:
         ):
             raise ValueError("line must be a positive integer")
 
+        if in_reply_to_id is not None:
+            _positive_number(in_reply_to_id, "in_reply_to_id")
+            if file is not None or line is not None:
+                raise ValueError("in_reply_to_id cannot be combined with file or line")
+
         owner, repo, number = _pull_request_parts(pr_url)
 
+        if in_reply_to_id is not None:
+            response = await self._api(
+                "POST",
+                f"/repos/{owner}/{repo}/pulls/{number}/comments/{in_reply_to_id}/replies",
+                json={"body": comment},
+            )
+            return _comment_result(response)
+
         if file is None:
-            await self._api(
+            response = await self._api(
                 "POST",
                 f"/repos/{owner}/{repo}/issues/{number}/comments",
                 json={"body": comment},
             )
-            return
+            return _comment_result(response)
 
         # Inline comment: resolve the PR head SHA first.
         pr_data = await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}")
@@ -224,7 +239,7 @@ class GitHubSourceControl:
             raise GitHubSourceControlError(
                 "GitHub API returned an empty pull-request head SHA"
             )
-        await self._api(
+        response = await self._api(
             "POST",
             f"/repos/{owner}/{repo}/pulls/{number}/comments",
             json={
@@ -235,6 +250,7 @@ class GitHubSourceControl:
                 "side": "RIGHT",
             },
         )
+        return _comment_result(response)
 
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int
@@ -768,6 +784,20 @@ def _log_text(content: bytes) -> str:
         except (OSError, zipfile.BadZipFile) as error:
             raise GitHubSourceControlError(f"could not read GitHub job log archive: {error}") from error
     return content.decode(errors="replace")
+
+
+def _comment_result(value: object) -> CommentResult:
+    response = _object(value)
+    comment_id = response.get("id")
+    url = _string(response, "html_url")
+    if (
+        not isinstance(comment_id, int)
+        or isinstance(comment_id, bool)
+        or comment_id < 1
+        or not url
+    ):
+        raise GitHubSourceControlError("GitHub API returned no valid comment id or URL")
+    return CommentResult(comment_id, url)
 
 
 __all__ = [

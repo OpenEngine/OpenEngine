@@ -46,6 +46,14 @@ class GitResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CommentResult:
+    """The created comment's provider ID and browser URL."""
+
+    id: int
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
 class Discussion:
     """One comment or review on a forge change request or work item."""
 
@@ -184,8 +192,13 @@ class SourceControl(Protocol):
         comment: str,
         file: str | None = None,
         line: int | None = None,
-    ) -> None:
-        """Comment on a review, optionally at a line in a changed file."""
+        in_reply_to_id: int | None = None,
+    ) -> CommentResult:
+        """Post a comment, optionally inline or replying to a review-thread root.
+
+        Replies cannot also specify file/line. Providers without reply support
+        raise NotImplementedError.
+        """
         ...
 
     async def view_change_request(
@@ -233,6 +246,7 @@ class SourceControl(Protocol):
 
 __all__ = [
     "ChangeRequest",
+    "CommentResult",
     "Discussion",
     "GitResult",
     "JobLogs",
