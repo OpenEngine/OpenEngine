@@ -45,14 +45,6 @@ _TOOL_SPEC: dict[str, object] = {
                 "minLength": 1,
                 "description": "What the work order should accomplish.",
             },
-            "repository": {
-                "type": "string",
-                "description": (
-                    "The repository to work in, as owner/name. "
-                    "Omit this when a default is already configured; "
-                    "the configured default always takes precedence."
-                ),
-            },
         },
         "required": ["prompt"],
         "additionalProperties": False,
@@ -143,20 +135,9 @@ class ConciergeBroker:
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return {"ok": False, "error": "prompt must be a non-empty string"}
-        if set(arguments) - {"prompt", "repository"}:
+        if set(arguments) - {"prompt"}:
             return {"ok": False, "error": "unknown work-order arguments"}
-        repository = self._default_repository or arguments.get("repository", "")
-        if not isinstance(repository, str):
-            return {"ok": False, "error": "repository must be a string"}
-        repository = repository.strip()
-        if not repository:
-            return {
-                "ok": False,
-                "error": (
-                    "repository is required because no default is configured; "
-                    "ask the user which repository to work in"
-                ),
-            }
+        repository = self._default_repository or "."
         try:
             url, run_id = await self._create_workorder(repository, prompt.strip())
         except Exception as error:
