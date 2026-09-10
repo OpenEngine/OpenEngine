@@ -1,34 +1,33 @@
 import { useEffect, useState } from "react";
 
-import {
-  api,
-  attachWorkspace,
-  detachWorkspace,
-  type ApiThread,
-} from "./api";
+import { api, type ApiThread } from "./api";
 
 export type WorkspaceInfo = Pick<
   ApiThread,
   "workspaceRoot" | "workspaceRef" | "workspaceAttached"
 >;
 
-/** A conversation's checkout, shared by chat and workflow surfaces. */
+/** A checkout, shared by chat and graph workflow surfaces. */
 export function WorkspaceControl({
   threadId,
+  runId,
   initial,
-}: {
-  threadId: string;
+}: ({ threadId: string; runId?: never } | { runId: string; threadId?: never }) & {
   initial?: Partial<WorkspaceInfo>;
 }) {
-  const [fetched, setFetched] = useState<ApiThread>();
+  const [fetched, setFetched] = useState<WorkspaceInfo>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const resource = runId
+    ? `/graph/api/runs/${encodeURIComponent(runId)}/workspace`
+    : `/api/threads/${encodeURIComponent(threadId ?? "")}`;
+  const endpoint = runId ? resource : `${resource}/workspace`;
 
   useEffect(() => {
     setFetched(undefined);
     setError(undefined);
     let current = true;
-    void api<ApiThread>(`/api/threads/${threadId}`)
+    void api<WorkspaceInfo>(resource)
       .then((thread) => {
         if (current) setFetched(thread);
       })
@@ -36,7 +35,7 @@ export function WorkspaceControl({
     return () => {
       current = false;
     };
-  }, [threadId]);
+  }, [resource]);
 
   const workspace = fetched ?? initial ?? {};
   const attached =
@@ -47,7 +46,7 @@ export function WorkspaceControl({
     setError(undefined);
     try {
       setFetched(
-        await (attached ? detachWorkspace : attachWorkspace)(threadId),
+        await api<WorkspaceInfo>(endpoint, { method: attached ? "DELETE" : "POST" }),
       );
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));

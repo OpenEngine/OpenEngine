@@ -523,6 +523,13 @@ class ScriptedGraphRuntime:
         )
         return self._snapshot(run)
 
+    async def workspace(self, run_id: RunId):
+        self._require(run_id)
+        raise NoSuchPositionError("this run has no workspace to attach or detach")
+
+    async def set_workspace_attached(self, run_id: RunId, attached: bool):
+        return await self.workspace(run_id)
+
     async def set_runner(
         self, run_id: RunId, node_id: NodeId, runner: str
     ) -> RunSnapshot:

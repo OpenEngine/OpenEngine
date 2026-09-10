@@ -187,6 +187,29 @@ def test_detaching_keeps_the_branch_and_reattaching_restores_the_work(
     assert _git(Path(reattached.root_path), "branch", "--show-current") == workspace.ref
 
 
+def test_detaching_preserves_work_after_switching_to_a_publishing_branch(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "main"))
+    root = Path(workspace.root_path)
+    _git(root, "switch", "-c", "agent/publish-change")
+    (root / "committed.md").write_text("published work\n")
+    _git(root, "add", "committed.md")
+    _git(root, *_IDENTITY, "commit", "-m", "feat: published change")
+    (root / "uncommitted.md").write_text("remaining work\n")
+
+    asyncio.run(provider.detach(workspace.workspace_id))
+    restored = asyncio.run(provider.attach(workspace.workspace_id, str(repository), "main"))
+
+    assert restored.workspace_id == workspace.workspace_id
+    assert Path(restored.root_path, "committed.md").read_text() == "published work\n"
+    assert Path(restored.root_path, "uncommitted.md").read_text() == "remaining work\n"
+    assert _git(repository, "rev-parse", workspace.ref) == _git(
+        repository, "rev-parse", "agent/publish-change"
+    )
+
+
 def test_detach_is_idempotent_and_leaves_committed_work_alone(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     _repository(repository)

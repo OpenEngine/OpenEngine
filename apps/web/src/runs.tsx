@@ -926,9 +926,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
           </StatStrip>
-          {graph && typeof graph.values.workspace === "string" ? (
+          {graph && typeof graph.values.workspaceId === "string" ? (
             <section className="run-workspace" aria-label="WorkOrder checkout">
-              <div className="workspace-control"><span className="micro">Working in</span><code className="dock-path">cd {graph.values.workspace}</code></div>
+              <WorkspaceControl runId={graph.runId} />
             </section>
           ) : workspaceThreadId && (
             <section className="run-workspace" aria-label="WorkOrder checkout">

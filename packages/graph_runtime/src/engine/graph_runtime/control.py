@@ -37,6 +37,7 @@ from enum import Enum
 from typing import Protocol, runtime_checkable
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
+from engine.ports import WorkspaceState
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.events import EventObserver
@@ -312,6 +313,16 @@ class GraphRuntime(Protocol):
         `AmbiguousExecutionError` when several do and none was named -- two
         tasks fanned into the same node make even a node name ambiguous.
         """
+        ...
+
+    async def workspace(self, run_id: RunId) -> WorkspaceState:
+        """Read the current checkout state of the run's workspace."""
+        ...
+
+    async def set_workspace_attached(
+        self, run_id: RunId, attached: bool
+    ) -> WorkspaceState:
+        """Detach or restore an idle run's checkout, preserving its work."""
         ...
 
     async def set_runner(
