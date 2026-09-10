@@ -103,3 +103,23 @@ def test_web_entrypoint_reports_the_configured_webhook(
     assert webhook is not None
     assert webhook.repository == "owner/name"
     assert webhook.current_secret() == "from-file"
+
+
+def test_composition_passes_the_target_repository_to_the_http_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import Mock
+
+    loaded = _loaded(tmp_path, '[github]\nrepository = "owner/name"\n')
+    for name in (
+        "build_capabilities", "build_runners", "build_read_only_runners",
+        "build_workflow_runners", "build_session", "build_graph_runtime",
+        "build_milestone_scoper",
+    ):
+        monkeypatch.setattr(web_main, name, Mock())
+    create_app = Mock()
+    monkeypatch.setattr(web_main, "create_app", create_app)
+
+    web_main.compose_app(loaded, None)
+
+    assert create_app.call_args.kwargs["github_repository"] == "owner/name"

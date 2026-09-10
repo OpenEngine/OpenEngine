@@ -959,6 +959,7 @@ def create_app(
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
+    github_repository: str = "",
     github_bot_login: str = "",
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
@@ -2464,6 +2465,7 @@ def create_app(
     # pointed at it collects failed deliveries until GitHub disables the hook.
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
+        repository=github_repository,
         self_login=lambda: github_bot_login,
         handle=github_comment_handler,
     )

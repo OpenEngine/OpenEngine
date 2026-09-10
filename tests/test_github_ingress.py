@@ -141,7 +141,7 @@ def _record(handled):
 def test_a_comment_is_handled_once_however_often_it_is_delivered() -> None:
     async def scenario():
         handled = []
-        ingress = GithubIngress(webhook_secret=lambda: WEBHOOK_SECRET, handle=_record(handled))
+        ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=_record(handled))
         assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
         assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
         assert ingress.accept("issue_comment", _issue_comment(comment_id=2, body="again"))
@@ -161,7 +161,7 @@ def test_a_full_queue_asks_github_to_redeliver() -> None:
             handled.append(comment)
             await gate.wait()
 
-        ingress = GithubIngress(webhook_secret=lambda: WEBHOOK_SECRET, handle=handle, capacity=1)
+        ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=handle, capacity=1)
         assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
         await asyncio.sleep(0)  # the worker takes the first comment off the queue
         assert ingress.accept("issue_comment", _issue_comment(comment_id=2))
@@ -178,7 +178,7 @@ def test_a_full_queue_asks_github_to_redeliver() -> None:
 
 
 def test_nothing_is_queued_with_nothing_to_answer_it() -> None:
-    ingress = GithubIngress(webhook_secret=lambda: WEBHOOK_SECRET)
+    ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET)
     assert not ingress.accept("issue_comment", _issue_comment())
     # A delivery this route never acts on is still settled, handler or not.
     assert ingress.accept("issues", _issue_comment())
@@ -196,7 +196,7 @@ def test_a_failed_comment_can_be_redelivered() -> None:
             if len(attempts) == 1:
                 raise RuntimeError("agent is down")
 
-        ingress = GithubIngress(webhook_secret=lambda: WEBHOOK_SECRET, handle=handle)
+        ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=handle)
         assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
         await ingress.drain()
         assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
@@ -219,7 +219,7 @@ def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
             handled.append(comment)
             raise RuntimeError("agent is down")
 
-        ingress = GithubIngress(webhook_secret=lambda: WEBHOOK_SECRET, handle=handle)
+        ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=handle)
         ingress.accept("issue_comment", _issue_comment(comment_id=1))
         await ingress.drain()
         ingress.accept("issue_comment", _issue_comment(comment_id=2))
@@ -236,7 +236,7 @@ def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
 _UNWIRED = object()
 
 
-def _client(secret: str = WEBHOOK_SECRET, handle=None):
+def _client(secret: str = WEBHOOK_SECRET, handle=None, repository: str = "acme/api"):
     """A test client over the route. Handles comments into nowhere by default;
     pass ``handle=_UNWIRED`` for the app as it stands with nothing wired."""
     from starlette.applications import Starlette
@@ -247,7 +247,7 @@ def _client(secret: str = WEBHOOK_SECRET, handle=None):
         handle = None
     elif handle is None:
         handle = _record([])
-    ingress = GithubIngress(webhook_secret=lambda: secret, handle=handle)
+    ingress = GithubIngress(repository=repository, webhook_secret=lambda: secret, handle=handle)
     app = Starlette(routes=[Route("/api/github/events", ingress.webhook, methods=["POST"])])
     return TestClient(app), ingress
 
@@ -389,3 +389,23 @@ def test_the_webhook_route_is_exempt_from_session_auth() -> None:
     from engine.apps.web.github_login import _AUTH_EXEMPT
 
     assert "/api/github/events" in _AUTH_EXEMPT
+
+
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+@pytest.mark.parametrize("repository", ["acme/api", "ACME/API", "other/api", ""])
+def test_signed_deliveries_only_queue_for_the_configured_repository(event, repository) -> None:
+    handled = []
+    client, ingress = _client(handle=_record(handled), repository=repository)
+    payload = _issue_comment()
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
+    body = json.dumps(payload).encode()
+    headers = dict(_signed(body), **{"x-github-event": event})
+    with client:
+        response = client.post("/api/github/events", content=body, headers=headers)
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert response.status_code == (503 if not repository else 200)
+    assert [c.repository for c in handled] == (
+        ["acme/api"] if repository.lower() == "acme/api" else []
+    )

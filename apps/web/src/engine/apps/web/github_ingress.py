@@ -148,6 +148,7 @@ class GithubIngress:
         self,
         *,
         webhook_secret: Callable[[], str] = lambda: "",
+        repository: str = "",
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         self_login: Callable[[], str] = lambda: "",
         capacity: int = 256,
@@ -155,6 +156,7 @@ class GithubIngress:
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
     ) -> None:
         self._webhook_secret = webhook_secret
+        self._repository = repository
         self._self_login = self_login
         self._handle = handle
         self._verify_signature = verify_signature
@@ -231,6 +233,13 @@ class GithubIngress:
             # Nothing to do with this delivery, whether or not a handler is
             # wired: settle it, so a webhook subscribed to more events than
             # Engine reads does not retry every one of them forever.
+            return True
+        if not self._repository:
+            log.warning("a GitHub comment was delivered but no target repository is configured")
+            return False
+        if comment.repository.lower() != self._repository.lower():
+            # A shared App secret authenticates deliveries from other repos too.
+            # Ignore them before queueing or remembering their comment identities.
             return True
         if self._handle is None:
             log.warning(

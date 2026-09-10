@@ -17,8 +17,10 @@ Name the repository whose deliveries this deployment answers in `engine.toml`:
 repository = "owner/name"
 ```
 
-The slug is validated at startup, so a misspelling is refused there rather than
-silently dropping every delivery.
+The slug format is validated at startup. Comments from other repositories are
+acknowledged and ignored, even when signed with the same secret. Repository
+names are compared without regard to case. Without a configured repository,
+actionable comment deliveries receive 503 until setup is complete.
 
 ## Storing the secret
 
