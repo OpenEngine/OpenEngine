@@ -28,13 +28,13 @@ posts its UI link, and reports progress in the same thread.
 public_url = "https://engine.example"
 
 [work_orders]
-repository = "acme/api"                 # optional default; the agent can ask
+repository = "."                        # local checkout path; defaults to "."
 workflow = "implementation-review-v1"   # optional if exactly one is installed
 runner = "claude"                       # work-order executor, not concierge
 ```
 
-A greeting needs no work-order configuration. Creating work requires a repository
-and a resolvable step workflow. Missing configuration becomes a tool error so the
+A greeting needs no work-order configuration. Creating work requires a resolvable step workflow. The repository is a local
+checkout path, not a GitHub owner/name, and cannot be supplied by the agent. Missing configuration becomes a tool error so the
 concierge can explain what is needed.
 
 ## Code boundaries
@@ -50,7 +50,7 @@ concierge can explain what is needed.
   ignores bots and message edits, and deduplicates by channel/message timestamp
   across both Slack event types. `drain()` and `close()` support tests/shutdown.
 - `slack_egress.py`: the only granted MCP tool is
-  `create_workorder(prompt, repository?)`. Its host callback returns `(url, run_id)`.
+  `create_workorder(prompt)`. Its host callback returns `(url, run_id)`.
   The host binds the Slack origin; the model cannot supply a destination channel
   or thread. The stdio-to-TCP bridge keeps its credential in a mode-0600 temporary
   file and advertises a fixed supported MCP protocol version.
