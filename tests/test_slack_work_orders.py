@@ -211,7 +211,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -244,8 +244,8 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         credential_store=MagicMock(),
         concierge_provider=provider or FakeACPProvider(),
         graph_runtime=graph_runtime,
+        github_comment_handler=github_comment_handler,
     ), capabilities, slack_store
-
 
 def _mention_graph():
     """The workflow these mentions name, doing nothing in particular."""
@@ -259,6 +259,29 @@ def _mention_graph():
     return graph_workflow(
         builder, id="implementation-review-v1", name="Implementation review"
     )
+
+def _github_event_route(app) -> bool:
+    return any(getattr(r, "path", None) == "/api/github/events" for r in app.routes)
+
+
+def test_the_github_webhook_route_is_absent_until_something_answers_it(tmp_path):
+    """An endpoint that accepts a delivery it can never act on is a trap: a
+    webhook pointed at it collects failed deliveries until GitHub disables it."""
+    app, _capabilities, _slack_store = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig()
+    )
+    assert not _github_event_route(app)
+
+
+def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
+    async def handle(_comment):
+        pass
+
+    app, _capabilities, _slack_store = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        github_comment_handler=handle,
+    )
+    assert _github_event_route(app)
 
 
 def _workflow_catalog():
