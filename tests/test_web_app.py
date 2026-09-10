@@ -110,6 +110,7 @@ from engine.runtime import (
     EngineConfig,
     ResponseStyle,
     WorkflowCatalog,
+    load_workflow_catalog,
 )
 from engine.graph_runtime import (
     CANCELLED,
@@ -134,6 +135,16 @@ from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
 WORKFLOW_ID = WorkflowId("implementation-review-v1")
+
+#: The step workflow the tests below run. Named rather than left to
+#: `create_app`'s fallback, which reads `$ENGINE_CONFIG` before `./engine.toml`:
+#: with that variable pointing at another checkout -- which a worktree setup
+#: does readily -- the app would offer *those* definitions, and these tests
+#: would pass or fail on what some other directory happens to hold.
+#:
+#: A fixture rather than `workflows/`: this repository ships a graph and no step
+#: workflow, and the step half of the API is what most of this file is about.
+STEP_CATALOG = load_workflow_catalog(Path(__file__).parent / "fixtures" / "workflows")
 IMPLEMENTATION_STEP = StepId("implementation")
 REVIEW_STEP = StepId("review")
 HUMAN_REVIEW_STEP = StepId("human-review")
@@ -1292,7 +1303,7 @@ def _workflow_app(
         chat_runners,
         workflow_runners=implementers,
         review_runners=chat_runners,
-        workflow_catalog=workflow_catalog,
+        workflow_catalog=workflow_catalog if workflow_catalog is not None else STEP_CATALOG,
         graph_runtime=graph_runtime,
         approval_policy=approval_policy,
         communications_channel=communications_channel,
