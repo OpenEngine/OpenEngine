@@ -11,6 +11,14 @@ takes the two things a test has business replacing: which agents answer, and
 where the checkouts are made. Same ids, same names, same stages, same prompts;
 what is scripted is what the agent says back.
 
+The catalog also offers the step workflow in `tests/fixtures/workflows`, which
+this repository does not ship. It is here because the step runtime *is* shipped
+-- for a deployment that installs a definition of its own -- and some of what it
+draws has no graph equivalent yet: a step conversation places each approval
+beside the call that raised it, where a graph node's collects them in the
+end-of-turn slot. `apps/web/e2e/approval-placement.spec.ts` picks it by name to
+cover that, and every other spec picks the graph.
+
 Here rather than in `apps/web/e2e/harness/server.py` because naming one
 workflow is a thing only a test may do -- production code that special-cased
 `implementation_review` is what `tests/workflow_removal_acceptance` exists to
@@ -40,12 +48,18 @@ from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider  # noqa:
 from provider_fakes import fake_acp  # noqa: E402
 
 
-def scripted_catalog(workspace_root: str, binaries: Path) -> WorkflowCatalog:
-    """Every workflow this repository ships, ready to run against fakes.
+#: The step workflow the browser tier offers beside the shipped graphs. Its
+#: agents are CLIs, and a server composed for a test is already running fake
+#: ones, so it is loaded as it is.
+_STEP_WORKFLOWS = _ROOT / "tests" / "fixtures" / "workflows"
 
-    The step workflows are loaded as they are -- their agents are CLIs, and a
-    server composed for a test is already running fake ones. Only the graphs
-    are rebuilt.
+
+def scripted_catalog(workspace_root: str, binaries: Path) -> WorkflowCatalog:
+    """Every workflow the browser tier can start, ready to run against fakes.
+
+    The repository's own directory is loaded for its graphs -- and would be
+    loaded for a step workflow too, if one were added back to it -- and only
+    the graphs are rebuilt.
     """
     agent = fake_acp(binaries)
     scripted = agent_registry(
@@ -55,8 +69,9 @@ def scripted_catalog(workspace_root: str, binaries: Path) -> WorkflowCatalog:
         ]
     )
     loaded = load_workflow_catalog(_ROOT / "workflows")
+    steps = load_workflow_catalog(_STEP_WORKFLOWS)
     return WorkflowCatalog.from_definitions(
-        tuple(loaded),
+        (*loaded, *steps),
         (
             graph_for(
                 "codex",

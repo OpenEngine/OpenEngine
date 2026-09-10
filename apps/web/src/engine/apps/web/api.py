@@ -947,14 +947,6 @@ class ThreadService:
         return state.name or state.prompt or str(state.run_id)
 
 
-#: What the dropdown puts in front of a graph workflow's name.
-#:
-#: Plain English: these workflows are new and not finished yet. The label is
-#: there so nobody picks one expecting it to behave like the ones that have
-#: been running for months. It is a prefix on the *name* rather than a separate
-#: field so that every list, however it is drawn, carries the warning.
-BETA = "[BETA]"
-
 #: Where the graph runtime's sub-application is served from, so its addresses
 #: are `/graph/api/runs/...` and cannot collide with this app's own `/api`.
 GRAPH_PREFIX = "/graph"
@@ -1007,7 +999,7 @@ class _GraphSurface:
 
     They stay empty when the engine could not be opened for a reason outside
     the graphs themselves, which is what keeps that kind of failure to the
-    `[BETA]` feature: no engine, no `[BETA]` entries in the dropdown, and the
+    graph feature: no engine, no graph entries in the dropdown, and the
     rest of the application carries on. A graph that does not *compile* never
     gets this far -- it stops the server, because it is a definition somebody
     has to fix.
@@ -1103,12 +1095,12 @@ def create_app(
         )
 
     def offered_graphs() -> Mapping[str, GraphWorkflow]:
-        """The `[BETA]` entries a person may pick, right now.
+        """The graph entries a person may pick, right now.
 
         Two things have to be true, and the second one is only knowable once
         the server is up: this deployment has graph workflows, and the engine
         that runs them opened. If it did not -- an unwritable state directory,
-        a graph that no longer compiles -- there are no `[BETA]` entries at
+        a graph that no longer compiles -- there are no graph entries at
         all, rather than entries that fail the moment somebody picks one.
         """
         return graph_workflows if surface.runtime is not None else {}
@@ -1399,7 +1391,7 @@ def create_app(
         async with AsyncExitStack() as opened:
             opened.push_async_callback(slack_ingress.close)
             if graph_runtime is not None:
-                # Opening the graph engine is what makes a `[BETA]` WorkOrder
+                # Opening the graph engine is what makes a graph WorkOrder
                 # startable: it compiles every graph in the workflow directory
                 # and opens the files they remember their progress in. The exit
                 # stack closes it again when the server stops, which is the
@@ -1420,14 +1412,13 @@ def create_app(
                 # write, a checkpoint file another process is holding. That is
                 # not a reason for chats, projects and the step WorkOrders to go
                 # down with it, so it is logged and contained -- no engine, and
-                # therefore no `[BETA]` entries offered anywhere.
+                # therefore no graph entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
                 except GraphCompilationError as broken:
                     log.error(
-                        "%s workflow %r does not compile, so this server will "
-                        "not start: %s",
-                        BETA,
+                        "graph workflow %r does not compile, so this server "
+                        "will not start: %s",
                         str(broken.graph_id),
                         broken.reason,
                         exc_info=True,
@@ -1435,9 +1426,8 @@ def create_app(
                     raise
                 except Exception:
                     log.exception(
-                        "the graph engine did not start; %s WorkOrders are not "
-                        "being offered in this process",
-                        BETA,
+                        "the graph engine did not start; graph WorkOrders are "
+                        "not being offered in this process"
                     )
                 else:
                     # The graph engine's own control surface, so a run started
@@ -1622,12 +1612,13 @@ def create_app(
                 "defaultRunner": session.default_runner,
                 "workflowRunners": list(workflow_executor.runners),
                 "defaultWorkflowRunner": workflow_executor.default_runner,
-                # One dropdown, two kinds of workflow. The step workflows come
-                # first and read as they always have; the graph ones follow,
-                # wearing `[BETA]` and no version, because a graph does not
-                # have one yet. Only the graphs this process can actually start
-                # are here -- see `offered_graphs` -- because an entry nobody
-                # could run would be a choice that fails after it was made.
+                # One dropdown, two kinds of workflow. The step workflows
+                # come first and read as they always have; the graph ones
+                # follow, under their own names and with no version, because a
+                # graph does not have one. Only the graphs this process can
+                # actually start are here -- see `offered_graphs` -- because an
+                # entry nobody could run would be a choice that fails after it
+                # was made.
                 #
                 # Graph creation fields come from the workflow's declarations.
                 "workflows": [
@@ -1642,7 +1633,7 @@ def create_app(
                 + [
                     {
                         "id": str(graph.graph_id),
-                        "name": f"{BETA} {graph.name}",
+                        "name": graph.name,
                         "version": "",
                         "kind": "graph",
                         **(
@@ -1847,7 +1838,7 @@ def create_app(
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
     ) -> RunState:
-        """Hand a `[BETA]` WorkOrder to the graph engine and keep a row for it.
+        """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
         What actually starts the work is one call: the graph engine is given
         the graph's id and the two things every one of these graphs asks for --
@@ -2084,7 +2075,7 @@ def create_app(
         the WorkOrder the reader just threw away would reappear on the next
         poll.
 
-        A `[BETA]` one is the graph engine's, and none of that reaches it: its
+        A graph one is the graph engine's, and none of that reaches it: its
         driver is a task in the engine, not in `workflow_tasks`, and the agent
         it has open is not an agent run this app started. Deleting the row
         without telling the engine would take the WorkOrder off the rail and
@@ -2108,7 +2099,7 @@ def create_app(
         return Response(status_code=204)
 
     async def cancel_graph_run(run_id: RunId) -> None:
-        """Stop a `[BETA]` WorkOrder in the engine, if there is one to stop.
+        """Stop a graph WorkOrder in the engine, if there is one to stop.
 
         Two ways there is nothing to do, and neither is a reason to refuse the
         delete. The engine may not be running at all -- it failed to open, or
@@ -2124,9 +2115,8 @@ def create_app(
         runtime = surface.runtime
         if runtime is None:
             log.warning(
-                "the graph engine is not running, so %s WorkOrder %s was "
+                "the graph engine is not running, so graph WorkOrder %s was "
                 "deleted without being cancelled",
-                BETA,
                 run_id,
             )
             return
@@ -2134,9 +2124,8 @@ def create_app(
             await runtime.cancel(run_id)
         except GraphRuntimeError:
             log.warning(
-                "the graph engine has no record of %s WorkOrder %s, so there "
-                "was nothing to cancel",
-                BETA,
+                "the graph engine has no record of graph WorkOrder %s, so "
+                "there was nothing to cancel",
                 run_id,
             )
 
@@ -2829,7 +2818,7 @@ def create_app(
         The graph engine ships a small API of its own -- what a run is doing,
         what it has raised, and the two things a person can send back: a
         message for whichever agent is working, and an answer to a question it
-        stopped on. That is how a `[BETA]` run gets approved today, and this
+        stopped on. That is how a graph run gets approved today, and this
         app's pages cannot do it yet.
 
         A hop rather than a re-implementation, and behind a prefix of its own
@@ -3127,7 +3116,7 @@ def create_app(
             complete_human_review,
             methods=["POST"],
         ),
-        # The `[BETA]` half of the runs above, served by the engine that runs
+        # The graph half of the runs above, served by the engine that runs
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),
         Route("/api/threads", list_threads),

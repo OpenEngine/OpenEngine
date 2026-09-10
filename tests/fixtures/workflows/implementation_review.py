@@ -1,4 +1,15 @@
-"""Repository-owned implementation, review, and human decision workflow."""
+"""A step workflow, kept for the tests of the step runtime that runs one.
+
+This is the "Implementation review v1" definition this repository used to ship
+in `workflows/`. The product now ships the graph in
+`workflows/implementation_review_graph.py` and nothing else, but the step
+runtime -- the catalog, the executor, the run-bound MCP server, the golden
+trace of the pre-DSL reducer -- is still shipped and still has to be covered.
+
+So the definition moved here rather than being deleted with the deployment that
+offered it: a fixture the tests own, loaded from this directory, and no longer a
+choice anybody can pick in the interface.
+"""
 
 import openengine as oe
 

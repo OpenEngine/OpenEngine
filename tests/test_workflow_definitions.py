@@ -364,9 +364,15 @@ workflow = oe.workflow(
         load_workflow_catalog(tmp_path)
 
 
-def test_checked_in_definition_is_the_implementation_review_source_of_truth() -> None:
-    root = Path(__file__).parents[1]
-    loaded = load_workflow_catalog(root / "workflows")
+def test_the_step_workflow_fixture_is_what_the_step_tiers_replay() -> None:
+    """The definition `test_workflow_integration` and the golden trace load.
+
+    It used to be the one this repository shipped in `workflows/`, and this
+    test used to say so. The deployment ships a graph now, so the definition
+    lives in `tests/fixtures/workflows` and this pins its shape there: two
+    suites replay it, and a silent edit to it would move what they mean.
+    """
+    loaded = load_workflow_catalog(Path(__file__).parent / "fixtures" / "workflows")
     definition = loaded.require(WorkflowId("implementation-review-v1"))
     implementation, review, human = definition.steps
 

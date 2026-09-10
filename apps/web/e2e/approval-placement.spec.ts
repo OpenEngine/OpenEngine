@@ -11,12 +11,23 @@
  *  The matching itself is pinned at speed in
  *  `tests/test_workflow_mcp_execution.py`; what only a browser can say is that
  *  the pairing survives everything between the broker and the rendered page.
+ *
+ *  Driven through a *step* workflow, from `tests/fixtures/workflows`: inline
+ *  placement is something only a step conversation does today -- a graph node's
+ *  conversation collects its requests in the end-of-turn slot instead -- and
+ *  the step runtime that draws it is still shipped for a deployment that
+ *  installs a definition of its own. That is why the harness offers a step
+ *  workflow this repository does not itself ship, and why this spec picks it by
+ *  name rather than taking whatever the dropdown defaults to.
  */
 
 import type { Page } from "@playwright/test";
 
 import { expect, shot, test, type Script } from "./harness";
 
+/** The step workflow in `tests/fixtures/workflows`, as the dropdown spells a
+ *  step entry: its name, then its version. */
+const WORKFLOW = "Implementation review · v1";
 const TASK = "Add a greeting file to the repository.";
 const PULL_REQUEST = "https://github.com/acme/api/pull/7";
 
@@ -101,6 +112,7 @@ for (const runner of ["codex", "claude"]) {
     engine.script(SCRIPT);
 
     await page.goto("/runs/new");
+    await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
     await page.getByLabel("Repository").fill(engine.repository);
     await page.getByLabel("Implementation runner").selectOption(runner);
     await page.getByLabel("Task prompt").fill(TASK);

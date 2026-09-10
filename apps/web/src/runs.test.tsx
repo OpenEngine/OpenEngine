@@ -29,13 +29,13 @@ const config: EngineConfig = {
   ],
 };
 /** The same deployment, with a graph workflow beside the step ones. */
-const withBeta: EngineConfig = {
+const withGraph: EngineConfig = {
   ...config,
   workflows: [
     ...config.workflows,
     {
       id: "implementation-review-codex",
-      name: "[BETA] Implementation review (codex)",
+      name: "Implementation review (codex)",
       version: "",
       kind: "graph",
     },
@@ -171,14 +171,14 @@ describe("NewWorkflowPage", () => {
     );
   });
 
-  it("offers a beta workflow by its name alone, with no version to show", async () => {
-    // A [BETA] entry is a graph workflow. It has no version, and "name · "
-    // with nothing after it reads like something failed to load.
-    render(<NewWorkflowPage config={withBeta} />);
+  it("offers a graph workflow by its name alone, with no version to show", async () => {
+    // A graph workflow has no version, and "name · " with nothing after it
+    // reads like something failed to load.
+    render(<NewWorkflowPage config={withGraph} />);
 
     const selector = screen.getByRole("combobox", { name: "Workflow definition" });
     expect(
-      within(selector).getByRole("option", { name: "[BETA] Implementation review (codex)" }),
+      within(selector).getByRole("option", { name: "Implementation review (codex)" }),
     ).toHaveValue("implementation-review-codex");
   });
 
@@ -190,7 +190,7 @@ describe("NewWorkflowPage", () => {
     const fetch = stubPageApi();
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "error").mockImplementation(() => {});
-    render(<NewWorkflowPage config={withBeta} />);
+    render(<NewWorkflowPage config={withGraph} />);
     expect(screen.getByRole("combobox", { name: "Implementation runner" })).toBeVisible();
 
     await user.selectOptions(
@@ -218,8 +218,8 @@ describe("NewWorkflowPage", () => {
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const configured: EngineConfig = {
-      ...withBeta,
-      workflows: withBeta.workflows.map((workflow) => workflow.kind === "graph" ? {
+      ...withGraph,
+      workflows: withGraph.workflows.map((workflow) => workflow.kind === "graph" ? {
         ...workflow,
         inputs: [
           { name: "implementation_runner", label: "Implementation runner", default: "codex", required: true, choices: ["codex", "claude"] },

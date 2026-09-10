@@ -16,7 +16,7 @@ export const DEFAULT_API_URL = "http://localhost:8000";
 
 /** Every prefix the application serves that is not the client itself.
  *
- *  `/graph` is the `[BETA]` half: the graph engine's own control surface, which
+ *  `/graph` is the graph half: the graph engine's own control surface, which
  *  the API mounts beside its own `/api` because both servers call their runs
  *  `/api/runs`. Two prefixes on the server, so two here.
  *

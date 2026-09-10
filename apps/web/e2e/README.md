@@ -123,71 +123,87 @@ unzip it, and point `show-report` at the directory.
   it is recorded as an approval, the turn carries on, and the file the command
   was allowed to write exists in that chat's worktree.
 * `approval-placement.spec.ts` -- *where* a request is shown, on each runner: a
-  step runs three `git_subcommand` calls through the run-bound MCP server -- two
-  different commands and then a repeat of the first -- and each pause has to
-  render beside the call that raised it, with nothing collecting in the
-  end-of-turn slot, before the decision, after it, and after a reload. The
-  pairing is the provider's own id for the call, which that server is the one
-  place that has to look up rather than know; the lookup itself is pinned at
-  speed in `tests/test_workflow_mcp_execution.py`, and what only a browser can
-  say is that the pairing survives everything between the broker and the page.
-* `workflow-run.spec.ts` -- a workflow run on each runner, end to end: the run
-  is created from the form, provisions a checkout that exists on disk, streams
-  the implementation's first message and its command into the step's
-  conversation *while the step is still running*, and -- once `complete_step`
-  carries the declared `pr_url` -- advances through a review that leaves its
-  finding on `gh` to "Action required". Approving there ends it, and a reload
-  shows the same finished run: `succeeded`, `approved`, every stage behind it.
-* `graph-workflow.spec.ts` -- the same journey as `workflow-run.spec.ts`, for a
-  `[BETA]` graph WorkOrder, and **expected to fail in places**. See below.
+  graph's implementation node runs three `git_subcommand` calls through the
+  run-bound MCP server -- two different commands and then a repeat of the first
+  -- and each pause has to render beside the call that raised it, with nothing
+  collecting in the end-of-turn slot, before the decision, after it, and after a
+  reload. The pairing is the provider's own id for the call, which that server
+  is the one place that has to look up rather than know; the lookup itself is
+  pinned at speed in `tests/test_workflow_mcp_execution.py`, and what only a
+  browser can say is that the pairing survives everything between the broker and
+  the page.
+* `graph-workflow.spec.ts` -- the WorkOrder this repository ships, end to end,
+  split into the states a run passes through so a broken one is reported by
+  name. See below.
 * `dev-server.spec.ts` -- the interface as `engine-dev` serves it, with Vite in
   front of the API instead of the API serving `dist/`. Every other spec here
   opens one origin that answers for everything, so none of them can reach a
   client request the dev proxy does not forward -- and Vite answers an
   unforwarded path with `index.html` and a 200, which arrives as a JSON parse
-  error rather than as a 404. Creating a `[BETA]` WorkOrder is what found it:
-  its page reads the graph engine under `/graph`, and only `/api` was proxied.
+  error rather than as a 404. Creating a graph WorkOrder is what found it: its
+  page reads the graph engine under `/graph`, and only `/api` was proxied.
   The forwarded prefixes live in `src/api-proxy.ts` so a component test can read
   them too; this is the one that proves they reach the server.
 * `persisted-navigation.spec.ts` -- cold starts over both a SQLite file populated
   through the current production state-store adapter and the frozen
-  `fixtures/v0.0.0.sqlite3` artifact. The run list, run detail, implementation
-  and review transcripts, and a multi-turn standalone chat are followed through
-  their browser links. Each case then starts another chat and another workflow
-  in the same database and confirms the older history remains listed. The frozen
+  `fixtures/v0.0.0.sqlite3` artifact. Both hold a *step* run, which is what the
+  history in a real deployment's database looks like: this repository used to
+  ship a step workflow and now ships only a graph, and a run started before that
+  still has to open. The run list, run detail, implementation and review
+  transcripts, and a multi-turn standalone chat are followed through their
+  browser links. Each case then starts another chat and a graph WorkOrder in the
+  same database and confirms the older history remains listed. The frozen
   artifact makes opening the database exercise migrations added after v0.0.0.
 
-## The `[BETA]` graph WorkOrder, and what it cannot do yet
+## The graph WorkOrder
 
-`graph-workflow.spec.ts` is `workflow-run.spec.ts` walked again, on the other
-engine: the same task, with an explicit naming stage before implementation, but
-started from a `[BETA]` entry and run by LangGraph. It is split into one test per
-state a run passes through,
-because a graph WorkOrder does not reach all of them yet and one long test
-would report only the first gap.
+`graph-workflow.spec.ts` is the whole journey: the task, an explicit naming
+stage before implementation, four parallel reviewers, a reranker, and the
+question a person has to answer at the end. It is split into one test per state
+a run passes through rather than written as one long walk, because a spec per
+state reports every one that broke instead of only the first.
 
-```
-npm --prefix apps/web run test:e2e:beta     # only these
-npm --prefix apps/web run test:e2e          # everything else
-```
+| state |
+| --- |
+| the graph offers independent stage runners and passes the choices to execution |
+| the run provisions a checkout and both agents work in it |
+| the workflow tools reach the agent in a session it accepts |
+| the WorkOrder page shows the run's stages |
+| the checkout is named on the WorkOrder page |
+| the rail offers the run's conversations by node |
+| an agent's conversation is readable from the page |
+| an agent waiting on permission is answered in its conversation |
+| an agent steered during an executing turn responds |
+| the page says a person is being waited for, is answered, and stays answered |
 
-They are tagged `@beta` and run by their own CI job, which is allowed to fail.
-Each red test names one thing the interface cannot do for a graph run that it
-already does for a step run. As of this writing:
+These were tagged `@beta` and run by a CI job that was allowed to be red, one
+red test per thing the interface could not do for a graph run. They all pass
+now, so the tag, the second job and the `test:e2e:beta` script are gone and
+`npm run test:e2e` runs everything.
 
-| state | passes? |
-| --- | --- |
-| the graph offers independent stage runners and passes the choices to execution | yes |
-| the run provisions a checkout and both agents work in it | yes |
-| the workflow tools reach the agent in a session it accepts | yes |
-| the WorkOrder page shows the run's stages | no |
-| the checkout is named on the WorkOrder page | no |
-| an agent's conversation is readable from the page | no |
-| the page says a person is being waited for, and can answer | no |
+The step workflow they were once compared against -- `workflow-run.spec.ts`, and
+the "Implementation review v1" definition it ran -- is gone with the deployment
+that offered it. What that spec was the only cover for moved into the last test
+here: the reviewer's comment leaving through `gh`, and the approved run
+surviving a reload.
 
-The last one is the important one: the run *does* reach its human-review node
-and *does* raise an approval — the test polls the graph engine's own API to
-prove it — and there is simply nothing on the page to answer it with.
+Three things it covered have no graph equivalent on the page yet:
+
+* **A node's declared outputs.** A step card showed the `pr_url` and `findings`
+  a step declared through `complete_step`. A graph node's card shows the text
+  the agent finished with; the graph's state keeps the node's spoken output, not
+  the outputs the run-bound server took, so there is nothing for the page to
+  draw. The last test asserts the summary instead.
+* **The human decision, kept.** A finished step run read `approved` in its stats
+  and showed the decision note on its human-review card. A graph run's row
+  records that it succeeded and nothing about who ended it. The last test
+  asserts the finished run instead: `succeeded`, every stage behind it, and the
+  question gone.
+* **Inline approval placement.** A graph node's conversation collects its
+  requests in the end-of-turn slot rather than beside the call that raised each.
+  `approval-placement.spec.ts` still covers that placement, over the step
+  workflow in `tests/fixtures/workflows` -- see the note at the top of it, and
+  the harness note in `tests/graph_workflow_fakes.py`.
 
 The agents are scripted the same way as everywhere else here, but over a third
 protocol. `ACPNode` talks ACP to an adapter that wraps a CLI, not to the CLI, so

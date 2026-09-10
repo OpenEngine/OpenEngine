@@ -1,4 +1,4 @@
-/** A `[BETA]` WorkOrder's agent, read and steered as the conversation it is.
+/** A graph WorkOrder's agent, read and steered as the conversation it is.
  *
  *  The graph engine does not keep a transcript. It keeps an event log -- what a
  *  node said, what it called, what it stopped to ask -- and this is the half

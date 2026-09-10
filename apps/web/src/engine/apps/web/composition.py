@@ -424,7 +424,7 @@ def build_graph_runtime(
 
     Two kinds of workflow live in the `workflows` directory. The older kind is
     a list of steps, and the executor wired above runs those. The newer kind --
-    the ones the interface marks `[BETA]` -- is a graph, and LangGraph runs
+    the ones the interface offers as graphs -- is a graph, and LangGraph runs
     those. This builds the second engine.
 
     It hands back an *unopened* context manager rather than a running engine,
@@ -434,7 +434,7 @@ def build_graph_runtime(
 
     `None` when this deployment's workflow directory holds no graphs: there is
     nothing to run, so there is no reason to open the files. The interface then
-    offers no `[BETA]` entries, which is what keeps a person from picking one
+    offers no graph entries, which is what keeps a person from picking one
     that nothing here could start.
     """
     if not graphs:

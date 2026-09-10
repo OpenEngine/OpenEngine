@@ -563,7 +563,7 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
-  /** A `[BETA]` WorkOrder has no steps -- a graph is not made of them -- so the
+  /** A graph WorkOrder has no steps -- a graph is not made of them -- so the
    *  shortcuts under its name are its graph's nodes, offered from the moment
    *  the run exists rather than once an agent has said something. */
   it("offers a graph WorkOrder's nodes as its conversations", () => {

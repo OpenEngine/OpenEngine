@@ -26,6 +26,13 @@ from engine.runtime import load_workflow_catalog, resolve_default_branch
 
 
 ROOT = Path(__file__).parents[2]
+
+#: The step definition the trace is replayed through. It used to be shipped in
+#: `workflows/`; the deployment now ships a graph instead, so it lives with the
+#: tests that still need a step workflow. Same definition, same trace: what is
+#: pinned here is the interpreter, not which directory the file sits in.
+WORKFLOWS = ROOT / "tests" / "fixtures" / "workflows"
+
 pytestmark = pytest.mark.workflow_removal_acceptance
 GOLDEN = Path(__file__).parent / "fixtures" / "implementation_review_trace.json"
 WORKFLOW_ID = WorkflowId("implementation-review-v1")
@@ -179,7 +186,7 @@ def test_repository_workflow_matches_pre_dsl_golden_event_trace() -> None:
     golden = json.loads(GOLDEN.read_text())
     assert golden["generated_from"] == "d15456f"
     definition = resolve_default_branch(
-        load_workflow_catalog(ROOT / "workflows").require(WORKFLOW_ID), "main"
+        load_workflow_catalog(WORKFLOWS).require(WORKFLOW_ID), "main"
     )
     actual = []
     for name, events in _trace_scenarios().items():

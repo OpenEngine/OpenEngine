@@ -1,9 +1,17 @@
 """Create the browser suite's already-populated SQLite database.
 
 The fixture is data, not alternate application behaviour: it uses the real
-SQLite state-store API and the repository's current workflow definition.  The
-web server opens the completed file in a separate process afterwards, which is
-the restart/cold-start path this fixture exists to cover.
+SQLite state-store API.  The web server opens the completed file in a separate
+process afterwards, which is the restart/cold-start path this fixture exists to
+cover.
+
+The run it seeds is a *step* run, from `tests/fixtures/workflows` rather than
+from this repository's own workflow directory, because that is what the history
+in a real deployment's database looks like: this repository used to ship a step
+workflow and now ships only a graph, and every run started before that is still
+in the database and still has to open.  A step run carries its definition on its
+row, so nothing about reading one needs the catalog to still offer it -- which
+is the property this seed exists to keep true.
 """
 
 from __future__ import annotations
@@ -35,6 +43,11 @@ from engine.domain import (
 from engine.runtime import load_workflow_catalog
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+
+#: The step workflow the seeded history was run by. Not `workflows/`: the
+#: deployment no longer offers a step workflow, and a database full of runs
+#: from one is exactly what this fixture is.
+SEEDED_WORKFLOWS = REPO_ROOT / "tests" / "fixtures" / "workflows"
 
 CHAT_INSTANCE = AgentInstanceId("agi-seeded-chat")
 RUN_ID = RunId("run-seeded-history")
@@ -79,9 +92,9 @@ async def _seed_chat(store: SQLiteStateStore) -> None:
 
 
 async def _seed_workflow(store: SQLiteStateStore, repository: str) -> None:
-    catalog = load_workflow_catalog(REPO_ROOT / "workflows")
+    catalog = load_workflow_catalog(SEEDED_WORKFLOWS)
     if len(catalog) != 1:
-        raise ValueError("the browser seed expects exactly one repository workflow")
+        raise ValueError("the browser seed expects exactly one seeded workflow")
     definition = next(iter(catalog))
     implementation = StepCompleted(
         run_id=RUN_ID,

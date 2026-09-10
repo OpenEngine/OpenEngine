@@ -8,7 +8,7 @@ approval policy plumbing -- and changes only what a test must own:
     where it works        a fixture repository, so worktrees are disposable
     what it remembers     a SQLite file under the test's own directory
     which CLI it runs     `tests/provider_fakes.py`, scripted per test
-    which agent ACP finds the same fakes, for the `[BETA]` graph workflows
+    which agent ACP finds the same fakes, for the graph workflows
     GitHub API calls      stubbed so tests run without a real token or network
 
 Everything else is production wiring, including the parts that are easy to get

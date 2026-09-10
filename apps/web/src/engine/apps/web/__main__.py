@@ -167,7 +167,7 @@ def compose_app(
     read_only_runners = build_read_only_runners(settings)
     workflow_runners = build_workflow_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
-    # The second engine, for the `[BETA]` workflows in the same directory. It
+    # The second engine, for the graph workflows in the same directory. It
     # is `None` when that directory holds no graphs, and then the interface
     # offers none of them.
     graph_runtime = build_graph_runtime(
