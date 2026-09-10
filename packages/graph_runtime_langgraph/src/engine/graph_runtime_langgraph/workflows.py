@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Annotated, Any, overload
 
 from engine.graph_runtime import GraphCompilationError, GraphId
+from engine.graph_runtime.inputs import WorkflowInput
 from engine.ports import SourceControl
 from engine.graph_runtime_langgraph.acp import answer_permission
 from engine.graph_runtime_langgraph.graphs import LangGraphDefinition
@@ -88,6 +89,9 @@ class GraphWorkflow:
     names: Mapping[str, str] = field(default_factory=dict)
     """Display names per node id, for a node that does not name itself."""
 
+    inputs: tuple[WorkflowInput, ...] = ()
+    """Creation fields, available to nodes under state["inputs"]."""
+
     def compiled(self, checkpointer: Any) -> LangGraphDefinition:
         """This graph, compiled against the checkpointer a deployment owns."""
         return LangGraphDefinition(
@@ -100,7 +104,12 @@ class GraphWorkflow:
 
 @overload
 def graph_workflow(
-    builder: Any, *, id: str, name: str, names: Mapping[str, str] | None = None
+    builder: Any,
+    *,
+    id: str,
+    name: str,
+    names: Mapping[str, str] | None = None,
+    inputs: Sequence[WorkflowInput] = (),
 ) -> GraphWorkflow: ...
 
 
@@ -111,6 +120,7 @@ def graph_workflow(
     id: str,
     name: str,
     names: Mapping[str, str] | None = None,
+    inputs: Sequence[WorkflowInput] = (),
 ) -> Callable[[Callable[[], Any]], GraphWorkflow]: ...
 
 
@@ -120,6 +130,7 @@ def graph_workflow(
     id: str,
     name: str,
     names: Mapping[str, str] | None = None,
+    inputs: Sequence[WorkflowInput] = (),
 ) -> GraphWorkflow | Callable[[Callable[[], Any]], GraphWorkflow]:
     """Name a graph, so a deployment can be asked to run it.
 
@@ -143,18 +154,24 @@ def graph_workflow(
 
     Both produce the same value. Node display names are normally the nodes' own
     (`graph_node_name`); `names` is the override for a node that has none.
+    `inputs` declares creation fields, passed to nodes under state["inputs"].
     """
     if builder is None:
 
         def decorate(build: Callable[[], Any]) -> GraphWorkflow:
-            return _workflow(build(), id=id, name=name, names=names)
+            return _workflow(build(), id=id, name=name, names=names, inputs=inputs)
 
         return decorate
-    return _workflow(builder, id=id, name=name, names=names)
+    return _workflow(builder, id=id, name=name, names=names, inputs=inputs)
 
 
 def _workflow(
-    builder: Any, *, id: str, name: str, names: Mapping[str, str] | None
+    builder: Any,
+    *,
+    id: str,
+    name: str,
+    names: Mapping[str, str] | None,
+    inputs: Sequence[WorkflowInput],
 ) -> GraphWorkflow:
     if not id.strip():
         raise ValueError("a graph workflow needs an id")
@@ -165,11 +182,14 @@ def _workflow(
             f"graph workflow {id!r} must be built from a StateGraph, not "
             f"{type(builder).__name__}"
         )
+    if len({item.name for item in inputs}) != len(inputs):
+        raise ValueError("workflow input names must be unique")
     return GraphWorkflow(
         graph_id=GraphId(id.strip()),
         name=name.strip(),
         builder=builder,
         names=dict(names or {}),
+        inputs=tuple(inputs),
     )
 
 

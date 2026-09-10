@@ -201,9 +201,6 @@ describe("NewWorkflowPage", () => {
     expect(
       screen.queryByRole("combobox", { name: "Implementation runner" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/runs the agent named in its own definition/),
-    ).toBeVisible();
 
     // And nothing is sent in its place: the WorkOrder carries the graph, the
     // prompt and the repository, which is all a graph is given.
@@ -213,6 +210,44 @@ describe("NewWorkflowPage", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
     const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
     expect(JSON.parse(String(request.body))).not.toHaveProperty("runner");
+  });
+
+  it("submits independent workflow inputs and resets them when switching workflows", async () => {
+    const user = userEvent.setup();
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const configured: EngineConfig = {
+      ...withBeta,
+      workflows: withBeta.workflows.map((workflow) => workflow.kind === "graph" ? {
+        ...workflow,
+        inputs: [
+          { name: "implementation_runner", label: "Implementation runner", default: "codex", required: true, choices: ["codex", "claude"] },
+          { name: "review_runner", label: "Review runner", default: "claude", required: true, choices: ["codex", "claude"] },
+          { name: "context", label: "Extra context", default: "", required: false, choices: [] },
+        ],
+      } : workflow),
+    };
+    render(<NewWorkflowPage config={configured} />);
+    const workflow = screen.getByRole("combobox", { name: "Workflow definition" });
+    await user.selectOptions(workflow, "implementation-review-codex");
+    expect(screen.getByText("Workflow inputs")).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Implementation runner" }), "claude");
+    expect(screen.getByRole("combobox", { name: "Review runner" })).toHaveValue("claude");
+    await user.selectOptions(workflow, config.workflows[0].id);
+    expect(screen.queryByText("Workflow inputs")).not.toBeInTheDocument();
+    await user.selectOptions(workflow, "implementation-review-codex");
+    expect(screen.getByRole("combobox", { name: "Implementation runner" })).toHaveValue("codex");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Implementation runner" }), "claude");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Review runner" }), "codex");
+    await user.type(screen.getByRole("textbox", { name: "Extra context" }), "Check migrations");
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Create WorkOrder" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
+    const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body)).inputs).toEqual({
+      implementation_runner: "claude", review_runner: "codex", context: "Check migrations",
+    });
   });
 
   it("restores a prompt after unmounting and remounting", async () => {

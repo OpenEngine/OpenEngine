@@ -213,7 +213,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -247,6 +247,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         work_orders=work_orders,
         credential_store=MagicMock(),
         concierge_provider=provider or FakeACPProvider(),
+        graph_runtime=graph_runtime,
     ), capabilities, slack_store
 
 
@@ -1482,3 +1483,103 @@ def test_checked_in_slack_repository_is_current_checkout():
 
     config = tomllib.loads((Path(__file__).resolve().parents[1] / "engine.toml").read_text())
     assert config["work_orders"]["repository"] == "."
+
+
+@pytest.mark.parametrize("ending", ("finished", "human_review", "failed"))
+@pytest.mark.parametrize("before_row", (False, True))
+def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, before_row):
+    from starlette.testclient import TestClient
+    from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+    from engine.runtime import WorkflowCatalog
+    from engine.runtime.config import load_engine_config
+    from langgraph.graph import START, END, StateGraph
+    from pathlib import Path
+
+    configured = load_engine_config(Path(__file__).resolve().parents[1] / "engine.toml")
+    assert configured.config.work_orders.workflow == "implementation-review-rerank"
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {"received": state["inputs"]})
+    builder.add_edge(START, "work")
+    if ending == "human_review":
+        from engine.graph_runtime_langgraph.components import HumanReviewNode
+        builder.add_node("decision", HumanReviewNode())
+        builder.add_edge("work", "decision")
+        builder.add_edge("decision", END)
+    elif ending == "failed":
+        def fail(state):
+            raise RuntimeError("review service unavailable")
+        builder.add_node("failure", fail)
+        builder.add_edge("work", "failure")
+        builder.add_edge("failure", END)
+    else:
+        builder.add_edge("work", END)
+    graph = graph_workflow(
+        builder, id="implementation-review-rerank", name="Implementation review rerank",
+        inputs=(WorkflowInput("implementation_runner", "Implementation runner", "codex"),
+                WorkflowInput("review_runner", "Review runner", "claude")),
+    )
+    # Force the graph to reach its ending before start() returns: notifications
+    # must survive events arriving before the WorkOrder row/origin is saved.
+    from contextlib import asynccontextmanager
+    from engine.graph_runtime import RunStatus
+
+    @asynccontextmanager
+    async def runtime_before_row():
+        async with sqlite_runtime((graph,), tmp_path / "graph") as runtime:
+            start = runtime.start
+            async def start_and_wait(*args, **kwargs):
+                run = await start(*args, **kwargs)
+                async with asyncio.timeout(10):
+                    while (await runtime.snapshot(run.run_id)).status is RunStatus.RUNNING:
+                        await asyncio.sleep(0.01)
+                return await runtime.snapshot(run.run_id)
+            if before_row:
+                runtime.start = start_and_wait
+            yield runtime
+
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications, configured.config.work_orders,
+        WorkflowCatalog.from_definitions((), (graph,)), provider=provider,
+        graph_runtime=runtime_before_row(),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        result = provider.clients[0].result
+        assert not result.get("isError"), result
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        assert str(runs[0].workflow_id) == graph.graph_id
+        assert runs[0].origin.thread_id == "1"
+        snapshot = client.get(f"/graph/api/runs/{runs[0].run_id}").json()
+        assert snapshot["values"]["inputs"] == {
+            "implementation_runner": "codex", "review_runner": "claude",
+        }
+        expected = {
+            "finished": "Work order finished.",
+            "human_review": "Review complete and ready for your decision.",
+            "failed": "Work order failed: review service unavailable",
+        }[ending]
+        async def wait_for_notification():
+            async with asyncio.timeout(10):
+                while not any(message.text == expected for _, message, _ in communications.posts):
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_for_notification)
+        notifications = [
+            (channel, message, thread) for channel, message, thread in communications.posts
+            if message.text == expected
+        ]
+        assert len(notifications) == 1
+        channel, message, thread = notifications[0]
+        assert (channel, thread) == ("C", "1")
+        assert message.mention == ("" if ending == "finished" else "U")
+        assert any(str(runs[0].run_id) in link.url for link in message.links)
+        assert any(message.text == "*work* started." for _, message, _ in communications.posts)
+    assert any(message.links for _, message, _ in communications.posts)

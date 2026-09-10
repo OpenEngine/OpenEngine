@@ -22,8 +22,8 @@ import type { Page } from "@playwright/test";
 
 import { expect, shot, test, type Script } from "./harness";
 
-/** What the dropdown calls the graph, and what the runner-less form promises. */
-const WORKFLOW = "[BETA] Implementation review (codex)";
+/** What the workflow dropdown calls the graph. */
+const WORKFLOW = "[BETA] Implementation review rerank";
 const TASK = "Add a greeting file to the repository.";
 const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";
@@ -246,7 +246,7 @@ async function graphRun(page: Page, runUrl: string) {
   return response.json();
 }
 
-test("@beta a graph workflow is offered, and does not ask for a runner", async ({
+test("@beta a graph workflow accepts independent stage runners", async ({
   page,
   engine,
 }, testInfo) => {
@@ -258,9 +258,43 @@ test("@beta a graph workflow is offered, and does not ask for a runner", async (
     page.getByLabel("Workflow definition").getByRole("option", { name: WORKFLOW }),
   ).toHaveCount(1);
   await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
-  // The graph names the agent it runs, so there is nothing to choose.
-  await expect(page.getByLabel("Implementation runner")).toHaveCount(0);
+  const implementation = page.getByLabel("Implementation runner");
+  const review = page.getByLabel("Review runner");
+  await expect(implementation).toHaveValue("codex");
+  await expect(review).toHaveValue("claude");
+  await implementation.selectOption("claude");
+  await expect(review).toHaveValue("claude");
+  await review.selectOption("codex");
+  await expect(implementation).toHaveValue("claude");
+  await page.getByText("Workflow inputs", { exact: true }).click();
+  await expect(implementation).toBeHidden();
+  await expect(review).toBeHidden();
+  await page.getByText("Workflow inputs", { exact: true }).click();
+  await expect(implementation).toHaveValue("claude");
+  await expect(review).toHaveValue("codex");
   await shot(page, testInfo, "1 the beta choice");
+
+  await page.getByLabel("Repository").fill(engine.repository);
+  await page.getByLabel("Task prompt").fill(TASK);
+  await page.getByRole("button", { name: "Create WorkOrder" }).click();
+  await expect(page).toHaveURL(/\/runs\/run-/);
+  const runUrl = new URL(page.url()).pathname;
+  await expect.poll(async () => (await graphRun(page, runUrl)).values?.review, {
+    timeout: 60_000,
+  }).toEqual([]);
+  const run = await graphRun(page, runUrl);
+  expect(run.values.inputs).toEqual({
+    implementation_runner: "claude",
+    review_runner: "codex",
+  });
+  await openConversation(page, runUrl);
+  await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("claude");
+  await page.getByLabel("Runner", { exact: true }).selectOption("codex");
+  await expect.poll(async () =>
+    (await graphRun(page, runUrl)).runnerOverrides?.implementation ?? "codex"
+  ).toBe("codex");
+  await page.reload();
+  await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("codex");
 });
 
 test("@beta a graph WorkOrder provisions a checkout and runs its agents", async ({

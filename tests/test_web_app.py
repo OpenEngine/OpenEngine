@@ -5819,3 +5819,53 @@ def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
     assert refused.status_code == 400
     assert graph.status_code == 503
     assert "read-only file system" in caplog.text
+
+
+@pytest.mark.parametrize("values, status", [
+    ({"implementation_runner": "claude", "review_runner": "codex"}, 201),
+    ({}, 201),
+    ({"review_runner": "unknown"}, 400),
+    ({"review_runner": ""}, 400),
+    ({"review_runner": 42}, 400),
+    ({"undeclared": "value"}, 400),
+    ([], 400),
+])
+def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, status):
+    from dataclasses import dataclass
+    from engine.graph_runtime.inputs import WorkflowInput
+
+    @dataclass(frozen=True)
+    class InputGraph(ScriptedGraph):
+        inputs: tuple[WorkflowInput, ...] = (
+            WorkflowInput("implementation_runner", "Implementation runner", "codex", True, ("codex", "claude")),
+            WorkflowInput("review_runner", "Review runner", "claude", True, ("codex", "claude")),
+        )
+
+    graph = InputGraph(
+        GraphId("inputs"), "Inputs",
+        (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+    )
+    app, runtime = _graph_app(InMemoryStateStore(), graph)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                config = (await client.get("/api/config")).json()
+                offered = next(item for item in config["workflows"] if item["id"] == "inputs")
+                assert offered["inputs"][0]["choices"] == ["codex", "claude"]
+                response = await client.post("/api/runs", json={
+                    "workflowId": "inputs", "repository": ".", "prompt": "Task",
+                    "inputs": values,
+                })
+                assert response.status_code == status
+                if status == 201:
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    assert snapshot.values["inputs"] == {
+                        "implementation_runner": "codex", "review_runner": "claude", **values,
+                    }
+                else:
+                    assert (await client.get("/api/runs")).json()["runs"] == []
+
+    asyncio.run(scenario())

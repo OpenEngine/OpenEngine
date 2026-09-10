@@ -12,7 +12,7 @@ channel = "C0BUZP7GR0V"
 # docs/work-orders-from-slack.md for the Slack app side of it.
 [work_orders]
 repository = "."
-workflow = "implementation-review-v1"
+workflow = "implementation-review-rerank"
 
 [orchestrator]
 host = "127.0.0.1:7233"

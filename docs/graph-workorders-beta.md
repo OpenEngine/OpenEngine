@@ -33,13 +33,15 @@ underneath can do, which is the reason the second one exists:
 
 ## What happens when you pick one
 
-1. You choose a `[BETA]` entry, type your task and repository, and press
-   create.
-2. The web server hands the task and the repository to the graph engine and
-   asks it to start that graph. The agent is not a separate choice here: there
-   is one `[BETA]` entry per agent (`(codex)`, `(claude)`), so picking the
-   entry is picking the agent — which is why the form stops asking you which
-   runner to use as soon as you select one.
+1. You choose a `[BETA]` entry, type your task and repository, and expand
+   **Workflow inputs** to fill in any declared fields. Implementation workflows
+   offer independent **Implementation runner** and **Review runner** dropdowns:
+   choose Codex or Claude for either stage, including the same runner for both.
+   The workflow is `implementation-review-rerank`, with Codex implementation
+   and Claude review by default. It is also the configured Slack workflow.
+2. The web server validates the inputs and hands them, the task, and the
+   repository to the graph engine. Naming and reranking use the implementation
+   runner; all review facets use the review runner and its corresponding models.
 3. The graph engine gives the run an id, and the WorkOrder you see is saved
    under that same id — so both halves are talking about the same run.
 4. You land on the WorkOrder page, which shows the task, the repository and
@@ -151,7 +153,7 @@ The server **does not start**. The log says which graph it was and what was
 wrong with it:
 
 ```
-[BETA] workflow 'implementation-review-codex' does not compile, so this server
+[BETA] workflow 'implementation-review-rerank' does not compile, so this server
 will not start: Graph must have an entrypoint: add at least one edge from START
 ```
 
@@ -171,3 +173,31 @@ run one.
 Then this deployment's `workflows` directory holds no graph workflows, so no
 graph engine was started and there is nothing to offer. That is deliberate: an
 entry nobody could start is worse than no entry at all.
+
+## Declaring inputs in a workflow
+
+Pass `inputs` to either spelling of `graph_workflow`. Each `WorkflowInput`
+(imported from `engine.graph_runtime_langgraph`) declares a `name`, `label`,
+optional `default`, `required` flag, and optional tuple of `choices`. Fields
+with choices render as dropdowns; other fields accept text. For example:
+
+```python
+inputs=(WorkflowInput(
+    "review_runner", "Review runner", default="claude", required=True,
+    choices=("codex", "claude"),
+),)
+```
+
+WorkOrder creation accepts an `inputs` object in `POST /api/runs`, applies
+omitted defaults, and rejects unknown fields or invalid values before starting
+execution. Nodes read these values from `state["inputs"]`; they persist with
+normal graph checkpoints. Workflows without declarations keep their existing
+creation behavior.
+
+Runner inputs are resolved once when the runtime creates the run. Agent nodes
+bind a creation field through `graph_node_runner_input`; its value initializes
+that node's persisted runner override. The conversation Runner control displays
+and edits the same override. Returning to the workflow's original runner clears
+the override, and retry uses that runner even when the original creation input
+was different. Nodes can implement `_for_runner` to configure models and MCP
+bindings for the resolved runner, including approval recovery.

@@ -35,7 +35,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
@@ -118,6 +118,7 @@ from engine.domain import (
     project_id_for_instance,
     workstreams_by_milestone,
 )
+from engine.graph_runtime.inputs import resolve_inputs
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -1204,6 +1205,55 @@ def create_app(
                 ),
             )
 
+    pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
+    graph_notification_lock = asyncio.Lock()
+
+    async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
+        """Report lifecycle events without making delivery failure fail the graph."""
+        text = ""
+        mention = False
+        if state.origin is None:
+            return
+        topology = (
+            surface.runtime.topology(GraphId(str(state.workflow_id)))
+            if surface.runtime else None
+        )
+        node = topology.node(event.node_id) if topology and event.node_id else None
+        label = node.name if node else str(event.node_id or "Workflow")
+        if event.kind is EventKind.NODE_STARTED:
+            text = f"*{label}* started."
+        elif event.kind is EventKind.APPROVAL_REQUESTED:
+            if event.payload.get("toolName") == "human_review":
+                text = "Review complete and ready for your decision."
+            else:
+                text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
+            mention = True
+        elif event.kind is EventKind.RUN_FAILED:
+            text = f"Work order failed: {event.payload.get('error', 'Unknown error')}"
+            mention = True
+        elif event.kind is EventKind.RUN_FINISHED:
+            text = "Work order finished."
+        if text:
+            link = run_notifier.work_order_link(state)
+            await run_notifier.announce(
+                state, text, links=(link,) if link else (), mention=mention,
+            )
+
+    async def graph_notifications(event: RuntimeEvent) -> None:
+        if event.kind not in (
+            EventKind.NODE_STARTED, EventKind.APPROVAL_REQUESTED,
+            EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
+        ):
+            return
+        async with graph_notification_lock:
+            state = await session.state_store.load(event.run_id)
+            if state is None:
+                pending_graph_notifications.setdefault(event.run_id, []).append(event)
+                return
+            for pending in pending_graph_notifications.pop(event.run_id, []):
+                await notify_graph_event(state, pending)
+            await notify_graph_event(state, event)
+
     async def graph_event(event: RuntimeEvent) -> None:
         """Everything the graph engine says, kept where two readers can see it.
 
@@ -1218,6 +1268,7 @@ def create_app(
         positions inside the graph, and a row has nowhere to put it.
         """
         await graph_events.append(event)
+        await graph_notifications(event)
         phase = GRAPH_EVENT_PHASES.get(event.kind)
         name = _graph_workorder_name(event.payload.get("values"))
         if phase is None and not name:
@@ -1541,11 +1592,7 @@ def create_app(
                 # are here -- see `offered_graphs` -- because an entry nobody
                 # could run would be a choice that fails after it was made.
                 #
-                # `kind` is what each entry belongs to, said rather than left to
-                # be guessed. The form reads it: a graph names its own agent, so
-                # the runner field is not shown for one, and a client that
-                # worked that out from the empty version would break the day a
-                # graph gets versioned.
+                # Graph creation fields come from the workflow's declarations.
                 "workflows": [
                     {
                         "id": str(definition.workflow_id),
@@ -1561,6 +1608,10 @@ def create_app(
                         "name": f"{BETA} {graph.name}",
                         "version": "",
                         "kind": "graph",
+                        **(
+                            {"inputs": [asdict(item) for item in graph.inputs]}
+                            if getattr(graph, "inputs", ()) else {}
+                        ),
                     }
                     for graph in offered_graphs().values()
                 ],
@@ -1745,11 +1796,13 @@ def create_app(
         runtime: GraphRuntime,
         graph: GraphWorkflow,
         *,
+        inputs: dict[str, str],
         prompt: str,
         repository: str,
         workstream_id: WorkstreamId | None,
         milestone_id: MilestoneId | None,
-    ) -> JSONResponse:
+        origin: RunOrigin | None = None,
+    ) -> RunState:
         """Hand a `[BETA]` WorkOrder to the graph engine and keep a row for it.
 
         What actually starts the work is one call: the graph engine is given
@@ -1764,10 +1817,7 @@ def create_app(
         are talking about the same run and nothing has to translate between two
         sets of ids.
 
-        No runner is passed on, because a graph already names the agent it runs
-        -- picking "Implementation review (claude)" *is* picking Claude, which
-        is why there is one entry per agent in the dropdown rather than a
-        separate choice, and why the form hides the runner field for one.
+        Declared inputs are validated before starting and carried in graph state.
 
         The engine is an argument rather than something read here, because
         having one is what made this graph offerable in the first place: a
@@ -1776,7 +1826,11 @@ def create_app(
         """
         snapshot = await runtime.start(
             GraphId(str(graph.graph_id)),
-            {"task": prompt, "repository": repository},
+            {
+                "task": prompt,
+                "repository": repository,
+                **({"inputs": inputs} if inputs else {}),
+            },
         )
         if approval_policy.auto_approve:
             topology = runtime.topology(GraphId(str(graph.graph_id)))
@@ -1795,8 +1849,13 @@ def create_app(
             phase=GRAPH_PHASES[snapshot.status],
             prompt=prompt,
             repository=repository,
+            origin=origin,
         )
         await session.state_store.save(state)
+        # Nodes may publish before start() returns and before the origin exists.
+        async with graph_notification_lock:
+            for event in pending_graph_notifications.pop(state.run_id, []):
+                await notify_graph_event(state, event)
         # A very short run can be over before the row above exists, and the
         # ending it announced would then have had nothing to land on -- leaving
         # a WorkOrder that claims to be working forever. So the engine is asked
@@ -1816,9 +1875,7 @@ def create_app(
                 failure_reason=latest.error,
             )
             await session.state_store.save(state)
-        run = await run_reader.get(state.run_id)
-        assert run is not None
-        return JSONResponse(_run_json(run), status_code=201)
+        return state
 
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
@@ -1836,9 +1893,7 @@ def create_app(
         if definition is None and graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
         runner_name = str(body.get("runner") or workflow_executor.default_runner)
-        # A graph names the agent it runs, so there is no runner to check and
-        # none is sent: the form does not offer the field for one. Validating
-        # it anyway would refuse a WorkOrder over a value nothing reads.
+        # Graphs use their declared inputs instead of the step runner field.
         if graph is None and runner_name not in workflow_executor.runners:
             return _error(f"unknown workflow runner: {runner_name}", 400)
         workstream_id = (
@@ -1872,14 +1927,24 @@ def create_app(
             # `offered_graphs` only answers with a graph while the engine is
             # running, so this cannot be `None` here.
             assert surface.runtime is not None
-            return await start_graph_run(
+            try:
+                inputs = resolve_inputs(
+                    getattr(graph, "inputs", ()), body.get("inputs", {})
+                )
+            except ValueError as error:
+                return _error(str(error), 400)
+            state = await start_graph_run(
                 surface.runtime,
                 graph,
+                inputs=inputs,
                 prompt=prompt,
                 repository=repository,
                 workstream_id=workstream_id,
                 milestone_id=direct_milestone_id,
             )
+            run = await run_reader.get(state.run_id)
+            assert run is not None
+            return JSONResponse(_run_json(run), status_code=201)
 
         state = await start_step_run(
             prompt=prompt,
@@ -2876,18 +2941,28 @@ def create_app(
     async def concierge_create_workorder(
         origin: RunOrigin, repository: str, prompt: str,
     ) -> tuple[str, str]:
-        definition = _mentioned_workflow()
-        if definition is None:
-            raise RuntimeError("no step workflow is configured under `work_orders.workflow`")
-        runner_name = work_orders.runner or workflow_executor.default_runner
-        if runner_name not in workflow_executor.runners:
-            raise RuntimeError(f"unknown runner: {runner_name}")
         ready = asyncio.Event()
-        state = await start_step_run(
-            prompt=prompt, repository=repository,
-            workflow_id=definition.workflow_id, definition=definition,
-            runner_name=runner_name, origin=origin, ready=ready,
-        )
+        graph = offered_graphs().get(work_orders.workflow)
+        if graph is not None:
+            assert surface.runtime is not None
+            state = await start_graph_run(
+                surface.runtime, graph,
+                inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+                prompt=prompt, repository=repository,
+                workstream_id=None, milestone_id=None, origin=origin,
+            )
+        else:
+            definition = _mentioned_workflow()
+            if definition is None:
+                raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+            runner_name = work_orders.runner or workflow_executor.default_runner
+            if runner_name not in workflow_executor.runners:
+                raise RuntimeError(f"unknown runner: {runner_name}")
+            state = await start_step_run(
+                prompt=prompt, repository=repository,
+                workflow_id=definition.workflow_id, definition=definition,
+                runner_name=runner_name, origin=origin, ready=ready,
+            )
         link = run_notifier.work_order_link(state)
         _pending_announcements.append((
             origin,

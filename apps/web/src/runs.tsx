@@ -298,12 +298,9 @@ export function NewWorkflowPage({
   const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  // A graph workflow — the [BETA] kind — names the agent it runs, so there is
-  // one entry per agent and nothing left for a runner field to decide. Asking
-  // anyway would be a control that looks like a choice and is not: the server
-  // reads no runner for these.
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const selected = config.workflows.find((workflow) => workflow.id === workflowId);
-  const picksItsOwnAgent = selected?.kind === "graph";
+  const isGraphWorkflow = selected?.kind === "graph";
 
   useEffect(() => {
     if (prompt) window.localStorage.setItem(WORKFLOW_DRAFT_KEY, prompt);
@@ -321,7 +318,11 @@ export function NewWorkflowPage({
           workflowId,
           prompt,
           repository,
-          ...(picksItsOwnAgent ? {} : { runner }),
+          ...(isGraphWorkflow ? {
+            inputs: Object.fromEntries((selected?.inputs ?? []).map((input) => [
+              input.name, inputValues[input.name] ?? input.default,
+            ])),
+          } : { runner }),
           ...(milestone
             ? { milestoneId: milestone.milestoneId, workstreamId: workstreamId || undefined }
             : {}),
@@ -355,7 +356,10 @@ export function NewWorkflowPage({
           <select
             required
             value={workflowId}
-            onChange={(event) => setWorkflowId(event.target.value)}
+            onChange={(event) => {
+              setWorkflowId(event.target.value);
+              setInputValues({});
+            }}
           >
             {/* The version is only shown when there is one. A [BETA] graph
                 workflow has no version yet, and "name · " reads like something
@@ -392,12 +396,33 @@ export function NewWorkflowPage({
             placeholder="owner/repository or local path"
           />
         </label>
-        {picksItsOwnAgent ? (
-          <p className="form-note">
-            This workflow runs the agent named in its own definition, so there is no
-            runner to choose.
-          </p>
-        ) : (
+        {!!selected?.inputs?.length && (
+          <details className="workflow-inputs" open>
+            <summary>Workflow inputs</summary>
+            {selected.inputs.map((input) => (
+              <label key={input.name}>
+                <span>{input.label}</span>
+                {input.choices.length ? (
+                  <select
+                    required={input.required}
+                    value={inputValues[input.name] ?? input.default}
+                    onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
+                  >
+                    {!input.default && <option value="">Select…</option>}
+                    {input.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    required={input.required}
+                    value={inputValues[input.name] ?? input.default}
+                    onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
+                  />
+                )}
+              </label>
+            ))}
+          </details>
+        )}
+        {!isGraphWorkflow && (
           <label>
             <span>Implementation runner</span>
             <select
@@ -441,15 +466,14 @@ export function NewWorkflowPage({
           </a>
           <button
             className="btn btn-primary"
-            disabled={submitting || (!runner && !picksItsOwnAgent) || !workflowId}
+            disabled={submitting || (!runner && !isGraphWorkflow) || !workflowId}
             type="submit"
           >
             {submitting ? "Creating…" : milestone ? "Create task" : "Create WorkOrder"}
           </button>
         </div>
         <p className="form-note">
-          The implementation starts after the WorkOrder is created. Reviewer execution is not
-          available yet.
+          The workflow starts after the WorkOrder is created.
         </p>
       </form>
     </main>

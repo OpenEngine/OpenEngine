@@ -177,7 +177,7 @@ already does for a step run. As of this writing:
 
 | state | passes? |
 | --- | --- |
-| the graph is offered, and the form does not ask for a runner | yes |
+| the graph offers independent stage runners and passes the choices to execution | yes |
 | the run provisions a checkout and both agents work in it | yes |
 | the workflow tools reach the agent in a session it accepts | yes |
 | the WorkOrder page shows the run's stages | no |

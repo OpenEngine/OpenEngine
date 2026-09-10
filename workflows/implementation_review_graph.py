@@ -10,6 +10,7 @@ squashes noise and posts the survivors as PR comments with lineage.
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from engine.adapters.workspace_provider.git_worktree import (
@@ -18,6 +19,7 @@ from engine.adapters.workspace_provider.git_worktree import (
 )
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
+    WorkflowInput,
     State,
     TerminalMcpServer,
     agent_registry,
@@ -139,6 +141,45 @@ RERANKER_PROMPT = (
 # Helpers
 # ---------------------------------------------------------------------------
 
+class _RunnerInput:
+    """Resolve the stage's runner per invocation, including its MCP identity."""
+
+    graph_node_runner_input = "implementation_runner"
+
+    def _for_runner(self, runner: str) -> ACPNode:
+        config = self.session_config
+        if isinstance(self, ReviewNode):
+            facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
+            model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
+            config = _with_model(config, model)
+        return replace(
+            self,
+            agent=runner,
+            session_config=config,
+            mcp_server_bindings=tuple(
+                replace(binding, agent_id=runner)
+                if isinstance(binding, TerminalMcpServer) else binding
+                for binding in self.mcp_server_bindings
+            ),
+        )
+
+
+class InputImplementationNode(_RunnerInput, ACPNode):
+    pass
+
+
+class InputNameNode(_RunnerInput, NameNode):
+    pass
+
+
+class InputReviewNode(_RunnerInput, ReviewNode):
+    graph_node_runner_input = "review_runner"
+
+
+class InputRerankerNode(_RunnerInput, RerankerNode):
+    pass
+
+
 def _with_model(
     base: Mapping[str, object] | None, model: str
 ) -> dict[str, object]:
@@ -168,7 +209,7 @@ def pipeline(
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
 ) -> StateGraph:
-    """Implement with `runner`, then review with the other provider.
+    """Use declared stage inputs, defaulting to `runner` and the other provider.
 
     The three keyword arguments are the only things a deployment or a test has
     business replacing: where the checkouts are made, which agents answer, and
@@ -185,7 +226,7 @@ def pipeline(
     )
     builder.add_node(
         NAMING,
-        NameNode(
+        InputNameNode(
             agent=runner,
             registry=agents,
             cwd=checkout,
@@ -194,7 +235,7 @@ def pipeline(
     )
     builder.add_node(
         IMPLEMENTATION,
-        ACPNode(
+        InputImplementationNode(
             agent=runner,
             registry=agents,
             prompt=lambda state: IMPLEMENTATION_PROMPT.format(
@@ -225,7 +266,7 @@ def pipeline(
         node_name = _review_node_name(facet.id)
         builder.add_node(
             node_name,
-            ReviewNode(
+            InputReviewNode(
                 facet=facet.id,
                 agent=reviewer,
                 registry=agents,
@@ -269,7 +310,7 @@ def pipeline(
             )
         return RERANKER_PROMPT.format(
             reviewer_count=len(REVIEW_FACETS),
-            runner=reviewer,
+            runner=state.get("inputs", {}).get("review_runner", reviewer),
             findings_sections="".join(sections),
             pr_url=state.get("pr_url", ""),
             task=state.get("task", ""),
@@ -277,7 +318,7 @@ def pipeline(
 
     builder.add_node(
         RERANKER,
-        RerankerNode(
+        InputRerankerNode(
             agent=runner,
             registry=agents,
             prompt=_reranker_prompt,
@@ -324,8 +365,10 @@ def pipeline(
     return builder
 
 
-#: One graph per agent. Picking a runner is picking one of these.
-RUNNERS = ("codex", "claude")
+#: Runner choices for the implementation and review stages.
+RUNNER_CHOICES = ("codex", "claude")
+# The loader rebuilds one default graph with deployment session configuration.
+RUNNERS = ("codex",)
 
 
 def graph_for(
@@ -335,7 +378,7 @@ def graph_for(
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
 ) -> GraphWorkflow:
-    """This workflow, for one agent, named the way everything else names it."""
+    """Build the workflow with the requested initial implementation runner."""
     return graph_workflow(
         pipeline(
             runner,
@@ -343,9 +386,20 @@ def graph_for(
             agents=agents,
             session_config=session_config,
         ),
-        id=f"implementation-review-{runner}",
-        name=f"Implementation review ({runner})",
+        id="implementation-review-rerank",
+        name="Implementation review rerank",
+        inputs=(
+            WorkflowInput(
+                "implementation_runner", "Implementation runner",
+                default=runner, required=True, choices=RUNNER_CHOICES,
+            ),
+            WorkflowInput(
+                "review_runner", "Review runner",
+                default={"codex": "claude", "claude": "codex"}[runner],
+                required=True, choices=RUNNER_CHOICES,
+            ),
+        ),
     )
 
 
-workflow = tuple(graph_for(runner) for runner in RUNNERS)
+workflow = graph_for("codex")

@@ -64,6 +64,7 @@ from engine.graph_runtime_langgraph.store import (
     SqliteGraphRuntimeStore,
 )
 from engine.graph_runtime_langgraph.terminal_mcp import TerminalMcpServer
+from engine.graph_runtime.inputs import WorkflowInput
 from engine.graph_runtime_langgraph.workflows import (
     GraphWorkflow,
     State,
@@ -82,6 +83,7 @@ __all__ = [
     "DescribesItself",
     "GraphRuntimeStore",
     "GraphWorkflow",
+    "WorkflowInput",
     "HumanReviewNode",
     "InMemoryGraphRuntimeStore",
     "LangGraphDefinition",

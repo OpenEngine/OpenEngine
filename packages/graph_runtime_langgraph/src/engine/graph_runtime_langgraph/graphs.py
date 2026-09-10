@@ -124,6 +124,23 @@ class LangGraphDefinition:
         ]
         return nodes[0] if len(nodes) == 1 else None
 
+    def initial_runner_overrides(self, values: Any) -> dict[NodeId, str]:
+        """Resolve creation inputs once into the runtime's runner selections."""
+        inputs = values.get("inputs", {})
+        overrides = {}
+        for node in self.graph.get_graph().nodes.values():
+            described = _described(node)
+            key = getattr(described, "graph_node_runner_input", "")
+            runner = inputs.get(key) if key else None
+            default = getattr(described, "graph_node_runner", "")
+            if runner is not None:
+                supported = getattr(described, "graph_node_runners", ())
+                if runner not in (*supported, default):
+                    raise ValueError(f"unsupported runner for {node.id}: {runner}")
+                if runner != default:
+                    overrides[NodeId(node.id)] = runner
+        return overrides
+
     @cached_property
     def topology(self) -> GraphTopology:
         """The graph as a client is shown it.

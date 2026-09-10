@@ -1428,6 +1428,8 @@ select:disabled { cursor: default; }
 /* --- forms --------------------------------------------------------------- */
 
 .form { display: grid; gap: 22px; max-width: 720px; padding: 4px var(--gutter) 56px; }
+.workflow-inputs summary { cursor: pointer; font-weight: 600; }
+.workflow-inputs label { margin-top: 16px; }
 .form label { display: grid; gap: 9px; font-size: 14px; }
 .form label > span:first-child { color: var(--ink-soft); font-weight: 600; }
 .form input, .form select, .form textarea {

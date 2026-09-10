@@ -47,7 +47,7 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 CONFIG = Path(__file__).resolve().parents[1] / "engine.toml"
 
 STARTABLE = "implementation-review-v1"
-GRAPHS = ("implementation-review-codex", "implementation-review-claude")
+GRAPHS = ("implementation-review-rerank",)
 
 
 class RecordingWorkspaceProvider:
@@ -107,11 +107,9 @@ def test_the_repository_offers_the_same_workflow_on_either_engine() -> None:
 
     assert [str(one.graph_id) for one in loaded.graphs] == list(GRAPHS)
     assert [one.name for one in loaded.graphs] == [
-        "Implementation review (codex)",
-        "Implementation review (claude)",
+        "Implementation review rerank",
     ]
-    # One per runner, because an agent node names the agent it runs. Choosing a
-    # runner means choosing a graph, not filling in a field on one.
+    # One graph exposes both runner selections as creation inputs.
     assert all(isinstance(one, GraphWorkflow) for one in loaded.graphs)
 
 
@@ -375,12 +373,11 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
 
     assert [one["id"] for one in offered] == [STARTABLE, *GRAPHS]
     assert [one["name"] for one in offered if one["id"] in GRAPHS] == [
-        "[BETA] Implementation review (codex)",
-        "[BETA] Implementation review (claude)",
+        "[BETA] Implementation review rerank",
     ]
     # A graph has no version, and the client leaves the version out rather than
     # printing a trailing separator.
-    assert [one["version"] for one in offered if one["id"] in GRAPHS] == ["", ""]
+    assert [one["version"] for one in offered if one["id"] in GRAPHS] == [""]
 
 
 # --- and nothing falls over --------------------------------------------------
@@ -402,3 +399,84 @@ def test_every_composition_root_still_starts(
     # `engine-web` does before it serves anything, so building it is the test.
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
     assert build_app() is not None
+
+
+@pytest.mark.parametrize("implementation", ("codex", "claude"))
+@pytest.mark.parametrize("review", ("codex", "claude"))
+def test_stage_runners_configure_models_and_mcp_identity(
+    implementation, review,
+) -> None:
+    module = definition_module()
+    graph = module.graph_for("codex")
+    assert [item.name for item in graph.inputs] == [
+        "implementation_runner", "review_runner",
+    ]
+    nodes = nodes_of(graph.builder)
+    observed = [
+        nodes[name]._for_runner(runner)
+        for name, runner in (
+            ("implementation", implementation), ("review-security", review),
+            ("review-bugs", review), ("reranker", implementation),
+        )
+    ]
+    assert [node.agent for node in observed] == [implementation, review, review, implementation]
+    for node in observed:
+        assert all(binding.agent_id == node.agent for binding in node.mcp_server_bindings)
+    assert observed[1].session_config["model"] == module.REVIEW_MODELS[review]["elevated"]
+    assert observed[2].session_config["model"] == module.REVIEW_MODELS[review]["default"]
+
+
+def test_input_runner_can_be_reset_to_workflow_default_and_retried(tmp_path):
+    """Run the real ACP node and persist the selection across a runtime restart."""
+    from dataclasses import replace
+    from engine.graph_runtime import EventLog, NodeId
+    from engine.graph_runtime_langgraph import State, graph_workflow
+    from langgraph.graph import START, END, StateGraph
+    from langgraph_acp import ACPAgentRegistry
+    from test_graph_runtime_langgraph_acp import registry, until
+
+    module = definition_module()
+    provider = registry(tmp_path).resolve("stub")
+    agents = ACPAgentRegistry([
+        replace(provider, name="codex"), replace(provider, name="claude"),
+    ])
+    # Keep the repository's real input-aware node, replacing only the external
+    # agent process and the checkout/MCP dependencies this test does not need.
+    node = replace(
+        nodes_of(module.pipeline("codex", agents=agents))["implementation"],
+        cwd=str(tmp_path), mcp_server_bindings=(),
+    )
+    builder = StateGraph(State)
+    builder.add_node("implementation", node)
+    builder.add_edge(START, "implementation")
+    builder.add_edge("implementation", END)
+    graph = graph_workflow(builder, id="input-retry", name="Input retry")
+    implementation = NodeId("implementation")
+
+    async def scenario():
+        async with sqlite_runtime((graph,), tmp_path / "runtime") as runtime:
+            log = EventLog()
+            runtime.observe(log.append)
+            run = await runtime.start(graph.graph_id, {
+                "inputs": {"implementation_runner": "claude"},
+            })
+            events = await until(log, run.run_id, "run.finished")
+            assert next(e for e in events if e.kind.value == "conversation.started").payload["agent"] == "claude"
+            snapshot = await runtime.snapshot(run.run_id)
+            default = runtime.topology(graph.graph_id).node(implementation).runner
+            assert snapshot.runner_overrides.get(implementation, default) == "claude"
+            point = next(p for p in await runtime.history(run.run_id) if implementation in p.next_nodes)
+            changed = await runtime.set_runner(run.run_id, implementation, "codex")
+            assert changed.runner_overrides.get(implementation, default) == "codex"
+            assert changed.values["inputs"]["implementation_runner"] == "claude"
+
+        async with sqlite_runtime((graph,), tmp_path / "runtime") as runtime:
+            log = EventLog()
+            runtime.observe(log.append)
+            assert (await runtime.snapshot(run.run_id)).runner_overrides == {}
+            await runtime.resume_from(run.run_id, point.checkpoint_id)
+            events = await until(log, run.run_id, "run.finished")
+            assert next(e for e in events if e.kind.value == "conversation.started").payload["agent"] == "codex"
+            assert (await runtime.store.session(run.run_id, "implementation")).agent == "codex"
+
+    asyncio.run(scenario())
