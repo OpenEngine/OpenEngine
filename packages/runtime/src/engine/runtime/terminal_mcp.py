@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import dataclasses
 import json
+import logging
 import secrets
 import shlex
 import sys
@@ -42,6 +43,8 @@ from engine.runtime.step_results import (
     run_failed_from_arguments,
     step_completed_from_arguments,
 )
+
+logger = logging.getLogger(__name__)
 
 TerminalEvent = StepCompleted | RunFailed
 TerminalDelivery = Callable[[TerminalEvent], Awaitable[None]]
@@ -116,7 +119,7 @@ class PostedComment:
     """
 
     repository: str
-    """`owner/repo`, as the pull-request URL spells it."""
+    """Canonical lowercase owner/repo; prefixed with the host outside github.com."""
     pr_number: int
     kind: Literal["issue", "review"]
     """Which of GitHub's two comment id spaces `result.id` was drawn from."""
@@ -451,7 +454,7 @@ class TerminalMcpBroker:
             kind: Literal["issue", "review"] = (
                 "review" if file is not None or in_reply_to_id is not None else "issue"
             )
-            await self._record_comment(pr_url, kind, result)
+            await self._record_comment(kind, result)
             return {
                 "ok": True,
                 "acknowledgement": "comment added",
@@ -544,24 +547,31 @@ class TerminalMcpBroker:
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
 
     async def _record_comment(
-        self, pr_url: str, kind: Literal["issue", "review"], result: CommentResult
+        self, kind: Literal["issue", "review"], result: CommentResult
     ) -> None:
         """Write down a comment that is already posted, if anyone is keeping it.
 
-        Failures here are swallowed rather than reported, unlike everything
-        else in `_repository_call`. The comment exists on the forge by now, so
+        Failures here are logged without failing the tool. The comment exists on the forge by now, so
         the only thing the agent could do with the bad news is call
         `add_comment` again and post it twice.
         """
         if self._comment_recorder is None:
             return
-        pull_request = _github_pull_request(pr_url)
-        if pull_request is None:
-            return
-        repository, number = pull_request
-        with suppress(Exception):
+        try:
+            pull_request = _github_pull_request(result.url)
+            if pull_request is None:
+                logger.warning(
+                    "Could not identify posted comment %s for recording: %s",
+                    result.id, result.url,
+                )
+                return
+            repository, number = pull_request
             await self._comment_recorder(
                 PostedComment(repository, number, kind, result)
+            )
+        except Exception:
+            logger.exception(
+                "Could not record posted comment %s: %s", result.id, result.url
             )
 
     async def _approve_git(
@@ -974,18 +984,31 @@ def _comment_arguments(
 
 
 def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
-    """The `owner/repo` and number a GitHub pull-request URL names.
+    """Identify a PR from the comment URL returned by the source control API.
 
-    `None` for anything that is not one, GitLab's `-/merge_requests/<n>`
-    included. What a record is keyed on is GitHub's id spaces, and a note from
-    another forge cannot be told apart from a GitHub comment that happens to
-    have been given the same number, so it is left out rather than filed under
-    a name that is not its own. Trailing `/files` and a fragment are noise.
+    Preserve github.com's owner/repo keys and namespace Enterprise repositories
+    by authority. Use the returned path to follow renames and normalize casing.
+    GitLab merge-request URLs do not match this path.
     """
-    segments = urlsplit(pr_url).path.strip("/").split("/")
-    if len(segments) < 4 or segments[2] != "pull" or not segments[3].isdigit():
+    parsed = urlsplit(pr_url)
+    if parsed.scheme not in ("https", "http") or not parsed.hostname:
         return None
-    return f"{segments[0]}/{segments[1]}", int(segments[3])
+    segments = parsed.path.strip("/").split("/")
+    if (
+        len(segments) < 4
+        or not all(segments[:2])
+        or segments[2] != "pull"
+        or not segments[3].isdigit()
+    ):
+        return None
+    repository = f"{segments[0]}/{segments[1]}".lower()
+    host = parsed.hostname.lower()
+    port = parsed.port
+    if port is not None and port != (443 if parsed.scheme == "https" else 80):
+        host = f"{host}:{port}"
+    if host != "github.com":
+        repository = f"{host}/{repository}"
+    return repository, int(segments[3])
 
 
 async def _forward_call(

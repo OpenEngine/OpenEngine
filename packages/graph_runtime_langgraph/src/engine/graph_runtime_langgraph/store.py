@@ -131,7 +131,7 @@ class CommentRecord:
     comment_id: int
     """GitHub's id for the comment, unique only within `repository` and `kind`."""
     repository: str
-    """`owner/repo` the pull request belongs to."""
+    """Canonical lowercase owner/repo; prefixed with the host outside github.com."""
     kind: str
     """`issue` or `review`: which of GitHub's two id spaces `comment_id` is in.
 

@@ -877,7 +877,10 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         ("https://github.com/acme/api/pull/42", ("acme/api", 42)),
         ("https://github.com/acme/api/pull/42/files", ("acme/api", 42)),
         ("https://github.com/acme/api/pull/42#issuecomment-9", ("acme/api", 42)),
-        ("https://github.example.com/acme/api/pull/42", ("acme/api", 42)),
+        ("https://github.example.com/acme/api/pull/42", ("github.example.com/acme/api", 42)),
+        ("https://GITHUB.COM/Acme/API/pull/42", ("acme/api", 42)),
+        ("https://github.example.com:8443/acme/api/pull/42", ("github.example.com:8443/acme/api", 42)),
+        ("/acme/api/pull/42", None),
         # Another forge numbers its notes from its own counter, so it is left
         # out rather than filed under a GitHub comment's name.
         ("https://gitlab.com/acme/api/-/merge_requests/7", None),
@@ -893,10 +896,21 @@ def test_a_github_pull_request_is_read_off_the_review_url(
     assert _github_pull_request(pr_url) == expected
 
 
-def test_posted_comments_are_recorded_against_the_change_request() -> None:
+@pytest.mark.parametrize(
+    "host, repository",
+    [
+        ("github.com", "acme/renamed"),
+        ("github.example.com", "github.example.com/acme/renamed"),
+    ],
+)
+def test_posted_comments_are_recorded_against_the_change_request(
+    host: str, repository: str,
+) -> None:
+    comment_url = f"https://{host}/Acme/Renamed/pull/42#issuecomment-123"
+
     class RecordingSourceControl:
         async def add_comment(self, *_arguments: object) -> CommentResult:
-            return CommentResult(123, "https://example.com/comment/123")
+            return CommentResult(123, comment_url)
 
     async def scenario() -> list[PostedComment]:
         recorded: list[PostedComment] = []
@@ -928,17 +942,19 @@ def test_posted_comments_are_recorded_against_the_change_request() -> None:
 
     assert asyncio.run(scenario()) == [
         PostedComment(
-            "acme/api", 42, "issue", CommentResult(123, "https://example.com/comment/123")
+            repository, 42, "issue", CommentResult(123, comment_url)
         )
     ]
 
 
-def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted() -> None:
+def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The comment is on the forge by now; retrying would post it twice."""
 
     class RecordingSourceControl:
         async def add_comment(self, *_arguments: object) -> CommentResult:
-            return CommentResult(123, "https://example.com/comment/123")
+            return CommentResult(123, "https://github.com/Acme/Renamed/pull/42#issuecomment-123")
 
     async def scenario() -> dict[str, object]:
         async def record(_posted: PostedComment) -> None:
@@ -983,3 +999,7 @@ def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted() -> None
     answer = asyncio.run(scenario())
     assert answer["ok"] is True
     assert answer["acknowledgement"] == "comment added"
+
+    assert "Could not record posted comment 123" in caplog.text
+    assert "the store is gone" in caplog.text
+    assert "https://github.com/Acme/Renamed/pull/42#issuecomment-123" in caplog.text
