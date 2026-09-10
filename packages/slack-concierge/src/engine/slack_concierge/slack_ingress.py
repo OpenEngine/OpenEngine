@@ -64,10 +64,21 @@ class SlackIngress:
         if not self._connected():
             log.warning("Slack event ignored: no bot token is configured")
             return Response(status_code=200)
-        accepted = self.accept(payload)
-        return Response(status_code=200 if accepted else 503)
+        result = self.accept(payload)
+        if result is False:
+            return Response(status_code=503)
+        if isinstance(result, tuple) and self._react:
+            channel, ts = result
+            asyncio.create_task(self._fire_react(channel, ts))
+        return Response(status_code=200)
 
-    def accept(self, payload: dict) -> bool:
+    def accept(self, payload: dict) -> bool | tuple[str, str]:
+        """Accept a Slack event payload.
+
+        Returns ``False`` when the queue is full (back-pressure), ``True`` when
+        the event was filtered out or already seen, or ``(channel, ts)`` when a
+        message was enqueued so that the caller can react to it immediately.
+        """
         event = payload.get("event")
         if payload.get("type") != "event_callback" or not isinstance(event, dict):
             return True
@@ -97,17 +108,18 @@ class SlackIngress:
             self._seen.popitem(last=False)
         if self._worker is None:
             self._worker = asyncio.create_task(self._run())
-        return True
+        return (channel, ts)
+
+    async def _fire_react(self, channel: str, ts: str) -> None:
+        try:
+            await self._react(channel, ts, "eyes")
+        except Exception:
+            log.exception("Could not add eyes reaction")
 
     async def _run(self) -> None:
         while True:
             message = await self._queue.get()
             try:
-                if self._react and message.message_ts:
-                    try:
-                        await self._react(message.origin.channel, message.message_ts, "eyes")
-                    except Exception:
-                        log.exception("Could not add eyes reaction")
                 await self.concierge.handle(message)
             except Exception:
                 log.exception("Slack concierge turn failed")

@@ -208,6 +208,12 @@ class SlackCommunications:
                 raise SlackAuthError(f"Slack channel not found: {channel}")
 
     async def add_reaction(self, channel: str, timestamp: str, reaction: str) -> None:
+        """Add an emoji reaction to a message.
+
+        *channel* must be a Slack channel ID (e.g. ``C0123ABC``), not a
+        human-readable name — the Slack ``reactions.add`` endpoint does not
+        resolve names.
+        """
         token = self._credential_store.token()
         if not token:
             raise SlackAuthError(
@@ -229,9 +235,11 @@ class SlackCommunications:
             )
         body = response.json()
         if not body.get("ok") and body.get("error") != "already_reacted":
-            raise SlackAuthError(
-                f"Slack reaction failed: {body.get('error', 'reaction was not added')}"
-            )
+            error = body.get("error", "reaction was not added")
+            hint = ""
+            if error == "missing_scope":
+                hint = " — the workspace may need to be re-authorized to grant reactions:write"
+            raise SlackAuthError(f"Slack reaction failed: {error}{hint}")
 
     async def reply(self, message_id: str, message: str) -> str:
         raise NotImplementedError("Slack notification threads are not supported")

@@ -1321,11 +1321,16 @@ def test_ingress_filters_messages_and_bounds_queue():
     asyncio.run(scenario())
 
 
-def test_ingress_reacts_with_eyes_before_handling():
+def test_ingress_reacts_with_eyes_immediately():
+    """The eyes reaction fires from the webhook handler (not the queue worker),
+    so it is dispatched as soon as the event arrives — even if a previous
+    message is still being handled."""
+    import json
     from engine.slack_concierge import SlackIngress
 
     async def scenario():
         order: list[str] = []
+        handle_gate = asyncio.Event()
         messages = []
 
         class Concierge:
@@ -1334,6 +1339,7 @@ def test_ingress_reacts_with_eyes_before_handling():
             async def handle(self, message):
                 order.append("handle")
                 messages.append(message)
+                await handle_gate.wait()
             async def close(self):
                 pass
 
@@ -1343,23 +1349,48 @@ def test_ingress_reacts_with_eyes_before_handling():
             order.append("react")
             reacted.append((channel, ts, emoji))
 
-        ingress = SlackIngress(Concierge(), capacity=1, react=react)
+        ingress = SlackIngress(
+            Concierge(), capacity=4, react=react,
+            signing_secret=lambda: "secret",
+            verify_signature=lambda *a: True,
+            connected=lambda: True,
+        )
 
-        def payload(kind, ts, **extra):
-            return {"type": "event_callback", "event": dict(
-                type=kind, channel="C1", user="U1", ts=ts, text="hello", **extra)}
+        class FakeRequest:
+            def __init__(self, payload):
+                self._body = json.dumps(payload).encode()
+                self.headers = {"x-slack-request-timestamp": "0",
+                                "x-slack-signature": "v0=ok"}
+            async def body(self):
+                return self._body
 
-        ingress.accept(payload("app_mention", "1700.0001"))
+        payload = {"type": "event_callback", "event": dict(
+            type="app_mention", channel="C1", user="U1",
+            ts="1700.0001", text="hello")}
+
+        resp = await ingress.webhook(FakeRequest(payload))
+        assert resp.status_code == 200
+
+        # Give the background react task a chance to run
+        await asyncio.sleep(0)
+
+        # The reaction fired without waiting for handle to finish (handle is
+        # still blocked on handle_gate).
+        assert reacted == [("C1", "1700.0001", "eyes")]
+        assert "react" in order
+
+        handle_gate.set()
         await ingress.drain()
 
-        assert reacted == [("C1", "1700.0001", "eyes")]
         assert len(messages) == 1
-        assert order == ["react", "handle"]
+        assert set(order) == {"react", "handle"}
+        await ingress.close()
 
     asyncio.run(scenario())
 
 
 def test_ingress_failing_react_does_not_prevent_handle():
+    import json
     from engine.slack_concierge import SlackIngress
 
     async def scenario():
@@ -1376,17 +1407,36 @@ def test_ingress_failing_react_does_not_prevent_handle():
         async def failing_react(channel, ts, emoji):
             raise RuntimeError("Slack API down")
 
-        ingress = SlackIngress(Concierge(), capacity=1, react=failing_react)
+        ingress = SlackIngress(
+            Concierge(), capacity=1, react=failing_react,
+            signing_secret=lambda: "secret",
+            verify_signature=lambda *a: True,
+            connected=lambda: True,
+        )
 
-        def payload(kind, ts, **extra):
-            return {"type": "event_callback", "event": dict(
-                type=kind, channel="C1", user="U1", ts=ts, text="hello", **extra)}
+        class FakeRequest:
+            def __init__(self, payload):
+                self._body = json.dumps(payload).encode()
+                self.headers = {"x-slack-request-timestamp": "0",
+                                "x-slack-signature": "v0=ok"}
+            async def body(self):
+                return self._body
 
-        ingress.accept(payload("app_mention", "1700.0001"))
+        payload = {"type": "event_callback", "event": dict(
+            type="app_mention", channel="C1", user="U1",
+            ts="1700.0001", text="hello")}
+
+        resp = await ingress.webhook(FakeRequest(payload))
+        assert resp.status_code == 200
+
+        # Let the failing react task run
+        await asyncio.sleep(0)
+
         await ingress.drain()
 
         # handle was still called despite the react failure
         assert len(messages) == 1
+        await ingress.close()
 
     asyncio.run(scenario())
 
