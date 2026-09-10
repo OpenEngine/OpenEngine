@@ -46,6 +46,14 @@ class GitResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CommentResult:
+    """The created comment identifier and browser URL."""
+
+    id: int
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
 class Discussion:
     """One comment or review on a forge change request or work item."""
 
@@ -184,8 +192,13 @@ class SourceControl(Protocol):
         comment: str,
         file: str | None = None,
         line: int | None = None,
-    ) -> None:
-        """Comment on a review, optionally at a line in a changed file."""
+        in_reply_to_id: int | None = None,
+    ) -> CommentResult:
+        """Comment on a review and return its provenance.
+
+        GitHub replies target a top-level review comment ID and cannot specify
+        file or line. Providers without reply support raise NotImplementedError.
+        """
         ...
 
     async def view_change_request(

@@ -3,6 +3,10 @@
 import asyncio
 import json
 
+import pytest
+
+from engine.ports.source_control import CommentResult
+
 from engine.domain import (
     AgentId,
     AgentRunId,
@@ -329,13 +333,15 @@ def test_a_session_with_no_step_lists_only_the_repository_tools() -> None:
     assert asyncio.run(scenario()) == ["view_work_item"]
 
 
-def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
+@pytest.mark.parametrize("reply_id", [None, 99])
+def test_repo_comment_is_forwarded_before_review_can_complete(reply_id: int | None) -> None:
     class RecordingSourceControl:
         def __init__(self) -> None:
             self.comments: list[tuple[object, ...]] = []
 
-        async def add_comment(self, *arguments: object) -> None:
+        async def add_comment(self, *arguments: object) -> CommentResult:
             self.comments.append(arguments)
+            return CommentResult(123, "https://example.com/comment/123")
 
     async def scenario() -> None:
         source_control = RecordingSourceControl()
@@ -366,16 +372,23 @@ def test_repo_comment_is_forwarded_before_review_can_complete() -> None:
             "file": "src/worker.py",
             "line": 17,
         }
+        if reply_id is not None:
+            request["arguments"].pop("file")
+            request["arguments"].pop("line")
+            request["arguments"]["in_reply_to_id"] = reply_id
         accepted = await broker._submit(request)
 
         assert refused["ok"] is False
-        assert accepted == {"ok": True, "acknowledgement": "comment added"}
+        assert accepted["ok"] is True
+        assert accepted["acknowledgement"] == "comment added"
+        assert json.loads(accepted["output"]) == {"id": 123, "url": "https://example.com/comment/123"}
         assert source_control.comments == [
             (
                 "https://github.com/acme/api/pull/42",
                 "This can race.",
-                "src/worker.py",
-                17,
+                "src/worker.py" if reply_id is None else None,
+                17 if reply_id is None else None,
+                reply_id,
             )
         ]
 
@@ -808,5 +821,50 @@ def test_stdio_bridge_returns_a_small_acknowledgement() -> None:
                 "structuredContent": {"accepted": True},
             },
         }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("arguments", [
+    {"in_reply_to_id": 0}, {"in_reply_to_id": -1}, {"in_reply_to_id": True},
+    {"in_reply_to_id": "123"}, {"in_reply_to_id": 1.5},
+    {"in_reply_to_id": 123, "file": "src/app.py", "line": 1},
+])
+def test_comment_arguments_reject_invalid_replies(arguments: dict) -> None:
+    from engine.runtime.terminal_mcp import _comment_arguments
+
+    with pytest.raises(ValueError):
+        _comment_arguments({"pr_url": "https://github.com/acme/api/pull/42", "comment": "Fixed.", **arguments})
+
+
+def test_comment_provenance_reaches_mcp_client() -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario() -> None:
+        source = AsyncMock()
+        source.add_comment.return_value = CommentResult(124, "https://example.com/comment/124")
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"), agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP, registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(source, ("add_comment",))
+        async with broker:
+            config = broker.config
+            response = await _mcp_response(
+                config.args[config.args.index("--host") + 1],
+                int(config.args[config.args.index("--port") + 1]),
+                config.args[config.args.index("--token") + 1],
+                {"jsonrpc": "2.0", "id": "reply-1", "method": "tools/call", "params": {
+                    "name": "add_comment", "arguments": {
+                        "pr_url": "https://github.com/acme/api/pull/42",
+                        "comment": "Fixed", "in_reply_to_id": 123,
+                    },
+                }},
+                repository_tools=("add_comment",),
+            )
+        result = response["result"]
+        assert json.loads(result["content"][0]["text"]) == {"id": 124, "url": "https://example.com/comment/124"}
+        assert result["structuredContent"]["output"] == result["content"][0]["text"]
+        source.add_comment.assert_awaited_once_with("https://github.com/acme/api/pull/42", "Fixed", None, None, 123)
 
     asyncio.run(scenario())

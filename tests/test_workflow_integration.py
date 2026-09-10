@@ -1062,7 +1062,7 @@ def test_a_scripted_cli_drives_a_run_over_the_real_mcp_bridge(
         # GET /repos/.../pulls/N returns the head SHA the inline comment needs.
         if method == "GET" and "/pulls/" in path:
             return {"head": {"sha": "abc1234"}}
-        return {}
+        return {"id": 123, "html_url": f"{PULL_REQUEST}#discussion_r123"}
 
     try:
         with patch.object(GitHubSourceControl, "_api", fake_api):
@@ -1173,6 +1173,8 @@ def test_a_scripted_cli_reads_the_issue_while_naming_a_run(
 
     async def fake_api(self, method: str, path: str, **kwargs: object) -> object:
         read.append(path)
+        if method == "POST":
+            return {"id": 123, "html_url": f"{PULL_REQUEST}#issuecomment-123"}
         if path.endswith("/comments"):
             return []
         return {"number": 270, "title": ISSUE_TITLE, "state": "open"}

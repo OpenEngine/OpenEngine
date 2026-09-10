@@ -515,7 +515,7 @@ def test_review_comments_reach_the_github_api(tmp_path) -> None:
         **kwargs: object,
     ) -> dict:
         recorded.append(httpx.Request(method, f"https://api.github.com{path}"))
-        return {}
+        return {"id": 123, "html_url": "https://github.com/acme/api/pull/7#issuecomment-123"}
 
     from engine.adapters.source_control.github import GitHubSourceControl
     from unittest.mock import patch

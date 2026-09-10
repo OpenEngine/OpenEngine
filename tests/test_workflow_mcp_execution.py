@@ -23,6 +23,7 @@ from engine.domain import (
     WorkspaceId,
 )
 from engine.ports import ApprovalRequest, AgentTurn, GitResult, McpServerConfig
+from engine.ports.source_control import CommentResult
 from engine.runtime import (
     Capabilities,
     Dispatcher,
@@ -65,8 +66,9 @@ class CommentingSourceControl:
         comment: str,
         file: str | None = None,
         line: int | None = None,
-    ) -> None:  # pragma: no cover - presence is what the broker checks
-        pass
+        in_reply_to_id: int | None = None,
+    ) -> CommentResult:
+        return CommentResult(123, "https://example.invalid/comment/123")
 
 
 async def _call_tool(

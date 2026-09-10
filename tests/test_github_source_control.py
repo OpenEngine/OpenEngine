@@ -342,16 +342,18 @@ def test_general_comment_posts_to_the_issues_comments_endpoint(
 
     async def fake_api(self_inner, method: str, path: str, **kwargs: object) -> dict:
         api_calls.append((method, path, kwargs.get("json", {})))
-        return {}
+        return {"id": 123, "html_url": "https://github.com/acme/api/pull/42#discussion_r123"}
 
     monkeypatch.setattr(type(source_control), "_api", fake_api)
 
-    asyncio.run(
+    result = asyncio.run(
         source_control.add_comment(
             "https://github.com/acme/api/pull/42", "Looks good."
         )
     )
 
+    assert result.id == 123
+    assert result.url == "https://github.com/acme/api/pull/42#discussion_r123"
     assert len(api_calls) == 1
     method, path, payload = api_calls[0]
     assert method == "POST"
@@ -369,11 +371,11 @@ def test_inline_comment_resolves_head_and_posts_review_comment(
         api_calls.append((method, path, kwargs.get("json", {})))
         if method == "GET" and path.endswith("/pulls/42"):
             return {"head": {"sha": "abc123"}}
-        return {}
+        return {"id": 123, "html_url": "https://github.com/acme/api/pull/42#discussion_r123"}
 
     monkeypatch.setattr(type(source_control), "_api", fake_api)
 
-    asyncio.run(
+    result = asyncio.run(
         source_control.add_comment(
             "https://github.com/acme/api/pull/42",
             "This can race.",
@@ -382,6 +384,8 @@ def test_inline_comment_resolves_head_and_posts_review_comment(
         )
     )
 
+    assert result.id == 123
+    assert result.url == "https://github.com/acme/api/pull/42#discussion_r123"
     assert len(api_calls) == 2
     # First call fetches the PR to get the head SHA.
     get_method, get_path, _ = api_calls[0]
@@ -410,3 +414,35 @@ def test_inline_comment_requires_a_valid_file_and_line(
                 "https://github.com/acme/api/pull/42", "Finding.", file, line
             )
         )
+
+
+def test_reply_posts_to_existing_review_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock(return_value={"id": 124, "html_url": "https://github.com/acme/api/pull/42#discussion_r124"})
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    result = asyncio.run(source.add_comment(
+        "https://github.com/acme/api/pull/42", "Fixed.", in_reply_to_id=123
+    ))
+    api.assert_awaited_once_with(
+        "POST", "/repos/acme/api/pulls/42/comments/123/replies", json={"body": "Fixed."}
+    )
+    assert result.id == 124
+    assert result.url == "https://github.com/acme/api/pull/42#discussion_r124"
+
+
+@pytest.mark.parametrize("arguments", [
+    {"in_reply_to_id": 0}, {"in_reply_to_id": -1}, {"in_reply_to_id": True},
+    {"in_reply_to_id": "123"}, {"in_reply_to_id": 1.5},
+    {"in_reply_to_id": 123, "file": "src/app.py", "line": 1},
+])
+def test_invalid_reply_is_rejected_before_api_call(monkeypatch: pytest.MonkeyPatch, arguments: dict) -> None:
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock()
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError):
+        asyncio.run(source.add_comment("https://github.com/acme/api/pull/42", "Fixed.", **arguments))
+    api.assert_not_awaited()

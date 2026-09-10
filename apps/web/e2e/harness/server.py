@@ -166,6 +166,12 @@ def main(argv: list[str] | None = None) -> int:
             body = (kwargs.get("json") or {}).get("body", "")
             with gh_log.open("a", encoding="utf-8") as f:
                 f.write(_json.dumps({"path": path, "body": body}) + "\n")
+            owner, repo, kind, number = path.removeprefix("/repos/").split("/")[:4]
+            anchor = "discussion_r" if kind == "pulls" else "issuecomment-"
+            return {
+                "id": 123,
+                "html_url": f"https://github.com/{owner}/{repo}/pull/{number}#{anchor}123",
+            }
         return {}
 
     GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]

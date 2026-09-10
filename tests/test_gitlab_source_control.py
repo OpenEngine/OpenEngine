@@ -73,14 +73,33 @@ def test_gitlab_inline_comment_uses_a_positioned_discussion() -> None:
             self.calls.append((method, path, kwargs))
             if method == "GET":
                 return {"diff_refs": {"base_sha": "base", "start_sha": "start", "head_sha": "head"}}
-            return {}
+            return {"notes": [{"id": 123}]}
 
     transport = Transport()
     source = GitLabSourceControl("token", transport=transport)  # type: ignore[arg-type]
-    asyncio.run(source.add_comment("https://gitlab.com/group/project/-/merge_requests/7", "Fix this", "src/app.py", 12))
+    result = asyncio.run(source.add_comment("https://gitlab.com/group/project/-/merge_requests/7", "Fix this", "src/app.py", 12))
 
+    assert result.id == 123
+    assert result.url == "https://gitlab.com/group/project/-/merge_requests/7#note_123"
     assert transport.calls[1] == (
         "POST",
         "/projects/group%2Fproject/merge_requests/7/discussions",
         {"json": {"body": "Fix this", "position": {"position_type": "text", "base_sha": "base", "start_sha": "start", "head_sha": "head", "new_path": "src/app.py", "new_line": 12}}},
     )
+
+
+def test_gitlab_general_comment_returns_provenance() -> None:
+    transport = AsyncMock()
+    transport.request.return_value = {"id": 124}
+    source = GitLabSourceControl("token", transport=transport)
+    result = asyncio.run(source.add_comment("https://gitlab.com/group/project/-/merge_requests/7", "Hello"))
+    assert result.id == 124
+    assert result.url == "https://gitlab.com/group/project/-/merge_requests/7#note_124"
+
+
+def test_gitlab_replies_fail_without_posting_a_flat_comment() -> None:
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(NotImplementedError, match="replies"):
+        asyncio.run(source.add_comment("https://gitlab.com/group/project/-/merge_requests/7", "Reply", in_reply_to_id=123))
+    transport.request.assert_not_awaited()
