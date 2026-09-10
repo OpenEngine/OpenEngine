@@ -245,7 +245,8 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         concierge_provider=provider or FakeACPProvider(),
         graph_runtime=graph_runtime,
         github_comment_handler=github_comment_handler,
-        github_webhook_secret=github_webhook_secret,
+        github_webhook_secret=lambda: github_webhook_secret,
+        github_repository="acme/api",
     ), capabilities, slack_store
 
 def _mention_graph():
@@ -284,13 +285,20 @@ def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
 
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-def test_github_comments_continue_existing_workorders(tmp_path, monkeypatch, event):
+def test_github_comments_continue_existing_workorders(tmp_path, event):
     from starlette.testclient import TestClient
-    from engine.runtime import WorkflowExecutor
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
     from test_github_ingress import _issue_comment, _signed as github_signed
 
-    from engine.domain import RunPhase, StepCompleted, StepOutput
-    from dataclasses import replace
+    runtime = MagicMock()
+    runtime.snapshot = AsyncMock(return_value=SimpleNamespace(
+        values={"pr_url": "https://github.com/acme/api/pull/7"}))
+    runtime.steer = AsyncMock()
+
+    @asynccontextmanager
+    async def opened_runtime():
+        yield runtime
 
     provider = FakeACPProvider(create=True)
     communications = RecordingCommunications()
@@ -298,6 +306,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, monkeypatch, eve
         tmp_path, communications,
         WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1", runner="default"),
         _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened_runtime(),
     )
 
     source_control = MagicMock()
@@ -306,15 +315,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, monkeypatch, eve
     state = RunState(
         run_id=RunId("existing"), task_id=TaskId("task"),
         workflow_id=WorkflowId("implementation-review-v1"),
-        phase=RunPhase.AWAITING_HUMAN_REVIEW, current_step_id=StepId("review"),
-        step_results=(StepCompleted(
-            run_id=RunId("existing"), step_id=StepId("implementation"),
-            agent_run_id=AgentRunId("agent"), outcome="success", summary="done",
-            outputs=(StepOutput("pr_url", "https://github.com/acme/api/pull/7"),),
-        ),),
     )
-    complete = AsyncMock(return_value=replace(state, phase=RunPhase.SUCCEEDED))
-    monkeypatch.setattr(WorkflowExecutor, "complete_human_review", complete)
 
     def deliver(client, comment_id, text):
         payload = _issue_comment(comment_id, text)
@@ -337,9 +338,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, monkeypatch, eve
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert len(runs) == 1
         assert runs[0].run_id == state.run_id
-        complete.assert_awaited_once()
-        assert complete.call_args.args[0].summary == "Implement it"
-        thread = "7/review/1" if event == "pull_request_review_comment" else "7"
+        runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
         assert runs[0].origin is None
         assert len(provider.clients) == 1
         assert len(provider.clients[0].prompts) == 2

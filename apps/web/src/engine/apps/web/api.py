@@ -2473,34 +2473,18 @@ def create_app(
     ) -> tuple[str, str]:
         number = origin.thread_id.partition("/review/")[0]
         pr_url = f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}"
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("could not identify an existing work order: graph runtime unavailable")
         matches = []
         for state in await session.state_store.list_runs():
-            if graph_run(state):
-                if surface.runtime is None:
-                    continue
-                snapshot = await surface.runtime.snapshot(state.run_id)
-                url = snapshot.values.get("pr_url") if snapshot else None
-            else:
-                url = next((output.value for result in reversed(state.step_results)
-                            for output in result.outputs if output.name == "pr_url"), None)
-            if url == pr_url:
+            snapshot = await runtime.snapshot(state.run_id)
+            if snapshot is not None and snapshot.values.get("pr_url") == pr_url:
                 matches.append(state)
         if len(matches) != 1:
             raise RuntimeError("could not identify one existing work order for this pull request")
         state = matches[0]
-        if graph_run(state):
-            assert surface.runtime is not None
-            await surface.runtime.steer(state.run_id, prompt)
-        elif state.phase is RunPhase.AWAITING_HUMAN_REVIEW and state.current_step_id:
-            next_state = await workflow_executor.complete_human_review(HumanReviewCompleted(
-                run_id=state.run_id, step_id=state.current_step_id,
-                approved=False, summary=prompt,
-            ))
-            if next_state.phase is RunPhase.RUNNING_AGENT:
-                track_workflow(state.run_id, asyncio.create_task(
-                    workflow_executor.resume_agent_step(state.run_id)))
-        else:
-            raise RuntimeError("the work order is not awaiting review feedback")
+        await runtime.steer(state.run_id, prompt)
         link = run_notifier.work_order_link(state)
         return link.url if link else "", str(state.run_id)
 
