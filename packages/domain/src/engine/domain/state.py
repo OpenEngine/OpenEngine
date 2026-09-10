@@ -24,6 +24,7 @@ from engine.domain.workflow import WorkflowDefinition
 class RunPhase(Enum):
     """Coarse lifecycle position of a run."""
 
+    SCHEDULED = "scheduled"
     PENDING = "pending"
     PREPARING_WORKSPACE = "preparing_workspace"
     AWAITING_HUMAN_REVIEW = "awaiting_human_review"

@@ -463,7 +463,7 @@ function App() {
             project or WorkOrder in the rail. */}
         {sidebar()}
         {route.kind === "runs" ? (
-          <RunsPage runs={runs} error={runsError} />
+          <RunsPage runs={runs.filter((run) => run.phase !== "scheduled")} error={runsError} />
         ) : route.kind === "new-run" ? (
           <NewWorkflowPage config={config} />
         ) : route.kind === "new-task" ? (

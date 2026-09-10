@@ -4411,6 +4411,12 @@ def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_w
         "supersede": [],
         "reasons": ["The milestone needs a dedicated scoping view."],
     }
+    scheduled = [run for run in asyncio.run(store.list_runs()) if run.run_id != existing.run_id]
+    assert len(scheduled) == 1
+    assert scheduled[0].phase is RunPhase.SCHEDULED
+    assert scheduled[0].name == "Render the plan"
+    assert scheduled[0].milestone_id == milestone.milestone_id
+    assert scheduled[0].current_agent_run_id is None
     assert scoper.request["milestone"].name == "Milestone scoping"
     assert scoper.request["milestone"].requirements == (
         "Break milestone requirements into reviewable work orders.",
@@ -6012,4 +6018,57 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, st
                 else:
                     assert (await client.get("/api/runs")).json()["runs"] == []
 
+    asyncio.run(scenario())
+
+
+def test_scheduled_step_workorder_starts_only_once() -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        state = RunState(
+            run_id=RunId("run-scheduled"), task_id=TaskId("task-scheduled"),
+            workflow_id=WORKFLOW_ID, workflow_definition=next(iter(STEP_CATALOG)),
+            phase=RunPhase.SCHEDULED, name="Scheduled work", prompt="Do the work",
+            repository=".", runner_name="test",
+        )
+        await store.save(state)
+        app = _workflow_app(store, ConcurrentRunner())
+        async with app.router.lifespan_context(app):
+            assert (await store.load(state.run_id)).phase is RunPhase.SCHEDULED
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                first, second = await asyncio.gather(
+                    client.post("/api/runs/run-scheduled/start"),
+                    client.post("/api/runs/run-scheduled/start"),
+                )
+                assert sorted([first.status_code, second.status_code]) == [200, 409]
+                started = first if first.status_code == 200 else second
+                assert started.json()["runId"] == "run-scheduled"
+                assert started.json()["phase"] != "scheduled"
+                assert len(await store.list_runs()) == 1
+                assert (await client.post("/api/runs/missing/start")).status_code == 404
+    asyncio.run(scenario())
+
+
+def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        graph = ScriptedGraph(GraphId("scheduled-graph"), "Scheduled graph", (
+            ScriptedNode(NodeId("work"), "Work", (AwaitSteering(),)),
+        ))
+        state = RunState(
+            run_id=RunId("run-scheduled-graph"), task_id=TaskId("task-scheduled"),
+            workflow_id=WorkflowId(str(graph.graph_id)), phase=RunPhase.SCHEDULED,
+            name="Scheduled graph work", prompt="Do the work", repository=".",
+        )
+        await store.save(state)
+        app, runtime = _graph_app(store, graph)
+        async with app.router.lifespan_context(app):
+            assert (await store.load(state.run_id)).phase is RunPhase.SCHEDULED
+            assert await runtime.snapshot(state.run_id) is None
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.post("/api/runs/run-scheduled-graph/start")
+                assert response.status_code == 200, response.text
+                assert response.json()["runId"] == state.run_id
+                assert response.json()["phase"] != "scheduled"
+                assert await runtime.snapshot(state.run_id) is not None
+                assert (await client.post("/api/runs/run-scheduled-graph/start")).status_code == 409
     asyncio.run(scenario())

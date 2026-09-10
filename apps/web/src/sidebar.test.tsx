@@ -751,3 +751,11 @@ describe("Sidebar", () => {
     );
   });
 });
+
+
+it("hides scheduled workorders and shows them after starting", () => {
+  const { rerender } = render(<Sidebar initialSection="workflows" runs={[{ ...run, phase: "scheduled" }]} />);
+  expect(screen.queryByText("First run")).not.toBeInTheDocument();
+  rerender(<Sidebar initialSection="workflows" runs={[run]} />);
+  expect(screen.getByText("First run")).toBeInTheDocument();
+});

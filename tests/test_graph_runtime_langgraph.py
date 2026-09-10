@@ -589,3 +589,17 @@ def test_event_log_replays_and_tails_after_store_reopens(tmp_path: Path) -> None
             store.close()
 
     asyncio.run(scenario())
+
+
+def test_start_preserves_scheduled_run_identity_and_refuses_duplicates() -> None:
+    async def scenario():
+        runtime = LangGraphRuntime(_branching())
+        try:
+            run_id = RunId("run-scheduled")
+            snapshot = await runtime.start(GRAPH, {"size": "small"}, run_id=run_id)
+            assert snapshot.run_id == run_id
+            with pytest.raises(ValueError, match="already exists"):
+                await runtime.start(GRAPH, {}, run_id=run_id)
+        finally:
+            await runtime.aclose()
+    asyncio.run(scenario())

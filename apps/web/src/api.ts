@@ -450,6 +450,10 @@ export function completeHumanReview(
   );
 }
 
+export function startScheduledRun(runId: string): Promise<ApiWorkflowRun> {
+  return api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}/start`, { method: "POST" });
+}
+
 /** Throw a WorkOrder away for good.
  *
  *  Unlike archiving a project there is nothing to restore afterwards: the run,
