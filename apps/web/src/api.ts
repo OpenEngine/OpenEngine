@@ -33,12 +33,11 @@ export type EngineConfig = {
   defaultRunner: string;
   workflowRunners: string[];
   defaultWorkflowRunner: string;
-  /** What a WorkOrder can be created from.
-   *
-   *  `kind` is which engine runs it. A `"graph"` is the newer, `[BETA]` kind:
-   *  it has no version yet, and it names its own agent, so the form neither
-   *  prints a version for one nor asks which runner to use. */
-  workflows: { id: string; name: string; version: string; kind: "steps" | "graph" }[];
+  /** Graph workflows can declare creation inputs independently of step runners. */
+  workflows: {
+    id: string; name: string; version: string; kind: "steps" | "graph";
+    inputs?: { name: string; label: string; default: string; required: boolean; choices: string[] }[];
+  }[];
 };
 
 /** Which agent the next conversation starts on, for a plan or an ordinary chat.

@@ -10,6 +10,7 @@ squashes noise and posts the survivors as PR comments with lineage.
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from engine.adapters.workspace_provider.git_worktree import (
@@ -18,6 +19,7 @@ from engine.adapters.workspace_provider.git_worktree import (
 )
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
+    WorkflowInput,
     State,
     TerminalMcpServer,
     agent_registry,
@@ -139,6 +141,47 @@ RERANKER_PROMPT = (
 # Helpers
 # ---------------------------------------------------------------------------
 
+class _RunnerInput:
+    """Resolve the stage's runner per invocation, including its MCP identity."""
+
+    input_name = "implementation_runner"
+
+    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+        runner = state.get("inputs", {}).get(self.input_name, self.agent)
+        config = self.session_config
+        if isinstance(self, ReviewNode):
+            facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
+            model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
+            config = _with_model(config, model)
+        node = replace(
+            self,
+            agent=runner,
+            session_config=config,
+            mcp_server_bindings=tuple(
+                replace(binding, agent_id=runner)
+                if isinstance(binding, TerminalMcpServer) else binding
+                for binding in self.mcp_server_bindings
+            ),
+        )
+        return await super(_RunnerInput, node).__call__(state)
+
+
+class InputImplementationNode(_RunnerInput, ACPNode):
+    pass
+
+
+class InputNameNode(_RunnerInput, NameNode):
+    pass
+
+
+class InputReviewNode(_RunnerInput, ReviewNode):
+    input_name = "review_runner"
+
+
+class InputRerankerNode(_RunnerInput, RerankerNode):
+    pass
+
+
 def _with_model(
     base: Mapping[str, object] | None, model: str
 ) -> dict[str, object]:
@@ -168,7 +211,7 @@ def pipeline(
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
 ) -> StateGraph:
-    """Implement with `runner`, then review with the other provider.
+    """Use declared stage inputs, defaulting to `runner` and the other provider.
 
     The three keyword arguments are the only things a deployment or a test has
     business replacing: where the checkouts are made, which agents answer, and
@@ -185,7 +228,7 @@ def pipeline(
     )
     builder.add_node(
         NAMING,
-        NameNode(
+        InputNameNode(
             agent=runner,
             registry=agents,
             cwd=checkout,
@@ -194,7 +237,7 @@ def pipeline(
     )
     builder.add_node(
         IMPLEMENTATION,
-        ACPNode(
+        InputImplementationNode(
             agent=runner,
             registry=agents,
             prompt=lambda state: IMPLEMENTATION_PROMPT.format(
@@ -225,7 +268,7 @@ def pipeline(
         node_name = _review_node_name(facet.id)
         builder.add_node(
             node_name,
-            ReviewNode(
+            InputReviewNode(
                 facet=facet.id,
                 agent=reviewer,
                 registry=agents,
@@ -269,7 +312,7 @@ def pipeline(
             )
         return RERANKER_PROMPT.format(
             reviewer_count=len(REVIEW_FACETS),
-            runner=reviewer,
+            runner=state.get("inputs", {}).get("review_runner", reviewer),
             findings_sections="".join(sections),
             pr_url=state.get("pr_url", ""),
             task=state.get("task", ""),
@@ -277,7 +320,7 @@ def pipeline(
 
     builder.add_node(
         RERANKER,
-        RerankerNode(
+        InputRerankerNode(
             agent=runner,
             registry=agents,
             prompt=_reranker_prompt,
@@ -324,7 +367,7 @@ def pipeline(
     return builder
 
 
-#: One graph per agent. Picking a runner is picking one of these.
+#: Keep existing workflow ids and defaults; inputs can override either stage.
 RUNNERS = ("codex", "claude")
 
 
@@ -345,6 +388,17 @@ def graph_for(
         ),
         id=f"implementation-review-{runner}",
         name=f"Implementation review ({runner})",
+        inputs=(
+            WorkflowInput(
+                "implementation_runner", "Implementation runner",
+                default=runner, required=True, choices=RUNNERS,
+            ),
+            WorkflowInput(
+                "review_runner", "Review runner",
+                default={"codex": "claude", "claude": "codex"}[runner],
+                required=True, choices=RUNNERS,
+            ),
+        ),
     )
 
 

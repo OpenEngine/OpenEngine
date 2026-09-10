@@ -35,7 +35,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
@@ -118,6 +118,7 @@ from engine.domain import (
     project_id_for_instance,
     workstreams_by_milestone,
 )
+from engine.graph_runtime.inputs import resolve_inputs
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -1541,11 +1542,7 @@ def create_app(
                 # are here -- see `offered_graphs` -- because an entry nobody
                 # could run would be a choice that fails after it was made.
                 #
-                # `kind` is what each entry belongs to, said rather than left to
-                # be guessed. The form reads it: a graph names its own agent, so
-                # the runner field is not shown for one, and a client that
-                # worked that out from the empty version would break the day a
-                # graph gets versioned.
+                # Graph creation fields come from the workflow's declarations.
                 "workflows": [
                     {
                         "id": str(definition.workflow_id),
@@ -1561,6 +1558,10 @@ def create_app(
                         "name": f"{BETA} {graph.name}",
                         "version": "",
                         "kind": "graph",
+                        **(
+                            {"inputs": [asdict(item) for item in graph.inputs]}
+                            if getattr(graph, "inputs", ()) else {}
+                        ),
                     }
                     for graph in offered_graphs().values()
                 ],
@@ -1745,6 +1746,7 @@ def create_app(
         runtime: GraphRuntime,
         graph: GraphWorkflow,
         *,
+        inputs: dict[str, str],
         prompt: str,
         repository: str,
         workstream_id: WorkstreamId | None,
@@ -1764,10 +1766,7 @@ def create_app(
         are talking about the same run and nothing has to translate between two
         sets of ids.
 
-        No runner is passed on, because a graph already names the agent it runs
-        -- picking "Implementation review (claude)" *is* picking Claude, which
-        is why there is one entry per agent in the dropdown rather than a
-        separate choice, and why the form hides the runner field for one.
+        Declared inputs are validated before starting and carried in graph state.
 
         The engine is an argument rather than something read here, because
         having one is what made this graph offerable in the first place: a
@@ -1776,7 +1775,11 @@ def create_app(
         """
         snapshot = await runtime.start(
             GraphId(str(graph.graph_id)),
-            {"task": prompt, "repository": repository},
+            {
+                "task": prompt,
+                "repository": repository,
+                **({"inputs": inputs} if inputs else {}),
+            },
         )
         if approval_policy.auto_approve:
             topology = runtime.topology(GraphId(str(graph.graph_id)))
@@ -1836,9 +1839,7 @@ def create_app(
         if definition is None and graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
         runner_name = str(body.get("runner") or workflow_executor.default_runner)
-        # A graph names the agent it runs, so there is no runner to check and
-        # none is sent: the form does not offer the field for one. Validating
-        # it anyway would refuse a WorkOrder over a value nothing reads.
+        # Graphs use their declared inputs instead of the step runner field.
         if graph is None and runner_name not in workflow_executor.runners:
             return _error(f"unknown workflow runner: {runner_name}", 400)
         workstream_id = (
@@ -1872,9 +1873,16 @@ def create_app(
             # `offered_graphs` only answers with a graph while the engine is
             # running, so this cannot be `None` here.
             assert surface.runtime is not None
+            try:
+                inputs = resolve_inputs(
+                    getattr(graph, "inputs", ()), body.get("inputs", {})
+                )
+            except ValueError as error:
+                return _error(str(error), 400)
             return await start_graph_run(
                 surface.runtime,
                 graph,
+                inputs=inputs,
                 prompt=prompt,
                 repository=repository,
                 workstream_id=workstream_id,

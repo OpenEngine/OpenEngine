@@ -402,3 +402,37 @@ def test_every_composition_root_still_starts(
     # `engine-web` does before it serves anything, so building it is the test.
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
     assert build_app() is not None
+
+
+@pytest.mark.parametrize("implementation", ("codex", "claude"))
+@pytest.mark.parametrize("review", ("codex", "claude"))
+def test_stage_inputs_select_runners_models_and_mcp_identity(
+    monkeypatch, implementation, review,
+) -> None:
+    from engine.graph_runtime_langgraph import ACPNode
+
+    module = definition_module()
+    graph = module.graph_for("codex")
+    assert [item.name for item in graph.inputs] == [
+        "implementation_runner", "review_runner",
+    ]
+    observed = []
+
+    async def record(self, state):
+        observed.append(self)
+        return {}
+
+    monkeypatch.setattr(ACPNode, "__call__", record)
+    state = {"inputs": {"implementation_runner": implementation, "review_runner": review}}
+    nodes = nodes_of(graph.builder)
+
+    async def scenario():
+        for name in ("implementation", "review-security", "review-bugs", "reranker"):
+            await nodes[name](state)
+
+    asyncio.run(scenario())
+    assert [node.agent for node in observed] == [implementation, review, review, implementation]
+    for node in observed:
+        assert all(binding.agent_id == node.agent for binding in node.mcp_server_bindings)
+    assert observed[1].session_config["model"] == module.REVIEW_MODELS[review]["elevated"]
+    assert observed[2].session_config["model"] == module.REVIEW_MODELS[review]["default"]

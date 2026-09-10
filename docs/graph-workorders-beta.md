@@ -33,13 +33,14 @@ underneath can do, which is the reason the second one exists:
 
 ## What happens when you pick one
 
-1. You choose a `[BETA]` entry, type your task and repository, and press
-   create.
-2. The web server hands the task and the repository to the graph engine and
-   asks it to start that graph. The agent is not a separate choice here: there
-   is one `[BETA]` entry per agent (`(codex)`, `(claude)`), so picking the
-   entry is picking the agent — which is why the form stops asking you which
-   runner to use as soon as you select one.
+1. You choose a `[BETA]` entry, type your task and repository, and expand
+   **Workflow inputs** to fill in any declared fields. Implementation workflows
+   offer independent **Implementation runner** and **Review runner** dropdowns:
+   choose Codex or Claude for either stage, including the same runner for both.
+   Existing workflow entries retain their previous defaults.
+2. The web server validates the inputs and hands them, the task, and the
+   repository to the graph engine. Naming and reranking use the implementation
+   runner; all review facets use the review runner and its corresponding models.
 3. The graph engine gives the run an id, and the WorkOrder you see is saved
    under that same id — so both halves are talking about the same run.
 4. You land on the WorkOrder page, which shows the task, the repository and
@@ -171,3 +172,23 @@ run one.
 Then this deployment's `workflows` directory holds no graph workflows, so no
 graph engine was started and there is nothing to offer. That is deliberate: an
 entry nobody could start is worse than no entry at all.
+
+## Declaring inputs in a workflow
+
+Pass `inputs` to either spelling of `graph_workflow`. Each `WorkflowInput`
+(imported from `engine.graph_runtime_langgraph`) declares a `name`, `label`,
+optional `default`, `required` flag, and optional tuple of `choices`. Fields
+with choices render as dropdowns; other fields accept text. For example:
+
+```python
+inputs=(WorkflowInput(
+    "review_runner", "Review runner", default="claude", required=True,
+    choices=("codex", "claude"),
+),)
+```
+
+WorkOrder creation accepts an `inputs` object in `POST /api/runs`, applies
+omitted defaults, and rejects unknown fields or invalid values before starting
+execution. Nodes read these values from `state["inputs"]`; they persist with
+normal graph checkpoints. Workflows without declarations keep their existing
+creation behavior.
