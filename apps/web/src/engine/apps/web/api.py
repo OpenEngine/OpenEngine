@@ -1189,6 +1189,7 @@ def create_app(
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         async with AsyncExitStack() as opened:
             opened.push_async_callback(slack_ingress.close)
+            opened.push_async_callback(github_concierge.close)
             opened.push_async_callback(github_ingress.close)
             if graph_runtime is not None:
                 # Opening the graph engine is what makes a graph WorkOrder
@@ -2459,13 +2460,65 @@ def create_app(
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
         react=_slack_comms.add_reaction,
     )
+    async def github_reply(origin: RunOrigin, text: str) -> None:
+        number, _, review_id = origin.thread_id.partition("/review/")
+        await session.capabilities.source_control.add_comment(
+            f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}",
+            text,
+            in_reply_to_id=int(review_id) if review_id else None,
+        )
+
+    async def github_continue_workorder(
+        origin: RunOrigin, repository: str, prompt: str,
+    ) -> tuple[str, str]:
+        number = origin.thread_id.partition("/review/")[0]
+        pr_url = f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}"
+        matches = []
+        for state in await session.state_store.list_runs():
+            if graph_run(state):
+                if surface.runtime is None:
+                    continue
+                snapshot = await surface.runtime.snapshot(state.run_id)
+                url = snapshot.values.get("pr_url") if snapshot else None
+            else:
+                url = next((output.value for result in reversed(state.step_results)
+                            for output in result.outputs if output.name == "pr_url"), None)
+            if url == pr_url:
+                matches.append(state)
+        if len(matches) != 1:
+            raise RuntimeError("could not identify one existing work order for this pull request")
+        state = matches[0]
+        if graph_run(state):
+            assert surface.runtime is not None
+            await surface.runtime.steer(state.run_id, prompt)
+        elif state.phase is RunPhase.AWAITING_HUMAN_REVIEW and state.current_step_id:
+            next_state = await workflow_executor.complete_human_review(HumanReviewCompleted(
+                run_id=state.run_id, step_id=state.current_step_id,
+                approved=False, summary=prompt,
+            ))
+            if next_state.phase is RunPhase.RUNNING_AGENT:
+                track_workflow(state.run_id, asyncio.create_task(
+                    workflow_executor.resume_agent_step(state.run_id)))
+        else:
+            raise RuntimeError("the work order is not awaiting review feedback")
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
+    github_concierge = SlackConcierge(
+        provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
+        create_workorder=github_continue_workorder, reply=github_reply,
+        continue_existing=True,
+    )
+
     async def github_concierge_turn(comment: GithubComment) -> None:
-        # Issue and PR conversation comments share a thread; inline reviews
-        # have their own thread, identified by the root review comment.
+        # Issue-driven work orders are not supported. PR conversation comments
+        # and inline review replies both belong to an existing work order.
+        if not comment.is_pull_request:
+            return
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":
             thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
-        await slack_concierge.handle(IncomingMessage(
+        await github_concierge.handle(IncomingMessage(
             origin=RunOrigin(
                 channel=f"github:{comment.repository}", thread_id=thread_id,
                 author=comment.author,

@@ -284,12 +284,14 @@ def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
 
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-def test_github_comments_drive_concierge_and_create_workorders(tmp_path, monkeypatch, event):
+def test_github_comments_continue_existing_workorders(tmp_path, monkeypatch, event):
     from starlette.testclient import TestClient
     from engine.runtime import WorkflowExecutor
     from test_github_ingress import _issue_comment, _signed as github_signed
 
-    monkeypatch.setattr(WorkflowExecutor, "start", AsyncMock())
+    from engine.domain import RunPhase, StepCompleted, StepOutput
+    from dataclasses import replace
+
     provider = FakeACPProvider(create=True)
     communications = RecordingCommunications()
     app, capabilities, _ = _app(
@@ -298,8 +300,25 @@ def test_github_comments_drive_concierge_and_create_workorders(tmp_path, monkeyp
         _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
     )
 
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    object.__setattr__(capabilities, "source_control", source_control)
+    state = RunState(
+        run_id=RunId("existing"), task_id=TaskId("task"),
+        workflow_id=WorkflowId("implementation-review-v1"),
+        phase=RunPhase.AWAITING_HUMAN_REVIEW, current_step_id=StepId("review"),
+        step_results=(StepCompleted(
+            run_id=RunId("existing"), step_id=StepId("implementation"),
+            agent_run_id=AgentRunId("agent"), outcome="success", summary="done",
+            outputs=(StepOutput("pr_url", "https://github.com/acme/api/pull/7"),),
+        ),),
+    )
+    complete = AsyncMock(return_value=replace(state, phase=RunPhase.SUCCEEDED))
+    monkeypatch.setattr(WorkflowExecutor, "complete_human_review", complete)
+
     def deliver(client, comment_id, text):
         payload = _issue_comment(comment_id, text)
+        payload["issue"]["pull_request"] = {}
         if event == "pull_request_review_comment":
             payload["pull_request"] = payload.pop("issue")
             if comment_id != 1:
@@ -309,6 +328,7 @@ def test_github_comments_drive_concierge_and_create_workorders(tmp_path, monkeyp
                            headers=dict(github_signed(body), **{"x-github-event": event}))
 
     with TestClient(app) as client:
+        client.portal.call(capabilities.state_store.save, state)
         assert deliver(client, 1, "hello").status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         assert deliver(client, 2, "new workorder please").status_code == 200
@@ -316,27 +336,40 @@ def test_github_comments_drive_concierge_and_create_workorders(tmp_path, monkeyp
         client.portal.call(app.state.github_ingress.drain)
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert len(runs) == 1
-        assert runs[0].repository == "https://github.com/acme/api.git"
+        assert runs[0].run_id == state.run_id
+        complete.assert_awaited_once()
+        assert complete.call_args.args[0].summary == "Implement it"
         thread = "7/review/1" if event == "pull_request_review_comment" else "7"
-        assert runs[0].origin == RunOrigin("github:acme/api", thread, "someone")
+        assert runs[0].origin is None
         assert len(provider.clients) == 1
         assert len(provider.clients[0].prompts) == 2
         assert not provider.clients[0].result.get("isError")
     assert provider.clients[0].closed
-    assert communications.posts[0][1].text == provider.text
-    assert all((channel, thread_id) == ("github:acme/api", thread)
-               for channel, _, thread_id in communications.posts)
+    assert not communications.posts
+    assert source_control.add_comment.await_count == 2
+    source_control.add_comment.assert_awaited_with(
+        "https://github.com/acme/api/pull/7", provider.text,
+        in_reply_to_id=1 if event == "pull_request_review_comment" else None,
+    )
 
 
-def test_failed_github_concierge_turn_can_be_redelivered(tmp_path):
+@pytest.mark.parametrize("failure", ["turn", "reply"])
+def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
-    provider = FakeACPProvider(fail=True)
+    provider = FakeACPProvider(fail=failure == "turn")
     communications = RecordingCommunications()
-    app, _, _ = _app(tmp_path, communications, WorkOrdersConfig(),
+    app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
                      provider=provider, github_webhook_secret=SIGNING_SECRET)
-    body = json.dumps(_issue_comment()).encode()
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    object.__setattr__(capabilities, "source_control", source_control)
+    payload = _issue_comment()
+    payload["issue"]["pull_request"] = {}
+    if failure == "reply":
+        source_control.add_comment.side_effect = [RuntimeError("GitHub unavailable"), None]
+    body = json.dumps(payload).encode()
     headers = dict(github_signed(body), **{"x-github-event": "issue_comment"})
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
@@ -345,8 +378,73 @@ def test_failed_github_concierge_turn_can_be_redelivered(tmp_path):
         assert provider.clients[0].closed
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
-        assert len(communications.posts) == 1
+        assert source_control.add_comment.await_count == (2 if failure == "reply" else 1)
+        assert not communications.posts
     assert all(c.closed for c in provider.clients)
+
+
+@pytest.mark.parametrize("is_pr", [False, True])
+def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path, is_pr):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
+                               provider=provider, github_webhook_secret=SIGNING_SECRET)
+    source = MagicMock(add_comment=AsyncMock())
+    object.__setattr__(capabilities, "source_control", source)
+    payload = _issue_comment(1, "new workorder please")
+    if is_pr:
+        payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert not client.portal.call(capabilities.state_store.list_runs)
+        if is_pr:
+            assert provider.clients[0].result["isError"]
+            assert "could not identify" in provider.clients[0].result["content"][0]["text"]
+        else:
+            assert not provider.clients
+            source.add_comment.assert_not_awaited()
+    assert not communications.posts
+
+
+def test_github_feedback_steers_the_matching_graph_workorder(tmp_path):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime = MagicMock()
+    runtime.snapshot = AsyncMock(return_value=SimpleNamespace(
+        values={"pr_url": "https://github.com/acme/api/pull/7"}))
+    runtime.steer = AsyncMock()
+
+    @asynccontextmanager
+    async def opened_runtime():
+        yield runtime
+
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+                               provider=provider, github_webhook_secret=SIGNING_SECRET,
+                               graph_runtime=opened_runtime())
+    object.__setattr__(capabilities, "source_control", MagicMock(add_comment=AsyncMock()))
+    state = RunState(run_id=RunId("graph-work"), task_id=TaskId("task"),
+                     workflow_id=WorkflowId("graph-workflow"))
+    payload = _issue_comment(1, "new workorder please")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        client.portal.call(capabilities.state_store.save, state)
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
+        assert not provider.clients[0].result.get("isError")
+        assert len(client.portal.call(capabilities.state_store.list_runs)) == 1
 
 
 def _workflow_catalog():
@@ -1052,18 +1150,19 @@ async def call_mcp(config):
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
+    tool_name = "continue_workorder" if "--continue-existing" in config["args"] else "create_workorder"
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "unsupported"}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "create_workorder", "arguments": {"prompt": "Implement it"}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool_name, "arguments": {"prompt": "Implement it"}}},
     ]
     stdout, stderr = await process.communicate("".join(json.dumps(r) + "\n" for r in requests).encode())
     assert process.returncode == 0, stderr.decode()
     responses = [json.loads(line) for line in stdout.splitlines()]
     assert len(responses) == 3
     assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert responses[1]["result"]["tools"][0]["name"] == "create_workorder"
+    assert responses[1]["result"]["tools"][0]["name"] == tool_name
     return responses[2]["result"]
 
 

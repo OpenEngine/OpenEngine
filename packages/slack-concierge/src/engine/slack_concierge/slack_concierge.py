@@ -65,10 +65,11 @@ class SlackConcierge:
 
     def __init__(self, *, provider: ACPAgentProvider, create_workorder: CreateWorkorder,
                  reply: Reply, default_repository: str = "", max_threads: int = 32,
-                 timeout_seconds: float = 180,
+                 timeout_seconds: float = 180, continue_existing: bool = False,
                  turn_finished: Callable[[RunOrigin], Awaitable[None]] | None = None) -> None:
         if max_threads < 1:
             raise ValueError("max_threads must be positive")
+        self.continue_existing = continue_existing
         self.provider = provider
         self.create_workorder = create_workorder
         self.reply = reply
@@ -124,7 +125,8 @@ class SlackConcierge:
                     return await self.create_workorder(message.origin, repository, prompt)
                 broker = await opened.enter_async_context(ConciergeBroker(
                     create_workorder=create,
-                    default_repository=message.repository or self.default_repository))
+                    default_repository=message.repository or self.default_repository,
+                    continue_existing=self.continue_existing))
                 client = await self.provider.connect()
                 opened.push_async_callback(client.close)
                 session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])
@@ -134,7 +136,13 @@ class SlackConcierge:
                 raise
         self._threads.move_to_end(key)
         session = self._threads[key][1]
-        prompt = (INSTRUCTIONS + "\nUser: " if fresh else "") + message.text
+        instructions = INSTRUCTIONS if not self.continue_existing else (
+            "You are OpenEngineBot, a pull request concierge. Reply briefly to questions. "
+            "When asked to address feedback, use continue_workorder with the request. "
+            "It forwards feedback to the existing work order for this PR. Never create "
+            "a new work order or claim feedback was delivered unless the tool succeeds."
+        )
+        prompt = (instructions + "\nUser: " if fresh else "") + message.text
         parts = []
         async for event in session.prompt(prompt):
             if event.type == ACPEventType.MESSAGE_DELTA:

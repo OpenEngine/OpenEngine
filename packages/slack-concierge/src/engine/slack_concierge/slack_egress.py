@@ -66,7 +66,9 @@ class ConciergeBroker:
         *,
         create_workorder: CreateWorkorder,
         default_repository: str = "",
+        continue_existing: bool = False,
     ) -> None:
+        self._continue_existing = continue_existing
         self._create_workorder = create_workorder
         self._default_repository = default_repository
         self._token = secrets.token_hex(32)
@@ -104,7 +106,8 @@ class ConciergeBroker:
             "args": ["-m", "engine.slack_concierge.slack_egress",
                      "--host", "127.0.0.1", "--port",
                      str(self._server.sockets[0].getsockname()[1]),
-                     "--token-file", self._credential.name],
+                     "--token-file", self._credential.name,
+                     *(["--continue-existing"] if self._continue_existing else [])],
             "env": [],
         }
 
@@ -128,7 +131,7 @@ class ConciergeBroker:
             return {"ok": False, "error": "invalid concierge credential"}
         name = request.get("name")
         arguments = request.get("arguments")
-        if name != CONCIERGE_TOOL_NAME:
+        if name != ("continue_workorder" if self._continue_existing else CONCIERGE_TOOL_NAME):
             return {"ok": False, "error": f"unknown concierge tool: {name}"}
         if not isinstance(arguments, dict):
             return {"ok": False, "error": "arguments must be an object"}
@@ -141,10 +144,12 @@ class ConciergeBroker:
         try:
             url, run_id = await self._create_workorder(repository, prompt.strip())
         except Exception as error:
-            return {"ok": False, "error": f"could not start the work order: {error}"}
+            return {"ok": False, "error": f"work-order request failed: {error}"}
         return {
             "ok": True,
             "text": (
+                f"Feedback delivered to work order `{run_id}`."
+                if self._continue_existing else
                 f"Work order `{run_id}` started on `{repository}`. "
                 "Status updates will appear in this thread."
             ),
@@ -189,6 +194,7 @@ async def _mcp_response(
     port: int,
     token: str,
     request: object,
+    continue_existing: bool = False,
 ) -> dict[str, object] | None:
     if not isinstance(request, dict):
         return _rpc_error(None, -32600, "Invalid Request")
@@ -208,7 +214,10 @@ async def _mcp_response(
     if method == "ping":
         return _rpc_result(request_id, {})
     if method == "tools/list":
-        return _rpc_result(request_id, {"tools": [_TOOL_SPEC]})
+        spec = dict(_TOOL_SPEC)
+        if continue_existing:
+            spec.update(name="continue_workorder", description="Send feedback to the existing work order for this pull request. Never creates a work order.")
+        return _rpc_result(request_id, {"tools": [spec]})
     if method != "tools/call":
         return _rpc_error(request_id, -32601, "Method not found")
     if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
@@ -241,10 +250,10 @@ async def _mcp_response(
     )
 
 
-async def _serve_stdio(host: str, port: int, token: str) -> None:
+async def _serve_stdio(host: str, port: int, token: str, continue_existing: bool = False) -> None:
     while line := await asyncio.to_thread(sys.stdin.buffer.readline):
         try:
-            response = await _mcp_response(host, port, token, json.loads(line))
+            response = await _mcp_response(host, port, token, json.loads(line), continue_existing)
             if response is None:
                 continue
         except Exception as error:
@@ -270,8 +279,9 @@ def main() -> None:
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--token-file", required=True)
+    parser.add_argument("--continue-existing", action="store_true")
     arguments = parser.parse_args()
-    asyncio.run(_serve_stdio(arguments.host, arguments.port, Path(arguments.token_file).read_text()))
+    asyncio.run(_serve_stdio(arguments.host, arguments.port, Path(arguments.token_file).read_text(), arguments.continue_existing))
 
 
 __all__ = [
@@ -283,7 +293,8 @@ __all__ = [
 async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
     """Approve only the one named MCP grant; decline all other operations."""
 
-    names = {"mcp__concierge__create_workorder", "concierge/create_workorder"}
+    names = {"mcp__concierge__create_workorder", "concierge/create_workorder",
+             "mcp__concierge__continue_workorder", "concierge/continue_workorder"}
     if any(isinstance(value, str) and value in names
            for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
         for option in request.options:
