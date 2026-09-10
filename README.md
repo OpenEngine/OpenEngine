@@ -16,9 +16,10 @@ uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
 ```
-Then, run it by pointing it at your project:
+Then, run it by pointing it at your directory:
 ```bash
 uv run \
+  --project /path/to/openengine \
   --directory /path/to/your/project \
   --all-packages \
   engine-web
