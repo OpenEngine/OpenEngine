@@ -1048,6 +1048,7 @@ def create_app(
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: str = "",
+    github_bot_login: str = "",
     communications_channel: str = "",
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
@@ -3042,7 +3043,10 @@ def create_app(
     # wired separately; until then the route verifies a delivery and refuses it,
     # so an unanswered comment stays a failed delivery GitHub can redeliver
     # rather than a 200 that lost it.
-    github_ingress = GithubIngress(webhook_secret=lambda: github_webhook_secret)
+    github_ingress = GithubIngress(
+        webhook_secret=lambda: github_webhook_secret,
+        self_login=lambda: github_bot_login,
+    )
 
     def _mentioned_workflow() -> WorkflowDefinition | None:
         """Which workflow a mention runs: the configured one, or the only one."""

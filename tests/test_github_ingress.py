@@ -102,6 +102,23 @@ def test_the_people_who_can_write_to_a_repository_can_direct_engine(association)
     assert comment_from_payload("issue_comment", payload) is not None
 
 
+def test_engine_does_not_answer_its_own_comments() -> None:
+    """Engine posts as a machine user, not a GitHub app: that account is an
+    ordinary `User` and a collaborator, so only its login distinguishes it."""
+    payload = _issue_comment(user={"login": "OpenEngine-worker", "type": "User"})
+    assert comment_from_payload("issue_comment", payload) is not None
+    assert comment_from_payload("issue_comment", payload, self_login="OpenEngine-worker") is None
+    # GitHub logins are case-insensitive, so the comparison has to be too.
+    assert comment_from_payload("issue_comment", payload, self_login="openengine-worker") is None
+    # Somebody else's comment is still answered.
+    assert comment_from_payload("issue_comment", _issue_comment(), self_login="OpenEngine-worker")
+
+
+def test_a_github_app_is_still_recognised_by_its_user_type() -> None:
+    payload = _issue_comment(user={"login": "engine[bot]", "type": "Bot"})
+    assert comment_from_payload("issue_comment", payload, self_login="") is None
+
+
 def test_only_our_secret_signs_a_delivery() -> None:
     body = json.dumps(_issue_comment()).encode()
     assert verify_signature(WEBHOOK_SECRET, _signed(body)["x-hub-signature-256"], body)
@@ -167,6 +184,33 @@ def test_nothing_is_queued_with_nothing_to_answer_it() -> None:
     assert ingress.accept("issues", _issue_comment())
 
 
+def test_a_failed_comment_can_be_redelivered() -> None:
+    """A handler that raises must not consume the comment: the delivery was
+    already acknowledged, so deduplicating the retry away would lose the work."""
+
+    async def scenario():
+        attempts = []
+
+        async def handle(comment):
+            attempts.append(comment.comment_id)
+            if len(attempts) == 1:
+                raise RuntimeError("agent is down")
+
+        ingress = GithubIngress(webhook_secret=lambda: WEBHOOK_SECRET, handle=handle)
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        await ingress.drain()
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        await ingress.drain()
+        assert attempts == ["1", "1"]
+        # Once it succeeds it is remembered again, so a third copy is dropped.
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        await ingress.drain()
+        assert attempts == ["1", "1"]
+        await ingress.close()
+
+    asyncio.run(scenario())
+
+
 def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
     async def scenario():
         handled = []
@@ -230,6 +274,18 @@ def test_a_comment_is_refused_while_nothing_is_wired_to_answer_it() -> None:
     body = json.dumps(_issue_comment()).encode()
     headers = dict(_signed(body), **{"x-github-event": "issue_comment"})
     assert client.post("/api/github/events", content=body, headers=headers).status_code == 503
+
+
+def test_an_event_this_route_ignores_is_acknowledged_with_nothing_wired() -> None:
+    """A webhook subscribed to more events than Engine reads must not see every
+    one of them fail and retry forever."""
+    client, _ingress = _client(handle=_UNWIRED)
+    body = json.dumps({"action": "opened", "issue": {"number": 7}}).encode()
+    for event in ("issues", "push", "star"):
+        response = client.post(
+            "/api/github/events", content=body, headers=dict(_signed(body), **{"x-github-event": event})
+        )
+        assert response.status_code == 200, event
 
 
 def test_the_webhook_can_be_saved_before_anything_answers_it() -> None:

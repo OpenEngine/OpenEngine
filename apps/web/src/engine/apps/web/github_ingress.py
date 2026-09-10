@@ -67,12 +67,20 @@ def verify_signature(webhook_secret: str, signature: str, body: bytes) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-def comment_from_payload(event: str, payload: Mapping[str, object]) -> GithubComment | None:
+def comment_from_payload(
+    event: str, payload: Mapping[str, object], *, self_login: str = ""
+) -> GithubComment | None:
     """The comment in a delivery, or ``None`` for anything not worth an agent.
 
     Edits and deletions are excluded with everything else: only a new comment
     is somebody asking for something, and only from someone with write access
     to the repository it is on.
+
+    ``self_login`` is the GitHub account Engine posts as, whose own comments are
+    never answered. A GitHub app is recognisable by its ``Bot`` user type, but a
+    personal access token belonging to a machine user is not: such an account is
+    an ordinary ``User`` and typically a collaborator, so it would pass every
+    other check here and Engine would answer itself forever.
     """
     if event not in HANDLED_EVENTS or payload.get("action") != "created":
         return None
@@ -85,6 +93,10 @@ def comment_from_payload(event: str, payload: Mapping[str, object]) -> GithubCom
     if not isinstance(user, dict) or user.get("type") == "Bot":
         # A bot's comment includes this process's own replies, and answering
         # those is how a webhook talks to itself forever.
+        return None
+    login = user.get("login")
+    if self_login and isinstance(login, str) and login.lower() == self_login.lower():
+        # GitHub logins are case-insensitive, so the comparison is too.
         return None
     association = comment.get("author_association")
     if association not in TRUSTED_ASSOCIATIONS:
@@ -126,10 +138,12 @@ class GithubIngress:
         *,
         webhook_secret: Callable[[], str] = lambda: "",
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
+        self_login: Callable[[], str] = lambda: "",
         capacity: int = 256,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
     ) -> None:
         self._webhook_secret = webhook_secret
+        self._self_login = self_login
         self._handle = handle
         self._verify_signature = verify_signature
         self._queue: asyncio.Queue[GithubComment] = asyncio.Queue(maxsize=capacity)
@@ -158,14 +172,6 @@ class GithubIngress:
             # is answered even with nothing wired behind the route, so that the
             # webhook can be configured before whatever answers it exists.
             return JSONResponse({"ok": True})
-        if self._handle is None:
-            log.warning(
-                "a GitHub event was delivered but nothing is wired to answer it; "
-                "refusing the delivery rather than acknowledging and dropping it"
-            )
-            return JSONResponse(
-                {"error": "GitHub comment handling is not configured"}, status_code=503
-            )
         try:
             payload = json.loads(body)
         except ValueError:
@@ -181,10 +187,17 @@ class GithubIngress:
         full queue, or no handler wired. Those are the cases where a failed
         delivery GitHub can redeliver beats a 200 that loses the comment.
         """
-        comment = comment_from_payload(event, payload)
+        comment = comment_from_payload(event, payload, self_login=self._self_login())
         if comment is None:
+            # Nothing to do with this delivery, whether or not a handler is
+            # wired: settle it, so a webhook subscribed to more events than
+            # Engine reads does not retry every one of them forever.
             return True
         if self._handle is None:
+            log.warning(
+                "a GitHub comment was delivered but nothing is wired to answer it; "
+                "refusing the delivery rather than acknowledging and dropping it"
+            )
             return False
         identity = (comment.event, comment.comment_id)
         if identity in self._seen:
@@ -206,7 +219,15 @@ class GithubIngress:
                 assert self._handle is not None  # nothing is queued without one
                 await self._handle(comment)
             except Exception:
-                log.exception("GitHub comment handling failed")
+                # The delivery was acknowledged, so GitHub will not retry on its
+                # own; forgetting the comment is what makes a redelivery -- by
+                # hand from the delivery log, or by a later duplicate -- able to
+                # pick the work back up instead of being deduplicated away.
+                self._seen.pop((comment.event, comment.comment_id), None)
+                log.exception(
+                    "GitHub comment handling failed; %s on %s#%s can be redelivered",
+                    comment.comment_id, comment.repository, comment.number,
+                )
             finally:
                 self._queue.task_done()
 
