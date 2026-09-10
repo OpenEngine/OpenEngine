@@ -19,7 +19,7 @@ import {
 } from "./api";
 import { RailBrand, RailFoot } from "./brand";
 import { SettingsPanel } from "./settings-panel";
-import { isGraphRun, IN_PROGRESS_PHASES, runFinished, runStatusLabel } from "./runs";
+import { runFinished, runStatusLabel } from "./runs";
 
 export type RailSection = "projects" | "workflows";
 
@@ -101,29 +101,20 @@ function conversationsOf(
   run: ApiWorkflowRunListing,
   nodes: GraphNodes,
 ): RailConversation[] {
-  if (isGraphRun(run))
-    return (nodes[run.workflowId] ?? [])
-      .filter((node) => node.showInSidebar !== false)
-      .map((node) => ({
-        key: node.nodeId,
-        name: node.name,
-        href: graphConversationUrl(run.runId, node.nodeId),
-        group: node.group || undefined,
-        waiting: !runFinished(run) &&
-          (run.graphProgress?.waitingNodeIds.includes(node.nodeId) ?? false),
-      }));
-  return run.steps
-    .filter((step) => step.conversationUrl)
-    .map((step) => ({
-      key: step.stepId,
-      name: `${step.name} conversation`,
-      href: step.conversationUrl!,
-      waiting: step.waiting,
+  return (nodes[run.workflowId] ?? [])
+    .filter((node) => node.showInSidebar !== false)
+    .map((node) => ({
+      key: node.nodeId,
+      name: node.name,
+      href: graphConversationUrl(run.runId, node.nodeId),
+      group: node.group || undefined,
+      waiting: !runFinished(run) &&
+        (run.graphProgress?.waitingNodeIds.includes(node.nodeId) ?? false),
     }));
 }
 
 function currentGraphNodes(run: ApiWorkflowRunListing) {
-  const progress = isGraphRun(run) && !runFinished(run) ? run.graphProgress : undefined;
+  const progress = runFinished(run) ? undefined : run.graphProgress;
   return progress ? [...new Set([
     ...progress.activeNodeIds,
     ...progress.waitingNodeIds,
@@ -133,13 +124,10 @@ function currentGraphNodes(run: ApiWorkflowRunListing) {
 
 function workOrderCategories(run: ApiWorkflowRunListing, nodes: GraphNodes): string[] {
   if (runFinished(run)) return [run.phase];
-  if (isGraphRun(run)) {
-    const stages = currentGraphNodes(run).map((id) =>
-      nodes[run.workflowId]?.find((node) => node.nodeId === id)?.name ?? id,
-    );
-    if (stages.length) return stages;
-  }
-  return [runStatusLabel(run)];
+  const stages = currentGraphNodes(run).map((id) =>
+    nodes[run.workflowId]?.find((node) => node.nodeId === id)?.name ?? id,
+  );
+  return stages.length ? stages : [runStatusLabel(run)];
 }
 
 function WorkOrderFilters({ options, excluded, onChange }: {
@@ -442,18 +430,14 @@ export function Sidebar({
             {filteredRuns.map((run) => {
               const conversations = conversationsOf(run, graphNodes);
               const conversationGroups = groupConversations(conversations);
-              const progress = isGraphRun(run) && !runFinished(run)
-                ? run.graphProgress
-                : undefined;
+              const progress = runFinished(run) ? undefined : run.graphProgress;
               const currentNodes = currentGraphNodes(run);
               const status = [...new Set(currentNodes.map((id) => {
                 const node = graphNodes[run.workflowId]
                   ?.find((candidate) => candidate.nodeId === id);
                 return node?.group || node?.name || id;
               }))].join(", ") || runStatusLabel(run);
-              const executing = isGraphRun(run)
-                ? !!progress?.activeNodeIds.length
-                : IN_PROGRESS_PHASES.has(run.phase);
+              const executing = !!progress?.activeNodeIds.length;
               return (
                 <div className="rail-group" key={run.runId}>
                   <div
@@ -470,7 +454,7 @@ export function Sidebar({
                         {executing && (
                           <span className="rail-live" aria-label="WorkOrder is in progress" />
                         )}
-                        {status} · {run.workflowVersion || run.workflowId}
+                        {status} · {run.workflowId}
                       </span>
                     </a>
                     {/* The project row's × put next to a WorkOrder, where it

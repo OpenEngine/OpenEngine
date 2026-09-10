@@ -1,24 +1,16 @@
 """Events: things that have already happened.
 
-Events are inputs to the engine. They are facts, stated in the past tense, and
-are never speculative -- an adapter emits one only after the world has actually
-changed. Compare `commands`, which are requests for change.
+Events are facts, stated in the past tense -- an adapter emits one only after
+the world has actually changed. Compare `commands`, which are requests for
+change.
 
-Placeholder set for Ticket 1; the real vocabulary lands with the engine itself.
+What is left is the pair a run-bound agent reports through its terminal MCP
+tools: it finished the node it was given, or it could not.
 """
 
 from dataclasses import dataclass, field
 
-from engine.domain.ids import (
-    AgentRunId,
-    MilestoneId,
-    RunId,
-    StepId,
-    TaskId,
-    WorkflowId,
-    WorkstreamId,
-    WorkspaceId,
-)
+from engine.domain.ids import AgentRunId, RunId, StepId
 from engine.domain.workflow import StepOutput
 
 
@@ -30,45 +22,8 @@ class Event:
 
 
 @dataclass(frozen=True, slots=True)
-class RunRequested(Event):
-    """A human or upstream system asked for work to be done."""
-
-    task_id: TaskId
-    prompt: str
-    repository: str
-    workflow_id: WorkflowId
-    workstream_id: WorkstreamId | None = None
-    milestone_id: MilestoneId | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class RunNamed(Event):
-    """An agent supplied the concise display name for a workflow run."""
-
-    name: str
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceProvisioned(Event):
-    """A workspace provider handed back a usable checkout."""
-
-    workspace_id: WorkspaceId
-    root_path: str
-
-
-@dataclass(frozen=True, slots=True)
-class AgentRunCompleted(Event):
-    """An agent runner finished one execution, successfully or not."""
-
-    agent_run_id: AgentRunId
-    succeeded: bool
-    summary: str
-    changed_files: tuple[str, ...] = field(default=())
-
-
-@dataclass(frozen=True, slots=True)
 class StepCompleted(Event):
-    """A workflow step finished with an outcome and its declared outputs."""
+    """An agent finished its node with an outcome and its declared outputs."""
 
     step_id: StepId
     agent_run_id: AgentRunId
@@ -77,37 +32,6 @@ class StepCompleted(Event):
     outputs: tuple[StepOutput, ...] = field(default=())
     mcp_request_id: str | int | None = None
     """JSON-RPC request that submitted the result, absent for non-MCP producers."""
-
-
-@dataclass(frozen=True, slots=True)
-class AgentStepPaused(Event):
-    """An agent step stopped intentionally and must wait for a human message."""
-
-    step_id: StepId
-    agent_run_id: AgentRunId
-
-
-@dataclass(frozen=True, slots=True)
-class StepReactivated(Event):
-    """A human message reopened a previously closed workflow step."""
-
-    step_id: StepId
-
-
-@dataclass(frozen=True, slots=True)
-class HumanReviewCompleted(Event):
-    """A human made the final decision for a workflow review step."""
-
-    step_id: StepId
-    approved: bool
-    summary: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class ChangesPublished(Event):
-    """Source control accepted the attempt's changes."""
-
-    review_url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,15 +46,7 @@ class RunFailed(Event):
 
 
 __all__ = [
-    "AgentStepPaused",
-    "AgentRunCompleted",
-    "ChangesPublished",
     "Event",
-    "HumanReviewCompleted",
     "RunFailed",
-    "RunNamed",
-    "RunRequested",
     "StepCompleted",
-    "StepReactivated",
-    "WorkspaceProvisioned",
 ]

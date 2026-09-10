@@ -80,15 +80,12 @@ from engine.adapters.communications.slack import (
 )
 from engine.domain import (
     AgentId,
-    AgentInstance,
     AgentInstanceId,
     AgentRunId,
     AgentRunStatus,
-    AgentStep,
     ApprovalDecision,
     ApprovalId,
     ApprovalRecord,
-    HumanReviewCompleted,
     Message,
     Milestone,
     MilestoneId,
@@ -99,14 +96,10 @@ from engine.domain import (
     RunId,
     RunOrigin,
     RunPhase,
-    RunRequested,
     RunState,
     ScopingPlan,
     ScopingPolicy,
-    StartAgentRun,
-    StepId,
     TaskId,
-    WorkflowDefinition,
     WorkflowId,
     WorkspaceId,
     Workstream,
@@ -154,8 +147,6 @@ from engine.runtime import (
     UnknownApprovalError,
     UserInputNotAllowedError,
     WorkflowCatalog,
-    WorkflowExecutionError,
-    WorkflowExecutor,
     WorkflowRunView,
     WorkOrdersConfig,
     load_engine_config,
@@ -182,12 +173,6 @@ class ChatThread:
     workspace_id: WorkspaceId | None = None
     workspace_ref: str | None = None
     """What to check out to read this chat's work, checkout or no checkout."""
-    workflow_run_id: RunId | None = None
-    workflow_step_id: StepId | None = None
-    editable: bool = False
-    """Whether this workflow step permits human messages and interruption."""
-    auto_approve: bool = False
-    """Whether system auto-approvals are enabled for this conversation."""
 
 
 class ActiveRun:
@@ -416,7 +401,6 @@ class ThreadService:
         self,
         session: AgentSession,
         runners: Mapping[str, AgentRunner],
-        workflow_catalog: WorkflowCatalog | None = None,
         approval_policy: ApprovalConfig = ApprovalConfig(),
         *,
         approval_observer: Callable[[ApprovalRecord], Awaitable[None]] | None = None,
@@ -427,7 +411,6 @@ class ThreadService:
         )
         """Public alongside `session`: the same durable boundary, for pauses."""
         self._runners = runners
-        self._workflow_catalog = workflow_catalog
         self._threads: dict[AgentInstanceId, ChatThread] = {}
         self._locks: dict[AgentInstanceId, asyncio.Lock] = {}
         self._active_runs: dict[AgentInstanceId, ActiveRun] = {}
@@ -436,20 +419,16 @@ class ThreadService:
 
     async def list(self) -> tuple[ChatThread, ...]:
         await self._restore()
-        return tuple(
-            thread
-            for thread in reversed(self._threads.values())
-            if thread.workflow_run_id is None
-        )
+        return tuple(reversed(self._threads.values()))
 
     async def get(self, instance_id: AgentInstanceId) -> ChatThread | None:
         await self._restore()
         thread = self._threads.get(instance_id)
         if thread is not None:
             return thread
-        # Workflow workers may materialize a step after this web process has
-        # restored its initial registry. Resolve direct conversation links from
-        # the durable store instead of requiring a server restart.
+        # A conversation may be created after this web process restored its
+        # initial registry. Resolve direct links from the durable store instead
+        # of requiring a server restart.
         instance = await self.session.instance(instance_id)
         if instance is None:
             return None
@@ -461,12 +440,8 @@ class ThreadService:
                 if instance.runner in self.session.runners
                 else self.session.default_runner
             ),
-            title=await self._instance_title(instance),
+            title=instance.title,
             archived=instance.archived,
-            workflow_run_id=instance.workflow_run_id,
-            workflow_step_id=instance.workflow_step_id,
-            editable=await self._instance_step_editable(instance),
-            auto_approve=instance.auto_approve,
         )
         self._threads[instance.instance_id] = await self._sync_workspace(thread)
         self._locks[instance.instance_id] = asyncio.Lock()
@@ -486,21 +461,8 @@ class ThreadService:
     async def attach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
         """Give this chat a checkout again -- or a first one."""
         thread = await self._require_idle(instance_id)
-        repository = None
-        base_ref = None
-        if thread.workflow_run_id is not None:
-            run = await self.session.state_store.load(thread.workflow_run_id)
-            if run is None:
-                raise RuntimeError("WorkOrder not found")
-            repository = run.repository
-            definition = run.workflow_definition
-            if definition is None and self._workflow_catalog is not None:
-                definition = self._workflow_catalog.get(run.workflow_id)
-            base_ref = definition.workspace.base_ref if definition is not None else None
         async with self._locks[instance_id]:
-            state = await self.session.attach_workspace(
-                instance_id, repository=repository, base_ref=base_ref
-            )
+            state = await self.session.attach_workspace(instance_id)
         return self._apply_workspace_state(thread, state)
 
     async def detach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -672,12 +634,6 @@ class ThreadService:
         """The latest run, including a just-finished run needed by a racing resume."""
         return self._active_runs.get(instance_id)
 
-    def auto_approve_enabled(self, instance_id: AgentInstanceId) -> bool:
-        """The live per-conversation override read by workflow approval handlers."""
-
-        thread = self._threads.get(instance_id)
-        return bool(thread and thread.auto_approve)
-
     async def decide_approval(
         self,
         instance_id: AgentInstanceId,
@@ -825,7 +781,6 @@ class ThreadService:
         title: str | None = None,
         runner: str | None = None,
         archived: bool | None = None,
-        auto_approve: bool | None = None,
     ) -> ChatThread:
         thread = await self._require(instance_id)
         if runner is not None and runner not in self.session.runners:
@@ -836,15 +791,7 @@ class ThreadService:
             thread.runner = runner
         if archived is not None:
             thread.archived = archived
-        if auto_approve is not None:
-            if thread.workflow_step_id is None:
-                raise ValueError(
-                    "auto-approval is only available for workflow conversations"
-                )
-            thread.auto_approve = auto_approve
         await self._persist_metadata(thread)
-        if auto_approve:
-            await self.approvals.auto_approve_pending(instance_id)
         return thread
 
     async def _persist_metadata(self, thread: ChatThread) -> None:
@@ -853,7 +800,6 @@ class ThreadService:
             thread.title,
             thread.archived,
             thread.runner,
-            thread.auto_approve,
         )
 
     async def _require(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -912,12 +858,8 @@ class ThreadService:
                         if instance.runner in self.session.runners
                         else self.session.default_runner
                     ),
-                    title=await self._instance_title(instance),
+                    title=instance.title,
                     archived=instance.archived,
-                    workflow_run_id=instance.workflow_run_id,
-                    workflow_step_id=instance.workflow_step_id,
-                    editable=await self._instance_step_editable(instance),
-                    auto_approve=instance.auto_approve,
                 )
                 self._threads[instance.instance_id] = await self._sync_workspace(thread)
                 self._locks[instance.instance_id] = asyncio.Lock()
@@ -926,26 +868,6 @@ class ThreadService:
             # no longer exists and can never be answered.
             await self.approvals.interrupt_orphans()
             self._restored = True
-
-    async def _instance_step_editable(self, instance: AgentInstance) -> bool:
-        if instance.workflow_run_id is None or instance.workflow_step_id is None:
-            return False
-        state = await self.session.state_store.load(instance.workflow_run_id)
-        if state is None:
-            return False
-        definition = state.workflow_definition
-        if definition is None and self._workflow_catalog is not None:
-            definition = self._workflow_catalog.get(state.workflow_id)
-        return _workflow_step_editable(definition, instance.workflow_step_id)
-
-    async def _instance_title(self, instance: AgentInstance) -> str:
-        """Name workflow conversations after their owning run."""
-        if instance.workflow_run_id is None or instance.title != "New chat":
-            return instance.title
-        state = await self.session.state_store.load(instance.workflow_run_id)
-        if state is None:
-            return instance.title
-        return state.name or state.prompt or str(state.run_id)
 
 
 #: Where the graph runtime's sub-application is served from, so its addresses
@@ -1027,12 +949,9 @@ def create_app(
     runners: Mapping[str, AgentRunner],
     static_directory: Path | None = None,
     *,
-    workflow_runners: Mapping[str, AgentRunner] | None = None,
-    review_runners: Mapping[str, AgentRunner] | None = None,
     workflow_catalog: WorkflowCatalog | None = None,
     graph_runtime: AbstractAsyncContextManager[GraphRuntime] | None = None,
     approval_policy: ApprovalConfig = ApprovalConfig(),
-    default_branch: str = "main",
     credential_store: GitHubCredentialStore | None = None,
     github_client_id: str = "",
     github_client_id_source: str = "configuration",
@@ -1050,22 +969,17 @@ def create_app(
     concierge_provider: ACPAgentProvider | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
-    if workflow_runners is not None and review_runners is None:
-        raise ValueError("review_runners are required with workflow_runners")
     if workflow_catalog is None:
         loaded_config = load_engine_config()
         catalog = (
             load_workflow_catalog(loaded_config.workflows_directory)
             if loaded_config.workflows_directory is not None
-            else WorkflowCatalog.from_definitions(())
+            else WorkflowCatalog.from_graphs(())
         )
     else:
         catalog = workflow_catalog
     # The graph workflows this deployment could run, looked up by the id the
-    # dropdown sends back. A graph is the newer kind of workflow: the catalog
-    # keeps it apart from the step workflows because a different engine runs
-    # it, and this is the interface's half of that -- the one list a person
-    # picks from, with each entry remembering which engine it belongs to.
+    # dropdown sends back.
     #
     # "Could", not "does": whether they are actually offered is `offered_graphs`
     # below, which additionally asks whether the engine is running.
@@ -1079,24 +993,6 @@ def create_app(
     # graph's own sub-application serves. Built here rather than when the
     # server starts so that the observer below can be written once.
     graph_events = EventLog()
-
-    def graph_run(state: RunState) -> bool:
-        """Whether the graph engine, rather than the step executor, owns this row.
-
-        Asked of the row rather than of the graphs on offer, because a graph
-        can be renamed or withdrawn and the WorkOrders of it stay: a run that
-        checked the offered list would stop being recognised as a graph run the
-        moment its workflow left, and would then be restarted, refused a
-        transcript and left claiming to be working by the code below.
-
-        A step run always has its definition -- snapshotted on the row when it
-        was created, and in the catalog while the deployment still offers it --
-        and a graph run never does, so that absence is the tell.
-        """
-        return (
-            state.workflow_definition is None
-            and catalog.get(state.workflow_id) is None
-        )
 
     def offered_graphs() -> Mapping[str, GraphWorkflow]:
         """The graph entries a person may pick, right now.
@@ -1113,112 +1009,10 @@ def create_app(
     service = ThreadService(
         session,
         runners,
-        catalog,
         approval_policy,
         approval_observer=approval_feed.publish,
     )
     run_reader = RunReader(session.state_store, catalog)
-
-    async def approval_presented(_approval: ApprovalRecord) -> None:
-        # The broker's observer publishes every persisted transition. This
-        # presenter exists because the runner callback also supports run-local
-        # presentation, which workflow runs do not need.
-        return None
-
-    def workflow_approval_handler(
-        command: StartAgentRun, runner_name: str
-    ) -> ApprovalHandler:
-        # A workflow step runs on the implementation or the review runner of one
-        # provider, and the two read that provider's requests the same way --
-        # so either mapping answers "what does `runner_name` speak".
-        step_runner = (workflow_runners or runners).get(runner_name) or runners.get(
-            runner_name
-        )
-        return service.approvals.handler(
-            agent_run_id=command.agent_run_id,
-            instance_id=command.instance_id,
-            runner=runner_name,
-            present=approval_presented,
-            workspace_id=command.workspace_id,
-            translator=(
-                step_runner.permission_translator if step_runner is not None else None
-            ),
-            auto_approve=lambda: service.auto_approve_enabled(command.instance_id),
-            # The command carries the profile it was started with, so a step
-            # running an agent that only reads is held to that here as well as
-            # in a chat -- including against the conversation's own auto-approve.
-            read_only=command.profile.read_only,
-        )
-
-    workflow_executor = WorkflowExecutor(
-        session.capabilities,
-        workflow_runners if workflow_runners is not None else runners,
-        review_runners=review_runners if review_runners is not None else runners,
-        approval_handler=workflow_approval_handler,
-        catalog=catalog,
-        default_branch=default_branch,
-        communications_channel=communications_channel,
-        public_url=public_url,
-    )
-    workflow_tasks: dict[RunId, asyncio.Task[None]] = {}
-    workflow_restart_locks: dict[RunId, asyncio.Lock] = {}
-
-    def track_workflow(run_id: RunId, task: asyncio.Task[None]) -> None:
-        workflow_tasks[run_id] = task
-        task.add_done_callback(
-            lambda completed: (
-                workflow_tasks.pop(run_id, None)
-                if workflow_tasks.get(run_id) is completed
-                else None
-            )
-        )
-
-    async def workflow_runner_for(state: RunState) -> str:
-        """Use the active conversation's runner before the run's initial choice."""
-
-        instances = await session.state_store.list_instances(
-            workflow_run_id=state.run_id
-        )
-        current = next(
-            (
-                instance
-                for instance in instances
-                if instance.workflow_step_id == state.current_step_id
-            ),
-            None,
-        )
-        previous = next((instance for instance in instances if instance.runner), None)
-        return (
-            current.runner
-            if current is not None and current.runner
-            else state.runner_name
-            or (previous.runner if previous is not None else "")
-            or workflow_executor.default_runner
-        )
-
-    async def restore_agent_steps() -> None:
-        """Restart agent commands whose process-local dispatch was lost."""
-        for state in await session.state_store.list_runs():
-            if (
-                state.phase is not RunPhase.RUNNING_AGENT
-                or state.agent_paused
-                or state.run_id in workflow_tasks
-                # A graph WorkOrder is not this executor's to restart: it has
-                # no steps to pick back up, and looking for a step list a graph
-                # does not have would fail a run that is perfectly healthy.
-                # `restore_graph_runs` is the one that picks these up.
-                or graph_run(state)
-            ):
-                continue
-            runner_name = await workflow_runner_for(state)
-            track_workflow(
-                state.run_id,
-                asyncio.create_task(
-                    workflow_executor.resume_agent_step(
-                        state.run_id, runner_name=runner_name
-                    )
-                ),
-            )
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
     graph_notification_lock = asyncio.Lock()
@@ -1334,7 +1128,7 @@ def create_app(
         forever, so it is failed saying which workflow went missing.
         """
         for state in await session.state_store.list_runs():
-            if state.is_terminal or not graph_run(state):
+            if state.is_terminal:
                 continue
             try:
                 try:
@@ -1443,151 +1237,7 @@ def create_app(
                     surface.app = create_graph_app(surface.runtime, graph_events)
                     surface.runtime.observe(graph_event)
                     await restore_graph_runs(surface.runtime)
-            await restore_agent_steps()
-            try:
-                yield
-            finally:
-                tasks = tuple(workflow_tasks.values())
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-    def workflow_is_active(thread: ChatThread) -> bool:
-        return (
-            thread.workflow_run_id is not None
-            and thread.workflow_run_id in workflow_tasks
-        )
-
-    async def interrupt_workflow(thread: ChatThread) -> None:
-        """Stop the active process for an editable step without failing its run."""
-
-        if not thread.editable or thread.workflow_run_id is None:
-            raise RuntimeError("this workflow conversation is read-only")
-        state = await session.state_store.load(thread.workflow_run_id)
-        if (
-            state is None
-            or state.phase is not RunPhase.RUNNING_AGENT
-            or state.current_step_id != thread.workflow_step_id
-        ):
-            raise RuntimeError("this workflow step is no longer active")
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task = workflow_tasks.get(thread.workflow_run_id)
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        assert thread.workflow_step_id is not None
-        await workflow_executor.pause_agent_step(
-            thread.workflow_run_id, thread.workflow_step_id
-        )
-
-    async def switch_workflow_runner(thread: ChatThread) -> None:
-        """Restart an active workflow turn on its conversation's new runner."""
-
-        assert thread.workflow_run_id is not None
-        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
-        async with lock:
-            task = workflow_tasks.get(thread.workflow_run_id)
-            if task is None or task.done():
-                return
-            state = await session.state_store.load(thread.workflow_run_id)
-            if (
-                state is None
-                or state.phase is not RunPhase.RUNNING_AGENT
-                or state.current_step_id != thread.workflow_step_id
-            ):
-                return
-            if state.current_agent_run_id is not None:
-                await service.approvals.cancel_run(state.current_agent_run_id)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-            # The completed turn may have advanced to another agent between the
-            # first state read and cancellation. Resume whichever conversation is
-            # now current, without applying this conversation's choice to another.
-            state = await session.state_store.load(thread.workflow_run_id)
-            if (
-                state is None
-                or state.phase is not RunPhase.RUNNING_AGENT
-                or state.agent_paused
-            ):
-                return
-            runner_name = await workflow_runner_for(state)
-            track_workflow(
-                state.run_id,
-                asyncio.create_task(
-                    workflow_executor.resume_agent_step(
-                        state.run_id, runner_name=runner_name
-                    )
-                ),
-            )
-
-    async def continue_workflow(thread: ChatThread, text: str) -> None:
-        """Interrupt, append a human message, and resume the same workflow step."""
-
-        assert thread.workflow_run_id is not None
-        if not thread.editable:
-            raise RuntimeError("this workflow conversation is read-only")
-        await service.require_somewhere_to_run(thread.instance_id)
-        before = len(await service.history(thread.instance_id))
-        state = await session.state_store.load(thread.workflow_run_id)
-        if state is None:
-            raise RuntimeError("this workflow step is no longer active")
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task = workflow_tasks.get(thread.workflow_run_id)
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        if (
-            state.phase is RunPhase.RUNNING_AGENT
-            and state.current_step_id == thread.workflow_step_id
-        ):
-            await workflow_executor.pause_agent_step(
-                thread.workflow_run_id, thread.workflow_step_id
-            )
-        task = asyncio.create_task(
-            workflow_executor.resume_agent_step(
-                thread.workflow_run_id,
-                text,
-                thread.runner,
-                step_id=thread.workflow_step_id,
-            )
-        )
-        track_workflow(thread.workflow_run_id, task)
-        while (
-            len(await service.history(thread.instance_id)) <= before and not task.done()
-        ):
-            await asyncio.sleep(0)
-        if task.done() and not task.cancelled() and task.exception() is not None:
-            raise RuntimeError(str(task.exception()))
-
-    async def stream_workflow_conversation(
-        instance_id: AgentInstanceId, run_id: RunId
-    ) -> AsyncIterator[bytes]:
-        """Poll durable workflow progress into the chat client's snapshot stream."""
-        previous: list[dict[str, object]] | None = None
-        previous_approvals: dict[str, dict[str, object]] = {}
-        while True:
-            history = await service.history(instance_id)
-            content = _latest_assistant_content(history)
-            approvals = await session.state_store.list_approvals(
-                instance_id=instance_id
-            )
-            active = run_id in workflow_tasks
-            for record in approvals:
-                approval = _approval_json(record)
-                approval_id = str(record.approval_id)
-                if approval != previous_approvals.get(approval_id):
-                    previous_approvals[approval_id] = approval
-                    yield _json_line({"type": "approval", "approval": approval})
-            if not active:
-                yield _json_line({"type": "done", "content": content})
-                return
-            if content != previous:
-                previous = content
-                yield _json_line({"type": "content", "content": content})
-            await asyncio.sleep(0.25)
+            yield
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -1615,32 +1265,14 @@ def create_app(
                     else ""
                 ),
                 "defaultRunner": session.default_runner,
-                "workflowRunners": list(workflow_executor.runners),
-                "defaultWorkflowRunner": workflow_executor.default_runner,
-                # One dropdown, two kinds of workflow. The step workflows
-                # come first and read as they always have; the graph ones
-                # follow, under their own names and with no version, because a
-                # graph does not have one. Only the graphs this process can
-                # actually start are here -- see `offered_graphs` -- because an
-                # entry nobody could run would be a choice that fails after it
-                # was made.
-                #
-                # Graph creation fields come from the workflow's declarations.
+                # Only the graphs this process can actually start are here --
+                # see `offered_graphs` -- because an entry nobody could run
+                # would be a choice that fails after it was made. Their
+                # creation fields come from the workflow's own declarations.
                 "workflows": [
-                    {
-                        "id": str(definition.workflow_id),
-                        "name": definition.name,
-                        "version": definition.version,
-                        "kind": "steps",
-                    }
-                    for definition in catalog
-                ]
-                + [
                     {
                         "id": str(graph.graph_id),
                         "name": graph.name,
-                        "version": "",
-                        "kind": "graph",
                         **(
                             {"inputs": [asdict(item) for item in graph.inputs]}
                             if getattr(graph, "inputs", ()) else {}
@@ -1660,11 +1292,10 @@ def create_app(
         runs = []
         for run in await run_reader.list():
             row = _run_json(run, listing=True)
-            # Graph rows have no steps. Carry only the live frontier and
-            # approval owners, not the snapshot's potentially large values.
+            # Carry only the live frontier and approval owners, not the
+            # snapshot's potentially large values.
             if (
-                not run.workflow_version
-                and run.phase not in {"succeeded", "failed"}
+                run.phase not in {"succeeded", "failed"}
                 and surface.runtime is not None
             ):
                 # A row of a workflow this deployment no longer has cannot
@@ -1884,8 +1515,7 @@ def create_app(
             workstream_id=workstream_id,
             milestone_id=milestone_id,
             # Working, as the engine has just reported it. `graph_event` above
-            # moves this when the run ends. It is never picked back up by the
-            # step executor -- see `restore_agent_steps`.
+            # moves this when the run ends.
             phase=GRAPH_PHASES[snapshot.status],
             prompt=prompt,
             repository=repository,
@@ -1928,14 +1558,9 @@ def create_app(
             milestone_value = _optional_string(body, "milestoneId")
         except ValueError as error:
             return _error(str(error), 400)
-        definition = catalog.get(workflow_id)
         graph = offered_graphs().get(str(workflow_id))
-        if definition is None and graph is None:
+        if graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
-        runner_name = str(body.get("runner") or workflow_executor.default_runner)
-        # Graphs use their declared inputs instead of the step runner field.
-        if graph is None and runner_name not in workflow_executor.runners:
-            return _error(f"unknown workflow runner: {runner_name}", 400)
         workstream_id = (
             WorkstreamId(workstream_value) if workstream_value is not None else None
         )
@@ -1963,35 +1588,21 @@ def create_app(
         # milestone is retained only for a task created without one.
         direct_milestone_id = milestone_id if workstream_id is None else None
 
-        if graph is not None:
-            # `offered_graphs` only answers with a graph while the engine is
-            # running, so this cannot be `None` here.
-            assert surface.runtime is not None
-            try:
-                inputs = resolve_inputs(
-                    getattr(graph, "inputs", ()), body.get("inputs", {})
-                )
-            except ValueError as error:
-                return _error(str(error), 400)
-            state = await start_graph_run(
-                surface.runtime,
-                graph,
-                inputs=inputs,
-                prompt=prompt,
-                repository=repository,
-                workstream_id=workstream_id,
-                milestone_id=direct_milestone_id,
+        # `offered_graphs` only answers with a graph while the engine is
+        # running, so this cannot be `None` here.
+        assert surface.runtime is not None
+        try:
+            inputs = resolve_inputs(
+                getattr(graph, "inputs", ()), body.get("inputs", {})
             )
-            run = await run_reader.get(state.run_id)
-            assert run is not None
-            return JSONResponse(_run_json(run), status_code=201)
-
-        state = await start_step_run(
+        except ValueError as error:
+            return _error(str(error), 400)
+        state = await start_graph_run(
+            surface.runtime,
+            graph,
+            inputs=inputs,
             prompt=prompt,
             repository=repository,
-            workflow_id=workflow_id,
-            definition=definition,
-            runner_name=runner_name,
             workstream_id=workstream_id,
             milestone_id=direct_milestone_id,
         )
@@ -1999,92 +1610,20 @@ def create_app(
         assert run is not None
         return JSONResponse(_run_json(run), status_code=201)
 
-    async def start_step_run(
-        *,
-        prompt: str,
-        repository: str,
-        workflow_id: WorkflowId,
-        definition: WorkflowDefinition | None,
-        runner_name: str,
-        workstream_id: WorkstreamId | None = None,
-        milestone_id: MilestoneId | None = None,
-        origin: RunOrigin | None = None,
-        ready: asyncio.Event | None = None,
-    ) -> RunState:
-        """Record a step WorkOrder and start driving it, whoever asked for it.
-
-        The form and a chat mention differ in what they know, not in what they
-        start -- so this is one function rather than two that would drift: an
-        `origin` is the only thing the second one carries that the first does
-        not, and it is what makes the run answerable in the place it came from.
-        """
-        run_id = RunId(f"run-{uuid4().hex[:12]}")
-        task_id = TaskId(f"task-{uuid4().hex[:12]}")
-        event = RunRequested(
-            run_id=run_id,
-            task_id=task_id,
-            prompt=prompt,
-            repository=repository,
-            workflow_id=workflow_id,
-            workstream_id=workstream_id,
-            milestone_id=milestone_id,
-        )
-        state = RunState(
-            run_id=run_id,
-            task_id=task_id,
-            workflow_id=workflow_id,
-            workstream_id=workstream_id,
-            milestone_id=milestone_id,
-            prompt=prompt,
-            repository=repository,
-            workflow_definition=definition,
-            origin=origin,
-        )
-        await session.state_store.save(state)
-        await session.state_store.append_events(run_id, (event,))
-
-        async def drive() -> None:
-            if ready is not None:
-                await ready.wait()
-            await workflow_executor.start(event, runner_name)
-
-        track_workflow(
-            run_id,
-            asyncio.create_task(drive()),
-        )
-        return state
-
     async def get_run(request: Request) -> JSONResponse:
         run_id = RunId(request.path_params["run_id"])
         run = await run_reader.get(run_id)
         if run is None:
             return _error("run not found", 404)
-        task = workflow_tasks.get(run_id)
-        if run.terminal_outcome is not None and task is not None and not task.done():
-            # A terminal MCP result is persisted before its acknowledgement is
-            # sent. Do not expose the terminal snapshot until that final piece
-            # of the runner protocol has completed too.
-            await asyncio.shield(task)
-            run = await run_reader.get(run_id)
-            assert run is not None
         return JSONResponse(_run_json(run))
 
     async def delete_run(request: Request) -> Response:
         """Throw a WorkOrder away, whatever it was in the middle of.
 
-        A run still being worked on is stopped first, and which engine is asked
-        to stop it depends on which one is running it. A step WorkOrder is this
-        app's: the agent turn is cancelled and the task driving the run is
-        awaited out, so nothing is left holding a run id that is about to stop
-        existing -- a save landing after the delete would put the row back, and
-        the WorkOrder the reader just threw away would reappear on the next
-        poll.
-
-        A graph one is the graph engine's, and none of that reaches it: its
-        driver is a task in the engine, not in `workflow_tasks`, and the agent
-        it has open is not an agent run this app started. Deleting the row
-        without telling the engine would take the WorkOrder off the rail and
-        leave the run working -- agents still going in the repository, with
+        A run still being worked on is the graph engine's, and its driver is a
+        task in the engine rather than anything this app holds. Deleting the
+        row without telling the engine would take the WorkOrder off the rail
+        and leave the run working -- agents still going in the repository, with
         nothing left on screen to stop them by. So the engine is asked to
         cancel the run, and only then is the row forgotten.
         """
@@ -2092,14 +1631,7 @@ def create_app(
         state = await session.state_store.load(run_id)
         if state is None:
             return _error("run not found", 404)
-        if graph_run(state):
-            await cancel_graph_run(run_id)
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task = workflow_tasks.pop(run_id, None)
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await cancel_graph_run(run_id)
         await session.state_store.delete_run(run_id)
         return Response(status_code=204)
 
@@ -2141,17 +1673,14 @@ def create_app(
         WorkOrder page also needs a finite snapshot when it opens after an
         agent has finished, so serve the same recorded events as JSON here.
 
-        Answered for any graph WorkOrder, including one whose workflow this
+        Answered for any WorkOrder, including one whose workflow this
         deployment no longer has: what a run said is recorded against the run,
         not against the graph, so a withdrawn or renamed workflow takes away
         the ability to draw the graph and not the transcripts underneath it.
         """
         run_id = RunId(request.path_params["run_id"])
-        state = await session.state_store.load(run_id)
-        if state is None:
+        if await session.state_store.load(run_id) is None:
             return _error("run not found", 404)
-        if not graph_run(state):
-            return _error("run is not a graph WorkOrder", 409)
         return JSONResponse(
             {
                 "events": [
@@ -2165,41 +1694,6 @@ def create_app(
                 ]
             }
         )
-
-    async def complete_human_review(request: Request) -> JSONResponse:
-        run_id = RunId(request.path_params["run_id"])
-        state = await session.state_store.load(run_id)
-        if state is None:
-            return _error("run not found", 404)
-        body = await _json_body(request)
-        approved = body.get("approved")
-        if not isinstance(approved, bool):
-            return _error("approved must be a boolean", 400)
-        if (
-            state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
-            or state.current_step_id is None
-        ):
-            return _error("run is not awaiting human review", 409)
-        summary = str(body.get("summary", "")).strip()
-        try:
-            next_state = await workflow_executor.complete_human_review(
-                HumanReviewCompleted(
-                    run_id=run_id,
-                    step_id=state.current_step_id,
-                    approved=approved,
-                    summary=summary,
-                )
-            )
-            if next_state.phase is RunPhase.RUNNING_AGENT:
-                track_workflow(
-                    run_id,
-                    asyncio.create_task(workflow_executor.resume_agent_step(run_id)),
-                )
-        except WorkflowExecutionError as error:
-            return _error(str(error), 409)
-        run = await run_reader.get(run_id)
-        assert run is not None
-        return JSONResponse(_run_json(run))
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
@@ -2246,29 +1740,12 @@ def create_app(
             else:
                 title = None
         runner = str(body["runner"]) if "runner" in body else None
-        if (
-            runner is not None
-            and thread.workflow_run_id is not None
-            and runner not in workflow_executor.runners
-        ):
-            return _error(f"unknown workflow runner: {runner}", 400)
-        runner_changed = runner is not None and runner != thread.runner
-        auto_approve = None
-        if "autoApprove" in body:
-            if not isinstance(body["autoApprove"], bool):
-                return _error("autoApprove must be a boolean", 400)
-            auto_approve = body["autoApprove"]
         try:
             thread = await service.update_metadata(
-                instance_id,
-                title=title,
-                runner=runner,
-                auto_approve=auto_approve,
+                instance_id, title=title, runner=runner
             )
         except ValueError as error:
             return _error(str(error), 400)
-        if runner_changed and thread.workflow_run_id is not None:
-            await switch_workflow_runner(thread)
         return JSONResponse(_thread_json(thread))
 
     async def archive_thread(request: Request) -> JSONResponse:
@@ -2295,23 +1772,20 @@ def create_app(
             return _error("thread not found", 404)
         history = await service.history(instance_id)
         active = service.active_run(instance_id)
-        workflow_active = workflow_is_active(thread)
-        visible_history = _through_latest_user(history) if workflow_active else history
         # What a conversation was asked to allow is part of the transcript, and
         # is loaded with it. The run stream replays these too, but it is only
-        # opened for a run this process is still executing -- so a step that has
-        # since finished, or one whose task this process no longer holds, used
-        # to come back from a page load with its approvals missing entirely.
+        # opened while this process is still executing the turn -- so a chat
+        # whose run has since finished used to come back from a page load with
+        # its approvals missing entirely.
         approvals = await session.state_store.list_approvals(instance_id=instance_id)
         return JSONResponse(
             {
-                "messages": _messages_json(visible_history),
+                "messages": _messages_json(history),
                 "approvals": [_approval_json(record) for record in approvals],
                 # A complete assistant transcript can become durable just
                 # before ActiveRun flips to done. In that window replaying it
                 # would duplicate the assistant message in the client.
-                "unstable_resume": workflow_active
-                or (
+                "unstable_resume": (
                     active is not None
                     and bool(history)
                     and history[-1].role is Role.USER
@@ -2375,13 +1849,6 @@ def create_app(
         thread = await service.get(instance_id)
         if thread is None:
             return _error("thread not found", 404)
-        # Workflow steps share one checkout. An earlier conversation may be
-        # idle while a later step is still using that same directory.
-        if workflow_is_active(thread):
-            assert thread.workflow_run_id is not None
-            state = await session.state_store.load(thread.workflow_run_id)
-            if state is None or state.phase is RunPhase.RUNNING_AGENT:
-                return _error("this workflow has a run in progress", 409)
         try:
             thread = await service.detach_workspace(instance_id)
         except RuntimeError as error:
@@ -2390,8 +1857,7 @@ def create_app(
 
     async def run_thread(request: Request) -> Response:
         instance_id = _thread_id(request)
-        thread = await service.get(instance_id)
-        if thread is None:
+        if await service.get(instance_id) is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
         try:
@@ -2401,16 +1867,6 @@ def create_app(
         runner = str(body["runner"]) if body.get("runner") else None
 
         try:
-            if thread.workflow_run_id is not None:
-                if runner is not None and runner != thread.runner:
-                    if runner not in workflow_executor.runners:
-                        return _error(f"unknown workflow runner: {runner}", 400)
-                    thread = await service.update_metadata(instance_id, runner=runner)
-                await continue_workflow(thread, text)
-                return StreamingResponse(
-                    stream_workflow_conversation(instance_id, thread.workflow_run_id),
-                    media_type="application/x-ndjson",
-                )
             run = await service.start_run(instance_id, text, runner)
             return StreamingResponse(run.stream(), media_type="application/x-ndjson")
         except RuntimeError as error:
@@ -2418,47 +1874,31 @@ def create_app(
 
     async def resume_run(request: Request) -> Response:
         instance_id = _thread_id(request)
-        thread = await service.get(instance_id)
-        if thread is None:
+        if await service.get(instance_id) is None:
             return _error("thread not found", 404)
         # Keep a completed snapshot available for the small race where history
         # observed an active run immediately before it finished.
         run = service.latest_run(instance_id)
         if run is not None:
             return StreamingResponse(run.stream(), media_type="application/x-ndjson")
-        if thread.workflow_run_id is not None:
-            return StreamingResponse(
-                stream_workflow_conversation(instance_id, thread.workflow_run_id),
-                media_type="application/x-ndjson",
-            )
         return Response(status_code=204)
 
     async def cancel_run(request: Request) -> Response:
         instance_id = _thread_id(request)
-        thread = await service.get(instance_id)
-        if thread is None:
+        if await service.get(instance_id) is None:
             return _error("thread not found", 404)
         try:
-            if thread.workflow_run_id is not None:
-                await interrupt_workflow(thread)
-            else:
-                await service.stop_run(instance_id)
+            await service.stop_run(instance_id)
         except RuntimeError as error:
             return _error(str(error), 409)
         return Response(status_code=204)
 
     async def decide_approval(request: Request) -> Response:
         instance_id = _thread_id(request)
-        thread = await service.get(instance_id)
-        if thread is None:
+        if await service.get(instance_id) is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
         try:
-            workflow_agent_run_id = None
-            if thread.workflow_run_id is not None:
-                workflow_state = await session.state_store.load(thread.workflow_run_id)
-                if workflow_state is not None:
-                    workflow_agent_run_id = workflow_state.current_agent_run_id
             approval_id = ApprovalId(request.path_params["approval_id"])
             if "answers" in body:
                 raw_answers = body["answers"]
@@ -2477,12 +1917,12 @@ def create_app(
                 if len(answers) != len(raw_answers):
                     raise ValueError("each answer must be an array of strings")
                 approval = await service.answer_question(
-                    instance_id, approval_id, answers, workflow_agent_run_id
+                    instance_id, approval_id, answers
                 )
             else:
                 decision = _required_string(body, "decision")
                 approval = await service.decide_approval(
-                    instance_id, approval_id, decision, workflow_agent_run_id
+                    instance_id, approval_id, decision
                 )
         except ValueError as error:
             return _error(str(error), 400)
@@ -2985,27 +2425,16 @@ def create_app(
         origin: RunOrigin, repository: str, prompt: str,
     ) -> tuple[str, str]:
         ready = asyncio.Event()
-        graph = offered_graphs().get(work_orders.workflow)
-        if graph is not None:
-            assert surface.runtime is not None
-            state = await start_graph_run(
-                surface.runtime, graph,
-                inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
-                prompt=prompt, repository=repository,
-                workstream_id=None, milestone_id=None, origin=origin,
-            )
-        else:
-            definition = _mentioned_workflow()
-            if definition is None:
-                raise RuntimeError("no workflow is configured under `work_orders.workflow`")
-            runner_name = work_orders.runner or workflow_executor.default_runner
-            if runner_name not in workflow_executor.runners:
-                raise RuntimeError(f"unknown runner: {runner_name}")
-            state = await start_step_run(
-                prompt=prompt, repository=repository,
-                workflow_id=definition.workflow_id, definition=definition,
-                runner_name=runner_name, origin=origin, ready=ready,
-            )
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        assert surface.runtime is not None
+        state = await start_graph_run(
+            surface.runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=prompt, repository=repository,
+            workstream_id=None, milestone_id=None, origin=origin,
+        )
         link = run_notifier.work_order_link(state)
         _pending_announcements.append((
             origin,
@@ -3039,11 +2468,17 @@ def create_app(
         handle=github_comment_handler,
     )
 
-    def _mentioned_workflow() -> WorkflowDefinition | None:
-        """Which workflow a mention runs: the configured one, or the only one."""
+    def _mentioned_workflow() -> GraphWorkflow | None:
+        """Which workflow a mention runs: the configured one, or the only one.
+
+        Answered from the graphs actually on offer rather than from the
+        catalog, because a mention that resolved to a workflow this process
+        could not start would be accepted and then go nowhere.
+        """
+        offered = offered_graphs()
         if work_orders.workflow:
-            return catalog.get(WorkflowId(work_orders.workflow))
-        return next(iter(catalog)) if len(catalog) == 1 else None
+            return offered.get(work_orders.workflow)
+        return next(iter(offered.values())) if len(offered) == 1 else None
 
     # --- runner utilization ---------------------------------------------------
 
@@ -3125,11 +2560,6 @@ def create_app(
         Route("/api/runs/{run_id}", get_run),
         Route("/api/runs/{run_id}", delete_run, methods=["DELETE"]),
         Route("/api/runs/{run_id}/graph-events", graph_run_events),
-        Route(
-            "/api/runs/{run_id}/human-review",
-            complete_human_review,
-            methods=["POST"],
-        ),
         # The graph half of the runs above, served by the engine that runs
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),
@@ -3243,12 +2673,6 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
         result["workspaceRoot"] = thread.workspace_root
     if thread.workspace_ref is not None:
         result["workspaceRef"] = thread.workspace_ref
-    if thread.workflow_run_id is not None:
-        result["workflowRunId"] = str(thread.workflow_run_id)
-    if thread.workflow_step_id is not None:
-        result["workflowStepId"] = str(thread.workflow_step_id)
-        result["editable"] = thread.editable
-        result["autoApprove"] = thread.auto_approve
     return result
 
 
@@ -3350,96 +2774,32 @@ def _workstream_json(workstream: Workstream) -> dict[str, object]:
     }
 
 
-def _workflow_step_editable(
-    definition: WorkflowDefinition | None, step_id: StepId | None
-) -> bool:
-    """Resolve UI behavior from the run's compiled workflow snapshot."""
-
-    if definition is None or step_id is None:
-        return False
-    step = definition.step(step_id)
-    return isinstance(step, AgentStep) and step.editable
-
-
 def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, object]:
     """One WorkOrder, as a client is shown it.
 
-    A listing leaves out the prose an agent wrote: step summaries and outputs,
-    the task prompt, a failure's reason, and the review and decision bodies.
+    A listing leaves out the prose: the task prompt and a failure's reason.
     Every screen polls `/api/runs` once a second to keep the rail current, so
     what that list carries is what every screen pays for, on a payload that
-    grows with the transcript of every run ever started. The pages that draw
-    the prose read the one run they are about from `/api/runs/{run_id}`.
+    grows with every run ever started. The pages that draw the prose read the
+    one run they are about from `/api/runs/{run_id}`.
     """
-    steps: list[dict[str, object]] = [
-        {
-            "stepId": str(step.step_id),
-            "name": step.name,
-            "kind": step.kind,
-            "status": step.status,
-            "outcome": step.outcome,
-            "changesRequested": step.changes_requested,
-            "agentId": str(step.agent_id) if step.agent_id else None,
-            "agentInstanceId": (
-                str(step.agent_instance_id) if step.agent_instance_id else None
-            ),
-            "agentRunId": str(step.agent_run_id) if step.agent_run_id else None,
-            "mcpRequestId": step.mcp_request_id,
-            "conversationId": (
-                str(step.conversation_id) if step.conversation_id else None
-            ),
-            "conversationUrl": (
-                f"/runs/{run.run_id}/conversations/{step.agent_instance_id}"
-                if step.agent_instance_id
-                else None
-            ),
-            "waiting": step.waiting,
-        }
-        for step in run.steps
-    ]
     result: dict[str, object] = {
         "runId": str(run.run_id),
         "name": run.name,
         "workflowId": run.workflow_id,
         "workflowName": run.workflow_name,
-        "workflowVersion": run.workflow_version,
         "taskId": run.task_id,
         "workstreamId": str(run.workstream_id) if run.workstream_id else None,
         "milestoneId": str(run.milestone_id) if run.milestone_id else None,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},
         "phase": run.phase,
-        "currentStepId": str(run.current_step_id) if run.current_step_id else None,
         "terminalOutcome": run.terminal_outcome,
-        "steps": steps,
     }
     if listing:
         return result
     result["taskPrompt"] = run.task_prompt
     result["failureReason"] = run.failure_reason
-    for step, step_json in zip(run.steps, steps):
-        step_json["summary"] = step.summary
-        step_json["outputs"] = [
-            {"name": output.name, "value": output.value} for output in step.outputs
-        ]
-    if run.pending_human_review is not None:
-        result["pendingHumanReview"] = {
-            "stepId": str(run.pending_human_review.step_id),
-            "title": run.pending_human_review.title,
-            "summary": run.pending_human_review.summary,
-            "prUrl": run.pending_human_review.pull_request_url,
-        }
-    else:
-        result["pendingHumanReview"] = None
-    if run.human_decision is not None:
-        result["humanDecision"] = {
-            "stepId": str(run.human_decision.step_id),
-            "approved": run.human_decision.approved,
-            "outcome": run.human_decision.outcome,
-            "summary": run.human_decision.summary,
-        }
-    else:
-        result["humanDecision"] = None
     return result
 
 
@@ -3524,33 +2884,6 @@ def _messages_json(messages: tuple[Message, ...]) -> list[dict[str, object]]:
         _merge_message(assistant_content, message, tool_calls)
     flush_assistant()
     return result
-
-
-def _through_latest_user(messages: tuple[Message, ...]) -> tuple[Message, ...]:
-    """Hide an in-flight assistant transcript that resume will stream anew."""
-    for index in range(len(messages) - 1, -1, -1):
-        if messages[index].role is Role.USER:
-            return messages[: index + 1]
-    return messages
-
-
-def _latest_assistant_content(
-    messages: tuple[Message, ...],
-) -> list[dict[str, object]]:
-    """Build the current assistant snapshot after the latest user message."""
-    suffix_start = 0
-    for index in range(len(messages) - 1, -1, -1):
-        if messages[index].role is Role.USER:
-            suffix_start = index + 1
-            break
-
-    content: list[dict[str, object]] = []
-    tool_calls: dict[str, dict[str, object]] = {
-        call_id: {} for call_id in _tool_call_ids(messages[:suffix_start])
-    }
-    for message in messages[suffix_start:]:
-        _merge_message(content, message, tool_calls)
-    return content
 
 
 def _tool_call_ids(messages: Iterable[Message]) -> set[str]:

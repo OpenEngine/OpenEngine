@@ -47,7 +47,6 @@ from engine.apps.web.composition import (  # noqa: E402
     build_read_only_runners,
     build_runners,
     build_session,
-    build_workflow_runners,
 )
 from engine.runtime import (  # noqa: E402
     EngineConfigError,
@@ -140,8 +139,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
         runners,
         STATIC_DIRECTORY,
-        workflow_runners=build_workflow_runners(settings),
-        review_runners=read_only_runners,
         workflow_catalog=catalog,
         graph_runtime=build_graph_runtime(
             settings,
@@ -149,7 +146,6 @@ def main(argv: list[str] | None = None) -> int:
             source_control=capabilities.source_control,
         ),
         approval_policy=loaded.config.approvals,
-        default_branch=loaded.config.default_branch,
         milestone_scoper=MilestoneScoper(
             Scoper(agent="codex", registry=scoper_registry)
         ),

@@ -14,7 +14,6 @@ from engine.domain import (
     Project,
     ProjectId,
     RunId,
-    RunRequested,
     RunState,
     TaskId,
     WorkflowId,
@@ -158,22 +157,12 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
         workflow_id=WorkflowId("implementation-v1"),
         workstream_id=workstream.workstream_id,
     )
-    requested = RunRequested(
-        run_id=run.run_id,
-        task_id=run.task_id,
-        prompt="Implement runtime support.",
-        repository="openai/openengine",
-        workflow_id=run.workflow_id,
-        workstream_id=workstream.workstream_id,
-    )
-
     first = SQLiteStateStore(path)
     asyncio.run(first.save_project(project))
     asyncio.run(first.save_milestone(foundation))
     asyncio.run(first.save_milestone(milestone))
     asyncio.run(first.save_workstream(workstream))
     asyncio.run(first.save(run))
-    asyncio.run(first.append_events(run.run_id, (requested,)))
     first.close()
 
     second = SQLiteStateStore(path)
@@ -182,7 +171,6 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
         assert asyncio.run(second.list_milestones()) == (milestone, foundation)
         assert asyncio.run(second.list_workstreams()) == (workstream,)
         assert asyncio.run(second.load(run.run_id)) == run
-        assert asyncio.run(second.history(run.run_id)) == (requested,)
     finally:
         second.close()
 

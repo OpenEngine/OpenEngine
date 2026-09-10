@@ -1,4 +1,4 @@
-"""The vocabulary for describing workflow steps and their completion."""
+"""The vocabulary a run-bound agent is held to, and how it reports back."""
 
 from dataclasses import FrozenInstanceError, asdict
 
@@ -21,13 +21,11 @@ def test_a_step_spec_names_an_agent_and_its_required_outputs() -> None:
         step_id=StepId("change"),
         agent_id=AgentId("coder"),
         required_outputs=("revision",),
-        editable=True,
     )
 
     assert step.step_id == StepId("change")
     assert step.agent_id == AgentId("coder")
     assert step.required_outputs == ("revision",)
-    assert step.editable is True
 
 
 def test_step_completion_is_an_event_with_string_outputs() -> None:
@@ -73,7 +71,6 @@ def test_collection_fields_default_to_empty_tuples() -> None:
     )
 
     assert step.required_outputs == ()
-    assert step.editable is False
     assert event.outputs == ()
 
 

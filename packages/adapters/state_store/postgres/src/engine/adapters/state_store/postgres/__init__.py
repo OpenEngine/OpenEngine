@@ -9,7 +9,6 @@ from collections.abc import Mapping, Sequence
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
 from engine.domain.chat import Conversation, Message
-from engine.domain.events import Event
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
@@ -19,7 +18,6 @@ from engine.domain.ids import (
     MilestoneId,
     ProjectId,
     RunId,
-    StepId,
     TaskId,
     WorkstreamId,
     WorkspaceId,
@@ -52,12 +50,6 @@ class PostgresStateStore:
 
     async def delete_run(self, run_id: RunId) -> bool:
         raise NotImplementedError("Postgres writes land with the state-store ticket")
-
-    async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
-        raise NotImplementedError("Event append lands with the state-store ticket")
-
-    async def history(self, run_id: RunId) -> Sequence[Event]:
-        raise NotImplementedError("History reads land with the state-store ticket")
 
     async def save_project(self, project: Project) -> None:
         raise NotImplementedError("Project writes land with the state-store ticket")
@@ -108,8 +100,6 @@ class PostgresStateStore:
         *,
         instance_id: AgentInstanceId | None = None,
         conversation_id: ConversationId | None = None,
-        workflow_run_id: RunId | None = None,
-        workflow_step_id: StepId | None = None,
     ) -> AgentInstance:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 
@@ -119,7 +109,6 @@ class PostgresStateStore:
         title: str,
         archived: bool,
         runner: str,
-        auto_approve: bool = False,
     ) -> AgentInstance:
         raise NotImplementedError(
             "Agent instance metadata lands with the state-store ticket"
@@ -134,10 +123,7 @@ class PostgresStateStore:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 
     async def list_instances(
-        self,
-        agent_id: AgentId | None = None,
-        *,
-        workflow_run_id: RunId | None = None,
+        self, agent_id: AgentId | None = None
     ) -> Sequence[AgentInstance]:
         raise NotImplementedError("Agent instances land with the state-store ticket")
 

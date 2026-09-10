@@ -31,11 +31,9 @@ export type EngineConfig = {
   /** The agent the New Project button talks to, empty when none is composed. */
   planAgent: string;
   defaultRunner: string;
-  workflowRunners: string[];
-  defaultWorkflowRunner: string;
-  /** Graph workflows can declare creation inputs independently of step runners. */
+  /** Each workflow declares the inputs its creation form asks for. */
   workflows: {
-    id: string; name: string; version: string; kind: "steps" | "graph";
+    id: string; name: string;
     inputs?: { name: string; label: string; default: string; required: boolean; choices: string[] }[];
   }[];
 };
@@ -60,10 +58,6 @@ export type ApiThread = {
   /** What to check out to read this chat's work, attached or not. */
   workspaceRef?: string;
   workspaceAttached: boolean;
-  workflowRunId?: string;
-  workflowStepId?: string;
-  editable?: boolean;
-  autoApprove?: boolean;
 };
 
 export type ApiProject = {
@@ -189,27 +183,21 @@ export function setProjectArchived(
   );
 }
 
-/** A step as the runs list carries it: what it is and where it stands, which
- *  is all the rail and the cards read of one. */
-export type ApiRunStepListing = {
+/** One node of the graph a WorkOrder is running, as its page draws it.
+ *
+ *  Built by the page from the graph's topology and the engine's snapshot -- see
+ *  `RunView` -- rather than served by this application. */
+export type ApiRunStep = {
   stepId: string;
   name: string;
   kind: "agent" | "human";
   status: string;
   outcome: string | null;
-  changesRequested: boolean;
   agentId: string | null;
-  agentInstanceId: string | null;
-  agentRunId: string | null;
-  conversationId: string | null;
   conversationUrl: string | null;
   waiting: boolean;
   /** Related graph nodes shown together on the WorkOrder overview. */
   group?: string;
-};
-
-/** A step with the prose the agent wrote, which only its own page draws. */
-export type ApiRunStep = ApiRunStepListing & {
   summary: string;
   outputs: { name: string; value: string }[];
 };
@@ -225,14 +213,12 @@ export type ApiWorkflowRunListing = {
   name: string;
   workflowId: string;
   workflowName: string;
-  workflowVersion: string;
   taskId: string;
   workstreamId: string | null;
   milestoneId: string | null;
   repository: string;
   repositoryContext: { repository: string };
   phase: string;
-  currentStepId: string | null;
   /** Live graph frontier supplied by the polled runs list. */
   graphProgress?: {
     activeNodeIds: string[];
@@ -240,26 +226,28 @@ export type ApiWorkflowRunListing = {
     nextNodeIds: string[];
   };
   terminalOutcome: string | null;
-  steps: ApiRunStepListing[];
 };
 
 /** One whole WorkOrder, as `GET /api/runs/{runId}` answers for the page about
- *  it: the listing, and every word written along the way. */
-export type ApiWorkflowRun = Omit<ApiWorkflowRunListing, "steps"> & {
+ *  it: the listing, plus the prose only its own page draws. */
+export type ApiWorkflowRun = ApiWorkflowRunListing & {
   taskPrompt: string;
   failureReason: string;
+};
+
+/** A WorkOrder as its page draws it: the row, with the stages, frontier and
+ *  pending decision read off the graph engine's own snapshot.
+ *
+ *  Derived rather than served. The row knows identity and lifecycle; what the
+ *  run is doing right now belongs to the engine running it, and the page joins
+ *  the two rather than asking this application to keep a copy in step. */
+export type RunView = ApiWorkflowRun & {
+  currentStepId: string | null;
   steps: ApiRunStep[];
   pendingHumanReview: {
     stepId: string;
     title: string;
-    summary: string;
     prUrl: string | null;
-  } | null;
-  humanDecision: {
-    stepId: string;
-    approved: boolean;
-    outcome: "approved" | "rejected";
-    summary: string;
   } | null;
 };
 
@@ -430,30 +418,10 @@ export function decideGraphApproval(
   );
 }
 
-/** Record the decision a run stopped for, and get the finished run back.
- *
- *  The response is the whole run rather than the decision, because approving is
- *  the transition that ends it: the phase, the terminal outcome, and the human
- *  step all change together, and re-reading them separately would show a page
- *  half-decided. */
-export function completeHumanReview(
-  runId: string,
-  approved: boolean,
-  summary: string,
-): Promise<ApiWorkflowRun> {
-  return api<ApiWorkflowRun>(
-    `/api/runs/${encodeURIComponent(runId)}/human-review`,
-    {
-      method: "POST",
-      body: JSON.stringify({ approved, summary }),
-    },
-  );
-}
-
 /** Throw a WorkOrder away for good.
  *
- *  Unlike archiving a project there is nothing to restore afterwards: the run,
- *  its steps and its history go with it, which is why the rail asks first. */
+ *  Unlike archiving a project there is nothing to restore afterwards: the run
+ *  and its history go with it, which is why the rail asks first. */
 export function deleteRun(runId: string): Promise<void> {
   return api<void>(`/api/runs/${encodeURIComponent(runId)}`, {
     method: "DELETE",
@@ -471,16 +439,6 @@ export function setThreadRunner(
   return api<ApiThread>(`/api/threads/${threadId}`, {
     method: "PATCH",
     body: JSON.stringify({ runner }),
-  });
-}
-
-export function setThreadAutoApprove(
-  threadId: string,
-  autoApprove: boolean,
-): Promise<ApiThread> {
-  return api<ApiThread>(`/api/threads/${threadId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ autoApprove }),
   });
 }
 

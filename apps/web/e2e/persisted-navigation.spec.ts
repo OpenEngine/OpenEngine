@@ -56,45 +56,16 @@ async function verifyPersistedNavigation({
   await seededRunCard.click();
   await expect(page.getByRole("heading", { name: SEEDED_RUN })).toBeVisible();
   await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
-  await expect(step(page, "Implementation")).toContainText("Preserved every browser route.");
-  await expect(step(page, "Review")).toContainText("No navigation regressions found.");
-  await expect(page.getByRole("heading", { name: "approved" })).toBeVisible();
-  await shot(page, testInfo, "2 seeded workflow detail");
+  await expect(page.getByText("Preserve browser navigation and durable conversation history.")).toBeVisible();
+  await expect(page.getByText(/no longer has/)).toBeVisible();
+  await shot(page, testInfo, "2 persisted WorkOrder with retired workflow");
 
-  await step(page, "Implementation")
-    .getByRole("link", { name: "Open conversation" })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Seeded implementation conversation" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Preserve browser navigation and durable conversation history."),
-  ).toBeVisible();
-  await expect(
-    page.getByText("I preserved the routes and added durable history coverage."),
-  ).toBeVisible();
-  await shot(page, testInfo, "3 seeded implementation history");
-
-  await page.getByRole("link", { name: /Back to WorkOrder run-seeded-history/ }).click();
-  await step(page, "Review").getByRole("link", { name: "Open conversation" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Seeded review conversation" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("I found no navigation regressions in the seeded workflow."),
-  ).toBeVisible();
-  await shot(page, testInfo, "4 seeded review history");
-
-  // Workflow transcripts and ordinary chats share SQLite but have different
-  // routes. Cross that boundary directly and verify both turns of the
-  // pre-existing standalone conversation survived the cold start.
+  // Chats remain fully navigable after opening the existing state store.
   await page.goto(SEEDED_CHAT_URL);
   await expectSeededChatHistory(page);
   await shot(page, testInfo, "5 seeded standalone chat history");
 
-  // The new run is a graph WorkOrder, because that is the only kind this
-  // deployment offers now. The seeded one above is a step run from before it
-  // did, so this crosses both engines in one database.
+  // New graph runs can start alongside the existing WorkOrder rows.
   const pullRequest = "https://github.com/acme/engine/pull/42";
   const workflowScript: Script = {
     title: FRESH_TITLE,

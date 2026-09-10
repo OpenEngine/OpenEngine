@@ -454,7 +454,7 @@ def test_a_chat_asks_the_runner_that_answers_it_whether_it_can_pause() -> None:
     assert writer.runs == []
 
 
-def test_plan_approval_ignores_system_and_conversation_auto_approve() -> None:
+def test_plan_approval_ignores_system_auto_approve() -> None:
     async def scenario() -> tuple[object, list[ApprovalRecord]]:
         store = InMemoryStateStore()
         instance = await store.create_instance(CODER)
@@ -476,7 +476,6 @@ def test_plan_approval_ignores_system_and_conversation_auto_approve() -> None:
             instance_id=instance.instance_id,
             runner="claude",
             present=present,
-            auto_approve=lambda: True,
         )(
             ApprovalRequest(
                 approval_id="provider-plan",
@@ -516,7 +515,6 @@ def test_structured_question_returns_and_persists_human_answers() -> None:
             instance_id=instance.instance_id,
             runner="codex",
             present=present,
-            auto_approve=lambda: True,
         )(
             ApprovalRequest(
                 approval_id="provider-question",

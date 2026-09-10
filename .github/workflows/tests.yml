@@ -191,48 +191,35 @@ jobs:
         run: uv sync --locked --all-packages
 
       - name: Dependency direction holds
-        # domain <- engine, ports <- runtime <- adapters, apps compose.
+        # domain <- ports <- runtime <- adapters, apps compose.
         # Verbose so a violation names the offending package and import.
         run: uv run pytest tests/test_boundaries.py tests/test_layout_helpers.py -v
 
-      - name: domain and engine install on a bare interpreter
+      - name: domain installs on a bare interpreter
         # The strongest form of "no third-party dependencies": not "we declared
         # none" but "nothing else is present and the code still runs". Catches a
         # dependency that arrives through packaging rather than an import.
         run: |
           set -euo pipefail
           uv venv /tmp/bare
-          uv pip install --python /tmp/bare/bin/python packages/domain packages/engine
+          uv pip install --python /tmp/bare/bin/python packages/domain
           uv pip freeze --python /tmp/bare/bin/python
           installed=$(uv pip freeze --python /tmp/bare/bin/python | wc -l)
-          if [ "$installed" -ne 2 ]; then
-            echo "::error::expected only engine-domain and engine-core, found $installed packages"
+          if [ "$installed" -ne 1 ]; then
+            echo "::error::expected only engine-domain, found $installed packages"
             exit 1
           fi
           /tmp/bare/bin/python -c "
-          import openengine as oe
-          from engine.core import decide
-          from engine.domain import RunId, RunRequested, RunState, TaskId
-          worker = oe.agent(id='worker', instructions='work')
-          workflow = oe.workflow(
-              id='test-v1', name='Test', version='v1',
-              steps=[oe.agent_step(
-                  id='work', name='Work', agent=worker,
-                  prompt=oe.template('work'),
-                  transitions={'*': oe.succeed()},
-              )],
+          from dataclasses import replace
+          from engine.domain import RunId, RunPhase, RunState, TaskId, WorkflowId
+          run = RunState(
+              run_id=RunId('r'), task_id=TaskId('t'), workflow_id=WorkflowId('test'),
           )
-          run, task = RunId('r'), TaskId('t')
-          _, commands = decide(
-              RunState(run_id=run, task_id=task, workflow_id=workflow.workflow_id),
-              RunRequested(
-                  run_id=run, task_id=task, prompt='p', repository='acme/api',
-                  workflow_id=workflow.workflow_id,
-              ),
-              workflow,
-          )
-          assert commands, 'engine emitted no command'
-          print('core decided:', commands[0].__class__.__name__)
+          assert run.phase is RunPhase.PENDING
+          assert not run.is_terminal
+          for phase in (RunPhase.SUCCEEDED, RunPhase.FAILED):
+              assert replace(run, phase=phase).is_terminal
+          print('domain run state works without third-party dependencies')
           "
 
   tests:

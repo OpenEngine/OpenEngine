@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiMilestone, ApiProject, ApiWorkflowRun, EngineConfig } from "./api";
 import {
-  conversationCount,
   NewWorkflowPage,
   phaseAccent,
   phaseLabel,
@@ -21,11 +20,9 @@ const config: EngineConfig = {
   defaultAgent: "agent",
   planAgent: "planner",
   defaultRunner: "runner",
-  workflowRunners: ["codex"],
-  defaultWorkflowRunner: "codex",
   workflows: [
-    { id: "work-v1", name: "Work", version: "v1", kind: "steps" },
-    { id: "release-v2", name: "Release", version: "v2", kind: "steps" },
+    { id: "work-v1", name: "Work" },
+    { id: "release-v2", name: "Release" },
   ],
 };
 /** The same deployment, with a graph workflow beside the step ones. */
@@ -36,8 +33,6 @@ const withGraph: EngineConfig = {
     {
       id: "implementation-review-codex",
       name: "Implementation review (codex)",
-      version: "",
-      kind: "graph",
     },
   ],
 };
@@ -62,7 +57,6 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
     name: "First run",
     workflowId: "work-v1",
     workflowName: "Work",
-    workflowVersion: "v1",
     taskId: "task-1",
     workstreamId: null,
     milestoneId: null,
@@ -70,45 +64,8 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
     repository: ".",
     repositoryContext: { repository: "." },
     phase: "running_agent",
-    currentStepId: "implement",
     terminalOutcome: null,
     failureReason: "",
-    steps: [
-      {
-        stepId: "implement",
-        name: "Implementation",
-        kind: "agent",
-        status: "in_progress",
-        outcome: null,
-        summary: "",
-        outputs: [],
-        changesRequested: false,
-        agentId: "agent",
-        agentInstanceId: "instance",
-        agentRunId: "agent-run",
-        conversationId: "conversation",
-        conversationUrl: "/conversations/conversation",
-        waiting: false,
-      },
-      {
-        stepId: "review",
-        name: "Review",
-        kind: "human",
-        status: "pending",
-        outcome: null,
-        summary: "",
-        outputs: [],
-        changesRequested: false,
-        agentId: null,
-        agentInstanceId: null,
-        agentRunId: null,
-        conversationId: null,
-        conversationUrl: null,
-        waiting: false,
-      },
-    ],
-    pendingHumanReview: null,
-    humanDecision: null,
     ...overrides,
   };
 }
@@ -145,13 +102,8 @@ describe("run display helpers", () => {
     expect(phaseAccent("running_agent")).toBeUndefined();
   });
 
-  it("counts only steps with conversations", () => {
-    expect(conversationCount(run())).toBe(1);
-    expect(conversationCount(run({ steps: [] }))).toBe(0);
-  });
-
-  it("labels active runs with their current workflow step", () => {
-    expect(runStatusLabel(run())).toBe("Implementation");
+  it("labels runs with their lifecycle phase", () => {
+    expect(runStatusLabel(run())).toBe("running agent");
     expect(runStatusLabel(run({ phase: "succeeded" }))).toBe("succeeded");
   });
 });
@@ -166,7 +118,7 @@ describe("NewWorkflowPage", () => {
       ),
     ).toBeVisible();
     const selector = screen.getByRole("combobox", { name: "Workflow definition" });
-    expect(within(selector).getByRole("option", { name: "Release · v2" })).toHaveValue(
+    expect(within(selector).getByRole("option", { name: "Release" })).toHaveValue(
       "release-v2",
     );
   });
@@ -191,7 +143,7 @@ describe("NewWorkflowPage", () => {
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "error").mockImplementation(() => {});
     render(<NewWorkflowPage config={withGraph} />);
-    expect(screen.getByRole("combobox", { name: "Implementation runner" })).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Implementation runner" })).not.toBeInTheDocument();
 
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Workflow definition" }),
@@ -219,7 +171,7 @@ describe("NewWorkflowPage", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const configured: EngineConfig = {
       ...withGraph,
-      workflows: withGraph.workflows.map((workflow) => workflow.kind === "graph" ? {
+      workflows: withGraph.workflows.map((workflow) => workflow.id === "implementation-review-codex" ? {
         ...workflow,
         inputs: [
           { name: "implementation_runner", label: "Implementation runner", default: "codex", required: true, choices: ["codex", "claude"] },
@@ -342,12 +294,9 @@ describe("useRuns", () => {
     vi.useFakeTimers();
     const terminal = run({
       phase: "succeeded",
-      currentStepId: null,
       terminalOutcome: "approved",
-      steps: run().steps.map((step) => ({ ...step, status: "completed" })),
     });
-    const active = run();
-    const waiting = run({ steps: [{ ...active.steps[0], waiting: true }] });
+    const waiting = run({ graphProgress: { activeNodeIds: [], waitingNodeIds: ["review"], nextNodeIds: [] } });
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(json({ runs: [terminal] }))
@@ -357,12 +306,12 @@ describe("useRuns", () => {
     const { result } = renderHook(() => useRuns());
     await act(async () => {});
     expect(result.current.runs[0].phase).toBe("succeeded");
-    expect(result.current.runs[0].steps[0].waiting).toBe(false);
+    expect(result.current.runs[0].graphProgress).toBeUndefined();
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
     expect(result.current.runs[0].phase).toBe("running_agent");
-    expect(result.current.runs[0].steps[0].waiting).toBe(true);
+    expect(result.current.runs[0].graphProgress?.waitingNodeIds).toEqual(["review"]);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -431,8 +380,6 @@ describe("useGraphNodes", () => {
     run({
       runId: "run-2",
       workflowId: "implementation-review-codex",
-      workflowVersion: "",
-      steps: [],
     });
   const topology = {
     graphId: "implementation-review-codex",
@@ -452,18 +399,18 @@ describe("useGraphNodes", () => {
 
     const { result, rerender } = renderHook(
       ({ runs }) => useGraphNodes(runs),
-      { initialProps: { runs: [run(), graphRun()] } },
+      { initialProps: { runs: [graphRun(), graphRun()] } },
     );
 
     await waitFor(() =>
       expect(result.current["implementation-review-codex"]).toHaveLength(2),
     );
-    // The step WorkOrder's definition is not a graph, so nothing asked for it.
+    // Multiple runs of the same graph share one topology request.
     expect(fetch).toHaveBeenCalledTimes(1);
 
     // A poll answering with the same WorkOrders is not news about their graphs,
     // whose shape does not change while the server is up.
-    rerender({ runs: [run(), graphRun()] });
+    rerender({ runs: [graphRun(), graphRun()] });
     await act(async () => {});
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -497,16 +444,14 @@ describe("RunsPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders stage and chat counts and offers only phases that exist", async () => {
+  it("renders repository and phase and offers only phases that exist", async () => {
     const runs = [
       run(),
       run({
         runId: "run-2",
         name: "Second run",
         phase: "failed",
-        currentStepId: null,
         terminalOutcome: "rejected",
-        steps: [],
       }),
     ];
     const user = userEvent.setup();
@@ -515,9 +460,8 @@ describe("RunsPage", () => {
     await screen.findByRole("heading", { name: "First run" });
     const firstCard = container.querySelector('.cards a[href="/runs/run-1"]');
     expect(firstCard).not.toBeNull();
-    expect(within(firstCard as HTMLElement).getByText("2")).toBeInTheDocument();
-    expect(within(firstCard as HTMLElement).getByText("1")).toBeInTheDocument();
-    expect(within(firstCard as HTMLElement).getAllByText("Implementation")).toHaveLength(2);
+    expect(within(firstCard as HTMLElement).getByText(".")).toBeInTheDocument();
+    expect(within(firstCard as HTMLElement).getAllByText("running agent")).toHaveLength(2);
 
     const filters = screen.getByRole("group", { name: "Filter WorkOrders by phase" });
     expect(within(filters).getByRole("button", { name: "running agent" })).toBeInTheDocument();
@@ -532,6 +476,55 @@ describe("RunsPage", () => {
 
 describe("RunDetailPage", () => {
   it.each([
+    ["Approve", "accept"],
+    ["Reject", "cancel"],
+  ])("submits %s to the graph approval and clears the decision", async (label, decision) => {
+    const awaiting = {
+      runId: "run-1", graphId: "work-v1", status: "awaiting_approval",
+      activeExecutions: [], nextNodes: [], values: {}, error: "",
+      pendingApprovals: [{ approvalId: "approval-1", nodeId: "review", reason: "Review the release", allowedDecisions: ["accept", "cancel"] }],
+    };
+    const settled = { ...awaiting, status: "completed", pendingApprovals: [] };
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith("/approvals/approval-1") && init?.method === "POST") return json(settled);
+      if (path === "/api/runs/run-1") return json(run());
+      if (path === "/graph/api/runs/run-1") return json(awaiting);
+      if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
+      return json({ events: [] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    render(<RunDetailPage runId="run-1" />);
+    await user.click(await screen.findByRole("button", { name: label }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument());
+    expect(fetch).toHaveBeenCalledWith("/graph/api/runs/run-1/approvals/approval-1", expect.objectContaining({ method: "POST", body: JSON.stringify({ decision }) }));
+  });
+
+  it("keeps a graph approval available after a refused decision", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (init?.method === "POST") return json({ error: "decision unavailable" }, { status: 409 });
+      if (path === "/api/runs/run-1") return json(run());
+      if (path === "/graph/api/runs/run-1") return json({
+        runId: "run-1", graphId: "work-v1", status: "awaiting_approval",
+        activeExecutions: [], nextNodes: [], values: {}, error: "",
+        pendingApprovals: [{ approvalId: "approval-1", nodeId: "review", reason: "Review the release", allowedDecisions: ["accept", "cancel"] }],
+      });
+      if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
+      return json({ events: [] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup();
+    render(<RunDetailPage runId="run-1" />);
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(/Could not record decision: decision unavailable/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+  });
+
+
+  it.each([
     ["https://github.com/example/repo/pull/1", "https://github.com/example/repo/pull/1"],
     ["http://example.com/pull/1", "http://example.com/pull/1"],
     ["javascript:alert(1)", null],
@@ -539,8 +532,6 @@ describe("RunDetailPage", () => {
   ])("renders structured graph outputs and validates approval URL %s", async (prUrl, expectedUrl) => {
     const graphRun = run({
       workflowId: "implementation-review-codex",
-      workflowVersion: "",
-      steps: [],
     });
     const values = {
       empty: null,
@@ -603,16 +594,13 @@ describe("RunDetailPage", () => {
     }
   });
 
-  it("says where to look for a beta WorkOrder that has no stages here", async () => {
+  it("says where to look for a WorkOrder that has no stages here", async () => {
     // A graph WorkOrder has no steps to draw, because a graph is not made of
     // them. Without a word of explanation the page reads as one that never
     // started.
     const graphRun = run({
       workflowId: "implementation-review-codex",
       workflowName: "Implementation review (codex)",
-      workflowVersion: "",
-      currentStepId: null,
-      steps: [],
     });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -636,11 +624,11 @@ describe("RunDetailPage", () => {
 
     render(<RunDetailPage runId="run-1" />);
 
-    expect(await screen.findByText("Beta workflow")).toBeVisible();
+    expect(await screen.findByText("Stages unavailable")).toBeVisible();
     expect(screen.getByText("Implementation review (codex)")).toBeVisible();
   });
 
-  it("says a beta WorkOrder cannot be loaded once its workflow is gone", async () => {
+  it("says a WorkOrder cannot be loaded once its workflow is gone", async () => {
     // A WorkOrder outlives the workflow it ran. Once that workflow has been
     // renamed or withdrawn there is no graph to draw its stages from, and the
     // page has to say so rather than throw the whole WorkOrder away over a 404
@@ -648,9 +636,6 @@ describe("RunDetailPage", () => {
     const graphRun = run({
       workflowId: "implementation-review-codex",
       workflowName: "implementation-review-codex",
-      workflowVersion: "",
-      currentStepId: null,
-      steps: [],
     });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -667,13 +652,10 @@ describe("RunDetailPage", () => {
     expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
   });
 
-  it("opens a beta conversation before its first transcript arrives", async () => {
+  it("opens a graph conversation before its first transcript arrives", async () => {
     const graphRun = run({
       workflowId: "implementation-review-codex",
       workflowName: "Implementation review (codex)",
-      workflowVersion: "",
-      currentStepId: null,
-      steps: [],
     });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -720,9 +702,6 @@ describe("RunDetailPage", () => {
     const graphRun = run({
       workflowId: "implementation-review-codex",
       workflowName: "Implementation review (codex)",
-      workflowVersion: "",
-      currentStepId: null,
-      steps: [],
     });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -776,285 +755,8 @@ describe("RunDetailPage", () => {
     expect(screen.getByRole("heading", { name: "Review (Performance)" })).toBeVisible();
   });
 
-  it("renders steps from an arbitrary workflow definition", async () => {
-    const generic = run({
-      workflowId: "release-v2",
-      workflowName: "Release",
-      workflowVersion: "v2",
-      phase: "succeeded",
-      currentStepId: "publish",
-      terminalOutcome: "succeeded",
-      steps: [
-        {
-          ...run().steps[0],
-          stepId: "prepare",
-          name: "Prepare release",
-          status: "completed",
-          summary: "Prepared artifacts.",
-        },
-        {
-          ...run().steps[1],
-          stepId: "publish",
-          name: "Publish release",
-          status: "completed",
-          outcome: "approved",
-        },
-      ],
-    });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(generic)));
-
-    render(<RunDetailPage runId="run-1" />);
-
-    expect(await screen.findByRole("heading", { name: "Prepare release" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Publish release" })).toBeVisible();
-    expect(screen.getByText("Prepared artifacts.")).toBeVisible();
-  });
-
-  it("ends the run with the decision it stopped for", async () => {
-    const completed = run().steps.map((step) => ({ ...step, status: "completed" }));
-    const awaiting = run({
-      phase: "awaiting_human_review",
-      currentStepId: "human-review",
-      steps: completed,
-      pendingHumanReview: {
-        stepId: "human-review",
-        title: "Review implementation for task-1",
-        summary: "Implementation: done",
-        prUrl: null,
-      },
-    });
-    const decided = run({
-      phase: "succeeded",
-      currentStepId: null,
-      terminalOutcome: "approved",
-      steps: completed,
-      humanDecision: {
-        stepId: "human-review",
-        approved: true,
-        outcome: "approved",
-        summary: "Reads right.",
-      },
-    });
-    let settled = false;
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path === "/api/runs/run-1/human-review" && init?.method === "POST") {
-        settled = true;
-        return json(decided);
-      }
-      if (path === "/api/runs/run-1") return json(settled ? decided : awaiting);
-      return json({ error: "not found" }, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetch);
-    const user = userEvent.setup();
-
-    const { container } = render(<RunDetailPage runId="run-1" />);
-
-    const note = await screen.findByRole("textbox", { name: "Decision note" });
-    expect(note).toHaveAttribute(
-      "placeholder",
-      "Optional — why this WorkOrder was approved or rejected.",
-    );
-    await user.type(note, "Reads right.");
-    await user.click(screen.getByRole("button", { name: "Approve" }));
-
-    // The whole run moved on the one response, so the page is never shown a
-    // half-decided state: the phase, the outcome, and the prompt agree.
-    expect(await screen.findByText("succeeded")).toBeVisible();
-    expect(
-      within(container.querySelector(".stats") as HTMLElement).getByText("approved"),
-    ).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/runs/run-1/human-review",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ approved: true, summary: "Reads right." }),
-      }),
-    );
-  });
-
-  it("records a rejection as the decision it was", async () => {
-    const completed = run().steps.map((step) => ({ ...step, status: "completed" }));
-    const awaiting = run({
-      phase: "awaiting_human_review",
-      currentStepId: "human-review",
-      steps: completed,
-      pendingHumanReview: {
-        stepId: "human-review",
-        title: "Review implementation for task-1",
-        summary: "Implementation: done",
-        prUrl: null,
-      },
-    });
-    const decided = run({
-      phase: "failed",
-      currentStepId: null,
-      terminalOutcome: "rejected",
-      steps: completed,
-      humanDecision: {
-        stepId: "human-review",
-        approved: false,
-        outcome: "rejected",
-        summary: "The greeting is wrong.",
-      },
-    });
-    // Held open, so the buttons can be read mid-decision: the pressed one is
-    // the only thing on the page that says which decision is in flight, and a
-    // run must not be able to take two.
-    let release = () => {};
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let settled = false;
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path === "/api/runs/run-1/human-review" && init?.method === "POST") {
-        await held;
-        settled = true;
-        return json(decided);
-      }
-      if (path === "/api/runs/run-1") return json(settled ? decided : awaiting);
-      return json({ error: "not found" }, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetch);
-    const user = userEvent.setup();
-
-    const { container } = render(<RunDetailPage runId="run-1" />);
-
-    const note = await screen.findByRole("textbox", { name: "Decision note" });
-    await user.type(note, "The greeting is wrong.");
-    await user.click(screen.getByRole("button", { name: "Reject" }));
-
-    expect(await screen.findByRole("button", { name: "Rejecting…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
-
-    await act(async () => {
-      release();
-      await held;
-    });
-
-    // The rejection is terminal in the other direction, and the page has to
-    // say so: a decision recorded as approved here is the failure this asserts
-    // against, and it is not one the run offers a way back from.
-    expect(await screen.findByText("failed")).toBeVisible();
-    expect(
-      within(container.querySelector(".stats") as HTMLElement).getByText("rejected"),
-    ).toBeVisible();
-    expect(container.querySelector(".callout-rejected")).toHaveTextContent(
-      "The greeting is wrong.",
-    );
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/runs/run-1/human-review",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ approved: false, summary: "The greeting is wrong." }),
-      }),
-    );
-  });
-
-  it("keeps the decision available after one is refused", async () => {
-    const awaiting = run({
-      phase: "awaiting_human_review",
-      currentStepId: "human-review",
-      pendingHumanReview: {
-        stepId: "human-review",
-        title: "Review implementation for task-1",
-        summary: "Implementation: done",
-        prUrl: null,
-      },
-    });
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path === "/api/runs/run-1/human-review" && init?.method === "POST")
-        return json({ error: "run is not awaiting human review" }, { status: 409 });
-      if (path === "/api/runs/run-1") return json(awaiting);
-      return json({ error: "not found" }, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetch);
-    const user = userEvent.setup();
-
-    render(<RunDetailPage runId="run-1" />);
-    await user.click(await screen.findByRole("button", { name: "Approve" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "run is not awaiting human review",
-    );
-    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
-  });
-
-  it("links to the pull request awaiting review", async () => {
-    const awaiting = run({
-      phase: "awaiting_human_review",
-      currentStepId: "human-review",
-      pendingHumanReview: {
-        stepId: "human-review",
-        title: "Review implementation for task-1",
-        summary: "Implementation: done",
-        prUrl: "https://github.com/acme/api/pull/42",
-      },
-    });
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
-      if (path === "/api/runs/run-1") return json(awaiting);
-      return json({ error: "not found" }, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetch);
-
-    render(<RunDetailPage runId="run-1" />);
-
-    const link = await screen.findByRole("link", { name: /view pull request/i });
-    expect(link).toHaveAttribute("href", "https://github.com/acme/api/pull/42");
-  });
-
-  it("returns a finished run to the step a new message reopened", async () => {
-    vi.useFakeTimers();
-    const finished = run({
-      phase: "succeeded",
-      currentStepId: null,
-      terminalOutcome: "approved",
-      steps: run().steps.map((step) => ({ ...step, status: "completed" })),
-    });
-    let reopened = false;
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
-      if (path === "/api/runs/run-1") return json(reopened ? run() : finished);
-      if (path === "/api/threads/instance")
-        return json({
-          id: "instance",
-          title: "Implementation",
-          archived: false,
-          agentId: "agent",
-          runner: "codex",
-          workspaceRoot: "/worktrees/ws-1",
-          workspaceRef: "engine/ws-1",
-          workspaceAttached: true,
-        });
-      return json({ error: "not found" }, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetch);
-
-    const { container } = render(<RunDetailPage runId="run-1" />);
-    await act(async () => {});
-    expect(container.querySelector(".stats")).toHaveTextContent("approved");
-    expect(container.querySelector(".step[data-live]")).toBeNull();
-
-    // Writing to the implementation's conversation puts the run back to work,
-    // and the page has to follow a run it had already seen finish.
-    reopened = true;
-    await act(async () => vi.advanceTimersByTimeAsync(1000));
-
-    expect(within(container.querySelector(".detail-title") as HTMLElement).getByText(
-      "Implementation",
-    )).toBeVisible();
-    expect(container.querySelector(".stages .stage[data-status='in_progress']")).toHaveTextContent(
-      "Implementation",
-    );
-    expect(container.querySelector(".step[data-live]")).toHaveTextContent("Implementation");
-  });
-
   it("detaches and reattaches a graph workflow's checkout", async () => {
-    const graphRun = run({ workflowId: "graph", workflowVersion: "", steps: [] });
+    const graphRun = run({ workflowId: "graph" });
     let attached = true;
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -1090,47 +792,4 @@ describe("RunDetailPage", () => {
     );
   });
 
-  it("offers the workflow checkout's detach operation", async () => {
-    const terminal = run({
-      phase: "succeeded",
-      currentStepId: null,
-      terminalOutcome: "approved",
-    });
-    const attached = {
-      id: "instance",
-      title: "Implementation",
-      archived: false,
-      agentId: "agent",
-      runner: "codex",
-      workspaceRoot: "/worktrees/ws-1",
-      workspaceRef: "engine/ws-1",
-      workspaceAttached: true,
-    };
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path === "/api/runs/run-1") return json(terminal);
-      if (path === "/api/threads/instance/workspace" && init?.method === "DELETE")
-        return json({
-          ...attached,
-          workspaceRoot: undefined,
-          workspaceAttached: false,
-        });
-      if (path === "/api/threads/instance") return json(attached);
-      return json({ error: "not found" }, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetch);
-    const user = userEvent.setup();
-
-    render(<RunDetailPage runId="run-1" />);
-
-    expect(await screen.findByText("cd /worktrees/ws-1")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Detach" }));
-
-    expect(await screen.findByText("git checkout engine/ws-1")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Reattach" })).toBeEnabled();
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/threads/instance/workspace",
-      expect.objectContaining({ method: "DELETE" }),
-    );
-  });
 });
