@@ -979,8 +979,8 @@ def test_concierge_broker_requires_repository() -> None:
     asyncio.run(scenario())
 
 
-def test_concierge_broker_uses_explicit_repository() -> None:
-    """An explicit repository overrides the default."""
+def test_concierge_broker_default_repository_wins_over_explicit() -> None:
+    """The configured default repository takes precedence over an explicit one."""
     from engine.slack_concierge.slack_egress import ConciergeBroker
 
     async def scenario() -> None:
@@ -993,6 +993,38 @@ def test_concierge_broker_uses_explicit_repository() -> None:
         broker = ConciergeBroker(
             create_workorder=create,
             default_repository="acme/api",
+        )
+        async with broker:
+            result = await broker._submit(
+                {
+                    "token": broker._token,
+                    "name": "create_workorder",
+                    "arguments": {
+                        "prompt": "fix the bug",
+                        "repository": "acme/frontend",
+                    },
+                }
+            )
+        assert result["ok"] is True
+        assert created == [("acme/api", "fix the bug")]
+
+    asyncio.run(scenario())
+
+
+def test_concierge_broker_uses_explicit_repository_when_no_default() -> None:
+    """An explicit repository is used when no default is configured."""
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario() -> None:
+        created: list[tuple[str, str]] = []
+
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            created.append((repository, prompt))
+            return "https://engine.example/runs/run-1", "run-1"
+
+        broker = ConciergeBroker(
+            create_workorder=create,
+            default_repository="",
         )
         async with broker:
             result = await broker._submit(
@@ -1247,6 +1279,14 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch)
         assert len(provider.clients[0].prompts) == 2
     assert any(m.links for _, m, _ in communications.posts)
     assert all(thread == "1" for _, _, thread in communications.posts)
+    # The work-order announcement (with the link) must follow the conversational
+    # reply so that messages appear in the expected order in the thread.
+    link_indices = [i for i, (_, m, _) in enumerate(communications.posts) if m.links]
+    reply_indices = [i for i, (_, m, _) in enumerate(communications.posts) if not m.links]
+    assert reply_indices and link_indices
+    assert max(reply_indices) < min(link_indices), (
+        "announcement with link should appear after the conversational reply"
+    )
 
 
 def test_concierge_uses_real_langgraph_acp_session(tmp_path):

@@ -2848,8 +2848,13 @@ def create_app(
         _slack_redirect_uri = None
         return Response(status_code=204)
 
+    _pending_announcements: list[tuple[RunOrigin, CommunicationsMessage, RunState]] = []
+
     async def concierge_reply(origin: RunOrigin, text: str) -> None:
         await run_notifier.post(origin, CommunicationsMessage(text, mention=origin.author))
+        while _pending_announcements:
+            ann_origin, ann_msg, ann_state = _pending_announcements.pop(0)
+            await run_notifier.post(ann_origin, ann_msg, ann_state)
 
     async def concierge_create_workorder(
         origin: RunOrigin, repository: str, prompt: str,
@@ -2866,12 +2871,14 @@ def create_app(
             runner_name=runner_name, origin=origin,
         )
         link = run_notifier.work_order_link(state)
-        await run_notifier.post(
-            origin, CommunicationsMessage(
+        _pending_announcements.append((
+            origin,
+            CommunicationsMessage(
                 f"Started a work order on `{repository}`. I will report progress here.",
                 (link,) if link else (), mention=origin.author,
-            ), state,
-        )
+            ),
+            state,
+        ))
         return link.url if link else "", str(state.run_id)
 
     slack_concierge = SlackConcierge(
