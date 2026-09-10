@@ -1360,6 +1360,76 @@ def test_ingress_filters_messages_and_bounds_queue():
     asyncio.run(scenario())
 
 
+def test_ingress_reacts_with_eyes_before_handling():
+    from engine.slack_concierge import SlackIngress
+
+    async def scenario():
+        order: list[str] = []
+        messages = []
+
+        class Concierge:
+            def has_thread(self, channel, thread_id):
+                return False
+            async def handle(self, message):
+                order.append("handle")
+                messages.append(message)
+            async def close(self):
+                pass
+
+        reacted: list[tuple[str, str, str]] = []
+
+        async def react(channel, ts, emoji):
+            order.append("react")
+            reacted.append((channel, ts, emoji))
+
+        ingress = SlackIngress(Concierge(), capacity=1, react=react)
+
+        def payload(kind, ts, **extra):
+            return {"type": "event_callback", "event": dict(
+                type=kind, channel="C1", user="U1", ts=ts, text="hello", **extra)}
+
+        ingress.accept(payload("app_mention", "1700.0001"))
+        await ingress.drain()
+
+        assert reacted == [("C1", "1700.0001", "eyes")]
+        assert len(messages) == 1
+        assert order == ["react", "handle"]
+
+    asyncio.run(scenario())
+
+
+def test_ingress_failing_react_does_not_prevent_handle():
+    from engine.slack_concierge import SlackIngress
+
+    async def scenario():
+        messages = []
+
+        class Concierge:
+            def has_thread(self, channel, thread_id):
+                return False
+            async def handle(self, message):
+                messages.append(message)
+            async def close(self):
+                pass
+
+        async def failing_react(channel, ts, emoji):
+            raise RuntimeError("Slack API down")
+
+        ingress = SlackIngress(Concierge(), capacity=1, react=failing_react)
+
+        def payload(kind, ts, **extra):
+            return {"type": "event_callback", "event": dict(
+                type=kind, channel="C1", user="U1", ts=ts, text="hello", **extra)}
+
+        ingress.accept(payload("app_mention", "1700.0001"))
+        await ingress.drain()
+
+        # handle was still called despite the react failure
+        assert len(messages) == 1
+
+    asyncio.run(scenario())
+
+
 def test_concierge_permissions_only_allow_the_granted_tool():
     from engine.slack_concierge.slack_egress import tool_permission
     from langgraph_acp.permissions import ACPPermissionRequest, ACPPermissionOption
