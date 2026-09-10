@@ -33,6 +33,7 @@ implementation role: use only the granted create_workorder tool.
 class IncomingMessage:
     origin: RunOrigin
     text: str
+    message_ts: str = ""
 
 
 class ConversationState(TypedDict):

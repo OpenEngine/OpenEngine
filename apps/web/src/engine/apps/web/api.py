@@ -70,6 +70,7 @@ from engine.apps.web.utilization import (
 )
 from engine.adapters.communications.slack import (
     SlackAuthError,
+    SlackCommunications,
     SlackCredentialStore,
     authorization_url as slack_authorization_url,
     exchange_code as exchange_slack_code,
@@ -2879,9 +2880,11 @@ def create_app(
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
     )
+    _slack_comms = SlackCommunications(_slack_store)
     slack_ingress = SlackIngress(
         slack_concierge, signing_secret=_signing_secret,
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
+        react=_slack_comms.add_reaction,
     )
 
     def _mentioned_workflow() -> WorkflowDefinition | None:

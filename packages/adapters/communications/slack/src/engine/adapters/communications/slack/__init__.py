@@ -23,6 +23,7 @@ _TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 _REVOKE_URL = "https://slack.com/api/auth.revoke"
 _AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
 _POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
+_REACTIONS_ADD_URL = "https://slack.com/api/reactions.add"
 _LIST_CONVERSATIONS_URL = "https://slack.com/api/conversations.list"
 
 
@@ -206,6 +207,32 @@ class SlackCommunications:
             if not cursor:
                 raise SlackAuthError(f"Slack channel not found: {channel}")
 
+    async def add_reaction(self, channel: str, timestamp: str, reaction: str) -> None:
+        token = self._credential_store.token()
+        if not token:
+            raise SlackAuthError(
+                "Slack is not connected, so the reaction was not added"
+            )
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                _REACTIONS_ADD_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "channel": channel,
+                    "timestamp": timestamp,
+                    "name": reaction,
+                },
+            )
+        if response.is_error:
+            raise SlackAuthError(
+                f"Slack returned {response.status_code} while adding a reaction"
+            )
+        body = response.json()
+        if not body.get("ok") and body.get("error") != "already_reacted":
+            raise SlackAuthError(
+                f"Slack reaction failed: {body.get('error', 'reaction was not added')}"
+            )
+
     async def reply(self, message_id: str, message: str) -> str:
         raise NotImplementedError("Slack notification threads are not supported")
 
@@ -312,7 +339,7 @@ def authorization_url(client_id: str, redirect_uri: str, state: str) -> str:
             # which is not how a thread reads.
             "scope": (
                 "app_mentions:read,chat:write,chat:write.public,channels:read,"
-                "channels:history,groups:history"
+                "channels:history,groups:history,reactions:write"
             ),
             "redirect_uri": redirect_uri,
             "state": state,
