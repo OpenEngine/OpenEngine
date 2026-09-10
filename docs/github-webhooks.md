@@ -7,10 +7,41 @@ collect failures until GitHub disabled the hook.
 
 Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, subscribe it to the
 `issue_comment` and `pull_request_review_comment` events, and give it a secret.
-Start Engine with the same secret:
+
+## Naming the repository
+
+Name the repository whose deliveries this deployment answers in `engine.toml`:
+
+```toml
+[github]
+repository = "owner/name"
+```
+
+The slug is validated at startup, so a misspelling is refused there rather than
+silently dropping every delivery.
+
+## Storing the secret
+
+The webhook's shared secret is not written in `engine.toml`, which is
+committed. Store it as `ENGINE_GITHUB_WEBHOOK_SECRET=your-secret` in a
+server-local `.env` beside the loaded `engine.toml` (or in the working
+directory when no config file is loaded) — the same file the
+[GitHub login](github-login.md) secret uses. It is gitignored; restrict its
+permissions to the service owner (`chmod 600 .env`) and edit it over SSH. The
+app reads it directly, with dotenv interpolation disabled, without sourcing it
+into a shell. A process environment variable of the same name takes precedence,
+and the file is reread per delivery, so rotating the secret in GitHub's webhook
+settings and on disk takes effect without a restart. Secrets are not accepted
+in TOML.
+
+`engine-web --check` reports both halves — the repository and whether a secret
+is readable — so a half-finished setup is visible before the first delivery
+arrives.
+
+## The account Engine posts as
 
 ```bash
-GITHUB_WEBHOOK_SECRET=... GITHUB_BOT_LOGIN=... uv run engine-web
+GITHUB_BOT_LOGIN=... uv run engine-web
 ```
 
 `GITHUB_BOT_LOGIN` is the GitHub account Engine posts as, whose own comments are
@@ -18,6 +49,8 @@ never answered. Set it whenever Engine authenticates with a personal access
 token belonging to a machine user: such an account is an ordinary user and
 usually a collaborator, so without this it would answer itself in a loop. A
 GitHub app is recognised by its user type and needs no setting.
+
+## What the route does with a delivery
 
 The route verifies the `X-Hub-Signature-256` GitHub sends and refuses anything
 it did not sign. A signature only proves GitHub sent the delivery, so authorship

@@ -958,7 +958,7 @@ def create_app(
     github_login_config: GitHubLoginConfig | None = None,
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
-    github_webhook_secret: str = "",
+    github_webhook_secret: Callable[[], str] = lambda: "",
     github_bot_login: str = "",
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
@@ -2463,7 +2463,7 @@ def create_app(
     # could accept a delivery but never act on it is a trap, because a webhook
     # pointed at it collects failed deliveries until GitHub disables the hook.
     github_ingress = GithubIngress(
-        webhook_secret=lambda: github_webhook_secret,
+        webhook_secret=github_webhook_secret,
         self_login=lambda: github_bot_login,
         handle=github_comment_handler,
     )
