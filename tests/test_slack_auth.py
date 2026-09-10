@@ -159,7 +159,7 @@ def test_authorization_url_requests_notification_scope_and_state() -> None:
     assert url.startswith("https://slack.com/oauth/v2/authorize?")
     assert (
         "scope=app_mentions%3Aread%2Cchat%3Awrite%2Cchat%3Awrite.public"
-        "%2Cchannels%3Aread" in url
+        "%2Cchannels%3Aread%2Cchannels%3Ahistory%2Cgroups%3Ahistory" in url
     )
     assert "state=nonce" in url
 
