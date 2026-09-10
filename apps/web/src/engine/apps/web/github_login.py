@@ -46,6 +46,7 @@ class GitHubLoginConfig:
     client_secret: str = field(repr=False)
     redirect_uri: str
     secret_file: Path | None = field(default=None, repr=False)
+    repository: str = ""
 
     def current_secret(self) -> str:
         if self.secret_file is None:
@@ -132,10 +133,11 @@ class GitHubLogin:
         signature = self._sign(payload)
         browser = f"{payload}.{signature}"
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        scope = "read:user repo" if self.config.repository else "read:user"
         response = RedirectResponse("https://github.com/login/oauth/authorize?" + urlencode({
             "client_id": self.config.client_id,
             "redirect_uri": self.config.redirect_uri,
-            "scope": "read:user",
+            "scope": scope,
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
@@ -218,6 +220,15 @@ class GitHubLogin:
                         or user["id"] <= 0 or not isinstance(user.get("login"), str)
                         or not user["login"]):
                     raise ValueError("Invalid identity")
+                if self.config.repository:
+                    repo_response = await client.get(
+                        f"https://api.github.com/repos/{self.config.repository}",
+                        headers={"Accept": "application/vnd.github+json",
+                                 "Authorization": f"Bearer {token}"},
+                    )
+                    if repo_response.status_code == 404 or repo_response.status_code == 403:
+                        return RedirectResponse("/login?error=unauthorized", status_code=302)
+                    repo_response.raise_for_status()
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
         # Issue a session cookie and redirect to the app.
