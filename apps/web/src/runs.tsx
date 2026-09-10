@@ -494,6 +494,8 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
       id: "workspace",
       name: run.phase === "pending" ? "Queued" : "Workspace",
       status: preparing ? "in_progress" : "completed",
+      steps: [] as ApiRunStep[],
+      grouped: false,
     },
     ...collapseStepGroups(run.steps),
   ];
@@ -511,6 +513,18 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
           key={stage.id}
         >
           <span>{stage.name}</span>
+          {stage.grouped && stage.steps.length > 1 && (
+            <span className="stage-subnodes">
+              {stage.steps.map((step) => (
+                <span
+                  className="stage-subnode"
+                  data-status={step.status}
+                  key={step.stepId}
+                  title={step.name}
+                />
+              ))}
+            </span>
+          )}
         </li>
       ))}
     </ol>
@@ -699,9 +713,12 @@ function StepGroup({ name, status, steps, currentStepId }: {
   return (
     <details className="step-group">
       <summary className="step-group-summary">
-        <span>
-          <span className="eyebrow">agent group</span>
-          <strong>{name}</strong>
+        <span className="step-group-label">
+          <span className="step-group-caret" aria-hidden="true">▶</span>
+          <span>
+            <span className="eyebrow">agent group</span>
+            <strong>{name}</strong>
+          </span>
         </span>
         <span className={`chip ${status === "action_required" ? "chip-flame" : ""}`}>
           {phaseLabel(status)}
