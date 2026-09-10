@@ -304,7 +304,16 @@ def authorization_url(client_id: str, redirect_uri: str, state: str) -> str:
             "client_id": client_id,
             # `app_mentions:read` is what makes the bot hearable: without it
             # Slack delivers no `app_mention`, and pinging it does nothing.
-            "scope": "app_mentions:read,chat:write,chat:write.public,channels:read",
+            # The history scopes are what make it hearable a second time. A
+            # reply in a thread it is already holding arrives as
+            # `message.channels`, or `message.groups` in a private channel, and
+            # Slack delivers neither to an app that cannot read that
+            # conversation -- so without them every turn needs a fresh mention,
+            # which is not how a thread reads.
+            "scope": (
+                "app_mentions:read,chat:write,chat:write.public,channels:read,"
+                "channels:history,groups:history"
+            ),
             "redirect_uri": redirect_uri,
             "state": state,
         }

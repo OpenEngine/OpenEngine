@@ -12,11 +12,12 @@ posts its UI link, and reports progress in the same thread.
    bot token is logged and the delivery is ignored because no reply can be sent.
 2. Set the Slack Events request URL to `<public_url>/api/slack/events` and
    subscribe to `app_mention`. Invite the bot to the channel.
-3. For replies without another mention, subscribe to `message.channels` and grant
-   `channels:history`; private channels use `message.groups` and `groups:history`.
-   These are Slack app installation settings: this change does not broaden the
-   OAuth scopes requested by OpenEngine. Update the Slack app and reinstall it
-   when granting additional permissions. See Slack's
+3. For replies without another mention, subscribe to `message.channels`, and to
+   `message.groups` as well for private channels. OpenEngine's authorization
+   request already asks for the `channels:history` and `groups:history` scopes
+   those events require, so a workspace connected before they were requested has
+   to be reconnected in Settings → Slack for Slack to start delivering them. See
+   Slack's
    [message event documentation](https://docs.slack.dev/reference/events/message/).
 4. Install the Codex ACP adapter prerequisites (`npx` and Codex authentication).
    The web composition defaults to `CodexACPProvider`; tests or another deployment
