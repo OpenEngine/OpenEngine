@@ -191,6 +191,8 @@ def compose_app(
         github_login_config=github_login_config,
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
+        github_webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET", ""),
+        github_bot_login=os.environ.get("GITHUB_BOT_LOGIN", ""),
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         milestone_scoper=build_milestone_scoper(settings),

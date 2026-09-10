@@ -42,6 +42,7 @@ from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
+from engine.apps.web.github_ingress import GithubComment, GithubIngress
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -1038,6 +1039,9 @@ def create_app(
     github_login_config: GitHubLoginConfig | None = None,
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
+    github_webhook_secret: str = "",
+    github_bot_login: str = "",
+    github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
@@ -1390,6 +1394,7 @@ def create_app(
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         async with AsyncExitStack() as opened:
             opened.push_async_callback(slack_ingress.close)
+            opened.push_async_callback(github_ingress.close)
             if graph_runtime is not None:
                 # Opening the graph engine is what makes a graph WorkOrder
                 # startable: it compiles every graph in the workflow directory
@@ -3024,6 +3029,15 @@ def create_app(
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
         react=_slack_comms.add_reaction,
     )
+    # GitHub comments arrive on their own signed route, answered by whatever is
+    # passed in. The route is only mounted when something is: an endpoint that
+    # could accept a delivery but never act on it is a trap, because a webhook
+    # pointed at it collects failed deliveries until GitHub disables the hook.
+    github_ingress = GithubIngress(
+        webhook_secret=lambda: github_webhook_secret,
+        self_login=lambda: github_bot_login,
+        handle=github_comment_handler,
+    )
 
     def _mentioned_workflow() -> WorkflowDefinition | None:
         """Which workflow a mention runs: the configured one, or the only one."""
@@ -3158,6 +3172,10 @@ def create_app(
             methods=["POST"],
         ),
     ]
+    if github_comment_handler is not None:
+        routes.append(
+            Route("/api/github/events", github_ingress.webhook, methods=["POST"])
+        )
     if static_directory is not None and (static_directory / "index.html").is_file():
 
         async def spa_page(_request: Request) -> Response:
@@ -3196,6 +3214,7 @@ def create_app(
     app.state.thread_service = service
     app.state.milestone_scoper = milestone_scoper
     app.state.slack_ingress = slack_ingress
+    app.state.github_ingress = github_ingress
     # Enforce session auth on API routes when GitHub login is configured.
     app = github_login.middleware(app)
     return app
