@@ -11,6 +11,7 @@ OpenEngine uses your locally installed codex and claude CLI. This means that it 
 
 First, clone the repo:
 ```bash
+cd OpenEngine
 uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
@@ -18,15 +19,10 @@ npm --prefix apps/web run build
 Then, run it by pointing it at your project:
 ```bash
 uv run \
-  --project /path/to/openengine \
   --directory /path/to/your/project \
   --all-packages \
   engine-web
 ```
-
-`--project` selects OpenEngine's uv environment; it does not change the
-command's working directory. `--directory` makes the target project the working
-directory that `engine-web` and its agents see.
 
 `engine-web` serves the client built into `apps/web/dist` and reads its
 configuration once, so a source edit needs a rebuild, a Ctrl-C, or both. While
