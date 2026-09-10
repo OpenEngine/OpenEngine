@@ -39,6 +39,7 @@ from engine.ports.permissions import (
 )
 from engine.ports.source_control import (
     ChangeRequest,
+    CommentResult,
     Discussion,
     GitResult,
     JobLogs,
@@ -63,6 +64,7 @@ __all__ = [
     "ApprovalResponse",
     "ApprovalCapability",
     "ChangeRequest",
+    "CommentResult",
     "Communications",
     "Message",
     "MessageLink",
