@@ -928,10 +928,14 @@ class ACPNode:
         """Turn the broker's terminal result into graph state or a run failure."""
         if isinstance(event, RunFailed):
             raise RuntimeError(event.reason)
+        outputs = {output.name: output.value for output in event.outputs}
         update: dict[str, object] = {
-            self.output_key or str(current_execution().node_id): event.summary
+            self.output_key or str(current_execution().node_id): (
+                {**outputs, "summary": event.summary} if outputs else event.summary
+            )
         }
-        update.update({output.name: output.value for output in event.outputs})
+        # Keep outputs available to downstream nodes as well as phase results.
+        update.update(outputs)
         return update
 
     async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:
