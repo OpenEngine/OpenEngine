@@ -884,6 +884,7 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         # Another forge numbers its notes from its own counter, so it is left
         # out rather than filed under a GitHub comment's name.
         ("https://gitlab.com/acme/api/-/merge_requests/7", None),
+        ("https://gitlab.example.com/x/y/pull/7/-/merge_requests/1#note_123", None),
         ("https://github.com/acme/api/issues/42", None),
         ("https://github.com/acme/api", None),
     ],

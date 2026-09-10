@@ -996,6 +996,7 @@ def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
     segments = parsed.path.strip("/").split("/")
     if (
         len(segments) < 4
+        or "-" in segments
         or not all(segments[:2])
         or segments[2] != "pull"
         or not segments[3].isdigit()
