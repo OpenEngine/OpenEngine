@@ -24,7 +24,7 @@
 
 import { expect, shot, test, type Script } from "./harness";
 
-const WORKFLOW = "[BETA] Implementation review (codex)";
+const WORKFLOW = "[BETA] Codex implements, Claude reviews";
 const TASK = "Add a greeting file to the repository.";
 const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";

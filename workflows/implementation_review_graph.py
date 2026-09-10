@@ -164,15 +164,15 @@ def _fan_out_reviews(state: dict[str, Any]) -> list[Send]:
 def pipeline(
     runner: str,
     *,
+    reviewer: str | None = None,
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
 ) -> StateGraph:
-    """Implement with `runner`, then review with the other provider.
+    """Implement with `runner`, defaulting to review by the other provider.
 
-    The three keyword arguments are the only things a deployment or a test has
-    business replacing: where the checkouts are made, which agents answer, and
-    what session settings (attribution, output style) the adapter should apply.
+    The reviewer can be selected independently. Deployments and tests can also
+    replace the workspace provider, agent registry, and session settings.
     """
     builder: StateGraph = StateGraph(State)
     builder.add_node(
@@ -218,7 +218,8 @@ def pipeline(
 
     # ---- review fan-out: one node per facet, run in parallel ----------------
 
-    reviewer = {"codex": "claude", "claude": "codex"}[runner]
+    if reviewer is None:
+        reviewer = {"codex": "claude", "claude": "codex"}[runner]
     models = REVIEW_MODELS[reviewer]
     for facet in REVIEW_FACETS:
         model = models["elevated"] if facet.elevated else models["default"]
@@ -324,28 +325,41 @@ def pipeline(
     return builder
 
 
-#: One graph per agent. Picking a runner is picking one of these.
-RUNNERS = ("codex", "claude")
+#: Existing cross-provider variants first, then same-provider variants.
+VARIANTS = (
+    ("codex", "claude"),
+    ("claude", "codex"),
+    ("claude", "claude"),
+    ("codex", "codex"),
+)
 
 
 def graph_for(
     runner: str,
     *,
+    reviewer: str | None = None,
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
 ) -> GraphWorkflow:
-    """This workflow, for one agent, named the way everything else names it."""
+    """Offer one implementation/review pairing with an explicit display name."""
+    if reviewer is None:
+        reviewer = {"codex": "claude", "claude": "codex"}[runner]
+    graph_id = f"implementation-review-{runner}"
+    if reviewer == runner:
+        graph_id += f"-{reviewer}"
+    names = {"codex": "Codex", "claude": "Claude"}
     return graph_workflow(
         pipeline(
             runner,
+            reviewer=reviewer,
             workspace_provider=workspace_provider,
             agents=agents,
             session_config=session_config,
         ),
-        id=f"implementation-review-{runner}",
-        name=f"Implementation review ({runner})",
+        id=graph_id,
+        name=f"{names[runner]} implements, {names[reviewer]} reviews",
     )
 
 
-workflow = tuple(graph_for(runner) for runner in RUNNERS)
+workflow = tuple(graph_for(runner, reviewer=reviewer) for runner, reviewer in VARIANTS)

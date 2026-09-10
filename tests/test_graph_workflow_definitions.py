@@ -47,7 +47,18 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 CONFIG = Path(__file__).resolve().parents[1] / "engine.toml"
 
 STARTABLE = "implementation-review-v1"
-GRAPHS = ("implementation-review-codex", "implementation-review-claude")
+GRAPHS = (
+    "implementation-review-codex",
+    "implementation-review-claude",
+    "implementation-review-claude-claude",
+    "implementation-review-codex-codex",
+)
+GRAPH_NAMES = [
+    "Codex implements, Claude reviews",
+    "Claude implements, Codex reviews",
+    "Claude implements, Claude reviews",
+    "Codex implements, Codex reviews",
+]
 
 
 class RecordingWorkspaceProvider:
@@ -106,13 +117,37 @@ def test_the_repository_offers_the_same_workflow_on_either_engine() -> None:
     loaded = catalog()
 
     assert [str(one.graph_id) for one in loaded.graphs] == list(GRAPHS)
-    assert [one.name for one in loaded.graphs] == [
-        "Implementation review (codex)",
-        "Implementation review (claude)",
-    ]
-    # One per runner, because an agent node names the agent it runs. Choosing a
-    # runner means choosing a graph, not filling in a field on one.
+    assert [one.name for one in loaded.graphs] == GRAPH_NAMES
+    # Each pairing is a separate choice in the workflow catalog.
     assert all(isinstance(one, GraphWorkflow) for one in loaded.graphs)
+
+
+@pytest.mark.parametrize(
+    ("runner", "reviewer"),
+    [
+        ("codex", "claude"),
+        ("claude", "codex"),
+        ("claude", "claude"),
+        ("codex", "codex"),
+    ],
+)
+def test_each_variant_routes_agents_and_review_models(
+    runner: str, reviewer: str,
+) -> None:
+    module = definition_module()
+    nodes = nodes_of(module.pipeline(runner, reviewer=reviewer))
+
+    for stage in (module.NAMING, module.IMPLEMENTATION, module.RERANKER):
+        assert nodes[stage].agent == runner
+    assert nodes[module.IMPLEMENTATION].mcp_server_bindings[0].agent_id == runner
+    for facet in module.REVIEW_FACETS:
+        node = nodes[f"review-{facet.id}"]
+        assert node.agent == reviewer
+        assert node.mcp_server_bindings[0].agent_id == reviewer
+        tier = "elevated" if facet.elevated else "default"
+        assert node.session_config["model"] == module.REVIEW_MODELS[reviewer][tier]
+    prompt = nodes[module.RERANKER].prompt({})
+    assert f"Produced by {reviewer} reviewing" in prompt
 
 
 def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
@@ -347,7 +382,7 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
 ) -> None:
     """The dropdown itself, through the endpoint the client reads it from.
 
-    Both kinds, in one list: the step workflow as it always read, and the two
+    Both kinds, in one list: the step workflow as it always read, and the four
     graphs after it wearing `[BETA]`. The prefix is the warning that these are
     new -- picking one runs it on the graph engine, which this deployment
     starts because its workflow directory holds graphs.
@@ -375,12 +410,11 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
 
     assert [one["id"] for one in offered] == [STARTABLE, *GRAPHS]
     assert [one["name"] for one in offered if one["id"] in GRAPHS] == [
-        "[BETA] Implementation review (codex)",
-        "[BETA] Implementation review (claude)",
+        f"[BETA] {name}" for name in GRAPH_NAMES
     ]
     # A graph has no version, and the client leaves the version out rather than
     # printing a trailing separator.
-    assert [one["version"] for one in offered if one["id"] in GRAPHS] == ["", ""]
+    assert [one["version"] for one in offered if one["id"] in GRAPHS] == [""] * len(GRAPHS)
 
 
 # --- and nothing falls over --------------------------------------------------
