@@ -35,7 +35,10 @@ from typing import Any
 
 import pytest
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
+from engine.domain import (
+    ApprovalDecision, ApprovalId, ApprovalKind, RunFailed, RunId, StepCompleted,
+    WorkspaceId,
+)
 from engine.graph_runtime import EventLog, GraphId, NodeId, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     LangGraphDefinition,
@@ -1093,6 +1096,55 @@ def test_a_line_explaining_a_request_is_published_before_the_wait(
 
 
 # --- steering ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("terminal", ["complete_step", "fail_step"])
+def test_terminal_result_waits_for_queued_steering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal: str,
+) -> None:
+    speak_or_terminal = ACPNode._speak_or_terminal
+    follow_ups = ["Run the fast suite.", "Check the documentation.", "Check formatting."]
+    injected = False
+
+    async def queue_at_completion(self: ACPNode, turn: Any, *args: Any) -> Any:
+        nonlocal injected
+        result = await speak_or_terminal(self, turn, *args)
+        if isinstance(result, (StepCompleted, RunFailed)) and not injected:
+            injected = True
+            for message in follow_ups[:2]:
+                await turn.execution.steer(message)
+        elif injected and args[1] == follow_ups[0]:
+            # Also drain messages arriving while a queued follow-up is handled.
+            await turn.execution.steer(follow_ups[2])
+        return result
+
+    monkeypatch.setattr(ACPNode, "_speak_or_terminal", queue_at_completion)
+
+    async def scenario() -> Any:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_terminal=terminal),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(
+                log, run.run_id,
+                "run.finished" if terminal == "complete_step" else "run.failed",
+            )
+            return await runtime.snapshot(run.run_id)
+
+    final = asyncio.run(scenario())
+
+    assert prompts(tmp_path) == [PROMPT, *follow_ups]
+    assert len(sent(tmp_path, "session/new")) == 1
+    if terminal == "complete_step":
+        assert final.values[str(IMPLEMENTATION)] == "Implemented through MCP."
+        assert final.values["pr_url"] == "https://github.com/acme/repository/pull/7"
+        assert final.values[str(REVIEW)] == "Looks right."
+    else:
+        assert final.error == "The implementation cannot continue."
+        assert str(REVIEW) not in final.values
 
 
 def test_steering_interrupts_the_turn_in_flight(tmp_path: Path) -> None:
