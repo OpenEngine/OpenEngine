@@ -29,14 +29,12 @@ uv run \
   --all-packages \
   engine-web
 ```
-
-`engine-web` serves the client built into `apps/web/dist` and reads its
-configuration once, so a source edit needs a rebuild, a Ctrl-C, or both. While
-working on OpenEngine itself, run the development server instead:
-
+While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev
 ```
+
+Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
 ## engine.toml
 The main configuration file for OpenEngine. It's defined [here](./engine.toml).
