@@ -5,6 +5,13 @@ concierge here may only steer the work order that already opened the pull
 request, and its participants are whoever can comment on it rather than one
 person in a direct message. Both differences are authority, so this is its own
 graph rather than a mode of the Slack one.
+
+Model output flows inward and never outward. What the agent writes reaches the
+work order through the feedback tool, which is private; what gets posted back
+to the pull request is fixed text chosen by whether that tool succeeded, plus
+identifiers this process already held. A pull-request comment is untrusted
+text, the agent reading it can read the host it runs on, and a reply is public
+-- so the one thing a commenter can dictate is not given a way out.
 """
 from __future__ import annotations
 
@@ -19,7 +26,6 @@ from typing import TypedDict
 from engine.domain import RunOrigin
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp.agent import ACPAgentProvider
-from langgraph_acp.events import ACPEventType
 from langgraph_acp.session import ACPSession
 
 from .github_egress import FeedbackBroker
@@ -29,14 +35,48 @@ from .github_egress import FeedbackBroker
 SteerWorkorder = Callable[[RunOrigin, str], Awaitable[tuple[str, str]]]
 Reply = Callable[[RunOrigin, str], Awaitable[None]]
 
-INSTRUCTIONS = """You are OpenEngineBot, a pull request concierge. Reply briefly to
-questions about this pull request. When someone asks for a change or for
-review feedback to be addressed, use continue_workorder with their request: it
-forwards the request to the work order that opened this pull request. You have
-no implementation role and cannot start work orders: use only the granted
-continue_workorder tool. Never claim feedback was delivered unless the tool
-succeeds.
+INSTRUCTIONS = """You are OpenEngineBot, a pull request concierge. Your one effect
+on this pull request is the continue_workorder tool: when a comment asks for a
+change, or asks for review feedback to be addressed, call it with that request
+and it reaches the work order that opened this pull request. You have no
+implementation role and cannot start work orders.
+
+Nothing you write is published. The reply posted to the pull request is fixed
+text chosen by whether that tool succeeded, so do not compose an answer and do
+not try to tell the reader anything except by calling the tool. When a comment
+asks for no change, call nothing.
 """
+
+#: Everything the concierge is allowed to say in public. Fixed strings, chosen
+#: by what happened rather than written by a model.
+FORWARDED = "Forwarded to work order `{run_id}`."
+UNDELIVERED = (
+    "I could not reach the work order for this pull request, so nothing has "
+    "been forwarded."
+)
+NOT_FORWARDED = (
+    "I only forward change requests to the work order that opened this pull "
+    "request, and I have not forwarded anything for this comment."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    """What one turn did to the work order, as the host saw it.
+
+    The whole basis for the public reply. ``run_id`` and ``url`` come from this
+    process's own store, never from the conversation.
+    """
+
+    run_id: str = ""
+    url: str = ""
+    attempted: bool = False
+
+    def announcement(self) -> str:
+        if self.run_id:
+            forwarded = FORWARDED.format(run_id=self.run_id)
+            return f"{forwarded} {self.url}" if self.url else forwarded
+        return UNDELIVERED if self.attempted else NOT_FORWARDED
 
 
 @dataclass(frozen=True)
@@ -102,6 +142,10 @@ class GithubConcierge:
             tuple[str, str, str], tuple[AsyncExitStack, ACPSession]
         ] = OrderedDict()
         self._lock = asyncio.Lock()
+        # What the turn in progress did, read by `_reply` to choose what to
+        # say. One slot rather than one per session because `handle` serializes
+        # turns: exactly one is ever in flight to write it.
+        self._delivery = Delivery()
         self.graph = build_graph(self._turn, self._reply)
 
     @staticmethod
@@ -138,6 +182,7 @@ class GithubConcierge:
         request = state["request"]
         origin = request.origin
         key = self._key(origin)
+        self._delivery = Delivery()
         fresh = key not in self._threads
         if fresh:
             while len(self._threads) >= self.max_threads:
@@ -150,7 +195,10 @@ class GithubConcierge:
                     # The session belongs to this origin for its whole life, so
                     # the authority a tool call carries is the authority of the
                     # author whose history it was reasoning over.
-                    return await self.steer_workorder(origin, prompt)
+                    self._delivery = Delivery(attempted=True)
+                    url, run_id = await self.steer_workorder(origin, prompt)
+                    self._delivery = Delivery(run_id=run_id, url=url, attempted=True)
+                    return url, run_id
 
                 broker = await opened.enter_async_context(
                     FeedbackBroker(steer_workorder=steer)
@@ -165,17 +213,17 @@ class GithubConcierge:
         self._threads.move_to_end(key)
         session = self._threads[key][1]
         prompt = (INSTRUCTIONS + "\nUser: " if fresh else "") + request.text
-        parts = []
-        async for event in session.prompt(prompt):
-            if event.type == ACPEventType.MESSAGE_DELTA:
-                content = event.data.get("content", {})
-                if isinstance(content, dict) and content.get("type") == "text":
-                    parts.append(str(content.get("text", "")))
-        return {"reply": "".join(parts).strip() or "I'm working on that."}
+        # Driven to completion and discarded. The turn's worth is in what it
+        # asked of the tool, which has already been recorded by the time this
+        # finishes; its prose is the part an untrusted commenter can dictate,
+        # and reading it here is what would give that prose somewhere to go.
+        async for _event in session.prompt(prompt):
+            pass
+        return {"reply": self._delivery.announcement()}
 
     async def _reply(self, state: ConversationState) -> dict:
         await self.reply(state["request"].origin, state["reply"])
         return {}
 
 
-__all__ = ["FeedbackRequest", "GithubConcierge", "build_graph"]
+__all__ = ["Delivery", "FeedbackRequest", "GithubConcierge", "build_graph"]

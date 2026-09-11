@@ -39,7 +39,8 @@ _TOOL_SPEC: dict[str, object] = {
     "description": (
         "Send feedback to the work order that opened this pull request, so the "
         "agent behind it can act on the request. Never starts a new work order. "
-        "Returns the work order URL so you can share it with the user."
+        "Calling this is the only way to affect the pull request: the reply "
+        "posted there is fixed text chosen by whether this succeeded."
     ),
     "inputSchema": {
         "type": "object",

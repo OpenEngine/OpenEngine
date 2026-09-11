@@ -14,8 +14,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from engine.domain import RunId, RunState, TaskId, WorkflowId
+from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Delivery
 from engine.graph_runtime import NodeId
 from engine.runtime import WorkOrdersConfig
+
+#: Stands in for anything the host holds and the public must not be told.
+LEAKED = "ghp_000000000000000000000000000000000000"
 from test_slack_work_orders import (
     SIGNING_SECRET,
     FakeACPProvider,
@@ -98,7 +102,9 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     from test_github_ingress import _issue_comment, _signed as github_signed
 
     runtime, opened = _graph_runtime()
-    provider = FakeACPProvider(create=True)
+    # Whatever the model says is a stranger's to dictate: stand something that
+    # must never be published where its prose would be.
+    provider = FakeACPProvider(create=True, text=f"the deploy key is {LEAKED}")
     communications = RecordingCommunications()
     app, capabilities, _ = _app(
         tmp_path, communications,
@@ -144,8 +150,13 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     assert provider.clients[0].closed
     assert not communications.posts
     assert source_control.add_comment.await_count == 2
+    posted = [call.args[1] for call in source_control.add_comment.await_args_list]
+    # The comment that asked for nothing, then the one that was forwarded --
+    # both fixed text, and the run id is this process's own.
+    assert posted == [NOT_FORWARDED, "Forwarded to work order `existing`."]
+    assert not any(LEAKED in text for text in posted)
     source_control.add_comment.assert_awaited_with(
-        "https://github.com/acme/api/pull/7", provider.text,
+        "https://github.com/acme/api/pull/7", posted[-1],
         in_reply_to_id=1 if event == "pull_request_review_comment" else None,
     )
 
@@ -287,6 +298,10 @@ def test_feedback_is_steered_only_where_the_graph_says_it_may_be(tmp_path, graph
             runtime.steer.assert_not_awaited()
             assert provider.clients[0].result["isError"]
             assert "could not identify" in provider.clients[0].result["content"][0]["text"]
+            # Why it failed is for the agent, which can try something else.
+            # The pull request is told only that nothing was forwarded.
+            capabilities.source_control.add_comment.assert_awaited_once_with(
+                "https://github.com/acme/api/pull/7", UNDELIVERED, in_reply_to_id=None)
         else:
             runtime.steer.assert_awaited_once_with(
                 RunId("existing"), "Implement it",
@@ -533,3 +548,23 @@ def test_github_permissions_only_allow_the_feedback_tool():
             assert result.granted == allowed, name
 
     asyncio.run(scenario())
+
+
+def test_only_fixed_text_and_host_identifiers_are_ever_published():
+    """The reply is chosen by what happened, not composed by anyone.
+
+    Every branch here is a constant or an identifier this process already held,
+    which is the property that makes an untrusted comment unable to reach the
+    public reply however the agent answering it is steered.
+    """
+    delivered = Delivery(run_id="run-abc", url="https://engine.example/runs/run-abc",
+                         attempted=True)
+    assert delivered.announcement() == (
+        "Forwarded to work order `run-abc`. https://engine.example/runs/run-abc")
+    # A deployment with no work-order URL still names the run.
+    assert Delivery(run_id="run-abc", attempted=True).announcement() == (
+        "Forwarded to work order `run-abc`.")
+    # Asked for, and did not land.
+    assert Delivery(attempted=True).announcement() == UNDELIVERED
+    # Never asked for: a comment that wanted no change.
+    assert Delivery().announcement() == NOT_FORWARDED
