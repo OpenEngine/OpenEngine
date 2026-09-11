@@ -95,6 +95,38 @@ def test_slack_communications_renders_structured_links_as_mrkdwn() -> None:
     )
 
 
+def test_slack_communications_escapes_link_content_that_could_break_the_mrkdwn_tag() -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": True, "ts": "123.456"}
+
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
+        client = client_type.return_value.__aenter__.return_value
+        client.post = AsyncMock(return_value=response)
+        __import__("asyncio").run(
+            SlackCommunications(store).post(
+                "C12345678",
+                Message(
+                    "Review run-42",
+                    (
+                        MessageLink(
+                            "Open review",
+                            "https://evil.example|Approved by security> <!channel",
+                        ),
+                    ),
+                ),
+            )
+        )
+
+    text = client.post.await_args.kwargs["json"]["text"]
+    assert "<!channel" not in text
+    assert text == (
+        "Review run-42\n"
+        "<https://evil.example%7CApproved by security&gt; &lt;!channel|Open review>"
+    )
+
+
 def test_slack_communications_resolves_name_that_starts_like_an_id() -> None:
     store = MagicMock(spec=SlackCredentialStore)
     store.token.return_value = "xoxb-token"

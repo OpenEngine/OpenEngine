@@ -27,6 +27,11 @@ _REACTIONS_ADD_URL = "https://slack.com/api/reactions.add"
 _LIST_CONVERSATIONS_URL = "https://slack.com/api/conversations.list"
 
 
+def _escape_mrkdwn(text: str) -> str:
+    """Neutralize mrkdwn syntax so untrusted text can't break out of a `<url|label>` tag."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class SlackAuthError(RuntimeError):
     """Slack authorization or secure storage failed."""
 
@@ -169,7 +174,10 @@ class SlackCommunications:
         if isinstance(message, str):
             return message
         text = f"<@{message.mention}> {message.text}" if message.mention else message.text
-        links = "\n".join(f"<{link.url}|{link.label}>" for link in message.links)
+        links = "\n".join(
+            f"<{_escape_mrkdwn(link.url).replace('|', '%7C')}|{_escape_mrkdwn(link.label)}>"
+            for link in message.links
+        )
         return f"{text}\n{links}" if links else text
 
     async def _resolve_channel(

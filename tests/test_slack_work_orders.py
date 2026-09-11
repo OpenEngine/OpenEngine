@@ -1428,3 +1428,112 @@ def test_the_human_review_notification_links_to_the_pull_request(tmp_path):
         if message.text == "Review complete and ready for your decision."
     )
     assert any(link.url == PR_URL for link in message.links)
+
+
+def test_the_human_review_notification_omits_a_pull_request_link_that_is_not_a_github_pr_url(
+    tmp_path,
+):
+    """A `pr_url` that doesn't resolve to a real GitHub PR is never linked."""
+    from starlette.testclient import TestClient
+    from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
+    from engine.graph_runtime_langgraph.components import HumanReviewNode
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+    from engine.runtime import WorkflowCatalog
+    from langgraph.graph import START, END, StateGraph
+
+    UNTRUSTED_URL = "https://evil.example|Approved by security> <!channel"
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {"pr_url": UNTRUSTED_URL})
+    builder.add_node("decision", HumanReviewNode())
+    builder.add_edge(START, "work")
+    builder.add_edge("work", "decision")
+    builder.add_edge("decision", END)
+    graph = graph_workflow(
+        builder, id="implementation-review-rerank", name="Implementation review rerank",
+        inputs=(WorkflowInput("implementation_runner", "Implementation runner", "codex"),
+                WorkflowInput("review_runner", "Review runner", "claude")),
+    )
+
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, _capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(),
+        WorkflowCatalog.from_graphs((graph,)), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/slack/events", content=body, headers=_signed(body)
+        ).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+
+        async def wait_for_notification():
+            async with asyncio.timeout(10):
+                while not any(
+                    message.text == "Review complete and ready for your decision."
+                    for _, message, _ in communications.posts
+                ):
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_for_notification)
+    _, message, _ = next(
+        (channel, message, thread) for channel, message, thread in communications.posts
+        if message.text == "Review complete and ready for your decision."
+    )
+    assert all(link.label != "View pull request" for link in message.links)
+
+
+def test_the_human_review_notification_does_not_linger_when_no_pull_request_is_coming(
+    tmp_path,
+):
+    """A human review with no PR-producing node bails out of the wait quickly."""
+    from starlette.testclient import TestClient
+    from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
+    from engine.graph_runtime_langgraph.components import HumanReviewNode
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+    from engine.runtime import WorkflowCatalog
+    from langgraph.graph import START, END, StateGraph
+
+    builder = StateGraph(State)
+    builder.add_node("decision", HumanReviewNode())
+    builder.add_edge(START, "decision")
+    builder.add_edge("decision", END)
+    graph = graph_workflow(
+        builder, id="implementation-review-rerank", name="Implementation review rerank",
+        inputs=(WorkflowInput("implementation_runner", "Implementation runner", "codex"),
+                WorkflowInput("review_runner", "Review runner", "claude")),
+    )
+
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, _capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(),
+        WorkflowCatalog.from_graphs((graph,)), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/slack/events", content=body, headers=_signed(body)
+        ).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+
+        async def wait_for_notification():
+            async with asyncio.timeout(1.5):
+                while not any(
+                    message.text == "Review complete and ready for your decision."
+                    for _, message, _ in communications.posts
+                ):
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_for_notification)
+    _, message, _ = next(
+        (channel, message, thread) for channel, message, thread in communications.posts
+        if message.text == "Review complete and ready for your decision."
+    )
+    assert all(link.label != "View pull request" for link in message.links)

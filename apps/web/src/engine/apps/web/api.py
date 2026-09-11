@@ -157,6 +157,7 @@ from engine.runtime import (
     load_engine_config,
     load_workflow_catalog,
 )
+from engine.runtime.terminal_mcp import _github_pull_request
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -1056,18 +1057,38 @@ def create_app(
         snapshot taken right as the approval is raised can still read as if that
         output never happened. Best effort: give the write a moment to land, and
         say nothing about the pull request rather than block the notification.
+
+        Most human reviews have no preceding PR-creating node, so `pr_url` is
+        never coming: bail as soon as the checkpoint stops advancing rather
+        than spending the full budget on a value that will never arrive. Only
+        a well-formed GitHub pull request URL is trusted -- the value is agent
+        output, not something this process generated.
         """
         if surface.runtime is None:
             return None
-        for _ in range(20):
+        last_checkpoint = None
+        for attempt in range(20):
             snapshot = await surface.runtime.snapshot(run_id)
-            pr_url = snapshot.values.get("pr_url") if snapshot else None
-            if isinstance(pr_url, str) and pr_url:
+            if snapshot is None:
+                return None
+            pr_url = snapshot.values.get("pr_url")
+            if isinstance(pr_url, str) and pr_url and _github_pull_request(pr_url):
                 return pr_url
+            if attempt > 0 and snapshot.checkpoint_id == last_checkpoint:
+                return None
+            last_checkpoint = snapshot.checkpoint_id
             await asyncio.sleep(0.1)
         return None
 
-    async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
+    def _wants_human_review_link(event: RuntimeEvent) -> bool:
+        return (
+            event.kind is EventKind.APPROVAL_REQUESTED
+            and event.payload.get("toolName") == "human_review"
+        )
+
+    async def notify_graph_event(
+        state: RunState, event: RuntimeEvent, pull_request_url: str | None = None
+    ) -> None:
         """Report lifecycle events without making delivery failure fail the graph."""
         text = ""
         mention = False
@@ -1083,11 +1104,10 @@ def create_app(
         if event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
         elif event.kind is EventKind.APPROVAL_REQUESTED:
-            if event.payload.get("toolName") == "human_review":
+            if _wants_human_review_link(event):
                 text = "Review complete and ready for your decision."
-                pr_url = await _pr_url_once_committed(state.run_id)
-                if pr_url:
-                    pull_request_link = MessageLink("View pull request", pr_url)
+                if pull_request_url:
+                    pull_request_link = MessageLink("View pull request", pull_request_url)
             else:
                 text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
             mention = True
@@ -1106,14 +1126,25 @@ def create_app(
             EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
         ):
             return
+        # Waits on the run's own checkpoint to commit, which can take up to
+        # ~2s -- outside the lock so it cannot delay every other run's
+        # notifications behind it.
+        pull_request_url = (
+            await _pr_url_once_committed(event.run_id)
+            if _wants_human_review_link(event) else None
+        )
         async with graph_notification_lock:
             state = await session.state_store.load(event.run_id)
             if state is None:
                 pending_graph_notifications.setdefault(event.run_id, []).append(event)
                 return
             for pending in pending_graph_notifications.pop(event.run_id, []):
-                await notify_graph_event(state, pending)
-            await notify_graph_event(state, event)
+                pending_pr_url = (
+                    await _pr_url_once_committed(pending.run_id)
+                    if _wants_human_review_link(pending) else None
+                )
+                await notify_graph_event(state, pending, pending_pr_url)
+            await notify_graph_event(state, event, pull_request_url)
 
     async def graph_event(event: RuntimeEvent) -> None:
         """Everything the graph engine says, kept where two readers can see it.
