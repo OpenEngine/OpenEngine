@@ -107,21 +107,30 @@ are not answered.
 ## Watching what arrives
 
 Every comment the route queues is remembered for the web UI, so a delivery can
-be followed without reading GitHub's delivery log or this process's stdout. The
-panel is on the WorkOrders page, where it shows every recent comment, and on a
-WorkOrder's own page, where it shows only the comments left on that WorkOrder's
-pull request.
+be followed without reading GitHub's delivery log or this process's stdout.
+Comments are always read beside the work they steered: a WorkOrder's page shows
+the comments left on its own pull request, and there is no page or route that
+lists every comment this process has seen. The strip under the WorkOrder's
+heading carries a `GitHub comments` count linking down to the panel, so the
+comments are findable without scrolling for them.
 
 A comment's row says when it was received, when the concierge picked it up, the
-WorkOrder its feedback was forwarded to, and the fixed announcement posted back
+WorkOrder its feedback reached -- and whether that WorkOrder was started for
+this comment or was already in flight -- and the fixed announcement posted back
 to the pull request, with a link to the comment itself at one end and to the
 WorkOrder at the other. A comment Engine decided not to act on says so and why
 -- "not a pull request", or an author without write access -- which is the
 distinction a delivery log cannot draw. Beside them, the queue depth and
 whether the concierge is answering a comment right now.
 
+A comment reaches a WorkOrder's page by the WorkOrder its feedback was
+forwarded to, falling back to whichever WorkOrder opened the pull request it
+was left on. That fallback is what puts an ignored comment -- which forwarded
+nothing to be named by -- in front of the right reader. A comment on a pull
+request no WorkOrder opened has no page, and is not shown.
+
 The record is in memory and bounded, so a restart forgets it. That is
 deliberate: it is a window on what is happening, and GitHub's delivery log and
 the pull request are the durable record.
 
-It is served from `GET /api/github/activity`, narrowed with `?runId=`.
+It is served from `GET /api/runs/{run_id}/github-comments`.

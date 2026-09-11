@@ -208,14 +208,29 @@ def test_a_comment_is_attributed_to_whichever_run_opened_its_pull_request() -> N
     log.started(comment)
     log.ignored("someone cannot write to acme/api")
 
-    body = activity_json(log.recent(), owners={("acme/api", 7): "existing"})
+    body = activity_json(
+        log.recent(), owners={("acme/api", 7): "existing"}, run_id="existing",
+    )
     (row,) = body["comments"]
     assert (row["runId"], row["dispatchedRunId"]) == ("existing", "")
+    # Without an owner there is nothing to attribute the comment to, so it
+    # belongs to no WorkOrder's page rather than to all of them.
     assert activity_json(log.recent(), owners={}, run_id="existing")["comments"] == []
 
 
+def test_a_comment_is_never_shown_beside_work_it_has_nothing_to_do_with() -> None:
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.dispatched("existing", "")
+
+    owners = {("acme/api", 7): "existing"}
+    assert activity_json(log.recent(), owners=owners, run_id="other")["comments"] == []
+
+
 def test_the_panel_is_told_a_webhook_will_never_deliver_anything() -> None:
-    empty = activity_json((), repository="", configured=False)
+    empty = activity_json((), repository="", configured=False, run_id="existing")
     assert (empty["configured"], empty["comments"]) == (False, [])
 
 
@@ -249,7 +264,7 @@ def test_the_route_reports_a_comment_all_the_way_to_its_reply(tmp_path) -> None:
             github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
 
-        feed = client.get("/api/github/activity").json()
+        feed = client.get("/api/runs/existing/github-comments").json()
         assert feed["configured"] and feed["repository"] == "acme/api"
         # Nothing is left in flight once the queue is drained.
         assert (feed["queued"], feed["working"]) == (0, False)
@@ -261,9 +276,10 @@ def test_the_route_reports_a_comment_all_the_way_to_its_reply(tmp_path) -> None:
         assert row["url"] == "https://github.com/acme/api/issues/7#c"
         assert row["excerpt"] == "new workorder please"
 
-        # The same row, reached from the work order's own page.
-        assert client.get("/api/github/activity?runId=existing").json()["comments"] == [row]
-        assert client.get("/api/github/activity?runId=other").json()["comments"] == []
+        # And nowhere else: another WorkOrder's page does not carry it, and
+        # there is no route that hands out every comment at once.
+        assert client.get("/api/runs/other/github-comments").json()["comments"] == []
+        assert client.get("/api/github/activity").status_code == 404
 
 
 def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
@@ -272,6 +288,6 @@ def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
 
     app, _capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
     with TestClient(app) as client:
-        feed = client.get("/api/github/activity").json()
+        feed = client.get("/api/runs/existing/github-comments").json()
     assert feed == {"repository": "acme/api", "configured": False, "queued": 0,
                     "working": False, "sessions": 0, "comments": []}

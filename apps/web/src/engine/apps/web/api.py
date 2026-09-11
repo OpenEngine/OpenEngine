@@ -2803,10 +2803,17 @@ def create_app(
         activity=github_activity,
     )
 
-    async def github_activity_feed(request: Request) -> JSONResponse:
-        """Recent comment activity, and what the concierge is doing right now.
+    async def run_github_comments(request: Request) -> JSONResponse:
+        """The GitHub comments left on this WorkOrder's pull request.
 
-        The work order each comment belongs to is resolved here rather than
+        Scoped by path rather than filtered by query because a comment only
+        means anything next to the work it steered: read on its own it is a
+        line from a conversation with no subject. Hanging it under the run
+        also keeps the one listing of every comment this process ever saw --
+        including comments about work that is none of this WorkOrder's
+        business -- off the API entirely.
+
+        The WorkOrder each comment belongs to is resolved here rather than
         remembered with the comment: a pull request's owner is written down
         when it is opened, which can be after a comment on it was recorded, so
         joining at read time is what lets a row reach the right page at all.
@@ -2829,7 +2836,7 @@ def create_app(
             queued=github_ingress.queued,
             working=github_concierge.busy,
             sessions=github_concierge.sessions,
-            run_id=request.query_params.get("runId", ""),
+            run_id=request.path_params["run_id"],
         ))
 
     def _mentioned_workflow() -> GraphWorkflow | None:
@@ -2886,7 +2893,6 @@ def create_app(
         Route("/api/github/connect", github_connect, methods=["POST"]),
         Route("/api/github/connect/poll", github_connect_poll, methods=["POST"]),
         Route("/api/github/disconnect", github_disconnect, methods=["POST"]),
-        Route("/api/github/activity", github_activity_feed),
         Route("/api/gitlab/status", gitlab_status),
         Route("/api/gitlab/client-id", gitlab_set_client_id, methods=["POST"]),
         Route("/api/gitlab/connect", gitlab_connect, methods=["POST"]),
@@ -2926,6 +2932,7 @@ def create_app(
         Route("/api/runs/{run_id}/start", start_scheduled_run, methods=["POST"]),
         Route("/api/runs/{run_id}", delete_run, methods=["DELETE"]),
         Route("/api/runs/{run_id}/graph-events", graph_run_events),
+        Route("/api/runs/{run_id}/github-comments", run_github_comments),
         # The graph half of the runs above, served by the engine that runs
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),

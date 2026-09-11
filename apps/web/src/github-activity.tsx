@@ -11,11 +11,15 @@
  *  itself quoted only far enough to recognise which one it is. Both ends are
  *  linked, because the two questions that follow any row are "which comment was
  *  that" and "which WorkOrder got it".
+ *
+ *  Always read beside one WorkOrder. A comment out of that context is a line
+ *  from a conversation with no subject, so there is no page anywhere that
+ *  lists every comment this process has ever seen.
  */
 
 import { useEffect, useState } from "react";
 
-import { getGithubActivity, type ApiGithubActivity, type ApiGithubComment } from "./api";
+import { getRunGithubComments, type ApiGithubActivity, type ApiGithubComment } from "./api";
 
 /** How often the panel asks again. Slower than the WorkOrder page's own poll:
  *  a comment is answered over tens of seconds, and the one thing here that
@@ -111,16 +115,34 @@ function CommentRow({ comment }: { comment: ApiGithubComment }) {
   );
 }
 
-/** The panel. Given a `runId` it shows only that WorkOrder's pull-request
- *  comments; without one it shows every comment this process has handled. */
-export function GithubActivityPanel({ runId }: { runId?: string }) {
+/** The anchor the WorkOrder page's own link points at, named once so the link
+ *  and the thing it scrolls to cannot drift apart. */
+export const GITHUB_COMMENTS_ANCHOR = "github-comments";
+
+export type RunGithubComments = {
+  activity?: ApiGithubActivity;
+  error: string;
+  /** Whether there is anything worth drawing. Nothing is drawn before the
+   *  first answer, or for a deployment no webhook points at that nothing has
+   *  ever reached: an empty panel that turns out to be a loading one is worse
+   *  than no panel at all. The WorkOrder page reads this too, so its link
+   *  never offers to scroll to a panel that is not there. */
+  visible: boolean;
+};
+
+/** Poll one WorkOrder's pull-request comments.
+ *
+ *  Read by the page rather than only by the panel, so the link in the header
+ *  and the panel it points at are two views of one answer instead of two
+ *  requests that can disagree. */
+export function useRunGithubComments(runId: string): RunGithubComments {
   const [activity, setActivity] = useState<ApiGithubActivity>();
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
     const load = () => {
-      getGithubActivity(runId)
+      getRunGithubComments(runId)
         .then((value) => {
           if (cancelled) return;
           setActivity(value);
@@ -140,15 +162,25 @@ export function GithubActivityPanel({ runId }: { runId?: string }) {
     };
   }, [runId]);
 
-  // Nothing is drawn before the first answer, or for a deployment no webhook
-  // points at and nothing has ever reached: an empty panel that turns out to
-  // be a loading one is worse than no panel at all. A later poll that fails
-  // keeps what is on screen and says so, because the rows are still true.
-  if (!activity || (!activity.configured && activity.comments.length === 0)) return null;
+  const visible = !!activity && (activity.configured || activity.comments.length > 0);
+  return { activity, error, visible };
+}
+
+/** The panel: one WorkOrder's pull-request comments, and what the concierge is
+ *  doing with them right now.
+ *
+ *  A later poll that fails keeps what is on screen and says so, because the
+ *  rows are still true -- only the reading of what is happening now is gone. */
+export function GithubActivityPanel({ activity, error, visible }: RunGithubComments) {
+  if (!visible || !activity) return null;
 
   const live = activity.comments.filter((comment) => LIVE.has(comment.status)).length;
   return (
-    <section className="gh-activity" aria-label="GitHub comment activity">
+    <section
+      aria-label="GitHub comment activity"
+      className="gh-activity"
+      id={GITHUB_COMMENTS_ANCHOR}
+    >
       <div className="gh-activity-head">
         <div>
           <p className="eyebrow">GitHub comments</p>
@@ -165,9 +197,7 @@ export function GithubActivityPanel({ runId }: { runId?: string }) {
       {error && <p className="notice">Could not read GitHub activity: {error}</p>}
       {activity.comments.length === 0 ? (
         <p className="state-inline">
-          {runId
-            ? "No GitHub comments have been delivered for this WorkOrder's pull request."
-            : "No GitHub comments have been delivered yet."}
+          No GitHub comments have been delivered for this WorkOrder&rsquo;s pull request.
         </p>
       ) : (
         <ul className="gh-comments">

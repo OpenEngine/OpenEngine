@@ -2,7 +2,18 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import type { ApiGithubActivity, ApiGithubComment } from "./api";
-import { GithubActivityPanel } from "./github-activity";
+import {
+  GITHUB_COMMENTS_ANCHOR,
+  GithubActivityPanel,
+  useRunGithubComments,
+} from "./github-activity";
+
+/** The panel as the WorkOrder page wears it: the hook that fetches, feeding
+ *  the panel that draws. Kept together here because the thing worth testing
+ *  is what a reader ends up seeing for a given answer from the engine. */
+function Panel({ runId = "run-1" }: { runId?: string }) {
+  return <GithubActivityPanel {...useRunGithubComments(runId)} />;
+}
 
 function comment(fields: Partial<ApiGithubComment> = {}): ApiGithubComment {
   return {
@@ -44,7 +55,7 @@ function activity(fields: Partial<ApiGithubActivity> = {}): ApiGithubActivity {
 function server(answer: () => Promise<Response>) {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    if (path.startsWith("/api/github/activity")) return answer();
+    if (path.includes("/github-comments")) return answer();
     throw new Error(`unexpected request to ${path}`);
   });
   vi.stubGlobal("fetch", fetcher);
@@ -65,7 +76,7 @@ afterEach(() => {
 
 it("tells the whole of what happened to a comment", async () => {
   server(async () => json(activity({ comments: [comment()] })));
-  render(<GithubActivityPanel runId="run-1" />);
+  render(<Panel />);
 
   const row = await screen.findByRole("listitem");
   expect(within(row).getByText("Replied")).toBeInTheDocument();
@@ -89,10 +100,18 @@ it("tells the whole of what happened to a comment", async () => {
 
 it("asks only for the WorkOrder it was given", async () => {
   const fetcher = server(async () => json(activity()));
-  render(<GithubActivityPanel runId="run-1" />);
+  render(<Panel />);
 
   await waitFor(() => expect(fetcher).toHaveBeenCalled());
-  expect(String(fetcher.mock.calls[0][0])).toBe("/api/github/activity?runId=run-1");
+  expect(String(fetcher.mock.calls[0][0])).toBe("/api/runs/run-1/github-comments");
+});
+
+it("is anchored where the WorkOrder page's link points", async () => {
+  server(async () => json(activity({ comments: [comment()] })));
+  const { container } = render(<Panel />);
+
+  await screen.findByRole("listitem");
+  expect(container.querySelector(`#${GITHUB_COMMENTS_ANCHOR}`)).not.toBeNull();
 });
 
 it("says why a comment was ignored rather than leaving it out", async () => {
@@ -113,7 +132,7 @@ it("says why a comment was ignored rather than leaving it out", async () => {
       }),
     ),
   );
-  render(<GithubActivityPanel />);
+  render(<Panel />);
 
   const row = await screen.findByRole("listitem");
   expect(within(row).getByText("Ignored")).toBeInTheDocument();
@@ -126,7 +145,7 @@ it("says why a comment was ignored rather than leaving it out", async () => {
 
 it("distinguishes a comment that started work from one that steered it", async () => {
   server(async () => json(activity({ comments: [comment({ startedRun: true })] })));
-  render(<GithubActivityPanel />);
+  render(<Panel />);
 
   const row = await screen.findByRole("listitem");
   const steps = within(row).getByText(/Received/).textContent ?? "";
@@ -145,7 +164,7 @@ it("says what the concierge is doing right now", async () => {
       }),
     ),
   );
-  render(<GithubActivityPanel />);
+  render(<Panel />);
 
   expect(await screen.findByText("Answering a comment")).toBeInTheDocument();
   expect(screen.getByText("2 queued")).toBeInTheDocument();
@@ -157,18 +176,18 @@ it("says what the concierge is doing right now", async () => {
 
 it("says a webhook has delivered nothing yet rather than looking broken", async () => {
   server(async () => json(activity()));
-  render(<GithubActivityPanel runId="run-1" />);
+  render(<Panel />);
 
   expect(
     await screen.findByText(
-      "No GitHub comments have been delivered for this WorkOrder's pull request.",
+      "No GitHub comments have been delivered for this WorkOrder\u2019s pull request.",
     ),
   ).toBeInTheDocument();
 });
 
 it("draws nothing where no webhook is configured", async () => {
   const fetcher = server(async () => json(activity({ repository: "", configured: false })));
-  const { container } = render(<GithubActivityPanel />);
+  const { container } = render(<Panel />);
 
   await waitFor(() => expect(fetcher).toHaveBeenCalled());
   expect(container).toBeEmptyDOMElement();
@@ -183,7 +202,7 @@ it("keeps the rows on screen when a later poll fails", async () => {
   });
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
-    render(<GithubActivityPanel />);
+    render(<Panel />);
     await screen.findByRole("listitem");
     await vi.advanceTimersByTimeAsync(4000);
     expect(await screen.findByText(/engine is restarting/)).toBeInTheDocument();

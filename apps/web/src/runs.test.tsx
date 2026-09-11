@@ -510,7 +510,7 @@ describe("RunDetailPage", () => {
       if (path === "/graph/api/runs/run-1") return json(awaiting);
       if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
       // The page reads GitHub comment activity for this WorkOrder too.
-      if (path.startsWith("/api/github/activity")) return json(noComments);
+      if (path.includes("/github-comments")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);
@@ -533,7 +533,7 @@ describe("RunDetailPage", () => {
       });
       if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
       // The page reads GitHub comment activity for this WorkOrder too.
-      if (path.startsWith("/api/github/activity")) return json(noComments);
+      if (path.includes("/github-comments")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);
@@ -798,7 +798,7 @@ describe("RunDetailPage", () => {
         });
       }
       // The page reads GitHub comment activity for this WorkOrder too.
-      if (path.startsWith("/api/github/activity")) return json(noComments);
+      if (path.includes("/github-comments")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);

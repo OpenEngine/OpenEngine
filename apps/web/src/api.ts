@@ -776,14 +776,16 @@ export type ApiGithubActivity = {
   comments: ApiGithubComment[];
 };
 
-/** Recent comment activity, optionally narrowed to one WorkOrder's own
- *  pull request. */
-export function getGithubActivity(
-  runId?: string,
+/** The GitHub comments left on one WorkOrder's pull request. There is no
+ *  unscoped form: a comment is only ever read beside the work it steered. */
+export function getRunGithubComments(
+  runId: string,
   signal?: AbortSignal,
 ): Promise<ApiGithubActivity> {
-  const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
-  return api<ApiGithubActivity>(`/api/github/activity${query}`, { signal });
+  return api<ApiGithubActivity>(
+    `/api/runs/${encodeURIComponent(runId)}/github-comments`,
+    { signal },
+  );
 }
 
 export const UTILIZATION_URL = "/utilization";

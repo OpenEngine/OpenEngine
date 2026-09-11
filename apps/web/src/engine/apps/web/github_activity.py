@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -238,9 +238,15 @@ def activity_json(
     queued: int = 0,
     working: bool = False,
     sessions: int = 0,
-    run_id: str = "",
+    run_id: str,
 ) -> dict[str, object]:
-    """The wire shape the panel reads.
+    """The wire shape one WorkOrder's comment panel reads.
+
+    ``run_id`` is required and always narrows, because a comment is only ever
+    read beside the work it steered. There is deliberately no way to ask this
+    for every comment at once: the process remembers comments about work that
+    is none of the asking WorkOrder's business, and that listing is not the
+    API's to hand out.
 
     ``owners`` maps a pull request to the work order that opened it, resolved
     by the caller rather than remembered here: ownership is written down when a
@@ -248,19 +254,17 @@ def activity_json(
     recorded, and a row is more use attributed late than not at all.
     """
     owned = owners or {}
-    comments: Iterable[dict[str, object]] = (
+    comments = (
         _comment_json(entry, owned.get((entry.repository.lower(), entry.number), ""))
         for entry in entries
     )
-    if run_id:
-        comments = (comment for comment in comments if comment["runId"] == run_id)
     return {
         "repository": repository,
         "configured": configured,
         "queued": queued,
         "working": working,
         "sessions": sessions,
-        "comments": list(comments),
+        "comments": [c for c in comments if c["runId"] == run_id],
     }
 
 
