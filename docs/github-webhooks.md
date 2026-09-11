@@ -81,8 +81,8 @@ subscribed to more than Engine needs does not accumulate failed deliveries.
 
 A comment on a pull request reaches at most one work order, and which one is
 the host's decision rather than the answering agent's. Engine looks up the run
-that opened the pull request — recorded when it was opened, not inferred from
-the conversation — and asks the graph engine what that run is doing now:
+working on the pull request — recorded when that run took it on, not inferred
+from the conversation — and asks the graph engine what it is doing now:
 
 - running, or waiting on a person: the request is steered into that run, and
   the reply names it.
@@ -91,8 +91,10 @@ the conversation — and asks the graph engine what that run is doing now:
   repository the comment arrived from, on the workflow named by
   `work_orders.workflow`, and the reply says a work order was started.
 
-A work order started this way reports nothing back to chat: the pull request is
-where the conversation is, and Engine answers it there.
+A work order started this way claims the pull request as it starts, so later
+comments steer it rather than starting another: one work order per pull
+request, however many comments arrive. It reports nothing back to chat — the
+pull request is where the conversation is, and Engine answers it there.
 
 The agent reading the comment decides only whether it is asking for a change at
 all; a comment that asks for nothing reaches no work order. Comments on issues

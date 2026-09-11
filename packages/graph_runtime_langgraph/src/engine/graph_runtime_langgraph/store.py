@@ -150,17 +150,19 @@ class CommentRecord:
 
 @dataclass(frozen=True, slots=True)
 class PullRequestRecord:
-    """The run that opened one GitHub pull request.
+    """The run working on one GitHub pull request.
 
-    Ownership of a pull request is created by opening it, so it is written down
-    when that happens rather than inferred afterwards. Inferring it from the
-    comments on the pull request cannot work: every run that comments is
-    recorded there, so a review, a status update, or any later follow-up would
-    displace the run that actually did the work.
+    Ownership of a pull request is created by taking it on -- usually by
+    opening it, or by being started to work on one that nobody is -- so it is
+    written down when that happens rather than inferred afterwards. Inferring
+    it from the comments on the pull request cannot work: every run that
+    comments is recorded there, so a review, a status update, or any later
+    follow-up would displace the run that actually did the work.
 
-    One row per pull request, replaced if the same one is opened again -- a
-    re-opened pull request belongs to whoever opened it last, which is still
-    the act of opening rather than the act of commenting.
+    One row per pull request, replaced when another run takes it on -- a
+    re-opened pull request belongs to whoever opened it last, and one whose
+    work order has finished belongs to whoever was started to carry it on,
+    which is still an act of taking it on rather than of commenting.
     """
 
     repository: str
@@ -168,9 +170,9 @@ class PullRequestRecord:
     number: int
     run_id: RunId
     opened_at: str
-    """When it was opened, ISO 8601, as the caller that opened it saw the clock."""
+    """When it was taken on, ISO 8601, as the caller that did so saw the clock."""
     node_id: NodeId | None = None
-    """Which node opened it. `None` outside a graph."""
+    """Which node took it on. `None` outside a graph."""
     url: str = ""
 
 

@@ -48,9 +48,16 @@ def _graph_runtime(
     from engine.graph_runtime import GraphId, GraphNode, GraphTopology, NodeId
     from engine.graph_runtime import UnknownGraphError
 
+    # Who owns which pull request, as the real store keeps it: written when a
+    # run takes one on and read back when a comment arrives, so a work order
+    # started for a comment is found by the next one.
+    claims = {(repository.lower(), pr_number): RunId(run_id)}
+
     async def run_for_pull_request(asked_repository, number):
-        matched = asked_repository == repository.lower() and number == pr_number
-        return RunId(run_id) if matched else None
+        return claims.get((asked_repository, number))
+
+    async def remember_pull_request(record):
+        claims[(record.repository, record.number)] = record.run_id
 
     async def snapshot(asked):
         if asked == RunId(STARTED_RUN):
@@ -73,7 +80,10 @@ def _graph_runtime(
         ),
     )
     runtime = MagicMock()
-    runtime.store = MagicMock(run_for_pull_request=AsyncMock(side_effect=run_for_pull_request))
+    runtime.store = MagicMock(
+        run_for_pull_request=AsyncMock(side_effect=run_for_pull_request),
+        remember_pull_request=AsyncMock(side_effect=remember_pull_request),
+    )
     runtime.snapshot = AsyncMock(side_effect=snapshot)
     runtime.topology = MagicMock(return_value=topology)
     runtime.steer = AsyncMock()
@@ -596,6 +606,13 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         # concierge answers itself, and a `github:` channel is not somewhere
         # the chat provider could post progress to.
         assert runs[0].origin is None
+        # And it claims the pull request, which nothing else would do for it:
+        # provenance is otherwise written by opening one, and this run pushes
+        # to the pull request that already exists.
+        claimed = runtime.store.remember_pull_request.await_args.args[0]
+        assert (claimed.repository, claimed.number, claimed.run_id) == (
+            "acme/api", 7, RunId(STARTED_RUN))
+        assert claimed.url == "https://github.com/acme/api/pull/7"
         assert provider.clients[0].result["structuredContent"]["started"] is True
     # And the pull request is told a work order was started, not that its
     # comment was forwarded to one that was already at work.
@@ -606,6 +623,49 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         in_reply_to_id=None,
     )
     assert not communications.posts
+
+
+def test_a_second_comment_steers_the_work_order_the_first_one_started(tmp_path):
+    """One work order per pull request, however many comments arrive.
+
+    The started run is what the pull request now belongs to, so the next
+    comment steers it. Were the claim not written, every comment would start
+    another work order: several agents pushing to one branch, and unbounded
+    run creation by anyone who can comment.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    # No run owns this pull request yet, so the first comment starts one.
+    runtime, opened = _graph_runtime(pr_number=99)
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot")))
+
+    def deliver(client, comment_id):
+        payload = _issue_comment(comment_id, "new workorder please")
+        payload["issue"]["pull_request"] = {}
+        body = json.dumps(payload).encode()
+        return client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"}))
+
+    with TestClient(app) as client:
+        for comment_id in (1, 2):
+            assert deliver(client, comment_id).status_code == 200
+            client.portal.call(app.state.github_ingress.drain)
+        assert runtime.start.await_count == 1
+        runtime.steer.assert_awaited_once_with(
+            RunId(STARTED_RUN), "Implement it", node_id=NodeId("implementation"))
+        assert [run.run_id for run in
+                client.portal.call(capabilities.state_store.list_runs)] == [RunId(STARTED_RUN)]
 
 
 @pytest.mark.parametrize("identity", ["resolved", "configured", "cased", "unavailable"])

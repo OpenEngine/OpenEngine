@@ -38,6 +38,7 @@ from collections.abc import (
 )
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
@@ -127,6 +128,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime_langgraph.store import PullRequestRecord
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
@@ -950,6 +952,22 @@ class MilestoneScoping(Protocol):
         milestone: MilestoneScope,
         policy: ScopingPolicy,
     ) -> ScopingPlan: ...
+
+
+class GithubProvenance(Protocol):
+    """The half of the runtime's store that says who owns a pull request.
+
+    Named as the pair it is used as: a comment is routed by reading the claim,
+    and a work order started for a comment is findable only if it writes one.
+    Stated as a protocol because this module reaches the store by duck-typing
+    -- the control surface is deliberately forge-agnostic -- and a runtime that
+    keeps no provenance answers ``None`` here rather than growing a method
+    shaped like a pull request.
+    """
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None: ...
+
+    async def remember_pull_request(self, record: PullRequestRecord) -> None: ...
 
 
 #: The statuses a run can still be steered in. A completed or failed run has
@@ -2518,7 +2536,9 @@ def create_app(
             in_reply_to_id=int(review_id) if review_id else None,
         )
 
-    async def github_start_workorder(repository: str, prompt: str) -> Continuation:
+    async def github_start_workorder(
+        store: GithubProvenance | None, repository: str, number: int, prompt: str,
+    ) -> Continuation:
         """Start a work order for a pull request that has no run in flight.
 
         Deliberately without an origin, unlike the Slack concierge's: the
@@ -2526,10 +2546,23 @@ def create_app(
         reply, and a ``github:`` channel is not somewhere the chat provider can
         post -- a run carrying one would send every progress update to a Slack
         channel that does not exist.
+
+        The run claims the pull request as it starts. Provenance is otherwise
+        written by opening one, which a run started here never does -- it
+        pushes to the pull request the comment arrived on -- so without the
+        claim nothing would own it and the next comment would start another
+        work order, leaving several agents on one branch and letting anyone who
+        can comment create runs without limit. Claiming needs somewhere to
+        write, so a deployment whose runtime keeps no provenance starts nothing
+        rather than starting what it cannot find again.
         """
         graph = _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        if store is None:
+            raise RuntimeError(
+                "could not start a work order: this runtime records no pull requests"
+            )
         runtime = surface.runtime
         assert runtime is not None  # only reached with a runtime in hand
         state = await start_graph_run(
@@ -2538,6 +2571,11 @@ def create_app(
             prompt=prompt, repository=repository,
             workstream_id=None, milestone_id=None,
         )
+        url = f"https://github.com/{repository}/pull/{number}"
+        await store.remember_pull_request(PullRequestRecord(
+            repository=repository.lower(), number=number, run_id=state.run_id,
+            opened_at=datetime.now(UTC).isoformat(), url=url,
+        ))
         link = run_notifier.work_order_link(state)
         return Continuation(
             url=link.url if link else "", run_id=str(state.run_id), started=True,
@@ -2547,8 +2585,8 @@ def create_app(
         """Steer the work order this pull request already has, or start one.
 
         Which of the two happens is the host's to decide, not the agent's: it
-        turns on what this process recorded when the pull request was opened
-        and on what the graph engine says that run is doing now, neither of
+        turns on what this process recorded when a run took the pull request
+        on and on what the graph engine says that run is doing now, neither of
         which a commenter can influence. A pull request nobody is working on --
         opened by hand, or by a run that has since finished or lost its graph
         -- has no execution to steer, and steering one would either raise or
@@ -2560,10 +2598,10 @@ def create_app(
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not reach a work order: graph runtime unavailable")
-        # Read through the binding that owns the provenance table rather than
+        # Through the binding that owns the provenance table rather than
         # through the control surface, which is deliberately forge-agnostic and
         # has no business growing a method shaped like a pull request.
-        store = getattr(runtime, "store", None)
+        store: GithubProvenance | None = getattr(runtime, "store", None)
         run_id = (
             None if store is None
             else await store.run_for_pull_request(repository.lower(), number)
@@ -2576,7 +2614,7 @@ def create_app(
                 # A saved work order can outlive the graph it was started from.
                 snapshot = None
         if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
-            return await github_start_workorder(repository, prompt)
+            return await github_start_workorder(store, repository, number, prompt)
         await runtime.steer(run_id, prompt, node_id=_reentry_node(runtime, snapshot))
         state = await session.state_store.load(run_id)
         link = run_notifier.work_order_link(state) if state is not None else None
