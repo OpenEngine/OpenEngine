@@ -204,38 +204,48 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   await shot(page, testInfo, "3 the project reopens its plan");
 
   // A plan is more than the conversation that wrote it. The project offers its
-  // milestones under its own row, and the page they open reads the timeline
-  // first and then says what each goal actually is.
+  // milestones under its own row, and the page they open reads the graph first
+  // and then keeps room under it for the work hanging off those goals.
   const rail = page.getByRole("navigation", { name: "Projects" });
   await rail.getByRole("link", { name: "Milestones · 3" }).click();
 
   await expect(page).toHaveURL(/\/projects\/[^/]+\/milestones$/);
   await expect(page.getByRole("heading", { name: "Milestones", level: 1 })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Milestone timeline" })).toBeVisible();
-  // The description a node can only offer on a hover, read here in full and in
-  // flow -- which is the whole reason this page exists.
-  const milestoneCards = page.locator(".cards");
-  const foundationCard = milestoneCards.getByRole("link", {
-    name: "Planning foundation",
-  });
-  await expect(foundationCard).toContainText(
-    FOUNDATION_DESCRIPTION,
-  );
-  await expect(milestoneCards.getByRole("link", { name: "First release" })).toBeVisible();
-  await expect(milestoneCards.getByRole("link", { name: "Wider rollout" })).toBeVisible();
+  const pageTimeline = page.getByRole("region", { name: "Milestone timeline" });
+  await expect(pageTimeline).toBeVisible();
+  const foundationNode = pageTimeline.getByRole("link", { name: "Planning foundation" });
+  await expect(foundationNode).toBeVisible();
+  await expect(pageTimeline.getByRole("link", { name: "First release" })).toBeVisible();
+  await expect(pageTimeline.getByRole("link", { name: "Wider rollout" })).toBeVisible();
+  // Nothing is wired into the two tables yet; what is settled is where the
+  // scheduled and the finished work will be read, and under which columns.
+  for (const [title, empty] of [
+    ["Scheduled Work", "No scheduled work yet."],
+    ["Finished Work", "No finished work yet."],
+  ]) {
+    const table = page.getByRole("table", { name: title });
+    await expect(table).toBeVisible();
+    await expect(table.getByRole("columnheader")).toHaveText([
+      "Workorder Name",
+      "Workorder Description",
+      "Milestone",
+    ]);
+    await expect(table.getByText(empty)).toBeVisible();
+  }
   await expect(rail.getByRole("link", { name: "Milestones · 3" })).toHaveAttribute(
     "aria-current",
     "page",
   );
   await shot(page, testInfo, "4 the project's milestones");
 
-  // The whole card, including the workstreams it has room to list, is the way
-  // into the milestone rather than only one small name inside it.
-  await foundationCard.click();
+  // The node on the graph is the way into the goal it names, and the page it
+  // opens is what holds the description a node has no room for.
+  await foundationNode.click();
   await expect(page).toHaveURL(/\/projects\/[^/]+\/milestones\/[^/]+$/);
   await expect(
     page.getByRole("heading", { name: "Planning foundation", level: 1 }),
   ).toBeVisible();
+  await expect(page.getByText(FOUNDATION_DESCRIPTION)).toBeVisible();
   await page.getByRole("link", { name: "← All milestones" }).click();
 
   // And the way back to the conversation the plan was written in.
