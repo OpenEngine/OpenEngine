@@ -74,6 +74,7 @@ IMPLEMENTATION = NodeId("implementation")
 REVIEW = NodeId("review")
 AGENT = "stub"
 PROMPT = "Implement the feature and run the tests."
+REOPEN = "Log a warning when unsupported workflows are detected."
 WORKFLOW_MCP_SERVER: Mapping[str, Any] = {
     "name": "workflow",
     "command": sys.executable,
@@ -866,6 +867,45 @@ def test_clarify_preserves_the_graph_position_until_continuation(
     assert str(REVIEW) not in paused.values
     assert final.values["pr_url"] == "https://github.com/acme/repository/pull/7"
     assert final.values[str(REVIEW)] == "Looks right."
+
+
+def test_reopening_a_clarified_step_answers_the_message_it_was_sent(
+    tmp_path: Path,
+) -> None:
+    """A step reopened after `clarify` replies to the person, not to itself.
+
+    Taking steering off the queue used to leave the flag announcing it raised,
+    so the turn carrying that very message saw steering nobody had sent and
+    cancelled itself before the agent could act on it. What the person asked
+    for was swallowed and answered with a terminal-tool correction instead.
+    """
+
+    async def scenario() -> tuple[Any, list[tuple[str, str]]]:
+        async with runtime_over(
+            tmp_path,
+            registry(
+                tmp_path,
+                uses_mcp=True,
+                mcp_clarify=True,
+                mcp_terminal="complete_step",
+            ),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "transcript", count=2)
+            # Settles the node onto the wait the reopening message arrives at,
+            # which is the only place the dropped flag could be read.
+            await runtime.snapshot(run.run_id)
+            await runtime.steer(run.run_id, REOPEN)
+            events = await until(log, run.run_id, "run.finished")
+            return await runtime.snapshot(run.run_id), transcript(events)
+
+    final, said = asyncio.run(scenario())
+
+    assert prompts(tmp_path) == [PROMPT, REOPEN]
+    assert INVALID_COMPLETION_ERROR not in [text for _, text in said]
+    assert final.values["pr_url"] == "https://github.com/acme/repository/pull/7"
 
 
 def test_clarify_resets_the_invalid_completion_budget(tmp_path: Path) -> None:

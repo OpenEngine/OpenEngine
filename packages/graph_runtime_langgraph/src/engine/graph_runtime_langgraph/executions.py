@@ -202,8 +202,19 @@ class NodeExecution:
         )
 
     async def next_message(self) -> str:
-        """Wait for an instruction. The interruption point steering arrives at."""
-        return await self._steering.get()
+        """Wait for an instruction. The interruption point steering arrives at.
+
+        Taking the message also retires the flag that announced it, exactly as
+        `pending_messages` does. A node that waited here has already delivered
+        what arrived, so leaving the flag raised would make the turn it starts
+        look like it was interrupted by steering that nobody sent -- cancelling
+        the agent's reply to the very message it was just handed.
+        """
+        message = await self._steering.get()
+        self._steered.clear()
+        if not self._steering.empty():
+            self._steered.set()
+        return message
 
     async def wait_for_message(self) -> None:
         """Wait until steering is queued without taking it from the node."""
