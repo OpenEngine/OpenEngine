@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from engine.domain import RunId, RunState, TaskId, WorkflowId
-from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Delivery
-from engine.graph_runtime import NodeId
+from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Continuation, Delivery
+from engine.graph_runtime import NodeId, RunStatus
 from engine.runtime import WorkOrdersConfig
 
 #: Stands in for anything the host holds and the public must not be told.
@@ -29,18 +29,23 @@ from test_slack_work_orders import (
 )
 
 
+#: The run id the fake runtime hands back when it is asked to start one.
+STARTED_RUN = "fresh"
+
+
 def _graph_runtime(
     *, run_id="existing", graph_id="implementation-review-v1",
     pr_number=7, repository="acme/api", always_open=("implementation",),
-    known_graph=True,
+    known_graph=True, status=RunStatus.RUNNING,
 ):
-    """A runtime answering the two questions the concierge asks of one.
+    """A runtime answering the three questions the concierge asks of one.
 
     Which run owns this pull request -- answered from what was written when it
-    was opened, not from who commented last -- and where feedback re-enters the
-    graph that run is executing.
+    was opened, not from who commented last -- where feedback re-enters the
+    graph that run is executing, and, when there is no such run to steer, what
+    starting one for the pull request produces.
     """
-    from engine.graph_runtime import GraphId, GraphNode, GraphTopology, NodeId, RunStatus
+    from engine.graph_runtime import GraphId, GraphNode, GraphTopology, NodeId
     from engine.graph_runtime import UnknownGraphError
 
     async def run_for_pull_request(asked_repository, number):
@@ -48,10 +53,16 @@ def _graph_runtime(
         return RunId(run_id) if matched else None
 
     async def snapshot(asked):
+        if asked == RunId(STARTED_RUN):
+            # The run this fake just started, which is running by construction.
+            return SimpleNamespace(
+                run_id=asked, graph_id=GraphId(graph_id),
+                status=RunStatus.RUNNING, values={},
+            )
         if not known_graph:
             raise UnknownGraphError(graph_id)
         return SimpleNamespace(
-            run_id=asked, graph_id=GraphId(graph_id), status=RunStatus.RUNNING,
+            run_id=asked, graph_id=GraphId(graph_id), status=status, values={},
         )
 
     topology = GraphTopology(
@@ -66,6 +77,10 @@ def _graph_runtime(
     runtime.snapshot = AsyncMock(side_effect=snapshot)
     runtime.topology = MagicMock(return_value=topology)
     runtime.steer = AsyncMock()
+    runtime.start = AsyncMock(return_value=SimpleNamespace(
+        run_id=RunId(STARTED_RUN), graph_id=GraphId(graph_id),
+        status=RunStatus.RUNNING, values={},
+    ))
 
     @asynccontextmanager
     async def opened():
@@ -325,7 +340,7 @@ def test_github_sessions_do_not_cross_authors(tmp_path):
                 source_control.can_write_repository.await_args_list] == ["first", "second"]
 
 
-@pytest.mark.parametrize("graph", ["unregistered", "one-reentry", "no-reentry", "two-reentries"])
+@pytest.mark.parametrize("graph", ["one-reentry", "no-reentry", "two-reentries"])
 def test_feedback_is_steered_only_where_the_graph_says_it_may_be(tmp_path, graph):
     """The always-open node is the graph's own statement of where to re-enter.
 
@@ -339,7 +354,6 @@ def test_feedback_is_steered_only_where_the_graph_says_it_may_be(tmp_path, graph
     from test_github_ingress import _issue_comment, _signed as github_signed
 
     runtime, opened = _graph_runtime(
-        known_graph=graph != "unregistered",
         always_open={"no-reentry": (), "two-reentries": ("implementation", "review")}
         .get(graph, ("implementation",)),
     )
@@ -360,20 +374,10 @@ def test_feedback_is_steered_only_where_the_graph_says_it_may_be(tmp_path, graph
         assert client.post("/api/github/events", content=body, headers=dict(
             github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
-        if graph == "unregistered":
-            # A saved work order can outlive its graph; say so rather than raise.
-            runtime.steer.assert_not_awaited()
-            assert provider.clients[0].result["isError"]
-            assert "could not identify" in provider.clients[0].result["content"][0]["text"]
-            # Why it failed is for the agent, which can try something else.
-            # The pull request is told only that nothing was forwarded.
-            capabilities.source_control.add_comment.assert_awaited_once_with(
-                "https://github.com/acme/api/pull/7", UNDELIVERED, in_reply_to_id=None)
-        else:
-            runtime.steer.assert_awaited_once_with(
-                RunId("existing"), "Implement it",
-                node_id=None if graph != "one-reentry" else NodeId("implementation"),
-            )
+        runtime.steer.assert_awaited_once_with(
+            RunId("existing"), "Implement it",
+            node_id=None if graph != "one-reentry" else NodeId("implementation"),
+        )
 
 
 @pytest.mark.parametrize("failure", ["turn", "reply"])
@@ -512,8 +516,12 @@ def test_a_second_tool_call_in_one_turn_does_not_forward_the_comment_again(tmp_p
         "Forwarded to work order `existing`.", in_reply_to_id=None)
     assert not communications.posts
 
-@pytest.mark.parametrize("is_pr", [False, True])
-def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path, is_pr):
+def test_github_does_not_answer_comments_on_issues(tmp_path):
+    """An issue is not a pull request: there is no work order to reach.
+
+    Neither the one in flight for a pull request nor a new one, because what
+    an issue comment is asking for is not something this concierge routes.
+    """
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -525,20 +533,78 @@ def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path,
               authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source)
     payload = _issue_comment(1, "new workorder please")
-    if is_pr:
-        payload["issue"]["pull_request"] = {}
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=dict(
             github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         assert not client.portal.call(capabilities.state_store.list_runs)
-        if is_pr:
-            assert provider.clients[0].result["isError"]
-            assert "could not identify" in provider.clients[0].result["content"][0]["text"]
-        else:
-            assert not provider.clients
-            source.add_comment.assert_not_awaited()
+        assert not provider.clients
+        source.add_comment.assert_not_awaited()
+    assert not communications.posts
+
+
+@pytest.mark.parametrize("absent", ["no-run", "unknown-graph", "finished"])
+def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent):
+    """Steering is for a run that is working; otherwise the comment is new work.
+
+    Which of the two a comment gets is the host's to decide, and it decides
+    from the provenance row written when the pull request was opened and from
+    what the graph engine says that run is doing now -- never from the comment,
+    which is a stranger's text. A pull request opened by hand has no row at
+    all; one whose work order has finished, or whose graph is no longer
+    registered, has nothing left listening to steer. In all three, a comment
+    asking for a change is asking for work nobody is doing.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime(
+        pr_number=7 if absent != "no-run" else 99,
+        known_graph=absent != "unknown-graph",
+        status=RunStatus.COMPLETED if absent == "finished" else RunStatus.RUNNING,
+    )
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+    )
+    source_control = MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "new workorder please")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.steer.assert_not_awaited()
+        # Started on the repository the comment arrived from, which is where
+        # the pull request is, rather than the configured default.
+        assert runtime.start.await_args.args[1] == {
+            "task": "Implement it", "repository": "acme/api"}
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
+        # No chat origin: this conversation is the pull request, which the
+        # concierge answers itself, and a `github:` channel is not somewhere
+        # the chat provider could post progress to.
+        assert runs[0].origin is None
+        assert provider.clients[0].result["structuredContent"]["started"] is True
+    # And the pull request is told a work order was started, not that its
+    # comment was forwarded to one that was already at work.
+    source_control.add_comment.assert_awaited_once_with(
+        "https://github.com/acme/api/pull/7",
+        f"Started work order `{STARTED_RUN}` for this pull request. "
+        f"https://engine.example/runs/{STARTED_RUN}",
+        in_reply_to_id=None,
+    )
     assert not communications.posts
 
 
@@ -633,11 +699,11 @@ def test_github_asks_who_it_posts_as_only_once(tmp_path):
 # --- the feedback broker, on its own -----------------------------------------
 
 
-def _submit(arguments, *, name="continue_workorder", token=None, steer=None):
+def _submit(arguments, *, name="continue_workorder", token=None, reach=None):
     from engine.github_concierge import FeedbackBroker
 
     async def scenario():
-        broker = FeedbackBroker(steer_workorder=steer or _accept)
+        broker = FeedbackBroker(continue_workorder=reach or _accept)
         async with broker:
             return await broker._submit({
                 "token": broker._token if token is None else token,
@@ -647,21 +713,31 @@ def _submit(arguments, *, name="continue_workorder", token=None, steer=None):
     return asyncio.run(scenario())
 
 
-async def _accept(prompt):
+async def _accept(prompt, started=False):
     _accept.prompts.append(prompt)
-    return "https://engine.example/runs/run-abc", "run-abc"
+    return Continuation(
+        url="https://engine.example/runs/run-abc", run_id="run-abc", started=started,
+    )
 
 
 _accept.prompts = []
 
 
-def test_feedback_broker_steers_the_pull_requests_work_order():
+@pytest.mark.parametrize("started", [False, True])
+def test_feedback_broker_reaches_the_pull_requests_work_order(started):
     _accept.prompts = []
-    result = _submit({"prompt": "  address the review  "})
+    result = _submit(
+        {"prompt": "  address the review  "},
+        reach=lambda prompt: _accept(prompt, started=started),
+    )
     assert result["ok"] is True
     assert "run-abc" in result["text"]
+    # The agent is told which happened, because it asked for one thing and the
+    # host may have done the other.
+    assert ("Started" in result["text"]) is started
     assert result["data"] == {
-        "run_id": "run-abc", "url": "https://engine.example/runs/run-abc"}
+        "run_id": "run-abc", "url": "https://engine.example/runs/run-abc",
+        "started": started}
     # The agent cannot choose which work order hears it; only what to say.
     assert _accept.prompts == ["address the review"]
 
@@ -680,7 +756,7 @@ def test_feedback_broker_refuses_a_malformed_call(request_, error):
 
 
 def test_feedback_broker_refuses_another_tool():
-    """There is no create_workorder here: a pull request already has one."""
+    """There is one tool: which work order it reaches is not the agent's."""
     result = _submit({"prompt": "go"}, name="create_workorder")
     assert result["ok"] is False
     assert "unknown concierge tool" in result["error"]
@@ -695,7 +771,7 @@ def test_feedback_broker_reports_why_the_feedback_did_not_land():
     async def refuse(_prompt):
         raise RuntimeError("could not identify one existing work order")
 
-    result = _submit({"prompt": "go"}, steer=refuse)
+    result = _submit({"prompt": "go"}, reach=refuse)
     assert result["ok"] is False
     assert "could not identify one existing work order" in result["error"]
 
@@ -735,6 +811,9 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
     # A deployment with no work-order URL still names the run.
     assert Delivery(run_id="run-abc", attempted=True).announcement() == (
         "Forwarded to work order `run-abc`.")
+    # Started for this comment rather than already at work, said as such.
+    assert Delivery(run_id="run-abc", attempted=True, started=True).announcement() == (
+        "Started work order `run-abc` for this pull request.")
     # Asked for, and did not land.
     assert Delivery(attempted=True).announcement() == UNDELIVERED
     # Never asked for: a comment that wanted no change.
