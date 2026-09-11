@@ -2152,7 +2152,6 @@ def create_app(
                 approval = await service.decide_approval(
                     instance_id, approval_id, decision
                 )
-            return approval
         except ValueError as error:
             return _error(str(error), 400)
         except UnknownApprovalError as error:

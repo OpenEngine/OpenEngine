@@ -218,9 +218,7 @@ class SlackConcierge:
             "pending_questions": self._questions[key],
             "linked_workorders": [
                 {"run_id": str(run.run_id), "name": run.name,
-                 "phase": run.phase.value, "prompt": run.prompt,
-                 "current_step_id": run.current_step_id,
-                 "agent_paused": run.agent_paused}
+                 "phase": run.phase.value, "prompt": run.prompt}
                 for run in linked
             ],
         })
