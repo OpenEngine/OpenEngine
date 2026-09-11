@@ -1,6 +1,7 @@
 """Provider preference, first-run selection, and GH CLI transport tests."""
 
 import asyncio
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -255,3 +256,77 @@ def test_gitlab_urls_still_use_selected_provider(tmp_path, monkeypatch):
     gitlab.add_comment.assert_awaited_once_with(url, "Hello", None, None, None)
     assert not cli.mock_calls
     assert not oauth.mock_calls
+
+
+def test_authenticated_login_uses_a_github_provider_despite_gitlab(tmp_path, monkeypatch):
+    cli, oauth, gitlab = AsyncMock(), AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: GhCliStatus(True, True),
+    )
+    router = RoutingSourceControl(preferences, cli, oauth, gitlab)
+    cli.authenticated_login.return_value = "OpenEngine-worker"
+    assert asyncio.run(
+        router.authenticated_login("https://github.com/acme/api")
+    ) == "OpenEngine-worker"
+    cli.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
+    assert not oauth.mock_calls
+    assert not gitlab.mock_calls
+
+
+def test_github_credential_detection_runs_off_the_event_loop(tmp_path, monkeypatch):
+    """A slow `gh` must not stall the loop that is serving other requests."""
+    import threading
+
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    loop_thread = threading.get_ident()
+    detecting: list[int] = []
+
+    def detect() -> GhCliStatus:
+        detecting.append(threading.get_ident())
+        return GhCliStatus(True, True)
+
+    monkeypatch.setattr("engine.apps.web.source_control.gh_cli_status", detect)
+    cli = AsyncMock()
+    router = RoutingSourceControl(preferences, cli, AsyncMock(), AsyncMock())
+
+    async def exercise() -> None:
+        nonlocal loop_thread
+        loop_thread = threading.get_ident()
+        await router.add_comment("https://github.com/acme/api/pull/1", "Hi")
+
+    asyncio.run(exercise())
+    assert detecting and loop_thread not in detecting
+
+
+@pytest.mark.parametrize("failure", [subprocess.TimeoutExpired("gh", 10), OSError("boom")])
+def test_gh_cli_status_survives_a_stuck_cli(monkeypatch, failure):
+    calls: list[dict] = []
+
+    def run(_arguments, **kwargs):
+        calls.append(kwargs)
+        raise failure
+
+    monkeypatch.setattr(subprocess, "run", run)
+    status = gh_cli_status()
+    assert not status.authenticated
+    assert status.message
+    assert calls[0]["timeout"] > 0
+
+
+def test_gh_cli_status_bounds_the_account_lookup(monkeypatch):
+    timeouts: list[float] = []
+
+    def run(arguments, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        if arguments[1] == "api":
+            raise subprocess.TimeoutExpired("gh", kwargs["timeout"])
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    status = gh_cli_status()
+    assert status.installed and status.authenticated and status.account == ""
+    assert len(timeouts) == 2 and all(value > 0 for value in timeouts)

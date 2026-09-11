@@ -2502,10 +2502,37 @@ def create_app(
         continue_existing=True,
     )
 
+    posting_login: list[str] = []
+
+    async def github_posting_login(repository: str) -> str:
+        """The account Engine replies as, asked once and remembered.
+
+        ``GITHUB_BOT_LOGIN`` is optional and usually unset, and a token held by
+        a machine user posts comments that look like anybody else's: without
+        knowing who this process posts as, the concierge answers its own reply
+        and then answers that, forever. The credentials themselves are the
+        authority on this, so they are asked rather than configured. A failure
+        to answer propagates: the turn is retried on redelivery instead of
+        replying into a loop this process cannot recognise.
+        """
+        if not posting_login:
+            posting_login.append(
+                github_bot_login
+                or await session.capabilities.source_control.authenticated_login(
+                    f"https://github.com/{repository}"
+                )
+            )
+        return posting_login[0]
+
     async def github_concierge_turn(comment: GithubComment) -> None:
         # Issue-driven work orders are not supported. PR conversation comments
         # and inline review replies both belong to an existing work order.
         if not comment.is_pull_request:
+            return
+        if comment.author.lower() == (
+            await github_posting_login(comment.repository)
+        ).lower():
+            # GitHub logins are case-insensitive, so the comparison is too.
             return
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":

@@ -243,6 +243,9 @@ class RecordingSourceControl:
     async def can_write_repository(self, pr_url: str, username: str) -> bool:
         return False
 
+    async def authenticated_login(self, repository_url: str) -> str:
+        return "OpenEngineBot"
+
     async def add_comment(
         self,
         _pr_url: str,

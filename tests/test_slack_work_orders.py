@@ -211,7 +211,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None, github_webhook_secret=""):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None, github_webhook_secret="", github_bot_login=""):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -247,6 +247,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         github_comment_handler=github_comment_handler,
         github_webhook_secret=lambda: github_webhook_secret,
         github_repository="acme/api",
+        github_bot_login=github_bot_login,
     ), capabilities, slack_store
 
 def _mention_graph():
@@ -313,6 +314,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, event, access):
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
     source_control.can_write_repository.return_value = access == "write"
     if access == "error":
@@ -375,6 +377,7 @@ def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
     payload = _issue_comment()
     payload["issue"]["pull_request"] = {}
@@ -403,7 +406,8 @@ def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path,
     communications = RecordingCommunications()
     app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
                                provider=provider, github_webhook_secret=SIGNING_SECRET)
-    source = MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True))
+    source = MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+              authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source)
     payload = _issue_comment(1, "new workorder please")
     if is_pr:
@@ -445,7 +449,8 @@ def test_github_feedback_steers_the_matching_graph_workorder(tmp_path, stale_pos
     app, capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig(),
                                provider=provider, github_webhook_secret=SIGNING_SECRET,
                                graph_runtime=opened_runtime())
-    object.__setattr__(capabilities, "source_control", MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True)))
+    object.__setattr__(capabilities, "source_control", MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+              authenticated_login=AsyncMock(return_value="OpenEngineBot")))
     state = RunState(run_id=RunId("graph-work"), task_id=TaskId("task"),
                      workflow_id=WorkflowId("graph-workflow"))
     stale = RunState(run_id=RunId("stale-work"), task_id=TaskId("stale-task"),
@@ -473,6 +478,94 @@ def test_github_feedback_steers_the_matching_graph_workorder(tmp_path, stale_pos
         runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
         assert not provider.clients[0].result.get("isError")
         assert len(client.portal.call(capabilities.state_store.list_runs)) == (1 if stale_position is None else 2)
+
+
+@pytest.mark.parametrize("identity", ["resolved", "configured", "cased", "unavailable"])
+def test_github_never_answers_its_own_reply(tmp_path, identity):
+    """The bot's own comment looks like anybody else's, so it must be recognised.
+
+    A token held by a machine user posts an ordinary ``User`` comment from a
+    collaborator, which passes every webhook-level filter: without knowing the
+    posting account, the concierge would answer itself forever.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(), provider=provider,
+        github_webhook_secret=SIGNING_SECRET,
+        github_bot_login="OpenEngineBot" if identity == "configured" else "",
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(
+        side_effect=RuntimeError("GitHub API unavailable") if identity == "unavailable"
+        else None,
+        return_value="OpenEngineBot",
+    )
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "I have addressed that")
+    payload["issue"]["pull_request"] = {}
+    payload["comment"]["user"]["login"] = (
+        "openenginebot" if identity == "cased" else "OpenEngineBot"
+    )
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        # Never answered, and never replied to: no loop can start from here.
+        assert not provider.clients
+        source_control.add_comment.assert_not_awaited()
+        assert not client.portal.call(capabilities.state_store.list_runs)
+        if identity == "configured":
+            # A configured identity is authoritative, so nothing is asked.
+            source_control.authenticated_login.assert_not_awaited()
+        else:
+            source_control.authenticated_login.assert_awaited_once_with(
+                "https://github.com/acme/api")
+        if identity == "unavailable":
+            # Failing closed forgets the comment, so it can be redelivered
+            # once the forge answers again rather than replying blind.
+            assert app.state.github_ingress.accept("issue_comment", payload)
+            client.portal.call(app.state.github_ingress.drain)
+            assert source_control.authenticated_login.await_count == 2
+    assert not communications.posts
+
+
+def test_github_asks_who_it_posts_as_only_once(tmp_path):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        provider=provider, github_webhook_secret=SIGNING_SECRET,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    def deliver(client, comment_id, login):
+        payload = _issue_comment(comment_id, "look at this")
+        payload["issue"]["pull_request"] = {}
+        payload["comment"]["user"]["login"] = login
+        body = json.dumps(payload).encode()
+        return client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"}))
+
+    with TestClient(app) as client:
+        assert deliver(client, 1, "someone").status_code == 200
+        assert deliver(client, 2, "OpenEngineBot").status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        source_control.authenticated_login.assert_awaited_once()
+        assert len(provider.clients) == 1
 
 
 def _workflow_catalog():
