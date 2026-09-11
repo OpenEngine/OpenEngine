@@ -53,6 +53,7 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.runtime",
         "engine.graph_runtime",
         "engine.orchestrator",
+        "engine.single_tool_mcp",
     ),
     ADAPTER: ("engine.domain", "engine.ports", "engine.runtime"),
     # The graph packages are here for the same reason `engine.adapters` is: an
@@ -108,7 +109,8 @@ def _layer_for(root: Path) -> str:
             return APP
         case ("packages", "domain"):
             return DOMAIN
-        case ("packages", "github-concierge" | "scoper" | "slack-concierge"):
+        case ("packages", "github-concierge" | "scoper" | "single-tool-mcp"
+              | "slack-concierge"):
             return RUNTIME
         case ("packages", "graph_runtime"):
             return RUNTIME
