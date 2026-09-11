@@ -9,17 +9,12 @@ const foundation: ApiMilestone = {
   name: "Foundation",
   description: "Build the shared project model.",
   dependencies: [],
-  workstreams: [
-    { workstreamId: "workstream-data", name: "Data model", scope: "Persist the plan." },
-    { workstreamId: "workstream-web", name: "Timeline view", scope: "" },
-  ],
 };
 const launch: ApiMilestone = {
   milestoneId: "milestone-launch",
   name: "Launch",
   description: "Ship the project to users.",
   dependencies: ["milestone-foundation"],
-  workstreams: [],
 };
 const project: ApiProject = {
   projectId: "project-1",
@@ -109,14 +104,6 @@ describe("ProjectMilestonesPage", () => {
     );
     expect(within(planned).getByText("Build the shared project model.")).toBeInTheDocument();
     expect(within(planned).getByText("milestone-foundation")).toBeInTheDocument();
-    expect(within(planned).getByText("2 workstreams")).toBeInTheDocument();
-    const workstreams = within(planned).getByRole("list", {
-      name: "Workstreams for Foundation",
-    });
-    expect(
-      within(workstreams).getAllByRole("listitem").map((item) => item.textContent),
-    ).toEqual(["Data modelPersist the plan.", "Timeline view"]);
-    expect(within(workstreams).queryByRole("link")).toBeNull();
 
     const shipping = document.querySelector<HTMLElement>(
       '.milestone-card[href="/projects/project-1/milestones/milestone-launch"]',
@@ -127,8 +114,6 @@ describe("ProjectMilestonesPage", () => {
     );
     // The dependency reads as the goal it names, not as the id recorded.
     expect(within(shipping).getByText("Depends on Foundation")).toBeInTheDocument();
-    expect(within(shipping).getByText("0 workstreams")).toBeInTheDocument();
-    expect(within(shipping).getByText("No workstreams yet.")).toBeInTheDocument();
   });
 
   it("follows the plan as it is written, without redrawing the page", async () => {

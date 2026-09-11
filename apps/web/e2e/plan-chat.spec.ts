@@ -229,8 +229,8 @@ test("a new project opens a planning conversation and appears in the rail", asyn
   );
   await shot(page, testInfo, "4 the project's milestones");
 
-  // The whole card, including the workstreams it has room to list, is the way
-  // into the milestone rather than only one small name inside it.
+  // The whole card is the way into the milestone rather than only one small
+  // name inside it.
   await foundationCard.click();
   await expect(page).toHaveURL(/\/projects\/[^/]+\/milestones\/[^/]+$/);
   await expect(

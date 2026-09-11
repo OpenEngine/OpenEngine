@@ -35,10 +35,9 @@ from engine.domain.ids import (
     RunId,
     SessionGrantId,
     TaskId,
-    WorkstreamId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project, Workstream
+from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunState
 
 
@@ -56,7 +55,6 @@ class InMemoryStateStore:
         self._states: dict[RunId, RunState] = {}
         self._projects: dict[ProjectId, Project] = {}
         self._milestones: dict[MilestoneId, Milestone] = {}
-        self._workstreams: dict[WorkstreamId, Workstream] = {}
         self._instances: dict[AgentInstanceId, AgentInstance] = {}
         self._conversations: dict[AgentInstanceId, Conversation] = {}
         self._agent_runs: dict[AgentRunId, AgentRun] = {}
@@ -72,13 +70,6 @@ class InMemoryStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock:
-            if state.workstream_id is not None and state.milestone_id is not None:
-                raise ValueError("a run cannot belong to both a workstream and a milestone")
-            if (
-                state.workstream_id is not None
-                and state.workstream_id not in self._workstreams
-            ):
-                raise KeyError(f"no workstream {state.workstream_id!r}")
             if (
                 state.milestone_id is not None
                 and state.milestone_id not in self._milestones
@@ -87,12 +78,12 @@ class InMemoryStateStore:
             self._states[state.run_id] = state
 
     async def list_runs(
-        self, workstream_id: WorkstreamId | None = None
+        self, milestone_id: MilestoneId | None = None
     ) -> Sequence[RunState]:
         with self._lock:
             states = list(self._states.values())
-        if workstream_id is not None:
-            states = [state for state in states if state.workstream_id == workstream_id]
+        if milestone_id is not None:
+            states = [state for state in states if state.milestone_id == milestone_id]
         return tuple(reversed(states))
 
     async def delete_run(self, run_id: RunId) -> bool:
@@ -141,44 +132,10 @@ class InMemoryStateStore:
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
         with self._lock:
             if any(
-                workstream.milestone_id == milestone_id
-                for workstream in self._workstreams.values()
-            ):
-                raise ValueError(f"milestone {milestone_id!r} still has workstreams")
-            if any(
                 state.milestone_id == milestone_id for state in self._states.values()
             ):
                 raise ValueError(f"milestone {milestone_id!r} still has runs")
             return self._milestones.pop(milestone_id, None) is not None
-
-    async def save_workstream(self, workstream: Workstream) -> None:
-        with self._lock:
-            if workstream.milestone_id not in self._milestones:
-                raise KeyError(f"no milestone {workstream.milestone_id!r}")
-            self._workstreams[workstream.workstream_id] = workstream
-
-    async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
-        with self._lock:
-            return self._workstreams.get(workstream_id)
-
-    async def list_workstreams(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[Workstream]:
-        with self._lock:
-            workstreams = list(self._workstreams.values())
-        if milestone_id is not None:
-            workstreams = [
-                item for item in workstreams if item.milestone_id == milestone_id
-            ]
-        return tuple(reversed(workstreams))
-
-    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
-        with self._lock:
-            if any(
-                state.workstream_id == workstream_id for state in self._states.values()
-            ):
-                raise ValueError(f"workstream {workstream_id!r} still has runs")
-            return self._workstreams.pop(workstream_id, None) is not None
 
     # --- agent identity and conversation ---------------------------------
 

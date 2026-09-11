@@ -14,7 +14,6 @@ from engine.domain.ids import (
     RunId,
     TaskId,
     WorkflowId,
-    WorkstreamId,
 )
 
 
@@ -54,7 +53,6 @@ class RunState:
     run_id: RunId
     task_id: TaskId
     workflow_id: WorkflowId
-    workstream_id: WorkstreamId | None = None
     milestone_id: MilestoneId | None = None
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""

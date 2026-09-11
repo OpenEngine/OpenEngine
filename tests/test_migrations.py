@@ -1,5 +1,6 @@
 """Alembic selects and applies the database-specific migration history."""
 
+import json
 from pathlib import Path
 import sqlite3
 
@@ -52,7 +53,7 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0007",)
+    assert revision == ("sqlite_0008",)
 
 
 def test_sqlite_upgrade_removes_runs_with_retired_human_review_phase(
@@ -187,14 +188,14 @@ def test_project_archive_migration_leaves_existing_projects_listed(
     assert row == ("OpenEngine", 0)
 
 
-def test_workstream_scope_migration_leaves_existing_workstreams_named(
+def test_removing_workstreams_rehomes_their_runs_on_the_milestone(
     tmp_path: Path,
 ) -> None:
-    """Scope is new, so what was recorded without one reads back unscoped."""
+    """A run outlives the heading it hung from, under the goal that heading served."""
 
     database = tmp_path / "state.sqlite3"
     url = f"sqlite:///{database}"
-    upgrade(url, "sqlite_0003")
+    upgrade(url, "sqlite_0007")
     with sqlite3.connect(database) as connection:
         connection.execute(
             "INSERT INTO projects (project_id, name) VALUES (?, ?)",
@@ -209,21 +210,58 @@ def test_workstream_scope_migration_leaves_existing_workstreams_named(
         )
         connection.execute(
             """
-            INSERT INTO workstreams (workstream_id, milestone_id, name)
-            VALUES (?, ?, ?)
+            INSERT INTO workstreams (workstream_id, milestone_id, name, scope)
+            VALUES (?, ?, ?, ?)
             """,
-            ("workstream-data", "milestone-foundation", "Data model"),
+            ("workstream-data", "milestone-foundation", "Data model", ""),
+        )
+        connection.executemany(
+            """
+            INSERT INTO run_states (run_id, state_json, workstream_id, milestone_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                (
+                    "run-scoped",
+                    '{"run_id":"run-scoped","workstream_id":"workstream-data",'
+                    '"milestone_id":null}',
+                    "workstream-data",
+                    None,
+                ),
+                (
+                    "run-loose",
+                    '{"run_id":"run-loose","workstream_id":null,"milestone_id":null}',
+                    None,
+                    None,
+                ),
+            ),
         )
         connection.commit()
 
     upgrade(url)
 
     with sqlite3.connect(database) as connection:
-        row = connection.execute(
-            "SELECT name, scope FROM workstreams WHERE workstream_id = ?",
-            ("workstream-data",),
-        ).fetchone()
-    assert row == ("Data model", "")
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        rows = dict(
+            connection.execute("SELECT run_id, milestone_id FROM run_states")
+        )
+        states = dict(connection.execute("SELECT run_id, state_json FROM run_states"))
+
+    assert "workstreams" not in tables
+    assert rows == {"run-scoped": "milestone-foundation", "run-loose": None}
+    assert json.loads(states["run-scoped"]) == {
+        "run_id": "run-scoped",
+        "milestone_id": "milestone-foundation",
+    }
+    assert json.loads(states["run-loose"]) == {
+        "run_id": "run-loose",
+        "milestone_id": None,
+    }
 
 
 def test_postgres_history_is_a_placeholder(capsys) -> None:
