@@ -18,6 +18,12 @@ agent is building, while posting the reply that announces it is a separate
 step that can fail on its own -- and a failed turn is redelivered. A comment
 whose feedback already landed is answered from what was recorded rather than
 run again, so a retried reply cannot ask for the same work twice.
+
+Once means once on both sides of that: between deliveries, and within a turn.
+A comment is the unit of authority here -- one person asked for one thing --
+and how many times the model chooses to call the tool while reading it is not
+a second person asking. The turn's first call is the comment's; later ones are
+refused where they are made, and the agent is told why.
 """
 from __future__ import annotations
 
@@ -70,6 +76,15 @@ NOT_FORWARDED = (
     "I only forward change requests to the work order that opened this pull "
     "request, and I have not forwarded anything for this comment."
 )
+
+
+class AlreadyForwarded(RuntimeError):
+    """Raised when a turn tries to steer its work order a second time.
+
+    Reaches the agent as a failed tool call, which is the honest answer: what
+    it asked for the second time did not happen, and it should not report that
+    it did.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +259,17 @@ class GithubConcierge:
                     # The session belongs to this origin for its whole life, so
                     # the authority a tool call carries is the authority of the
                     # author whose history it was reasoning over.
+                    if self._delivery.run_id:
+                        # The record that stops a redelivery forwarding twice
+                        # is read before the turn starts, which is too early to
+                        # see a second call inside one: the comment is the unit
+                        # of authority, so the turn's later calls are refused
+                        # here, where they are made.
+                        raise AlreadyForwarded(
+                            "this comment has already been forwarded to work "
+                            f"order `{self._delivery.run_id}`, and one comment "
+                            "is forwarded once"
+                        )
                     self._delivery = Delivery(attempted=True)
                     url, run_id = await self.steer_workorder(origin, prompt)
                     self._delivery = Delivery(run_id=run_id, url=url, attempted=True)
@@ -280,4 +306,10 @@ class GithubConcierge:
         return {}
 
 
-__all__ = ["Delivery", "FeedbackRequest", "GithubConcierge", "build_graph"]
+__all__ = [
+    "AlreadyForwarded",
+    "Delivery",
+    "FeedbackRequest",
+    "GithubConcierge",
+    "build_graph",
+]

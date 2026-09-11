@@ -2,6 +2,7 @@
 from .github_concierge import (
     NOT_FORWARDED,
     UNDELIVERED,
+    AlreadyForwarded,
     Delivery,
     FeedbackRequest,
     GithubConcierge,
@@ -13,6 +14,7 @@ __all__ = [
     "FEEDBACK_TOOL_NAME",
     "NOT_FORWARDED",
     "UNDELIVERED",
+    "AlreadyForwarded",
     "Delivery",
     "FeedbackBroker",
     "FeedbackRequest",

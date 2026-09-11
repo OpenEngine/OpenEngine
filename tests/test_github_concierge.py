@@ -461,6 +461,57 @@ def test_a_retried_delivery_does_not_forward_the_same_comment_twice(tmp_path, fa
 
 
 
+def test_a_second_tool_call_in_one_turn_does_not_forward_the_comment_again(tmp_path):
+    """Once per comment means once within the turn as well, not only across them.
+
+    The record that stops a redelivery forwarding twice is read before the turn
+    starts, which is too early to see a model calling the tool twice while
+    reading one comment. A comment is the unit of authority -- one person asked
+    for one thing -- so the turn's later calls are refused where they are made,
+    and the agent is told why rather than being left to report work that never
+    reached anyone.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True, calls=3)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(), provider=provider,
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "new workorder please")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issue_comment"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    # The work order was asked once, however many times the model asked for it.
+    runtime.steer.assert_awaited_once_with(
+        RunId("existing"), "Implement it", node_id=NodeId("implementation"))
+    first, *refused = provider.clients[0].results
+    assert "isError" not in first
+    assert first["structuredContent"]["run_id"] == "existing"
+    # Refused as tool results, so the agent can read them and stop asking --
+    # a raised error would end the turn and lose the forward that did land.
+    assert [answer["isError"] for answer in refused] == [True, True]
+    assert all("already been forwarded" in answer["content"][0]["text"]
+               for answer in refused)
+    # And the pull request is told what happened once, not once per call.
+    source_control.add_comment.assert_awaited_once_with(
+        "https://github.com/acme/api/pull/7",
+        "Forwarded to work order `existing`.", in_reply_to_id=None)
+    assert not communications.posts
+
 @pytest.mark.parametrize("is_pr", [False, True])
 def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path, is_pr):
     from starlette.testclient import TestClient

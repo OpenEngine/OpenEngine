@@ -924,10 +924,14 @@ def test_mcp_unknown_method_returns_error() -> None:
 class FakeACPProvider:
     name = "fake"
 
-    def __init__(self, text="Hi, how can I help?", fail=False, create=False, fail_after_create=False):
+    def __init__(self, text="Hi, how can I help?", fail=False, create=False,
+                 fail_after_create=False, calls=1):
         self.text, self.fail, self.create = text, fail, create
         self.clients = []
         self.fail_after_create = fail_after_create
+        #: How many times the model calls the tool in one turn. More than one
+        #: is a model that split a request, or was talked into asking twice.
+        self.calls = calls
 
     async def connect(self):
         provider = self
@@ -945,7 +949,8 @@ class FakeACPProvider:
                     provider.fail = False
                     raise RuntimeError("transient")
                 if provider.create and "new workorder" in prompt:
-                    self.result = await call_mcp(self.config)
+                    self.results = await call_mcp(self.config, calls=provider.calls)
+                    self.result = self.results[-1]
                     if provider.fail_after_create:
                         raise RuntimeError("failed after accepting work")
                 yield ACPEvent(agent="fake", type=ACPEventType.MESSAGE_DELTA,
@@ -957,11 +962,14 @@ class FakeACPProvider:
         return client
 
 
-async def call_mcp(config):
+async def call_mcp(config, calls=1):
     """Real stdio child -> TCP broker -> injected host callback.
 
     The tool is whichever one the broker advertises, so the same fake drives
     the Slack broker and the pull-request one without knowing either.
+
+    ``calls`` is how many times the tool is called down the one session, which
+    is what a model doing so within a single turn looks like from here.
     """
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
@@ -985,14 +993,18 @@ async def call_mcp(config):
         listed = await roundtrip({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         tools = listed["result"]["tools"]
         assert len(tools) == 1, tools
-        called = await roundtrip(
-            {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-             "params": {"name": tools[0]["name"], "arguments": {"prompt": "Implement it"}}})
+        answers = [
+            await roundtrip(
+                {"jsonrpc": "2.0", "id": 3 + call, "method": "tools/call",
+                 "params": {"name": tools[0]["name"],
+                            "arguments": {"prompt": "Implement it"}}})
+            for call in range(calls)
+        ]
     finally:
         process.stdin.close()
         _stdout, stderr = await process.communicate()
     assert process.returncode == 0, stderr.decode()
-    return called["result"]
+    return [answer["result"] for answer in answers]
 
 
 def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
