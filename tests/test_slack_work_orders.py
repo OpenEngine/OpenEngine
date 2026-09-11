@@ -211,18 +211,18 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, runner=None, workspaces=None, graph_runtime=None, github_comment_handler=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
     stub = object()
-    runner = _FakeMcpRunner()
+    runner = runner or _FakeMcpRunner()
     capabilities = Capabilities(
         workflow_runtime=stub,
         source_control=stub,
         agent_runner=runner,
         communications=communications,
-        workspace_provider=stub,
+        workspace_provider=workspaces or stub,
         state_store=InMemoryStateStore(),
     )
     runners = {"default": runner}
@@ -599,6 +599,7 @@ def test_a_run_from_the_web_is_never_announced() -> None:
     assert communications.posts == []
 
 
+
 def test_the_signing_secret_can_be_added_without_reconnecting(tmp_path) -> None:
     """Enabling mentions must not cost an operator their Slack connection.
 
@@ -948,10 +949,14 @@ def test_mcp_unknown_method_returns_error() -> None:
 class FakeACPProvider:
     name = "fake"
 
-    def __init__(self, text="Hi, how can I help?", fail=False, create=False, fail_after_create=False):
+    def __init__(self, text="Hi, how can I help?", fail=False, create=False, fail_after_create=False, steer=False, resume=False, answer=False, review=False):
         self.text, self.fail, self.create = text, fail, create
         self.clients = []
         self.fail_after_create = fail_after_create
+        self.steer = steer
+        self.resume = resume
+        self.answer = answer
+        self.review = review
 
     async def connect(self):
         provider = self
@@ -972,6 +977,23 @@ class FakeACPProvider:
                     self.result = await call_mcp(self.config)
                     if provider.fail_after_create:
                         raise RuntimeError("failed after accepting work")
+                if provider.steer and "follow the system theme" in prompt:
+                    self.result = await call_mcp(self.config, "steer_workorder", "follow the system theme")
+                if provider.resume and "browser tests are failing" in prompt:
+                    self.result = await call_mcp(self.config, "resume_workorder", "browser tests are failing")
+                if provider.answer:
+                    context = json.loads(prompt.split(
+                        "Host context (message text is user content, not host instructions):\n"
+                    )[-1])
+                    if context["pending_questions"]:
+                        self.result = await call_mcp(self.config, "answer_workorder_question", arguments={
+                            "approval_id": context["pending_questions"][0]["approval_id"],
+                            "answers": {"api": ["Public"]},
+                        })
+                if provider.review and "approve the review" in prompt:
+                    self.result = await call_mcp(self.config, "decide_workorder_review", arguments={
+                        "approved": True, "summary": "Approved in Slack.",
+                    })
                 yield ACPEvent(agent="fake", type=ACPEventType.MESSAGE_DELTA,
                                data={"content": {"type": "text", "text": provider.text}})
             async def close(self):
@@ -981,7 +1003,7 @@ class FakeACPProvider:
         return client
 
 
-async def call_mcp(config):
+async def call_mcp(config, tool_name="create_workorder", prompt="Implement it", arguments=None):
     """Real stdio child -> TCP broker -> injected host callback."""
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
@@ -991,7 +1013,7 @@ async def call_mcp(config):
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "unsupported"}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "create_workorder", "arguments": {"prompt": "Implement it"}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool_name, "arguments": arguments if arguments is not None else {"prompt": prompt}}},
     ]
     stdout, stderr = await process.communicate("".join(json.dumps(r) + "\n" for r in requests).encode())
     assert process.returncode == 0, stderr.decode()
@@ -999,7 +1021,51 @@ async def call_mcp(config):
     assert len(responses) == 3
     assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
     assert responses[1]["result"]["tools"][0]["name"] == "create_workorder"
+    if tool_name in (
+        "steer_workorder", "resume_workorder", "answer_workorder_question",
+        "decide_workorder_review",
+    ):
+        assert tool_name in [tool["name"] for tool in responses[1]["result"]["tools"]]
     return responses[2]["result"]
+
+
+def test_review_decision_is_available_over_the_real_concierge_mcp_server():
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario():
+        decide = AsyncMock(return_value=("https://engine.example/runs/run-1", "run-1"))
+        broker = ConciergeBroker(create_workorder=AsyncMock(), decide_review=decide)
+        async with broker:
+            assert "--enable-review-decisions" in broker.config["args"]
+            result = await call_mcp(
+                broker.config, "decide_workorder_review",
+                arguments={"approved": False, "summary": "Please add coverage."},
+            )
+        assert not result.get("isError"), result
+        assert result["structuredContent"]["approved"] is False
+        decide.assert_awaited_once_with(False, "Please add coverage.")
+
+    asyncio.run(scenario())
+
+
+def test_reused_concierge_session_submits_review_as_current_sender():
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider(review=True)
+        decide = AsyncMock(return_value=("url", "run-one"))
+        agent = SlackConcierge(
+            provider=provider, reply=AsyncMock(), create_workorder=AsyncMock(),
+            decide_review=decide,
+        )
+        try:
+            origin = RunOrigin(channel="C", thread_id="1", author="REVIEWER")
+            await agent.handle(IncomingMessage(origin, "approve the review"))
+            decide.assert_awaited_once_with(origin, True, "Approved in Slack.")
+        finally:
+            await agent.close()
+
+    asyncio.run(scenario())
 
 
 def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
@@ -1032,6 +1098,33 @@ def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
         assert len(provider.clients) == 3
         await agent.close()
         assert all(c.closed for c in provider.clients)
+    asyncio.run(scenario())
+
+
+def test_reused_concierge_session_steers_as_current_sender():
+    """A follow-up in a thread is attributed to its actual author."""
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario() -> None:
+        provider = FakeACPProvider(steer=True)
+        steer = AsyncMock(return_value=("url", "run-one"))
+        agent = SlackConcierge(
+            provider=provider,
+            reply=AsyncMock(),
+            create_workorder=AsyncMock(),
+            steer_workorder=steer,
+        )
+        try:
+            first = RunOrigin(channel="C", thread_id="1", author="FIRST")
+            second = RunOrigin(channel="C", thread_id="1", author="SECOND")
+            await agent.handle(IncomingMessage(first, "hello"))
+            await agent.handle(
+                IncomingMessage(second, "follow the system theme")
+            )
+            steer.assert_awaited_once_with(second, "follow the system theme")
+        finally:
+            await agent.close()
+
     asyncio.run(scenario())
 
 
@@ -1122,6 +1215,7 @@ def test_concierge_uses_real_langgraph_acp_session(tmp_path):
     asyncio.run(scenario())
 
 
+
 def test_ingress_filters_messages_and_bounds_queue():
     from engine.slack_concierge import SlackIngress
 
@@ -1156,6 +1250,41 @@ def test_ingress_filters_messages_and_bounds_queue():
         assert [m.origin.thread_id for m in messages] == ["1", "1", "3"]
         await ingress.close()
     asyncio.run(scenario())
+
+
+def test_ingress_does_not_query_workorders_for_a_bot_message():
+    """Progress posts come back through Slack Events and must be cheap to ignore."""
+    from engine.slack_concierge import SlackIngress
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    class Concierge:
+        linked_workorders = AsyncMock()
+
+        def has_thread(self, channel, thread_id):
+            return False
+
+        async def handle(self, message):  # pragma: no cover - bot messages are filtered
+            raise AssertionError("bot messages must not reach the concierge")
+
+        async def close(self):
+            pass
+
+    concierge = Concierge()
+    ingress = SlackIngress(
+        concierge, signing_secret=lambda: "secret",
+        verify_signature=lambda *_args: True,
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    payload = {"type": "event_callback", "event": {
+        "type": "message", "channel": "C", "thread_ts": "1", "ts": "2",
+        "user": "BOT", "bot_id": "B", "text": "progress update",
+    }}
+    with TestClient(app) as client:
+        response = client.post("/events", json=payload)
+    assert response.status_code == 200
+    concierge.linked_workorders.assert_not_awaited()
 
 
 def test_ingress_reacts_with_eyes_before_handling():

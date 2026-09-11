@@ -118,6 +118,7 @@ def test_loads_what_a_mention_should_start(tmp_path: Path) -> None:
         'repository = "acme/api"\n'
         'workflow = "implementation-review-v1"\n'
         'runner = "claude"\n'
+        'slack_operators = ["U-operator", "U-release"]\n'
     )
 
     loaded = load_engine_config(path, environ={}, cwd=tmp_path)
@@ -125,6 +126,7 @@ def test_loads_what_a_mention_should_start(tmp_path: Path) -> None:
     assert loaded.config.work_orders.repository == "acme/api"
     assert loaded.config.work_orders.workflow == "implementation-review-v1"
     assert loaded.config.work_orders.runner == "claude"
+    assert loaded.config.work_orders.slack_operators == ("U-operator", "U-release")
 
 
 def test_rejects_an_unknown_work_order_key(tmp_path: Path) -> None:
