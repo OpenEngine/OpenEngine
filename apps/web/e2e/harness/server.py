@@ -157,6 +157,11 @@ def main(argv: list[str] | None = None) -> int:
     async def _fake_api(self, method: str, path: str, **kwargs: object) -> dict:
         if method == "GET" and "/pulls/" in path:
             return {"head": {"sha": "abc1234"}}
+        if method == "GET" and path.endswith("/check-runs"):
+            return {"check_runs": [{
+                "name": "tests", "status": "completed", "conclusion": "success",
+                "details_url": "https://github.com/test/repo/actions/runs/1",
+            }]}
         if method == "POST" and "/comments" in path:
             import json as _json
             body = (kwargs.get("json") or {}).get("body", "")

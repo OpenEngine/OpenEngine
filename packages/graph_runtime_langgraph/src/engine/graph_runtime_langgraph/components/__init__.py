@@ -8,6 +8,7 @@ these; it should not have to reimplement any of them, and two workflows that did
 would disagree about what a checkout or a human decision means.
 
     WorkspaceNode      give this run somewhere to work
+    CICheck            wait for CI and report its verdict
     NameNode           give a run a concise display name, best effort
     HumanReviewNode    stop, and wait for a person
     ACPNode            run a coding agent over ACP
@@ -32,6 +33,7 @@ the only thing the split would have bought.
 """
 
 from engine.graph_runtime_langgraph.acp import ACPNode, NoWorkingDirectoryError
+from engine.graph_runtime_langgraph.components.ci_check import CICheck
 from engine.graph_runtime_langgraph.components.findings import (
     REVIEW_FACETS,
     Finding,
@@ -48,6 +50,7 @@ from engine.graph_runtime_langgraph.components.workspace import (
 
 __all__ = [
     "ACPNode",
+    "CICheck",
     "Finding",
     "REVIEW_FACETS",
     "ReviewFacet",
