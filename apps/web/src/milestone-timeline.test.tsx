@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MilestoneTimeline,
   MilestoneTimelineVisual,
-  mapMinHeight,
   orderMilestones,
 } from "./milestone-timeline";
 import type { ApiMilestone, ApiProject } from "./api";
@@ -15,26 +14,18 @@ const foundation: ApiMilestone = {
   name: "Foundation",
   description: "Build the shared project model.",
   dependencies: [],
-  workstreams: [
-    { workstreamId: "workstream-data", name: "Data model", scope: "Persist the plan." },
-  ],
 };
-// The same milestone once the planner has hung more work off it, kept apart so
-// the single-workstream case above stays the plain one.
-const staffed: ApiMilestone = {
+// The same goal after the planner has restated it, kept apart so a poll that
+// changes nothing a name would show has something to be told apart by.
+const restated: ApiMilestone = {
   ...foundation,
-  workstreams: [
-    ...foundation.workstreams,
-    { workstreamId: "workstream-web", name: "Timeline view", scope: "Draw the plan." },
-    { workstreamId: "workstream-tools", name: "Planner tools", scope: "Record the plan." },
-  ],
+  description: "Build the shared project and milestone model.",
 };
 const launch: ApiMilestone = {
   milestoneId: "launch",
   name: "Launch",
   description: "Ship the project to users.",
   dependencies: ["foundation"],
-  workstreams: [],
 };
 const project: ApiProject = {
   projectId: "project-1",
@@ -108,48 +99,11 @@ describe("milestone timeline", () => {
     );
   });
 
-  it("lists each milestone's workstreams beneath it, in the order the API sent", () => {
+  it("opens one milestone page per goal", () => {
     render(
-      <MilestoneTimelineVisual milestones={[staffed, launch]} projectId={project.projectId} />,
+      <MilestoneTimelineVisual milestones={[foundation, launch]} projectId={other.projectId} />,
     );
 
-    const list = screen.getByRole("list", { name: "Foundation" });
-    const items = screen.getAllByRole("listitem");
-
-    expect(list).toContainElement(items[0]);
-    // Newest first is decided by the store (`ORDER BY sequence DESC`), so the
-    // component may not re-sort what it was handed.
-    expect(items.map((item) => item.querySelector("span")?.textContent)).toEqual([
-      "Data model",
-      "Timeline view",
-      "Planner tools",
-    ]);
-    // A milestone with no workstreams gets no empty list under its name.
-    expect(screen.queryByRole("list", { name: "Launch" })).toBeNull();
-  });
-
-  it("gives a workstream's scope the tooltip the description already uses", () => {
-    render(<MilestoneTimelineVisual milestones={[foundation]} projectId={project.projectId} />);
-
-    const item = screen.getByRole("listitem");
-    const scope = screen.getByRole("tooltip", { name: "Persist the plan." });
-
-    // Reachable by keyboard, not only by a hover a touch device cannot make,
-    // without turning the workstream name into a navigation target.
-    expect(item).toHaveAttribute("tabindex", "0");
-    expect(item).toHaveAccessibleDescription("Persist the plan.");
-    expect(screen.queryByRole("link", { name: "Data model" })).toBeNull();
-    expect(item).toContainElement(scope);
-    expect(item).not.toHaveAttribute("title");
-  });
-
-  it("opens milestone pages from the milestones rather than their workstreams", () => {
-    render(
-      <MilestoneTimelineVisual milestones={[staffed, launch]} projectId={other.projectId} />,
-    );
-
-    // One link per goal keeps its workstream labels informational rather than
-    // making several differently named links lead to the same page.
     expect(
       screen.getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")]),
     ).toEqual([
@@ -161,20 +115,20 @@ describe("milestone timeline", () => {
   it("hangs a tooltip off the window, above what it describes", async () => {
     const user = userEvent.setup();
     render(<MilestoneTimelineVisual milestones={[foundation]} projectId={project.projectId} />);
-    const item = screen.getByRole("listitem");
-    const scope = screen.getByRole("tooltip", { name: "Persist the plan." });
-    // jsdom lays nothing out, so the bullet is handed the box a browser would
-    // give the last one in a list the map has scrolled.
-    item.getBoundingClientRect = () => ({ top: 600, left: 300, width: 170 }) as DOMRect;
+    const node = screen.getByText("Foundation").closest(".milestone-node") as HTMLElement;
+    const tooltip = screen.getByRole("tooltip", { name: "Build the shared project model." });
+    // jsdom lays nothing out, so the node is handed the box a browser would
+    // give one the map has scrolled.
+    node.getBoundingClientRect = () => ({ top: 600, left: 300, width: 170 }) as DOMRect;
 
-    await user.hover(item);
+    await user.hover(node);
 
     // Measured from the window's edges, not the map's: the map is the box that
     // was clipping the tooltip and scrolling it out of sight.
-    expect(scope.style.getPropertyValue("--tooltip-bottom")).toBe(
+    expect(tooltip.style.getPropertyValue("--tooltip-bottom")).toBe(
       `${window.innerHeight - 600 + 8}px`,
     );
-    expect(scope.style.getPropertyValue("--tooltip-left")).toBe("385px");
+    expect(tooltip.style.getPropertyValue("--tooltip-left")).toBe("385px");
   });
 
   it("keeps a tooltip on a milestone at the window's edge inside it", async () => {
@@ -194,21 +148,14 @@ describe("milestone timeline", () => {
     );
   });
 
-  it("grows the map so the deepest node's bullets stay inside it", () => {
-    const { container, rerender } = render(
-      <MilestoneTimelineVisual milestones={[staffed]} projectId={project.projectId} />,
+  it("reserves room for a node the map cannot measure", () => {
+    const { container } = render(
+      <MilestoneTimelineVisual milestones={[foundation]} projectId={project.projectId} />,
     );
-    const height = () =>
-      Number.parseFloat(container.querySelector<HTMLElement>(".milestone-map")!.style.minHeight);
+    const map = container.querySelector<HTMLElement>(".milestone-map")!;
 
-    // The node is out of flow, so nothing but this reserves room for it: top
-    // 83 + dot/name 66 + grid gap 9 + three 15px bullets + two 4px gaps.
-    expect(mapMinHeight([staffed])).toBe(height());
-    expect(height()).toBeGreaterThanOrEqual(83 + 66 + 9 + 3 * 15 + 2 * 4);
-
-    // A plan without workstreams is left on the floor the map already had.
-    rerender(<MilestoneTimelineVisual milestones={[launch]} projectId={project.projectId} />);
-    expect(height()).toBe(180);
+    // The node is out of flow, so nothing but this reserves room for it.
+    expect(Number.parseFloat(map.style.minHeight)).toBe(180);
   });
 
   it("renders an empty state without inventing milestones", () => {
@@ -278,25 +225,28 @@ describe("MilestoneTimeline", () => {
     expect(screen.getByText("Launch")).toBeInTheDocument();
   });
 
-  it("follows a workstream hung off a milestone that did not otherwise change", async () => {
+  it("follows a milestone restated under the name it already had", async () => {
     vi.useFakeTimers();
     const fetch = vi
       .fn()
       .mockImplementationOnce(plan([foundation]))
-      .mockImplementation(plan([staffed]));
+      .mockImplementation(plan([restated]));
     vi.stubGlobal("fetch", fetch);
 
     render(<MilestoneTimeline project={project} />);
     await act(async () => {});
 
-    expect(screen.getByText("Data model")).toBeInTheDocument();
-    expect(screen.queryByText("Timeline view")).toBeNull();
+    expect(
+      screen.getByRole("tooltip", { name: "Build the shared project model." }),
+    ).toBeInTheDocument();
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
-    // The milestone itself is untouched, so only the workstreams tell the two
-    // polls apart -- which is what `sameMilestones` has to notice.
-    expect(screen.getByText("Timeline view")).toBeInTheDocument();
+    // The name is untouched, so only the description tells the two polls apart
+    // -- which is what the deep comparison has to notice.
+    expect(
+      screen.getByRole("tooltip", { name: "Build the shared project and milestone model." }),
+    ).toBeInTheDocument();
   });
 
   it("holds the last good timeline through a failed poll", async () => {

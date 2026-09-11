@@ -9,17 +9,12 @@ const foundation: ApiMilestone = {
   name: "Foundation",
   description: "Build the shared project model.",
   dependencies: [],
-  workstreams: [
-    { workstreamId: "workstream-data", name: "Data model", scope: "Persist the plan." },
-    { workstreamId: "workstream-web", name: "Timeline view", scope: "" },
-  ],
 };
 const launch: ApiMilestone = {
   milestoneId: "milestone-launch",
   name: "Launch",
   description: "Ship the project to users.",
   dependencies: ["milestone-foundation"],
-  workstreams: [],
 };
 const project: ApiProject = {
   projectId: "project-1",
@@ -28,14 +23,13 @@ const project: ApiProject = {
   conversationUrl: "/conversations/agi-1",
 };
 
-/** A run is the record of one task, and carries the workstream it was started
- *  in -- which is all this page groups them by. */
+/** A run is the record of one task, and carries the milestone it was started
+ *  under -- which is all this page groups them by. */
 function run(
   runId: string,
   name: string,
-  workstreamId: string | null,
+  milestoneId: string | null,
   phase = "succeeded",
-  milestoneId: string | null = null,
 ): ApiWorkflowRun {
   return {
     runId,
@@ -43,7 +37,6 @@ function run(
     workflowId: "delivery",
     workflowName: "Delivery",
     taskId: `task-${runId}`,
-    workstreamId,
     milestoneId,
     taskPrompt: name,
     repository: ".",
@@ -54,21 +47,14 @@ function run(
   };
 }
 
-const persisting = run("run-1", "Persist milestones", "workstream-data", "running_agent");
-const migrating = run("run-2", "Add the workstream table", "workstream-data");
-const drawing = run("run-3", "Draw the dependency graph", "workstream-web");
-const unplanned = run("run-4", "A chore nobody planned", null);
-const direct = run(
-  "run-6",
-  "Document the milestone",
-  null,
-  "succeeded",
-  "milestone-foundation",
-);
+const persisting = run("run-1", "Persist milestones", "milestone-foundation", "running_agent");
+const migrating = run("run-2", "Add the milestone table", "milestone-foundation");
+const unplanned = run("run-3", "A chore nobody planned", null);
+const shipping = run("run-4", "Cut the release", "milestone-launch");
 const reviewing = run(
   "run-5",
   "Approve the release",
-  "workstream-data",
+  "milestone-foundation",
   "awaiting_human_review",
 );
 
@@ -90,7 +76,7 @@ function unavailable() {
 
 function open(
   milestoneId = "milestone-foundation",
-  runs = [persisting, migrating, drawing],
+  runs = [persisting, migrating],
   { runsLoaded = true, runsError = "" } = {},
 ) {
   return render(
@@ -106,7 +92,7 @@ function open(
 
 describe("MilestoneDetailsPage", () => {
   it("starts scheduled work and reports failures without removing the Start action", async () => {
-    const scheduled = run("scheduled", "Planned work", null, "scheduled", foundation.milestoneId);
+    const scheduled = run("scheduled", "Planned work", foundation.milestoneId, "scheduled");
     const fetcher = vi.fn(plan([foundation]));
     vi.stubGlobal("fetch", fetcher);
     open(foundation.milestoneId, [scheduled]);
@@ -157,75 +143,27 @@ describe("MilestoneDetailsPage", () => {
     );
   });
 
-  it("gives a card to every workstream under the milestone, and to no other", async () => {
+  it("lists every task started under the milestone, and leads to its run", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation, launch])));
 
-    const { container } = open();
-    await act(async () => {});
-
-    expect(
-      [...container.querySelectorAll(".workstream-card h2")].map((h) => h.textContent),
-    ).toEqual(["Data model", "Timeline view"]);
-    const data = screen.getByRole("article", { name: "Data model" });
-    expect(screen.getByRole("heading", { name: "Data model", level: 2 })).toBeInTheDocument();
-    expect(
-      within(within(data).getByRole("button", { name: "Data model" })).queryByRole("heading"),
-    ).toBeNull();
-    expect(within(data).getByText("Persist the plan.")).toBeInTheDocument();
-    expect(within(data).getByText("workstream-data")).toBeInTheDocument();
-  });
-
-  it("lists every milestone task with its workstream, and leads to its run", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
-
-    open("milestone-foundation", [persisting, migrating, drawing, unplanned]);
+    open("milestone-foundation", [persisting, migrating, unplanned, shipping]);
     await act(async () => {});
 
     const tasks = screen.getByRole("list", { name: "Tasks in Foundation" });
-    // The task belonging to no workstream or milestone is not part of this
-    // milestone, while every task in one of its workstreams is present.
+    // A task under no milestone, and one under another goal, are not this
+    // milestone's work.
     expect(within(tasks).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
       "/runs/run-1",
       "/runs/run-2",
-      "/runs/run-3",
     ]);
     expect(within(tasks).getByText("Persist milestones")).toBeInTheDocument();
-    expect(within(tasks).getAllByText("Data model")).toHaveLength(2);
-    expect(within(tasks).getByText("Timeline view")).toBeInTheDocument();
     // The stage the run has reached, in the workflow's own words while it runs.
     expect(within(tasks).getByText("running agent")).toBeInTheDocument();
-    expect(within(tasks).getAllByText("succeeded")).toHaveLength(2);
+    expect(within(tasks).getByText("succeeded")).toBeInTheDocument();
     // A non-terminal run is work left under this heading.
-    const data = screen.getByRole("article", { name: "Data model" });
-    expect(within(data).getByText("2 tasks")).toBeInTheDocument();
-    expect(within(data).getByText("1 unfinished")).toBeInTheDocument();
-  });
-
-  it("filters the task list when a workstream is clicked, and can show all again", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
-
-    open("milestone-foundation", [persisting, migrating, drawing, direct]);
-    await act(async () => {});
-
-    const data = screen.getByRole("button", { name: "Data model" });
-    fireEvent.click(data);
-
-    expect(data).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("heading", { name: "Data model tasks" })).toBeInTheDocument();
-    const filtered = screen.getByRole("list", { name: "Tasks in Data model" });
-    expect(within(filtered).getAllByRole("link")).toHaveLength(2);
-    expect(within(filtered).queryByText("Draw the dependency graph")).toBeNull();
-    expect(within(filtered).queryByText("Document the milestone")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Show all tasks" }));
-
-    expect(data).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("list", { name: "Tasks in Foundation" })).toHaveTextContent(
-      "Document the milestone",
-    );
+    expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("2");
+    expect(screen.getByText("Unfinished").nextSibling).toHaveTextContent("1");
   });
 
   it("counts a task awaiting human review as unfinished and calls it out", async () => {
@@ -235,44 +173,21 @@ describe("MilestoneDetailsPage", () => {
     open("milestone-foundation", [reviewing]);
     await act(async () => {});
 
-    const data = screen.getByRole("article", { name: "Data model" });
-    expect(within(data).getByText("1 unfinished")).toBeInTheDocument();
-    expect(within(data).getByText("1 awaiting review")).toBeInTheDocument();
+    expect(screen.getByText("Unfinished").nextSibling).toHaveTextContent("1");
     expect(screen.getByText("Awaiting review").nextSibling).toHaveTextContent("1");
   });
 
-  it("lists tasks linked directly to the milestone below its workstreams", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
-
-    open("milestone-foundation", [persisting, direct, unplanned]);
-    await act(async () => {});
-
-    const list = screen.getByRole("list", { name: "Tasks in Foundation" });
-    expect(within(list).getByRole("link", { name: /Document the milestone/ })).toHaveAttribute(
-      "href",
-      "/runs/run-6",
-    );
-    expect(within(list).queryByText("A chore nobody planned")).toBeNull();
-    expect(within(list).getByText("Data model")).toBeInTheDocument();
-    expect(within(list).getByText("Milestone task")).toBeInTheDocument();
-    expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("2");
-  });
-
-  it("says a workstream nothing has been started in has nothing in it", async () => {
+  it("says a milestone nothing has been started under has nothing in it", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation])));
 
     open("milestone-foundation", []);
     await act(async () => {});
 
-    const view = screen.getByRole("article", { name: "Timeline view" });
-    fireEvent.click(within(view).getByRole("button", { name: "Timeline view" }));
     expect(
-      screen.getByText("No tasks have been started in this workstream yet."),
+      screen.getByText("No tasks have been started under this milestone yet."),
     ).toBeInTheDocument();
-    expect(within(view).getByText("0 tasks")).toBeInTheDocument();
-    expect(screen.queryByText("1 unfinished")).toBeNull();
+    expect(screen.getByText("Tasks").nextSibling).toHaveTextContent("0");
   });
 
   it("does not claim there are no tasks before the runs poll answers", async () => {
@@ -315,17 +230,6 @@ describe("MilestoneDetailsPage", () => {
     expect(screen.getByText("Persist milestones")).toBeInTheDocument();
   });
 
-  it("says a milestone nothing hangs off has no workstreams", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([foundation, launch])));
-
-    const { container } = open("milestone-launch");
-    await act(async () => {});
-
-    expect(screen.getByText("No workstreams yet.")).toBeInTheDocument();
-    expect(container.querySelectorAll(".workstream-card")).toHaveLength(0);
-  });
-
   /** Reachable two ways: the URL is guessable, and `delete_milestone` can take
    *  this goal out of the plan while its page is open and polling. */
   it("says so when the plan holds no such milestone", async () => {
@@ -351,11 +255,11 @@ describe("MilestoneDetailsPage", () => {
 
     open();
     await act(async () => {});
-    expect(screen.queryByRole("button", { name: "Data model" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Foundation", level: 1 })).toBeNull();
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
-    expect(screen.getByRole("article", { name: "Data model" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Foundation", level: 1 })).toBeInTheDocument();
   });
 
   it("reports a failure that leaves it with nothing to show", async () => {
@@ -384,6 +288,6 @@ describe("MilestoneDetailsPage", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
 
     expect(screen.getByText("Not updating: store unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("article", { name: "Data model" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Foundation", level: 1 })).toBeInTheDocument();
   });
 });

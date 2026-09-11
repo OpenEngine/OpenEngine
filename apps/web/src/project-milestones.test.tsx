@@ -9,17 +9,12 @@ const foundation: ApiMilestone = {
   name: "Foundation",
   description: "Build the shared project model.",
   dependencies: [],
-  workstreams: [
-    { workstreamId: "workstream-data", name: "Data model", scope: "Persist the plan." },
-    { workstreamId: "workstream-web", name: "Timeline view", scope: "" },
-  ],
 };
 const launch: ApiMilestone = {
   milestoneId: "milestone-launch",
   name: "Launch",
   description: "Ship the project to users.",
   dependencies: ["milestone-foundation"],
-  workstreams: [],
 };
 const project: ApiProject = {
   projectId: "project-1",

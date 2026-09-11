@@ -620,31 +620,11 @@ select:disabled { cursor: default; }
 .milestone-link:hover .milestone-name { border-color: var(--ink); }
 .milestone-link:focus-visible { outline: 0; }
 .milestone-link:focus-visible .milestone-name { border-color: var(--ink); }
-.milestone-workstreams {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  padding: 0 2px;
-  text-align: left;
-}
-.milestone-workstream {
-  /* A hanging indent, so a name that wraps clears its own bullet. */
-  padding-left: 11px;
-  text-indent: -11px;
-  color: var(--muted);
-  font: 500 11px/1.35 var(--mono);
-  /* A workstream name can be machine-generated: break one rather than let it
-     run over the milestone 210px to the right. */
-  overflow-wrap: anywhere;
-}
-.milestone-workstream::before { content: "• "; }
-.milestone-workstream:focus-visible { color: var(--ink); }
 .milestone-tooltip {
   /* Above what it describes, and measured against the window by `pinTooltip`
      rather than against the node. The band above a node belongs to the map,
-     which is the box that scrolls: a description taller than that band was cut
-     off at the top of it, and a workstream list long enough to scroll carried
-     the band -- and the tooltip in it -- out of sight. */
+     which is the box that scrolls: a description taller than that band would
+     be cut off at the top of it. */
   position: fixed;
   z-index: 2;
   /* The fallbacks are reached only by a node that arrives under a pointer that
@@ -665,12 +645,8 @@ select:disabled { cursor: default; }
   opacity: 0;
   pointer-events: none;
 }
-/* One tooltip at a time: reading a workstream's scope shows it in place of the
-   milestone's description, since they share the band above the node. */
-.milestone-node:hover:not(:has(.milestone-workstream:hover)) > .milestone-tooltip,
-.milestone-node:has(> .milestone-link:focus-visible) > .milestone-tooltip,
-.milestone-workstream:hover > .milestone-tooltip,
-.milestone-workstream:focus-visible > .milestone-tooltip { visibility: visible; opacity: 1; }
+.milestone-node:hover > .milestone-tooltip,
+.milestone-node:has(> .milestone-link:focus-visible) > .milestone-tooltip { visibility: visible; opacity: 1; }
 .milestone-empty {
   display: grid;
   place-items: center;
@@ -702,36 +678,15 @@ select:disabled { cursor: default; }
 .work-table td { padding: 14px; border-bottom: 1px solid var(--rule); font-size: 14px; }
 .work-table-empty { color: var(--muted); font: 500 13px/1.5 var(--mono); text-align: center; }
 
-/* One milestone's own page: workstream cards filter the complete task list
-   below them. */
-.workstream-card {
-  position: relative;
-  width: 100%;
-  grid-template-rows: none;
-  gap: 12px;
-  align-content: start;
-}
-.workstream-card[data-selected] { border-top-color: var(--flame); background: var(--fill-hover); }
-.workstream-card-action {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-}
-.workstream-card-action:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
-.workstream-card .lede { font-size: 14px; }
-.chip-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.workstream-tasks {
+/* One milestone's own page: every task started under the goal. */
+.milestone-task-list {
   display: grid;
   gap: 2px;
   padding-top: 14px;
   border-top: 1px solid var(--rule);
 }
-.workstream-tasks li { display: flex; gap: 12px; align-items: center; }
-.workstream-tasks a {
+.milestone-task-list li { display: flex; gap: 12px; align-items: center; }
+.milestone-task-list a {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -742,9 +697,9 @@ select:disabled { cursor: default; }
   color: inherit;
   text-decoration: none;
 }
-.workstream-tasks a:hover .workstream-task-name { text-decoration: underline; }
-.workstream-tasks li + li { border-top: 1px solid var(--rule); }
-.workstream-task-name {
+.milestone-task-list a:hover .milestone-task-name { text-decoration: underline; }
+.milestone-task-list li + li { border-top: 1px solid var(--rule); }
+.milestone-task-name {
   flex: 1 1 50%;
   min-width: 0;
   font-size: 13px;
@@ -752,30 +707,14 @@ select:disabled { cursor: default; }
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
-.workstream-task-meta {
-  display: flex;
-  flex: 0 1 50%;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  align-items: baseline;
-  justify-content: flex-end;
-  min-width: 0;
-}
-.workstream-task-context {
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-.workstream-task-stage {
+.milestone-task-stage {
   flex: 0 0 auto;
   color: var(--muted);
   font: 500 11px/1.4 var(--mono);
   letter-spacing: .08em;
   text-transform: uppercase;
 }
-.workstream-task-stage[data-accent="flame"] { color: var(--flame-deep); }
+.milestone-task-stage[data-accent="flame"] { color: var(--flame-deep); }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: flex-end; }
 .milestone-tasks {
   margin: 26px var(--gutter) 48px;

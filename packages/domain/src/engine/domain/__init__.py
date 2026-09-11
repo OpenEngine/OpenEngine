@@ -38,17 +38,14 @@ from engine.domain.ids import (
     StepId,
     TaskId,
     WorkflowId,
-    WorkstreamId,
     WorkOrderId,
     WorkspaceId,
 )
 from engine.domain.planning import (
     Milestone,
     Project,
-    Workstream,
     instance_id_for_project,
     project_id_for_instance,
-    workstreams_by_milestone,
 )
 from engine.domain.state import RunOrigin, RunPhase, RunState
 from engine.domain.scoping import (
@@ -117,12 +114,9 @@ __all__ = [
     "ToolSpec",
     "Supersession",
     "WorkflowId",
-    "Workstream",
-    "WorkstreamId",
     "WorkOrder",
     "WorkOrderId",
     "WorkOrderSpec",
     "WorkOrderStatus",
-    "workstreams_by_milestone",
     "WorkspaceId",
 ]

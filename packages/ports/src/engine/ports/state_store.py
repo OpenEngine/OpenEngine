@@ -26,10 +26,9 @@ from engine.domain.ids import (
     ProjectId,
     RunId,
     TaskId,
-    WorkstreamId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project, Workstream
+from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunState
 
 
@@ -45,9 +44,9 @@ class StateStore(Protocol):
         ...
 
     async def list_runs(
-        self, workstream_id: WorkstreamId | None = None
+        self, milestone_id: MilestoneId | None = None
     ) -> Sequence[RunState]:
-        """Return persisted workflow runs, newest first, optionally by workstream."""
+        """Return persisted workflow runs, newest first, optionally by milestone."""
         ...
 
     async def delete_run(self, run_id: RunId) -> bool:
@@ -92,29 +91,9 @@ class StateStore(Protocol):
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
         """Delete one milestone, returning whether it existed.
 
-        Refused while workstreams or runs still point at it.
-        """
-        ...
-
-    async def save_workstream(self, workstream: Workstream) -> None:
-        ...
-
-    async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
-        ...
-
-    async def list_workstreams(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[Workstream]:
-        """Return workstreams newest first, optionally for one milestone."""
-        ...
-
-    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
-        """Delete one workstream, returning whether it existed.
-
-        Refused while runs still point at it, for the reason deleting a
-        milestone with workstreams is: the run is the record of work done under
-        this heading, and a run whose workstream is gone cannot say what it was
-        part of.
+        Refused while runs still point at it: the run is the record of work
+        done under this heading, and a run whose milestone is gone cannot say
+        what it was part of.
         """
         ...
 

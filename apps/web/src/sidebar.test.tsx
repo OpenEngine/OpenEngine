@@ -11,7 +11,6 @@ const run: ApiWorkflowRun = {
   workflowId: "implementation-review-codex",
   workflowName: "Implementation review (codex)",
   taskId: "task-1",
-  workstreamId: null,
   milestoneId: null,
   taskPrompt: "Do the work",
   repository: ".",

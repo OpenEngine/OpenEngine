@@ -48,7 +48,6 @@ interpreter:
 | --- | --- | --- |
 | `projects` | Keep | Product planning data. |
 | `milestones` | Keep | Product planning data. |
-| `workstreams` | Keep | Product planning data and run grouping. |
 | `agent_instances` | Keep | Durable agent/conversation identity. `workflow_step_id` initially stores the LangGraph node ID. |
 | `messages` | Keep | Complete inspectable conversation history should not inflate every checkpoint. |
 | `agent_runs` | Keep | Durable provider execution outcome and changed-file data. |
@@ -205,7 +204,7 @@ Split the current `RunState` into two models.
 ```text
 run_id
 workflow_id, workflow_version, graph_revision
-task_id, workstream_id
+task_id, milestone_id
 name, prompt, repository
 runner_name, workspace_id
 execution_backend
@@ -265,7 +264,7 @@ CREATE TABLE workflow_runs (
     workflow_version TEXT NOT NULL,
     graph_revision TEXT NOT NULL,
     task_id TEXT NOT NULL,
-    workstream_id TEXT REFERENCES workstreams(workstream_id),
+    milestone_id TEXT REFERENCES milestones(milestone_id),
     name TEXT NOT NULL DEFAULT '',
     prompt TEXT NOT NULL,
     repository TEXT NOT NULL,
@@ -281,8 +280,8 @@ CREATE TABLE workflow_runs (
     updated_at TEXT NOT NULL
 );
 
-CREATE INDEX workflow_runs_by_workstream
-    ON workflow_runs (workstream_id, sequence DESC);
+CREATE INDEX workflow_runs_by_milestone
+    ON workflow_runs (milestone_id, sequence DESC);
 
 CREATE INDEX workflow_runs_by_status
     ON workflow_runs (status, sequence DESC);
@@ -318,7 +317,7 @@ pending writes otherwise grow without bound.
 
 | Current `RunState` field | Target |
 | --- | --- |
-| `run_id`, `task_id`, `workflow_id`, `workstream_id` | Authoritative `workflow_runs` columns and minimal graph identifiers. |
+| `run_id`, `task_id`, `workflow_id`, `milestone_id` | Authoritative `workflow_runs` columns and minimal graph identifiers. |
 | `repository`, `prompt`, `name`, `runner_name`, `workspace_id` | `workflow_runs`; include references in graph state only when a node needs them. |
 | `phase`, `current_step_id`, `failure_reason` | Graph/Temporal execution truth plus repairable run projection. |
 | `agent_runs`, `current_agent_run_id` | Graph references plus existing `agent_runs`/`agent_instances` rows. |

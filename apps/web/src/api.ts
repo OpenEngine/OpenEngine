@@ -78,7 +78,7 @@ export function projectMilestonesUrl(projectId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/milestones`;
 }
 
-/** One milestone's own page: the workstreams under it and the tasks in each.
+/** One milestone's own page: the tasks started under it.
  *
  *  Nested under the plan it belongs to rather than named by its id alone: the
  *  page is read as part of a project, and the way back out is the plan. */
@@ -103,19 +103,11 @@ export function milestoneScopeUrl(
   return `${milestoneDetailsUrl(projectId, milestoneId)}/scope`;
 }
 
-export type ApiWorkstream = {
-  workstreamId: string;
-  name: string;
-  /** The part of the milestone this workstream covers. */
-  scope: string;
-};
-
 export type ApiMilestone = {
   milestoneId: string;
   name: string;
   description: string;
   dependencies: string[];
-  workstreams: ApiWorkstream[];
 };
 
 export type ApiProjectMilestones = {
@@ -214,7 +206,6 @@ export type ApiWorkflowRunListing = {
   workflowId: string;
   workflowName: string;
   taskId: string;
-  workstreamId: string | null;
   milestoneId: string | null;
   repository: string;
   repositoryContext: { repository: string };
