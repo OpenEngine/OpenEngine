@@ -272,7 +272,6 @@ export function NewWorkflowPage({
   );
   const [repository, setRepository] = useState(".");
   const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
-  const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
@@ -297,9 +296,7 @@ export function NewWorkflowPage({
           inputs: Object.fromEntries((selected?.inputs ?? []).map((input) => [
             input.name, inputValues[input.name] ?? input.default,
           ])),
-          ...(milestone
-            ? { milestoneId: milestone.milestoneId, workstreamId: workstreamId || undefined }
-            : {}),
+          ...(milestone ? { milestoneId: milestone.milestoneId } : {}),
         }),
       });
       // The run now owns this prompt, so the draft has nothing left to keep.
@@ -320,7 +317,7 @@ export function NewWorkflowPage({
         <h1>{milestone ? "Create a task" : "Create a WorkOrder"}</h1>
         <p className="lede">
           {milestone
-            ? "Start work for this milestone, optionally under one of its workstreams."
+            ? "Start work for this milestone."
             : "Create one WorkOrder that keeps its stages, agent conversations, outputs, and final human decision together."}
         </p>
       </header>
@@ -342,22 +339,6 @@ export function NewWorkflowPage({
             ))}
           </select>
         </label>
-        {milestone && (
-          <label>
-            <span>Workstream (optional)</span>
-            <select
-              value={workstreamId}
-              onChange={(event) => setWorkstreamId(event.target.value)}
-            >
-              <option value="">No workstream — milestone task</option>
-              {milestone.workstreams.map((workstream) => (
-                <option key={workstream.workstreamId} value={workstream.workstreamId}>
-                  {workstream.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <label>
           <span>Repository</span>
           <input

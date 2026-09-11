@@ -13,7 +13,6 @@ from engine.domain import (
     RunId,
     RunPhase,
     RunState,
-    WorkstreamId,
 )
 from engine.ports.state_store import StateStore
 from engine.runtime.workflows import WorkflowCatalog
@@ -26,7 +25,6 @@ class WorkflowRunView:
     workflow_id: str
     workflow_name: str
     task_id: str
-    workstream_id: WorkstreamId | None
     milestone_id: MilestoneId | None
     task_prompt: str
     repository: str
@@ -73,7 +71,6 @@ class RunReader:
                 str(state.workflow_id), str(state.workflow_id)
             ),
             task_id=str(state.task_id),
-            workstream_id=state.workstream_id,
             milestone_id=state.milestone_id,
             task_prompt=state.prompt,
             repository=state.repository,

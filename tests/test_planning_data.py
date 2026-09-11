@@ -1,4 +1,4 @@
-"""Project, milestone, and workstream persistence contracts."""
+"""Project and milestone persistence contracts."""
 
 import asyncio
 from collections.abc import Iterator
@@ -17,8 +17,6 @@ from engine.domain import (
     RunState,
     TaskId,
     WorkflowId,
-    Workstream,
-    WorkstreamId,
     instance_id_for_project,
     project_id_for_instance,
 )
@@ -52,48 +50,28 @@ def test_planning_hierarchy_and_run_association(store: StateStore) -> None:
         "Ship the first release.",
         (milestone.milestone_id,),
     )
-    workstream = Workstream(
-        WorkstreamId("workstream-data"),
-        milestone.milestone_id,
-        "Data model",
-        "The store, its ports, and its migrations.",
-    )
-    other_workstream = Workstream(
-        WorkstreamId("workstream-ui"), milestone.milestone_id, "User interface"
-    )
     run = RunState(
         run_id=RunId("run-data-model"),
         task_id=TaskId("task-data-model"),
         workflow_id=WorkflowId("implementation-v1"),
-        workstream_id=workstream.workstream_id,
+        milestone_id=milestone.milestone_id,
     )
 
     async def scenario() -> None:
         await store.save_project(project)
         await store.save_milestone(milestone)
         await store.save_milestone(launch)
-        await store.save_workstream(workstream)
-        await store.save_workstream(other_workstream)
         await store.save(run)
 
         assert await store.load_project(project.project_id) == project
         assert await store.load_milestone(milestone.milestone_id) == milestone
-        assert await store.load_workstream(workstream.workstream_id) == workstream
         assert await store.list_milestones(project.project_id) == (launch, milestone)
-        assert await store.list_workstreams(milestone.milestone_id) == (
-            other_workstream,
-            workstream,
-        )
-        assert await store.list_runs(workstream.workstream_id) == (run,)
-        assert await store.list_runs(other_workstream.workstream_id) == ()
+        assert await store.list_runs(milestone.milestone_id) == (run,)
+        assert await store.list_runs(launch.milestone_id) == ()
         assert await store.delete_milestone(launch.milestone_id) is True
         assert await store.delete_milestone(launch.milestone_id) is False
-        with pytest.raises(ValueError, match="still has workstreams"):
-            await store.delete_milestone(milestone.milestone_id)
         with pytest.raises(ValueError, match="still has runs"):
-            await store.delete_workstream(workstream.workstream_id)
-        assert await store.delete_workstream(other_workstream.workstream_id) is True
-        assert await store.delete_workstream(other_workstream.workstream_id) is False
+            await store.delete_milestone(milestone.milestone_id)
 
     asyncio.run(scenario())
 
@@ -118,14 +96,13 @@ def test_run_can_belong_directly_to_a_milestone(store: StateStore) -> None:
         assert await store.load(run.run_id) == run
         with pytest.raises(ValueError, match="still has runs"):
             await store.delete_milestone(milestone.milestone_id)
-        with pytest.raises(ValueError, match="both a workstream and a milestone"):
+        with pytest.raises(KeyError, match="no milestone"):
             await store.save(
                 RunState(
                     run_id=RunId("run-invalid"),
                     task_id=TaskId("task-invalid"),
                     workflow_id=WorkflowId("implementation-v1"),
-                    workstream_id=WorkstreamId("workstream-invalid"),
-                    milestone_id=milestone.milestone_id,
+                    milestone_id=MilestoneId("milestone-invalid"),
                 )
             )
 
@@ -145,23 +122,16 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
         "The first usable release.",
         (foundation.milestone_id,),
     )
-    workstream = Workstream(
-        WorkstreamId("workstream-runtime"),
-        milestone.milestone_id,
-        "Runtime",
-        "The planning tools and their MCP bridge.",
-    )
     run = RunState(
         run_id=RunId("run-runtime"),
         task_id=TaskId("task-runtime"),
         workflow_id=WorkflowId("implementation-v1"),
-        workstream_id=workstream.workstream_id,
+        milestone_id=milestone.milestone_id,
     )
     first = SQLiteStateStore(path)
     asyncio.run(first.save_project(project))
     asyncio.run(first.save_milestone(foundation))
     asyncio.run(first.save_milestone(milestone))
-    asyncio.run(first.save_workstream(workstream))
     asyncio.run(first.save(run))
     first.close()
 
@@ -169,7 +139,6 @@ def test_sqlite_planning_hierarchy_survives_reopening(tmp_path) -> None:
     try:
         assert asyncio.run(second.list_projects()) == (project,)
         assert asyncio.run(second.list_milestones()) == (milestone, foundation)
-        assert asyncio.run(second.list_workstreams()) == (workstream,)
         assert asyncio.run(second.load(run.run_id)) == run
     finally:
         second.close()
@@ -223,25 +192,16 @@ def test_a_project_that_no_conversation_named_reads_back_as_none() -> None:
     read: a project recorded some other way owns no conversation, and callers
     must still confirm the instance it does name exists."""
 
-    assert instance_id_for_project(ProjectId("workstream-1")) is None
+    assert instance_id_for_project(ProjectId("milestone-1")) is None
     assert instance_id_for_project(ProjectId("project-")) is None
 
 
 def test_planning_children_require_their_parent(store: StateStore) -> None:
     missing_project = ProjectId("project-missing")
-    missing_milestone = MilestoneId("milestone-missing")
 
     with pytest.raises(KeyError, match="no project"):
         asyncio.run(
             store.save_milestone(
                 Milestone(MilestoneId("milestone-orphan"), missing_project, "Orphan")
-            )
-        )
-    with pytest.raises(KeyError, match="no milestone"):
-        asyncio.run(
-            store.save_workstream(
-                Workstream(
-                    WorkstreamId("workstream-orphan"), missing_milestone, "Orphan"
-                )
             )
         )

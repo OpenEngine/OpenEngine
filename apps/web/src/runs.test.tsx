@@ -46,9 +46,6 @@ const milestone: ApiMilestone = {
   name: "Foundation",
   description: "Build the shared model.",
   dependencies: [],
-  workstreams: [
-    { workstreamId: "workstream-data", name: "Data model", scope: "Persist it." },
-  ],
 };
 
 function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
@@ -58,7 +55,6 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
     workflowId: "work-v1",
     workflowName: "Work",
     taskId: "task-1",
-    workstreamId: null,
     milestoneId: null,
     taskPrompt: "Do the work",
     repository: ".",
@@ -239,20 +235,13 @@ describe("NewWorkflowPage", () => {
     );
   });
 
-  it("creates a milestone task with an optional workstream", async () => {
+  it("creates a task under the milestone it was opened from", async () => {
     const fetch = stubPageApi();
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const user = userEvent.setup();
     render(<NewWorkflowPage config={config} project={project} milestone={milestone} />);
 
-    expect(
-      screen.getByRole("option", { name: "No workstream — milestone task" }),
-    ).toHaveValue("");
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Workstream (optional)" }),
-      "workstream-data",
-    );
     await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Persist it");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -260,7 +249,6 @@ describe("NewWorkflowPage", () => {
     const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
     expect(JSON.parse(String(request.body))).toMatchObject({
       milestoneId: "milestone-foundation",
-      workstreamId: "workstream-data",
     });
   });
 });

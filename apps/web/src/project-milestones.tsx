@@ -3,8 +3,8 @@
  *  The same timeline the planning conversation carries at its foot, given the
  *  room to be read: the graph at the top says how the goals depend on each
  *  other, and a card apiece then says what each one actually is -- the
- *  description, the goals it waits on, and every workstream hanging from it,
- *  none of which fits in a 170px node. */
+ *  description and the goals it waits on, neither of which fits in a 170px
+ *  node. */
 
 import { useMemo } from "react";
 
@@ -35,34 +35,12 @@ function MilestoneCard({
       aria-labelledby={titleId}
     >
       <div className="card-top">
-        <span className="chip">
-          {milestone.workstreams.length}{" "}
-          {milestone.workstreams.length === 1 ? "workstream" : "workstreams"}
-        </span>
         <code className="card-id">{milestone.milestoneId}</code>
       </div>
       <h2 id={titleId}>{milestone.name}</h2>
       {milestone.description && <p className="lede">{milestone.description}</p>}
       {dependencies.length > 0 && (
         <p className="micro">Depends on {dependencies.join(" · ")}</p>
-      )}
-      {milestone.workstreams.length > 0 ? (
-        // Named in full rather than off the heading above it: the timeline on
-        // the same page already labels a list with this milestone's bare name,
-        // and two lists answering to "Foundation" name neither of them.
-        <ul
-          className="milestone-card-workstreams"
-          aria-label={`Workstreams for ${milestone.name}`}
-        >
-          {milestone.workstreams.map((workstream) => (
-            <li key={workstream.workstreamId}>
-              <strong>{workstream.name}</strong>
-              {workstream.scope && <span>{workstream.scope}</span>}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="micro">No workstreams yet.</p>
       )}
     </a>
   );

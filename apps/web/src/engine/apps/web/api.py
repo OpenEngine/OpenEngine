@@ -104,15 +104,12 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkspaceId,
-    Workstream,
-    WorkstreamId,
     WorkOrder,
     WorkOrderId,
     WorkOrderSpec,
     WorkOrderStatus,
     instance_id_for_project,
     project_id_for_instance,
-    workstreams_by_milestone,
 )
 from engine.graph_runtime.inputs import resolve_inputs
 from engine.graph_runtime import (
@@ -1434,24 +1431,12 @@ def create_app(
         if project is None:
             return _error("project not found", 404)
         milestones = await session.state_store.list_milestones(project_id)
-        # Read every workstream once and group here rather than asking per
-        # milestone: the timeline polls this route every second per open
-        # project, and a query per milestone makes that cost grow with the plan
-        # while holding the store's lock.
-        by_milestone = workstreams_by_milestone(
-            await session.state_store.list_workstreams()
-        )
         return JSONResponse(
             {
                 # Linked to its plan like any other row: the milestones page
                 # this answers is where the way back to the conversation is.
                 "project": _project_json(project, await open_conversations()),
-                "milestones": [
-                    _milestone_json(
-                        milestone, by_milestone.get(milestone.milestone_id, ())
-                    )
-                    for milestone in milestones
-                ],
+                "milestones": [_milestone_json(milestone) for milestone in milestones],
             }
         )
 
@@ -1471,14 +1456,9 @@ def create_app(
         except ValueError as error:
             return _error(str(error), 400)
 
-        workstreams = {
-            item.workstream_id
-            for item in await session.state_store.list_workstreams(milestone_id)
-        }
         current = tuple(
             _workorder_for_run(run, milestone_id)
-            for run in await session.state_store.list_runs()
-            if run.milestone_id == milestone_id or run.workstream_id in workstreams
+            for run in await session.state_store.list_runs(milestone_id)
         )
         if milestone_scoper is None:
             return _error("milestone scoping is not configured", 503)
@@ -1525,7 +1505,6 @@ def create_app(
         inputs: dict[str, str],
         prompt: str,
         repository: str,
-        workstream_id: WorkstreamId | None,
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
         scheduled: RunState | None = None,
@@ -1570,7 +1549,6 @@ def create_app(
             task_id=scheduled.task_id if scheduled else TaskId(f"task-{uuid4().hex[:12]}"),
             name=scheduled.name if scheduled else "",
             workflow_id=WorkflowId(str(graph.graph_id)),
-            workstream_id=workstream_id,
             milestone_id=milestone_id,
             # Working, as the engine has just reported it. `graph_event` above
             # moves this when the run ends.
@@ -1628,8 +1606,8 @@ def create_app(
                 return _error(str(error), 400)
             state = await start_graph_run(
                 surface.runtime, graph, inputs=inputs, prompt=state.prompt,
-                repository=repository, workstream_id=state.workstream_id,
-                milestone_id=state.milestone_id, scheduled=state,
+                repository=repository, milestone_id=state.milestone_id,
+                scheduled=state,
             )
             run = await run_reader.get(state.run_id)
             assert run is not None
@@ -1642,39 +1620,19 @@ def create_app(
             prompt = _required_string(body, "prompt")
             repository = _required_string(body, "repository")
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
-            workstream_value = _optional_string(body, "workstreamId")
             milestone_value = _optional_string(body, "milestoneId")
         except ValueError as error:
             return _error(str(error), 400)
         graph = offered_graphs().get(str(workflow_id))
         if graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
-        workstream_id = (
-            WorkstreamId(workstream_value) if workstream_value is not None else None
-        )
         milestone_id = (
             MilestoneId(milestone_value) if milestone_value is not None else None
         )
-        workstream = (
-            await session.state_store.load_workstream(workstream_id)
-            if workstream_id is not None
-            else None
-        )
-        if workstream_id is not None and workstream is None:
-            return _error(f"unknown workstream: {workstream_id}", 400)
         if milestone_id is not None:
             milestone = await session.state_store.load_milestone(milestone_id)
             if milestone is None:
                 return _error(f"unknown milestone: {milestone_id}", 400)
-            if workstream is not None and workstream.milestone_id != milestone_id:
-                return _error(
-                    f"workstream {workstream_id} does not belong to milestone {milestone_id}",
-                    400,
-                )
-
-        # A selected workstream is the more specific relationship. The
-        # milestone is retained only for a task created without one.
-        direct_milestone_id = milestone_id if workstream_id is None else None
 
         # `offered_graphs` only answers with a graph while the engine is
         # running, so this cannot be `None` here.
@@ -1691,8 +1649,7 @@ def create_app(
             inputs=inputs,
             prompt=prompt,
             repository=repository,
-            workstream_id=workstream_id,
-            milestone_id=direct_milestone_id,
+            milestone_id=milestone_id,
         )
         run = await run_reader.get(state.run_id)
         assert run is not None
@@ -2522,7 +2479,7 @@ def create_app(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            workstream_id=None, milestone_id=None, origin=origin,
+            milestone_id=None, origin=origin,
         )
         link = run_notifier.work_order_link(state)
         _pending_announcements.append((
@@ -2907,15 +2864,12 @@ def _project_json(
     return result
 
 
-def _milestone_json(
-    milestone: Milestone, workstreams: Sequence[Workstream]
-) -> dict[str, object]:
+def _milestone_json(milestone: Milestone) -> dict[str, object]:
     return {
         "milestoneId": str(milestone.milestone_id),
         "name": milestone.name,
         "description": milestone.description,
         "dependencies": [str(dependency) for dependency in milestone.dependencies],
-        "workstreams": [_workstream_json(workstream) for workstream in workstreams],
     }
 
 
@@ -2970,14 +2924,6 @@ def _scoping_plan_json(plan: ScopingPlan) -> dict[str, object]:
     }
 
 
-def _workstream_json(workstream: Workstream) -> dict[str, object]:
-    return {
-        "workstreamId": str(workstream.workstream_id),
-        "name": workstream.name,
-        "scope": workstream.scope,
-    }
-
-
 def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, object]:
     """One WorkOrder, as a client is shown it.
 
@@ -2993,7 +2939,6 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "workflowId": run.workflow_id,
         "workflowName": run.workflow_name,
         "taskId": run.task_id,
-        "workstreamId": str(run.workstream_id) if run.workstream_id else None,
         "milestoneId": str(run.milestone_id) if run.milestone_id else None,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},

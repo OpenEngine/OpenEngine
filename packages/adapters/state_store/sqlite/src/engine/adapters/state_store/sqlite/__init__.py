@@ -34,10 +34,9 @@ from engine.domain.ids import (
     SessionGrantId,
     TaskId,
     WorkflowId,
-    WorkstreamId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project, Workstream
+from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunOrigin, RunPhase, RunState
 
 
@@ -67,15 +66,6 @@ class SQLiteStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock, self._connection:
-            if state.workstream_id is not None and state.milestone_id is not None:
-                raise ValueError("a run cannot belong to both a workstream and a milestone")
-            if state.workstream_id is not None:
-                exists = self._connection.execute(
-                    "SELECT 1 FROM workstreams WHERE workstream_id = ?",
-                    (state.workstream_id,),
-                ).fetchone()
-                if exists is None:
-                    raise KeyError(f"no workstream {state.workstream_id!r}")
             if state.milestone_id is not None:
                 exists = self._connection.execute(
                     "SELECT 1 FROM milestones WHERE milestone_id = ?",
@@ -85,29 +75,27 @@ class SQLiteStateStore:
                     raise KeyError(f"no milestone {state.milestone_id!r}")
             self._connection.execute(
                 """
-                INSERT INTO run_states (run_id, state_json, workstream_id, milestone_id)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO run_states (run_id, state_json, milestone_id)
+                VALUES (?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
-                    workstream_id = excluded.workstream_id,
                     milestone_id = excluded.milestone_id
                 """,
                 (
                     state.run_id,
                     json.dumps(_state_to_dict(state)),
-                    state.workstream_id,
                     state.milestone_id,
                 ),
             )
 
     async def list_runs(
-        self, workstream_id: WorkstreamId | None = None
+        self, milestone_id: MilestoneId | None = None
     ) -> Sequence[RunState]:
         query = "SELECT run_id, state_json FROM run_states"
         parameters: tuple[object, ...] = ()
-        if workstream_id is not None:
-            query += " WHERE workstream_id = ?"
-            parameters = (workstream_id,)
+        if milestone_id is not None:
+            query += " WHERE milestone_id = ?"
+            parameters = (milestone_id,)
         query += " ORDER BY sequence DESC"
         with self._lock:
             rows = self._connection.execute(query, parameters).fetchall()
@@ -232,75 +220,9 @@ class SQLiteStateStore:
             ).fetchone()
             if has_direct_runs is not None:
                 raise ValueError(f"milestone {milestone_id!r} still has runs")
-            try:
-                cursor = self._connection.execute(
-                    "DELETE FROM milestones WHERE milestone_id = ?", (milestone_id,)
-                )
-            except sqlite3.IntegrityError as error:
-                raise ValueError(
-                    f"milestone {milestone_id!r} still has workstreams or runs"
-                ) from error
-        return cursor.rowcount > 0
-
-    async def save_workstream(self, workstream: Workstream) -> None:
-        with self._lock, self._connection:
-            exists = self._connection.execute(
-                "SELECT 1 FROM milestones WHERE milestone_id = ?",
-                (workstream.milestone_id,),
-            ).fetchone()
-            if exists is None:
-                raise KeyError(f"no milestone {workstream.milestone_id!r}")
-            self._connection.execute(
-                """
-                INSERT INTO workstreams (workstream_id, milestone_id, name, scope)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(workstream_id) DO UPDATE SET
-                    milestone_id = excluded.milestone_id,
-                    name = excluded.name,
-                    scope = excluded.scope
-                """,
-                (
-                    workstream.workstream_id,
-                    workstream.milestone_id,
-                    workstream.name,
-                    workstream.scope,
-                ),
+            cursor = self._connection.execute(
+                "DELETE FROM milestones WHERE milestone_id = ?", (milestone_id,)
             )
-
-    async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
-        with self._lock:
-            row = self._connection.execute(
-                """
-                SELECT workstream_id, milestone_id, name, scope
-                FROM workstreams WHERE workstream_id = ?
-                """,
-                (workstream_id,),
-            ).fetchone()
-        return _workstream_from_row(row) if row is not None else None
-
-    async def list_workstreams(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[Workstream]:
-        query = "SELECT workstream_id, milestone_id, name, scope FROM workstreams"
-        parameters: tuple[object, ...] = ()
-        if milestone_id is not None:
-            query += " WHERE milestone_id = ?"
-            parameters = (milestone_id,)
-        query += " ORDER BY sequence DESC"
-        with self._lock:
-            rows = self._connection.execute(query, parameters).fetchall()
-        return tuple(_workstream_from_row(row) for row in rows)
-
-    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
-        with self._lock, self._connection:
-            try:
-                cursor = self._connection.execute(
-                    "DELETE FROM workstreams WHERE workstream_id = ?", (workstream_id,)
-                )
-            except sqlite3.IntegrityError as error:
-                raise ValueError(
-                    f"workstream {workstream_id!r} still has runs"
-                ) from error
         return cursor.rowcount > 0
 
     async def create_instance(
@@ -715,15 +637,6 @@ def _milestone_from_row(row: sqlite3.Row) -> Milestone:
     )
 
 
-def _workstream_from_row(row: sqlite3.Row) -> Workstream:
-    return Workstream(
-        workstream_id=WorkstreamId(row["workstream_id"]),
-        milestone_id=MilestoneId(row["milestone_id"]),
-        name=row["name"],
-        scope=row["scope"],
-    )
-
-
 def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
     return AgentInstance(
         instance_id=AgentInstanceId(row["instance_id"]),
@@ -826,7 +739,6 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "run_id": state.run_id,
         "task_id": state.task_id,
         "workflow_id": state.workflow_id,
-        "workstream_id": state.workstream_id,
         "milestone_id": state.milestone_id,
         "phase": state.phase.value,
         "repository": state.repository,
@@ -850,11 +762,6 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         run_id=RunId(str(value["run_id"])),
         task_id=TaskId(str(value["task_id"])),
         workflow_id=WorkflowId(str(value["workflow_id"])),
-        workstream_id=(
-            WorkstreamId(str(value["workstream_id"]))
-            if value.get("workstream_id") is not None
-            else None
-        ),
         milestone_id=(
             MilestoneId(str(value["milestone_id"]))
             if value.get("milestone_id") is not None
