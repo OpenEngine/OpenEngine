@@ -21,6 +21,7 @@ from engine.domain.ids import (
 class RunPhase(Enum):
     """Coarse lifecycle position of a run."""
 
+    SCHEDULED = "scheduled"
     PENDING = "pending"
     RUNNING_AGENT = "running_agent"
     SUCCEEDED = "succeeded"

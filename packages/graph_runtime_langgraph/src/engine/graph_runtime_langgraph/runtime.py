@@ -180,12 +180,14 @@ class LangGraphRuntime:
         return definition.topology if definition is not None else None
 
     async def start(
-        self, graph_id: GraphId, values: Mapping[str, object]
+        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None
     ) -> RunSnapshot:
         definition = self._definitions.get(graph_id)
         if definition is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
-        run_id = RunId(f"run-{uuid4().hex[:12]}")
+        run_id = run_id or RunId(f"run-{uuid4().hex[:12]}")
+        if await self._store.run(run_id) is not None:
+            raise ValueError(f"run already exists: {run_id}")
         await self._store.remember_run(RunRecord(
             run_id, graph_id,
             runner_overrides=definition.initial_runner_overrides(values),

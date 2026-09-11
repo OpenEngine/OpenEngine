@@ -1158,7 +1158,7 @@ def create_app(
         forever, so it is failed saying which workflow went missing.
         """
         for state in await session.state_store.list_runs():
-            if state.is_terminal:
+            if state.is_terminal or state.phase is RunPhase.SCHEDULED:
                 continue
             try:
                 try:
@@ -1326,7 +1326,7 @@ def create_app(
             # Carry only the live frontier and approval owners, not the
             # snapshot's potentially large values.
             if (
-                run.phase not in {"succeeded", "failed"}
+                run.phase not in {"scheduled", "succeeded", "failed"}
                 and surface.runtime is not None
             ):
                 # A row of a workflow this deployment no longer has cannot
@@ -1492,6 +1492,30 @@ def create_app(
             ),
             policy=ScopingPolicy(rules=(message,)),
         )
+        # Scope proposals become durable work, but dispatch is an explicit action.
+        definition = _mentioned_workflow()
+        workflow_id = WorkflowId(
+            work_orders.workflow or (str(definition.graph_id) if definition else "")
+        )
+        for spec in plan.create:
+            if spec.milestone_id != milestone_id:
+                return _error("scoper proposed work for another milestone", 400)
+        for spec in plan.create:
+            prompt = spec.objective
+            if spec.evidence_requirements:
+                prompt += "\n\nEvidence requirements:\n" + "\n".join(spec.evidence_requirements)
+            if spec.dependencies:
+                prompt += "\n\nDepends on: " + ", ".join(spec.dependencies)
+            await session.state_store.save(RunState(
+                run_id=RunId(f"run-{uuid4().hex[:12]}"),
+                task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+                workflow_id=workflow_id,
+                milestone_id=milestone_id,
+                phase=RunPhase.SCHEDULED,
+                name=spec.name,
+                prompt=prompt,
+                repository=work_orders.repository,
+            ))
         return JSONResponse(_scoping_plan_json(plan))
 
     async def start_graph_run(
@@ -1504,6 +1528,7 @@ def create_app(
         workstream_id: WorkstreamId | None,
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
+        scheduled: RunState | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1533,6 +1558,7 @@ def create_app(
                 "repository": repository,
                 **({"inputs": inputs} if inputs else {}),
             },
+            run_id=scheduled.run_id if scheduled else None,
         )
         if approval_policy.auto_approve:
             topology = runtime.topology(GraphId(str(graph.graph_id)))
@@ -1541,7 +1567,8 @@ def create_app(
                     await runtime.set_auto_approve(snapshot.run_id, node.node_id, True)
         state = RunState(
             run_id=snapshot.run_id,
-            task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+            task_id=scheduled.task_id if scheduled else TaskId(f"task-{uuid4().hex[:12]}"),
+            name=scheduled.name if scheduled else "",
             workflow_id=WorkflowId(str(graph.graph_id)),
             workstream_id=workstream_id,
             milestone_id=milestone_id,
@@ -1577,6 +1604,36 @@ def create_app(
             )
             await session.state_store.save(state)
         return state
+
+    scheduled_start_lock = asyncio.Lock()
+
+    async def start_scheduled_run(request: Request) -> JSONResponse:
+        async with scheduled_start_lock:
+            state = await session.state_store.load(RunId(request.path_params["run_id"]))
+            if state is None:
+                return _error("run not found", 404)
+            if state.phase is not RunPhase.SCHEDULED:
+                return _error("workorder is already started", 409)
+            workflow_id = state.workflow_id or WorkflowId(work_orders.workflow)
+            graph = offered_graphs().get(str(workflow_id)) if workflow_id else _mentioned_workflow()
+            if graph is None:
+                return _error("configure work_orders.workflow before starting this workorder", 400)
+            repository = state.repository or work_orders.repository
+            if not repository:
+                return _error("configure work_orders.repository before starting this workorder", 400)
+            assert surface.runtime is not None
+            try:
+                inputs = resolve_inputs(getattr(graph, "inputs", ()), {})
+            except ValueError as error:
+                return _error(str(error), 400)
+            state = await start_graph_run(
+                surface.runtime, graph, inputs=inputs, prompt=state.prompt,
+                repository=repository, workstream_id=state.workstream_id,
+                milestone_id=state.milestone_id, scheduled=state,
+            )
+            run = await run_reader.get(state.run_id)
+            assert run is not None
+            return JSONResponse(_run_json(run))
 
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
@@ -1662,7 +1719,8 @@ def create_app(
         state = await session.state_store.load(run_id)
         if state is None:
             return _error("run not found", 404)
-        await cancel_graph_run(run_id)
+        if state.phase is not RunPhase.SCHEDULED:
+            await cancel_graph_run(run_id)
         await session.state_store.delete_run(run_id)
         return Response(status_code=204)
 
@@ -2704,6 +2762,7 @@ def create_app(
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
+        Route("/api/runs/{run_id}/start", start_scheduled_run, methods=["POST"]),
         Route("/api/runs/{run_id}", delete_run, methods=["DELETE"]),
         Route("/api/runs/{run_id}/graph-events", graph_run_events),
         # The graph half of the runs above, served by the engine that runs
@@ -2861,8 +2920,10 @@ def _milestone_json(
 
 
 def _workorder_for_run(run: RunState, milestone_id: MilestoneId) -> WorkOrder:
-    """Present work already started under a milestone to the scoper."""
-    if run.phase is RunPhase.SUCCEEDED:
+    """Present scheduled and active milestone work to the scoper."""
+    if run.phase is RunPhase.SCHEDULED:
+        status = WorkOrderStatus.SCHEDULED
+    elif run.phase is RunPhase.SUCCEEDED:
         status = WorkOrderStatus.COMPLETE
     elif run.phase is RunPhase.FAILED:
         status = WorkOrderStatus.CANCELLED

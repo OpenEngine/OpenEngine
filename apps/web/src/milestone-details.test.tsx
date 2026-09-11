@@ -105,6 +105,23 @@ function open(
 }
 
 describe("MilestoneDetailsPage", () => {
+  it("starts scheduled work and reports failures without removing the Start action", async () => {
+    const scheduled = run("scheduled", "Planned work", null, "scheduled", foundation.milestoneId);
+    const fetcher = vi.fn(plan([foundation]));
+    vi.stubGlobal("fetch", fetcher);
+    open(foundation.milestoneId, [scheduled]);
+    const button = await screen.findByRole("button", { name: "Start Planned work" });
+    expect(screen.queryByRole("link", { name: /Planned work/ })).not.toBeInTheDocument();
+    fetcher.mockImplementationOnce(unavailable());
+    fireEvent.click(button);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not start workorder");
+    fetcher.mockImplementationOnce(async () => new Response(JSON.stringify({ ...scheduled, phase: "running_agent" })));
+    fireEvent.click(screen.getByRole("button", { name: "Start Planned work" }));
+    expect(await screen.findByRole("link", { name: /Planned work/ })).toHaveAttribute("href", "/runs/scheduled");
+    expect(fetcher).toHaveBeenCalledWith("/api/runs/scheduled/start", expect.objectContaining({ method: "POST" }));
+    expect(screen.queryByRole("button", { name: "Start Planned work" })).not.toBeInTheDocument();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();

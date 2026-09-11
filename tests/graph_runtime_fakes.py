@@ -430,12 +430,15 @@ class ScriptedGraphRuntime:
         return graph.topology() if graph is not None else None
 
     async def start(
-        self, graph_id: GraphId, values: Mapping[str, object]
+        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None
     ) -> RunSnapshot:
         graph = self._graphs.get(graph_id)
         if graph is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
-        run = _Run(RunId(f"run-{next(self.ids)}"), graph)
+        run_id = run_id or RunId(f"run-{next(self.ids)}")
+        if run_id in self._runs:
+            raise ValueError(f"run already exists: {run_id}")
+        run = _Run(run_id, graph)
         run.values.update(values)
         self._runs[run.run_id] = run
         await self.emit(run, EventKind.RUN_STARTED, {"values": dict(run.values)})

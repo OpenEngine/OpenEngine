@@ -732,7 +732,10 @@ select:disabled { cursor: default; }
   padding-top: 14px;
   border-top: 1px solid var(--rule);
 }
+.workstream-tasks li { display: flex; gap: 12px; align-items: center; }
 .workstream-tasks a {
+  flex: 1;
+  min-width: 0;
   display: flex;
   gap: 12px;
   align-items: baseline;

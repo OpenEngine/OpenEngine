@@ -8,6 +8,7 @@
 import { useMemo, useState } from "react";
 
 import {
+  startScheduledRun,
   milestoneNewTaskUrl,
   milestoneScopeUrl,
   projectMilestonesUrl,
@@ -54,16 +55,20 @@ function TaskList({
   tasks,
   label,
   workstreamNames,
+  onStart,
+  starting,
 }: {
   tasks: ApiWorkflowRunListing[];
   label: string;
   workstreamNames: Map<string, string>;
+  onStart: (task: ApiWorkflowRunListing) => void;
+  starting: string | null;
 }) {
   return (
     <ul className="workstream-tasks" aria-label={label}>
       {tasks.map((task) => (
         <li key={task.runId}>
-          <a href={`/runs/${encodeURIComponent(task.runId)}`}>
+          <a href={task.phase === "scheduled" ? undefined : `/runs/${encodeURIComponent(task.runId)}`}>
             <span className="workstream-task-name">{task.name}</span>
             <span className="workstream-task-meta">
               <span className="workstream-task-context">
@@ -76,6 +81,12 @@ function TaskList({
               </span>
             </span>
           </a>
+          {task.phase === "scheduled" && (
+            <button className="btn" type="button" disabled={starting !== null}
+              aria-label={`Start ${task.name}`} onClick={() => onStart(task)}>
+              {starting === task.runId ? "Starting…" : "Start"}
+            </button>
+          )}
         </li>
       ))}
     </ul>
@@ -154,6 +165,26 @@ export function MilestoneDetailsPage({
   runsError: string;
   runsLoaded: boolean;
 }) {
+  const [starting, setStarting] = useState<string | null>(null);
+  const [startError, setStartError] = useState("");
+  const [started, setStarted] = useState<Record<string, ApiWorkflowRunListing>>({});
+  // Keep the successful response visible until the shell's next poll catches up.
+  runs = useMemo(() => runs.map((run) =>
+    run.phase === "scheduled" ? started[run.runId] ?? run : run,
+  ), [runs, started]);
+  async function start(task: ApiWorkflowRunListing) {
+    if (starting !== null) return;
+    setStarting(task.runId);
+    setStartError("");
+    try {
+      const run = await startScheduledRun(task.runId);
+      setStarted((current) => ({ ...current, [run.runId]: run }));
+    } catch (failure) {
+      setStartError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setStarting(null);
+    }
+  }
   const [selectedWorkstreamId, setSelectedWorkstreamId] = useState<string | null>(null);
   const { project, milestones, loaded, error, stale } = useProjectMilestones(projectId);
   const milestone = milestones.find((item) => item.milestoneId === milestoneId);
@@ -314,6 +345,7 @@ export function MilestoneDetailsPage({
                 )}
               </span>
             </div>
+            {startError && <p className="notice" role="alert">Could not start workorder: {startError}</p>}
             {!runsLoaded ? (
               <p className="micro">
                 {runsError ? `Could not load tasks: ${runsError}` : "Loading tasks…"}
@@ -327,6 +359,8 @@ export function MilestoneDetailsPage({
                     : `Tasks in ${milestone.name}`
                 }
                 workstreamNames={workstreamNames}
+                onStart={(task) => void start(task)}
+                starting={starting}
               />
             ) : selectedWorkstream ? (
               <p className="micro">No tasks have been started in this workstream yet.</p>

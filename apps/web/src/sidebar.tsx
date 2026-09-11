@@ -353,6 +353,7 @@ export function Sidebar({
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Keep exclusions so newly observed stages are selected without resetting user choices.
   const [excludedFilters, setExcludedFilters] = useState<string[]>([]);
+  runs = runs.filter((run) => run.phase !== "scheduled");
   const runCategories = runs.map((run) => workOrderCategories(run, graphNodes));
   const filterOptions = [...new Set(runCategories.flat())].sort((a, b) => a.localeCompare(b));
   const filteredRuns = runs.filter((_, index) =>
