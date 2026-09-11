@@ -8,6 +8,12 @@ the pull-request concierge grants different authority through a broker of its
 own. Only the transport beneath the two is shared, from
 `engine.single_tool_mcp`, because carrying a call decides nothing about who may
 make it.
+
+Starting work is one of two grants a Slack conversation holds; steering work it
+already started is the other, and lives in `slack_steering` with a broker and a
+credential of its own. What is shared here is the permission callback, because
+a session has only one: `_GRANTS` is the whole list of what this conversation
+may do, and a tool missing from it cannot be called however it was validated.
 """
 
 from __future__ import annotations
@@ -16,6 +22,8 @@ from collections.abc import Awaitable, Callable
 
 from engine.single_tool_mcp import SingleToolBroker, serve_from_command_line
 from langgraph_acp.permissions import ACPPermissionOutcome, ACPPermissionRequest
+
+from .slack_steering import STEER_SERVER_NAME, STEER_TOOL_NAME
 
 #: Given (repository, prompt) create a work order and return (url, run_id).
 CreateWorkorder = Callable[[str, str], Awaitable[tuple[str, str]]]
@@ -101,10 +109,23 @@ def main() -> None:
     )
 
 
-async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
-    """Approve only the one named MCP grant; decline all other operations."""
+#: Every grant a Slack conversation holds, in both spellings a provider CLI
+#: names them by. One set rather than one check per broker because a session
+#: has a single permission callback: what it approves is the conversation's
+#: whole authority, and a grant missing from here is one the agent cannot use
+#: however carefully its broker validates the call.
+_GRANTS = frozenset({
+    f"mcp__{_SERVER_NAME}__{CONCIERGE_TOOL_NAME}",
+    f"{_SERVER_NAME}/{CONCIERGE_TOOL_NAME}",
+    f"mcp__{STEER_SERVER_NAME}__{STEER_TOOL_NAME}",
+    f"{STEER_SERVER_NAME}/{STEER_TOOL_NAME}",
+})
 
-    names = {"mcp__concierge__create_workorder", "concierge/create_workorder"}
+
+async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
+    """Approve only the named MCP grants; decline all other operations."""
+
+    names = _GRANTS
     if any(isinstance(value, str) and value in names
            for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
         for option in request.options:

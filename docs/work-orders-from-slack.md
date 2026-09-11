@@ -3,7 +3,10 @@
 Mention `@OpenEngineBot` to open a conversation. A greeting or test message gets
 “Hi, how can I help?”. Ask for a new work order in that thread and the concierge
 uses its `create_workorder` tool. The host starts the configured graph workflow,
-posts its UI link, and reports progress in the same thread.
+posts its UI link, and reports progress in the same thread. Refine or correct a
+work order that thread already started and the concierge uses `steer_workorder`
+instead, which routes the follow-up into the run that is already going rather
+than starting a second one.
 
 ## Setup and diagnosis
 
@@ -48,11 +51,18 @@ concierge can explain what is needed.
   after enqueueing. `accept()` routes mentions and replies in known threads,
   ignores bots and message edits, and deduplicates by channel/message timestamp
   across both Slack event types. `drain()` and `close()` support tests/shutdown.
-- `slack_egress.py`: the only granted MCP tool is
-  `create_workorder(prompt)`. Its host callback returns `(url, run_id)`.
-  The host binds the Slack origin; the model cannot supply a destination channel
-  or thread. The stdio-to-TCP bridge keeps its credential in a mode-0600 temporary
-  file and advertises a fixed supported MCP protocol version.
+- `slack_egress.py`: grants `create_workorder(prompt)`. Its host callback returns
+  `(url, run_id)`. The host binds the Slack origin; the model cannot supply a
+  destination channel or thread. The stdio-to-TCP bridge keeps its credential in a
+  mode-0600 temporary file and advertises a fixed supported MCP protocol version.
+- `slack_steering.py`: grants `steer_workorder(run_id, prompt)`, on a second MCP
+  server with its own credential, because the shared transport carries one tool
+  per broker. The model names the run, since only the conversation knows which
+  work order a follow-up is about -- so the host callback checks that run id
+  against the origin the run was stored with, and refuses one this thread did
+  not start. Steering reaches the execution in flight, or the graph's always-open
+  re-entry node; a run that is neither is refused, and the refusal reaches the
+  model as a tool error rather than a silent new work order.
 
 The web composition supplies the work-order callback and thread reply callback.
 It reuses `start_step_run` and `RunNotifier` for execution, links, and progress.

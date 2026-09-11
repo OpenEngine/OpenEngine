@@ -2477,9 +2477,44 @@ def create_app(
         ))
         return link.url if link else "", str(state.run_id)
 
+    async def concierge_steer_workorder(
+        origin: RunOrigin, run_id: str, prompt: str,
+    ) -> tuple[str, str]:
+        """Route a follow-up into a run this conversation already started.
+
+        The run id reaches here out of an untrusted Slack message, so it is a
+        request and not a permission: what makes a run steerable is that this
+        conversation is the one that asked for it. Checked against the origin
+        the run was stored with rather than against anything the agent said,
+        because a thread that could name any run could redirect somebody
+        else's work by guessing an id.
+        """
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("the graph runtime is unavailable")
+        state = await session.state_store.load(RunId(run_id))
+        if state is None or state.origin is None or (
+            (state.origin.channel, state.origin.thread_id)
+            != (origin.channel, origin.thread_id)
+        ):
+            raise RuntimeError("this conversation has no work order with that id")
+        try:
+            snapshot = await runtime.snapshot(state.run_id)
+        except UnknownGraphError:
+            # A saved work order can outlive the graph it was started from.
+            snapshot = None
+        if snapshot is None:
+            raise RuntimeError("that work order is no longer running")
+        await runtime.steer(
+            state.run_id, prompt, node_id=_reentry_node(runtime, snapshot)
+        )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
     slack_concierge = SlackConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
         create_workorder=concierge_create_workorder,
+        steer_workorder=concierge_steer_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
         turn_finished=concierge_turn_finished,
     )

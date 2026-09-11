@@ -1,9 +1,10 @@
-"""The transport both concierges expose their one tool through.
+"""The transport every concierge grant is exposed through.
 
 Tested once, here, rather than once per surface. That is the whole point of it
 being one implementation: a protocol answer that is wrong is wrong for every
 surface at once, and a copy of these tests per surface is how two copies of the
-code stayed in step until they didn't.
+code stayed in step until they didn't. One broker holds one grant, so a surface
+with two tools appears here twice.
 
 Each surface's own rules -- what it will accept and what it answers -- are not
 here. They live with the broker that decides them.
@@ -15,15 +16,30 @@ import pytest
 
 from engine.github_concierge import github_egress
 from engine.single_tool_mcp import PROTOCOL_VERSION, mcp_response, rpc_error, rpc_result
-from engine.slack_concierge import slack_egress
+from engine.slack_concierge import slack_egress, slack_steering
 
 #: Every surface served over this transport, with the one tool it grants. A
 #: surface that stops appearing here has stopped sharing the transport, which
 #: should be a decision rather than a silent omission.
 SURFACES = [
     pytest.param(slack_egress, "create_workorder", id="slack"),
+    pytest.param(slack_steering, "steer_workorder", id="slack-steering"),
     pytest.param(github_egress, "continue_workorder", id="github"),
 ]
+
+
+def _broker(surface):
+    """One unstarted broker of the surface's own kind.
+
+    Written out per surface rather than looked up, because the callback each
+    one binds is part of what it is: a factory that could build any of them
+    from a name would be a broker that serves several grants.
+    """
+    if surface is slack_egress:
+        return slack_egress.ConciergeBroker(create_workorder=_unused)
+    if surface is slack_steering:
+        return slack_steering.SteeringBroker(steer_workorder=_unused)
+    return github_egress.FeedbackBroker(steer_workorder=_unused)
 
 
 def _answer(request, surface):
@@ -178,7 +194,7 @@ def test_the_credential_is_never_passed_on_the_command_line():
     assert config["env"] == []
 
 
-async def _unused(_prompt):
+async def _unused(*_arguments):
     raise AssertionError("the transport must not call the tool")
 
 
@@ -191,13 +207,7 @@ def test_a_broker_that_was_never_started_has_nothing_to_describe():
 @pytest.mark.parametrize("surface, tool_name", SURFACES)
 def test_two_brokers_do_not_share_a_credential(surface, tool_name):
     """One run's secret opens one run's tool, and nobody else's."""
-    brokers = {
-        slack_egress.ConciergeBroker(create_workorder=_unused)._token
-        if surface is slack_egress
-        else github_egress.FeedbackBroker(steer_workorder=_unused)._token
-        for _ in range(2)
-    }
-    assert len(brokers) == 2
+    assert len({_broker(surface)._token for _ in range(2)}) == 2
 
 
 def test_rpc_envelopes_are_well_formed_json_rpc():

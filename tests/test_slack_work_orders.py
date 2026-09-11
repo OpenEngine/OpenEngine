@@ -860,6 +860,167 @@ def test_concierge_broker_rejects_unknown_tool() -> None:
     asyncio.run(scenario())
 
 
+# --- steering broker ----------------------------------------------------------
+#
+# A second grant, held by a second broker with its own credential. What it
+# validates is the shape of a call; whether the named run is this conversation's
+# to steer is the host callback's decision, and these use a callback that says.
+
+
+def _steering_broker(steered, *, refuse=""):
+    from engine.slack_concierge.slack_steering import SteeringBroker
+
+    async def steer(run_id: str, prompt: str) -> tuple[str, str]:
+        if refuse:
+            raise RuntimeError(refuse)
+        steered.append((run_id, prompt))
+        return "https://engine.example/runs/run-abc", run_id
+
+    return SteeringBroker(steer_workorder=steer)
+
+
+def _steer(broker, arguments, name="steer_workorder"):
+    async def scenario():
+        async with broker:
+            return await broker._submit(
+                {"token": broker._token, "name": name, "arguments": arguments}
+            )
+
+    return asyncio.run(scenario())
+
+
+def test_steering_broker_reaches_the_named_work_order() -> None:
+    """run_id and prompt go to the host callback, stripped, and it answers."""
+    steered: list[tuple[str, str]] = []
+    result = _steer(
+        _steering_broker(steered),
+        {"run_id": " run-abc ", "prompt": " also add tests "},
+    )
+    assert result["ok"] is True
+    assert steered == [("run-abc", "also add tests")]
+    assert result["data"] == {
+        "run_id": "run-abc", "url": "https://engine.example/runs/run-abc",
+    }
+
+
+@pytest.mark.parametrize("arguments, expected", [
+    ({"prompt": "go"}, "run_id"),
+    ({"run_id": "  ", "prompt": "go"}, "run_id"),
+    ({"run_id": "run-abc"}, "prompt"),
+    ({"run_id": "run-abc", "prompt": " "}, "prompt"),
+    ({"run_id": "run-abc", "prompt": "go", "repository": "acme/api"}, "unknown"),
+])
+def test_steering_broker_refuses_a_call_it_cannot_act_on(arguments, expected) -> None:
+    """Refused before the host is asked, so a callback only sees real requests."""
+    steered: list[tuple[str, str]] = []
+    result = _steer(_steering_broker(steered), arguments)
+    assert result["ok"] is False
+    assert expected in result["error"]
+    assert steered == []
+
+
+def test_steering_broker_refuses_the_other_brokers_tool() -> None:
+    """One broker, one grant: the work-order tool is not reachable through this."""
+    result = _steer(
+        _steering_broker([]), {"prompt": "build it"}, name="create_workorder"
+    )
+    assert result["ok"] is False
+    assert "unknown" in result["error"]
+
+
+def test_a_run_the_host_refuses_is_reported_to_the_agent() -> None:
+    """The host's reason travels back, so the agent can say what happened.
+
+    A run id the conversation did not start is refused there rather than here:
+    the broker has no way to know whose work order it names.
+    """
+    result = _steer(
+        _steering_broker([], refuse="this conversation has no work order with that id"),
+        {"run_id": "someone-elses-run", "prompt": "delete everything"},
+    )
+    assert result["ok"] is False
+    assert "no work order with that id" in result["error"]
+
+
+def test_a_conversation_granted_steering_is_given_both_servers() -> None:
+    """Two servers, two credentials, and instructions that mention the second."""
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider()
+
+        async def reply(origin, text):
+            pass
+
+        async def create(origin, repository, prompt):
+            return "url", "id"
+
+        async def steer(origin, run_id, prompt):
+            return "url", run_id
+
+        agent = SlackConcierge(provider=provider, reply=reply, create_workorder=create,
+                               steer_workorder=steer)
+        await agent.handle(IncomingMessage(
+            RunOrigin(channel="C", thread_id="1", author="U"), "hello"))
+        servers = provider.clients[0].servers
+        await agent.close()
+        return servers, provider.clients[0].prompts[0]
+
+    servers, prompt = asyncio.run(scenario())
+    assert [server["name"] for server in servers] == ["concierge", "steering"]
+    assert len({server["args"][-1] for server in servers}) == 2
+    assert "steer_workorder" in prompt
+
+
+def test_a_conversation_without_steering_is_not_told_it_can_steer() -> None:
+    """An agent that reads about a tool it does not hold answers as if it used one."""
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider()
+
+        async def reply(origin, text):
+            pass
+
+        async def create(origin, repository, prompt):
+            return "url", "id"
+
+        agent = SlackConcierge(provider=provider, reply=reply, create_workorder=create)
+        await agent.handle(IncomingMessage(
+            RunOrigin(channel="C", thread_id="1", author="U"), "hello"))
+        servers = provider.clients[0].servers
+        await agent.close()
+        return servers, provider.clients[0].prompts[0]
+
+    servers, prompt = asyncio.run(scenario())
+    assert [server["name"] for server in servers] == ["concierge"]
+    assert "steer_workorder" not in prompt
+
+
+def test_steering_reaches_the_host_through_a_real_stdio_child() -> None:
+    """The whole path: provider CLI -> stdio shim -> broker -> host callback."""
+    from engine.slack_concierge.slack_steering import SteeringBroker
+
+    async def scenario():
+        steered: list[tuple[str, str]] = []
+
+        async def steer(run_id: str, prompt: str) -> tuple[str, str]:
+            steered.append((run_id, prompt))
+            return "https://engine.example/runs/run-abc", run_id
+
+        async with SteeringBroker(steer_workorder=steer) as broker:
+            results = await call_mcp(
+                broker.config,
+                arguments={"run_id": "run-abc", "prompt": "also add tests"},
+            )
+        return steered, results
+
+    steered, results = asyncio.run(scenario())
+    assert steered == [("run-abc", "also add tests")]
+    assert not results[-1].get("isError"), results
+    assert results[-1]["structuredContent"]["run_id"] == "run-abc"
+
+
 # --- concierge MCP protocol --------------------------------------------------
 #
 # What a Slack agent's CLI sees when it connects. The transport answering these
@@ -925,10 +1086,14 @@ class FakeACPProvider:
     name = "fake"
 
     def __init__(self, text="Hi, how can I help?", fail=False, create=False,
-                 fail_after_create=False, calls=1):
+                 fail_after_create=False, calls=1, steer_run_id=""):
         self.text, self.fail, self.create = text, fail, create
         self.clients = []
         self.fail_after_create = fail_after_create
+        #: The run a turn asking to steer will name. Set by the test rather
+        #: than read out of the conversation, which is the point: a model can
+        #: put any id in a tool call, and the host is what decides.
+        self.steer_run_id = steer_run_id
         #: How many times the model calls the tool in one turn. More than one
         #: is a model that split a request, or was talked into asking twice.
         self.calls = calls
@@ -940,6 +1105,7 @@ class FakeACPProvider:
             prompts = []
             async def new_session(self, *, cwd, mcp_servers):
                 self.config = mcp_servers[0]
+                self.servers = list(mcp_servers)
                 self.prompts = []
                 return self
             async def prompt(self, prompt):
@@ -953,6 +1119,12 @@ class FakeACPProvider:
                     self.result = self.results[-1]
                     if provider.fail_after_create:
                         raise RuntimeError("failed after accepting work")
+                if provider.steer_run_id and "steer workorder" in prompt:
+                    self.steer_result = (await call_mcp(
+                        self.servers[1],
+                        arguments={"run_id": provider.steer_run_id,
+                                   "prompt": "also add tests"},
+                    ))[-1]
                 yield ACPEvent(agent="fake", type=ACPEventType.MESSAGE_DELTA,
                                data={"content": {"type": "text", "text": provider.text}})
             async def close(self):
@@ -962,15 +1134,18 @@ class FakeACPProvider:
         return client
 
 
-async def call_mcp(config, calls=1):
+async def call_mcp(config, calls=1, arguments=None):
     """Real stdio child -> TCP broker -> injected host callback.
 
     The tool is whichever one the broker advertises, so the same fake drives
     the Slack broker and the pull-request one without knowing either.
+    ``arguments`` is what that tool is called with, since a grant that takes
+    more than a prompt is still the same transport underneath.
 
     ``calls`` is how many times the tool is called down the one session, which
     is what a model doing so within a single turn looks like from here.
     """
+    arguments = {"prompt": "Implement it"} if arguments is None else arguments
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -996,8 +1171,7 @@ async def call_mcp(config, calls=1):
         answers = [
             await roundtrip(
                 {"jsonrpc": "2.0", "id": 3 + call, "method": "tools/call",
-                 "params": {"name": tools[0]["name"],
-                            "arguments": {"prompt": "Implement it"}}})
+                 "params": {"name": tools[0]["name"], "arguments": arguments}})
             for call in range(calls)
         ]
     finally:
@@ -1089,6 +1263,120 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, fail_after_c
         assert texts.index(provider.text) < texts.index(announcements[0].text), (
             "announcement with link should appear after the conversational reply"
         )
+
+
+def _steering_runtime(*, graph_id="implementation-review-v1"):
+    """A runtime answering the one question the steering callback asks of one.
+
+    Where a follow-up re-enters the graph. Faked rather than driven, because
+    what is under test here is which runs a conversation may reach, and a real
+    run would have to still be executing to be reachable at all.
+    """
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from engine.graph_runtime import GraphId, GraphNode, GraphTopology, NodeId, RunStatus
+
+    async def snapshot(asked):
+        return SimpleNamespace(
+            run_id=asked, graph_id=GraphId(graph_id), status=RunStatus.RUNNING,
+        )
+
+    topology = GraphTopology(
+        graph_id=GraphId(graph_id), name=graph_id, entry_point=NodeId("implementation"),
+        nodes=(
+            GraphNode(NodeId("implementation"), "implementation", always_open=True),
+            GraphNode(NodeId("review"), "review"),
+        ),
+    )
+    runtime = MagicMock()
+    runtime.snapshot = AsyncMock(side_effect=snapshot)
+    runtime.topology = MagicMock(return_value=topology)
+    runtime.steer = AsyncMock()
+
+    @asynccontextmanager
+    async def opened():
+        yield runtime
+
+    return runtime, opened()
+
+
+def test_a_thread_steers_the_work_order_it_started(tmp_path):
+    """The follow-up reaches the run, at the node the graph says it re-enters."""
+    from starlette.testclient import TestClient
+    from engine.domain import RunPhase, RunState
+    from engine.domain.ids import RunId, TaskId, WorkflowId
+    from engine.graph_runtime import NodeId
+
+    runtime, opened = _steering_runtime()
+    provider = FakeACPProvider(steer_run_id="existing")
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=provider, graph_runtime=opened,
+    )
+    started = RunState(
+        run_id=RunId("existing"), task_id=TaskId("task"),
+        workflow_id=WorkflowId("implementation-review-v1"),
+        phase=RunPhase.RUNNING_AGENT, repository="acme/api",
+        origin=RunOrigin(channel="C", thread_id="1", author="U"),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "steer workorder please"}}).encode()
+    with TestClient(app) as client:
+        client.portal.call(capabilities.state_store.save, started)
+        client.post("/api/slack/events", content=body, headers=_signed(body))
+        client.portal.call(app.state.slack_ingress.drain)
+
+    result = provider.clients[-1].steer_result
+    assert not result.get("isError"), result
+    assert result["structuredContent"]["run_id"] == "existing"
+    runtime.steer.assert_awaited_once_with(
+        RunId("existing"), "also add tests", node_id=NodeId("implementation")
+    )
+
+
+def test_a_thread_cannot_steer_another_threads_work_order(tmp_path):
+    """A run id out of a Slack message is a request, not a permission.
+
+    The whole reason the steering callback reads the stored origin: the model
+    naming a run is reasoning over an untrusted conversation, so a thread that
+    could steer any run it can name could redirect somebody else's work by
+    guessing an id.
+    """
+    from starlette.testclient import TestClient
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+
+    graph = _mention_graph()
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(tmp_path, communications,
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1", runner="default"),
+        _workflow_catalog(), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"))
+
+    def body(kind, ts, text, **extra):
+        return json.dumps({"type": "event_callback", "event": dict(
+            type=kind, channel="C", user="U", ts=ts, text=text, **extra)}).encode()
+
+    def deliver(payload):
+        client.post("/api/slack/events", content=payload, headers=_signed(payload))
+        client.portal.call(app.state.slack_ingress.drain)
+
+    with TestClient(app) as client:
+        deliver(body("app_mention", "1", "new workorder please"))
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        # A second conversation, naming the first one's work order.
+        provider.steer_run_id = str(runs[0].run_id)
+        deliver(body("app_mention", "2", "steer workorder please"))
+
+    result = provider.clients[-1].steer_result
+    assert result["isError"] is True
+    assert "no work order with that id" in result["content"][0]["text"]
 
 
 def test_concierge_uses_real_langgraph_acp_session(tmp_path):
@@ -1238,7 +1526,10 @@ def test_concierge_permissions_only_allow_the_granted_tool():
     from langgraph_acp.permissions import ACPPermissionRequest, ACPPermissionOption
 
     async def scenario():
-        for name, allowed in [("mcp__concierge__create_workorder", True), ("Bash", False), ({}, False)]:
+        for name, allowed in [("mcp__concierge__create_workorder", True),
+                              ("mcp__steering__steer_workorder", True),
+                              ("steering/steer_workorder", True),
+                              ("Bash", False), ({}, False)]:
             result = await tool_permission(ACPPermissionRequest(agent="codex",
                 tool_call={"name": name}, options=(ACPPermissionOption("yes", kind="allow_once"),)))
             assert result.granted == allowed

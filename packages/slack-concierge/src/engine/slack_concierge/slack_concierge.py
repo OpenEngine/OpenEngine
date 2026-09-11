@@ -16,8 +16,13 @@ from langgraph_acp.session import ACPSession
 from langgraph_acp.events import ACPEventType
 
 from .slack_egress import ConciergeBroker
+from .slack_steering import SteeringBroker
 
 CreateWorkorder = Callable[[RunOrigin, str, str], Awaitable[tuple[str, str]]]
+#: Given the conversation that asked, a run id and a follow-up, steer that work
+#: order and return (url, run_id). The origin travels with the call because
+#: which runs a thread may steer is the host's decision, not the agent's.
+SteerWorkorder = Callable[[RunOrigin, str, str], Awaitable[tuple[str, str]]]
 Reply = Callable[[RunOrigin, str], Awaitable[None]]
 
 INSTRUCTIONS = """You are OpenEngineBot, a Slack concierge. For a greeting or test
@@ -25,7 +30,19 @@ message respond 'Hi, how can I help?'. Only when the user requests work, use
 create_workorder with their task. The repository is chosen automatically.
 Do not claim work started unless the tool succeeds. Work-order progress and its
 UI link are posted in this thread by the host. Keep replies brief. You have no
-implementation role: use only the granted create_workorder tool.
+implementation role: use only the tools you have been granted.
+"""
+
+#: Added when the host grants steering. Separate from INSTRUCTIONS because a
+#: conversation that cannot steer must not be told it can: an agent that reads
+#: about a tool it does not hold answers as though it used one.
+STEERING_INSTRUCTIONS = """
+When the user refines or corrects a work order this conversation already
+started, use steer_workorder with that work order's id and their request
+instead of create_workorder: it reaches the run that is already going rather
+than starting the task over. Only work orders started in this conversation can
+be steered, and only while they are running; if steering fails, say so rather
+than starting a second work order for the same task unless the user asks.
 """
 
 
@@ -65,11 +82,13 @@ class SlackConcierge:
     def __init__(self, *, provider: ACPAgentProvider, create_workorder: CreateWorkorder,
                  reply: Reply, default_repository: str = "", max_threads: int = 32,
                  timeout_seconds: float = 180,
+                 steer_workorder: SteerWorkorder | None = None,
                  turn_finished: Callable[[RunOrigin], Awaitable[None]] | None = None) -> None:
         if max_threads < 1:
             raise ValueError("max_threads must be positive")
         self.provider = provider
         self.create_workorder = create_workorder
+        self.steer_workorder = steer_workorder
         self.reply = reply
         self.default_repository = default_repository
         self.max_threads = max_threads
@@ -123,16 +142,33 @@ class SlackConcierge:
                     return await self.create_workorder(message.origin, repository, prompt)
                 broker = await opened.enter_async_context(ConciergeBroker(
                     create_workorder=create, default_repository=self.default_repository))
+                servers = [broker.config]
+                if self.steer_workorder is not None:
+                    steer_workorder = self.steer_workorder
+
+                    async def steer(run_id: str, prompt: str) -> tuple[str, str]:
+                        # The session belongs to this conversation for its whole
+                        # life, so the origin a call carries is the conversation
+                        # whose history the model was reasoning over -- not
+                        # whatever the run id it produced happens to point at.
+                        return await steer_workorder(message.origin, run_id, prompt)
+
+                    steering = await opened.enter_async_context(
+                        SteeringBroker(steer_workorder=steer))
+                    servers.append(steering.config)
                 client = await self.provider.connect()
                 opened.push_async_callback(client.close)
-                session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])
+                session = await client.new_session(cwd=cwd, mcp_servers=servers)
                 self._threads[key] = (opened, session)
             except BaseException:
                 await opened.aclose()
                 raise
         self._threads.move_to_end(key)
         session = self._threads[key][1]
-        prompt = (INSTRUCTIONS + "\nUser: " if fresh else "") + message.text
+        preamble = INSTRUCTIONS + (
+            STEERING_INSTRUCTIONS if self.steer_workorder is not None else ""
+        )
+        prompt = (preamble + "\nUser: " if fresh else "") + message.text
         parts = []
         async for event in session.prompt(prompt):
             if event.type == ACPEventType.MESSAGE_DELTA:
