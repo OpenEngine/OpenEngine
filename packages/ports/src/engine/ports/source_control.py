@@ -123,6 +123,9 @@ class PipelineStatus:
     ref: str
     checks: tuple[StatusCheck, ...]
     pipelines: tuple[Pipeline, ...]
+    # None means requirements are unknown; () confirms no configured gates.
+    # Missing required checks are represented as pending by the provider.
+    required_checks: tuple[StatusCheck, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

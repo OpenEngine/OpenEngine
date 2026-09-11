@@ -99,6 +99,7 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
     "Workspace",
     "Naming",
     "Implementation",
+    "CI check",
     "Review",
     "Reranker",
     "Human review",

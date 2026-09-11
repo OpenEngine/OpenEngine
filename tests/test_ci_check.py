@@ -140,3 +140,40 @@ def test_pipeline_status_without_conclusion(execution):
     result = asyncio.run(CICheck()({**STATE, "pr_url": "https://gitlab.com/team/repo/-/merge_requests/42"}))["ci_check"]
     assert result["passed"] is False
     assert "https://ci/pipeline" in result["summary"]
+
+
+def test_required_gate_waits_even_when_visible_checks_pass(execution):
+    from dataclasses import replace
+
+    pending = StatusCheck("security", "pending", None, "")
+    passed = StatusCheck("security", "completed", "success", "https://ci/security")
+    execution.runtime.source_control.list_pipeline_status.side_effect = [
+        replace(status(), required_checks=(pending,)),
+        replace(status(), required_checks=(passed,)),
+    ]
+    assert asyncio.run(CICheck(poll_interval=0)(STATE))["ci_check"]["passed"] is True
+    assert execution.runtime.source_control.list_pipeline_status.await_count == 2
+
+
+def test_confirmed_no_required_gates_passes_without_ci(execution):
+    execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus(
+        "head", (), (), required_checks=(),
+    )
+    assert asyncio.run(CICheck()(STATE))["ci_check"]["passed"] is True
+
+
+@pytest.mark.parametrize("state,passed", [("success", True), ("failure", False), ("error", False)])
+def test_required_legacy_status_controls_verdict(execution, state, passed):
+    execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus(
+        "head", (), (), required_checks=(StatusCheck("legacy", state, None, "https://ci/legacy"),),
+    )
+    assert asyncio.run(CICheck()(STATE))["ci_check"]["passed"] is passed
+
+
+def test_missing_required_check_times_out(execution):
+    execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus(
+        "head", status().checks, (),
+        required_checks=(StatusCheck("security", "pending", None, ""),),
+    )
+    with pytest.raises(TimeoutError):
+        asyncio.run(CICheck(poll_interval=0, timeout=0.01)(STATE))

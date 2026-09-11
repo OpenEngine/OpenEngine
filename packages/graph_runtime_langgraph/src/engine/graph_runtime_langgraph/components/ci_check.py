@@ -25,8 +25,9 @@ _PASSING = {"success", "skipped", "neutral"}
 class CICheck:
     """Poll the PR's current revision until all reported CI has settled.
 
-    Reads ``pr_url`` and ``workspaceId`` from upstream nodes. Empty results
-    are retried because CI may not have registered yet. Provider errors and a
+    Reads ``pr_url`` and ``workspaceId`` from upstream nodes. Required gates
+    must all settle; a confirmed absence of requirements passes immediately.
+    Providers without requirement discovery retain polling of reported CI. Provider errors and a
     timeout fail the node, rather than claiming CI passed or asking an agent
     to fix an infrastructure error. Cancellation propagates through polling.
     """
@@ -66,9 +67,15 @@ class CICheck:
                 status = await source_control.list_pipeline_status(
                     WorkspaceId(workspace), change_request_number=number,
                 )
-                jobs = (*status.checks, *status.pipelines)
+                known_requirements = status.required_checks is not None
+                jobs = (
+                    status.required_checks if known_requirements
+                    else (*status.checks, *status.pipelines)
+                )
                 # GitHub supplies a conclusion; GitLab uses terminal statuses.
-                if jobs and all(job.status.lower() in _TERMINAL for job in jobs):
+                if (known_requirements or jobs) and all(
+                    job.status.lower() in _TERMINAL for job in jobs
+                ):
                     failed = [
                         job for job in jobs
                         if (job.conclusion or job.status).lower()
