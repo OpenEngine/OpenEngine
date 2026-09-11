@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from engine.github_concierge import FeedbackRequest, GithubConcierge
 from engine.github_concierge.github_egress import tool_permission as github_tool_permission
-from engine.slack_concierge import IncomingMessage, SlackConcierge, SlackIngress
+from engine.slack_concierge import SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
 from langgraph_acp.agent import ACPAgentProvider
 from langgraph_acp.providers import CodexACPProvider
@@ -123,6 +123,8 @@ from engine.graph_runtime import (
     GraphRuntime,
     GraphRuntimeError,
     GraphWorkflow,
+    NodeId,
+    RunSnapshot,
     RunStatus,
     RuntimeEvent,
     UnknownGraphError,
@@ -944,6 +946,24 @@ class MilestoneScoping(Protocol):
         milestone: MilestoneScope,
         policy: ScopingPolicy,
     ) -> ScopingPlan: ...
+
+
+def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None:
+    """Where feedback re-enters this run, or ``None`` to steer whatever runs.
+
+    Untargeted steering reaches the execution in flight, and there is none once
+    a run is parked at human review -- which is exactly when review feedback
+    arrives. An always-open node is the graph's own statement of where it may
+    be sent back to, so naming it is what makes the ordinary post-pull-request
+    case work instead of raising.
+
+    ``None`` when the graph names no such node, or names more than one: a graph
+    that has not said where to re-enter has not asked to be reset, and guessing
+    between two candidates would reset it somewhere arbitrary.
+    """
+    topology = runtime.topology(snapshot.graph_id)
+    open_nodes = [node for node in topology.nodes if node.always_open] if topology else []
+    return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
 def create_app(
@@ -2471,43 +2491,47 @@ def create_app(
         )
 
     async def github_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
-        number = origin.thread_id.partition("/review/")[0]
-        pr_url = f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}"
-        # The session this call came from belongs to one author for its whole
-        # life, so the permission asked about here is the permission of whoever
-        # the model was answering -- not of whoever happened to comment first.
-        if not await session.capabilities.source_control.can_write_repository(
-            pr_url, origin.author
-        ):
-            raise RuntimeError("repository write permission is required to send feedback")
+        repository = origin.channel.removeprefix("github:")
+        number = int(origin.thread_id.partition("/review/")[0])
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not identify an existing work order: graph runtime unavailable")
-        matches = []
-        for state in await session.state_store.list_runs():
-            try:
-                snapshot = await runtime.snapshot(state.run_id)
-            except UnknownGraphError:
-                # Saved work orders can outlive their registered graph.
-                continue
-            if snapshot is not None and snapshot.values.get("pr_url") == pr_url:
-                matches.append(state)
-        if len(matches) != 1:
+        # Read through the binding that owns the provenance table rather than
+        # through the control surface, which is deliberately forge-agnostic and
+        # has no business growing a method shaped like a pull request.
+        store = getattr(runtime, "store", None)
+        run_id = (
+            None if store is None
+            else await store.run_for_pull_request(repository.lower(), number)
+        )
+        if run_id is None:
             raise RuntimeError("could not identify one existing work order for this pull request")
-        state = matches[0]
-        await runtime.steer(state.run_id, prompt)
-        link = run_notifier.work_order_link(state)
-        return link.url if link else "", str(state.run_id)
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except UnknownGraphError:
+            # A saved work order can outlive the graph it was started from.
+            snapshot = None
+        if snapshot is None:
+            raise RuntimeError("could not identify one existing work order for this pull request")
+        await runtime.steer(run_id, prompt, node_id=_reentry_node(runtime, snapshot))
+        state = await session.state_store.load(run_id)
+        link = run_notifier.work_order_link(state) if state is not None else None
+        return link.url if link else "", str(run_id)
 
     github_concierge = GithubConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
         steer_workorder=github_steer_workorder, reply=github_reply,
     )
 
-    posting_login: list[str] = []
+    posting_login: dict[str, str] = {}
 
     async def github_posting_login(repository: str) -> str:
-        """The account Engine replies as, asked once and remembered.
+        """The account Engine replies as, asked once per repository.
+
+        Keyed rather than global: a deployment answers one repository today,
+        but a resolved login is a property of the credentials *on that forge
+        repository*, and an unkeyed cache would quietly hand the first
+        repository's answer to the second one's comments.
 
         ``GITHUB_BOT_LOGIN`` is optional and usually unset, and a token held by
         a machine user posts comments that look like anybody else's: without
@@ -2517,14 +2541,14 @@ def create_app(
         to answer propagates: the turn is retried on redelivery instead of
         replying into a loop this process cannot recognise.
         """
-        if not posting_login:
-            posting_login.append(
+        if repository not in posting_login:
+            posting_login[repository] = (
                 github_bot_login
                 or await session.capabilities.source_control.authenticated_login(
                     f"https://github.com/{repository}"
                 )
             )
-        return posting_login[0]
+        return posting_login[repository]
 
     async def github_concierge_turn(comment: GithubComment) -> None:
         # Issue-driven work orders are not supported. PR conversation comments
@@ -2535,6 +2559,26 @@ def create_app(
             await github_posting_login(comment.repository)
         ).lower():
             # GitHub logins are case-insensitive, so the comparison is too.
+            return
+        # Before the comment becomes a prompt, not after the model has acted on
+        # one. A comment is untrusted text and the agent that reads it can read
+        # the host it runs on, so whoever writes one is choosing what this
+        # process reads and what it says back in public. `author_association`
+        # does not bound that -- a COLLABORATOR may hold read access alone --
+        # and gating the outbound tool alone would still have run the turn.
+        # Write access is the line: it is already the authority to change this
+        # repository, so it is no escalation to reach the agent working on it.
+        if not await session.capabilities.source_control.can_write_repository(
+            f"https://github.com/{comment.repository}/pull/{comment.number}",
+            comment.author,
+        ):
+            # Ignored rather than answered, like the association filter above:
+            # a refusal posted back is both noise on the pull request and a way
+            # to make this process talk to somebody it will not act for.
+            log.info(
+                "ignored a GitHub comment from %s, who cannot write to %s",
+                comment.author, comment.repository,
+            )
             return
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":

@@ -196,6 +196,21 @@ class GraphRuntimeStore(EventStore, Protocol):
         """Every comment this run posted, oldest first."""
         ...
 
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
+        """Which run owns this pull request, by the comments it left on it.
+
+        The provenance this table was added for, read the other way round. A
+        caller holding a pull request -- a webhook answering a comment on it --
+        needs the run without knowing a run id, and the alternative is reading
+        every run's state to find the one that matches.
+
+        ``None`` when no run has been recorded against it, which is the honest
+        answer for a pull request opened by hand. Ambiguity is not possible:
+        two runs commenting on one pull request is one work order handing over
+        to another, and the most recent comment is the one still working.
+        """
+        ...
+
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         """Settle every open request this run raised, without deciding one.
 
@@ -285,6 +300,15 @@ class InMemoryGraphRuntimeStore:
         return tuple(
             record for record in self._comments.values() if record.run_id == run_id
         )
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
+        posted = [
+            record
+            for record in self._comments.values()
+            if record.repository == repository and record.pr_number == number
+        ]
+        posted.sort(key=lambda record: (record.posted_at, record.comment_id))
+        return posted[-1].run_id if posted else None
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         for approval_id, record in tuple(self._approvals.items()):
@@ -460,6 +484,16 @@ class SqliteGraphRuntimeStore:
             (str(run_id),),
         ).fetchall()
         return tuple(_comment_from(row) for row in rows)
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
+        # Served by `github_comments_by_pr`, so this stays one index seek
+        # however many runs and comments the deployment has accumulated.
+        row = self._connection.execute(
+            "SELECT run_id FROM github_comments WHERE repository = ? AND pr_number = ? "
+            "ORDER BY posted_at DESC, comment_id DESC LIMIT 1",
+            (repository, number),
+        ).fetchone()
+        return None if row is None else RunId(row["run_id"])
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         self._connection.execute(

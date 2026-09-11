@@ -528,6 +528,22 @@ def test_comments_a_run_posted_are_kept_for_the_runs_after_it(
         await store.remember_comment(posted)
         assert await store.comments(RunId("run-1")) == found
         assert await store.comments(RunId("run-2")) == (elsewhere,)
+        # The same provenance read the other way: a webhook holding a pull
+        # request finds its run without scanning every run that ever existed.
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-1")
+        assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
+        # The repository is part of the question: two forges number their pull
+        # requests from counters of their own.
+        assert await store.run_for_pull_request("acme/web", 42) is None
+        assert await store.run_for_pull_request("acme/other", 42) is None
+        # A pull request opened by hand belongs to no run, and says so.
+        assert await store.run_for_pull_request("acme/api", 999) is None
+        # A second run taking the pull request over is the one still working.
+        await store.remember_comment(replace(
+            inline, comment_id=200, run_id=RunId("run-3"),
+            posted_at="2026-09-10T19:00:00+00:00",
+        ))
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-3")
         return found
 
     assert asyncio.run(scenario()) == (posted, inline)
