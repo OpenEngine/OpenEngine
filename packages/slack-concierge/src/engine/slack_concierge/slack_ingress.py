@@ -64,10 +64,23 @@ class SlackIngress:
         if not self._connected():
             log.warning("Slack event ignored: no bot token is configured")
             return Response(status_code=200)
-        accepted = self.accept(payload)
+        known_thread = False
+        event = payload.get("event")
+        if (
+            isinstance(event, dict)
+            and event.get("type") == "message"
+            and not event.get("bot_id")
+            and not event.get("subtype")
+        ):
+            channel, thread = event.get("channel"), event.get("thread_ts")
+            if isinstance(channel, str) and isinstance(thread, str) and channel and thread:
+                known_thread = bool(await self.concierge.linked_workorders(
+                    RunOrigin(channel=channel, thread_id=thread)
+                ))
+        accepted = self.accept(payload, known_thread=known_thread)
         return Response(status_code=200 if accepted else 503)
 
-    def accept(self, payload: dict) -> bool:
+    def accept(self, payload: dict, *, known_thread: bool = False) -> bool:
         event = payload.get("event")
         if payload.get("type") != "event_callback" or not isinstance(event, dict):
             return True
@@ -81,15 +94,21 @@ class SlackIngress:
         if not isinstance(thread, str):
             return True
         key = (channel, thread)
-        if kind == "message" and not (self.concierge.has_thread(*key) or key in self._pending):
+        if kind == "message" and not (known_thread or self.concierge.has_thread(*key) or key in self._pending):
             return True
         identity = (channel, ts)
         if identity in self._seen:
             return True
         if self._queue.full():
             return False
-        text = re.sub(r"<@[^>]+>", "", str(event.get("text", ""))).strip()
-        message = IncomingMessage(RunOrigin(channel=channel, thread_id=thread, author=author), text or "Hello", message_ts=ts)
+        raw_text = str(event.get("text", ""))
+        text = re.sub(r"<@[^>]+>", "", raw_text).strip()
+        message = IncomingMessage(
+            RunOrigin(channel=channel, thread_id=thread, author=author),
+            text or "Hello", message_ts=ts, raw_text=raw_text,
+            mentioned_users=tuple(re.findall(r"<@([^>|]+)(?:\|[^>]+)?>", raw_text)),
+            event_type=kind,
+        )
         self._queue.put_nowait(message)
         self._pending.add(key)
         self._seen[identity] = None

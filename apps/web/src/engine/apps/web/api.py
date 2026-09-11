@@ -86,6 +86,7 @@ from engine.domain import (
     AgentStep,
     ApprovalDecision,
     ApprovalId,
+    ApprovalKind,
     ApprovalRecord,
     HumanReviewCompleted,
     Message,
@@ -1103,11 +1104,29 @@ def create_app(
     )
     run_reader = RunReader(session.state_store, catalog)
 
-    async def approval_presented(_approval: ApprovalRecord) -> None:
-        # The broker's observer publishes every persisted transition. This
-        # presenter exists because the runner callback also supports run-local
-        # presentation, which workflow runs do not need.
-        return None
+    async def approval_presented(approval: ApprovalRecord) -> None:
+        if not approval.is_pending or approval.kind is not ApprovalKind.USER_INPUT or not approval.questions:
+            return
+        instance = await session.state_store.load_instance(approval.instance_id)
+        if instance is None or instance.workflow_run_id is None:
+            return
+        state = await session.state_store.load(instance.workflow_run_id)
+        if state is None or state.origin is None:
+            return
+        questions = json.loads(approval.questions)
+        lines = ["Input required:"]
+        for question in questions:
+            lines.append(str(question["question"]))
+            options = [str(option["label"]) for option in question.get("options", [])]
+            if options:
+                lines.append("Choices: " + ", ".join(options))
+            if question.get("multiSelect"):
+                lines.append("You may choose more than one option.")
+            if question.get("allowsOther"):
+                lines.append("You may also provide your own answer.")
+        lines.append("Reply in this thread with your answer, or answer on the WorkOrder page.")
+        link = run_notifier.work_order_link(state)
+        await run_notifier.announce(state, "\n".join(lines), links=(link,) if link else (), mention=True)
 
     def workflow_approval_handler(
         command: StartAgentRun, runner_name: str
@@ -1439,7 +1458,18 @@ def create_app(
                 ),
             )
 
-    async def continue_workflow(thread: ChatThread, text: str) -> None:
+    async def continue_workflow(
+        thread: ChatThread, text: str, *, active_only: bool = False, resume_only: bool = False,
+    ) -> None:
+        """Serialize web and Slack continuations for the same WorkOrder."""
+        assert thread.workflow_run_id is not None
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
+        async with lock:
+            await continue_workflow_locked(thread, text, active_only=active_only, resume_only=resume_only)
+
+    async def continue_workflow_locked(
+        thread: ChatThread, text: str, *, active_only: bool = False, resume_only: bool = False,
+    ) -> None:
         """Interrupt, append a human message, and resume the same workflow step."""
 
         assert thread.workflow_run_id is not None
@@ -1450,12 +1480,43 @@ def create_app(
         state = await session.state_store.load(thread.workflow_run_id)
         if state is None:
             raise RuntimeError("this workflow step is no longer active")
+        if resume_only:
+            executing = workflow_tasks.get(thread.workflow_run_id)
+            if executing is not None and not executing.done():
+                raise RuntimeError("this work order already has an execution in progress; use steering")
+            if state.phase not in (RunPhase.SUCCEEDED, RunPhase.FAILED, RunPhase.AWAITING_HUMAN_REVIEW):
+                raise RuntimeError("this work order has not finished; use steering for running work or the WorkOrder page for paused work")
+            pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
+            if any(record.status.value == "pending" for record in pending):
+                raise RuntimeError("answer the pending decision on the WorkOrder page first")
+        if active_only:
+            if (
+                state.phase is not RunPhase.RUNNING_AGENT
+                or state.current_step_id != thread.workflow_step_id
+                or state.agent_paused
+            ):
+                raise RuntimeError("this work order is not running an agent; continue it on the WorkOrder page")
+            pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
+            if any(record.status.value == "pending" for record in pending):
+                raise RuntimeError("this agent needs a decision on the WorkOrder page before Slack steering")
         if state.current_agent_run_id is not None:
             await service.approvals.cancel_run(state.current_agent_run_id)
         task = workflow_tasks.get(thread.workflow_run_id)
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        latest = await session.state_store.load(thread.workflow_run_id)
+        if active_only and (
+            latest is None or latest.phase is not RunPhase.RUNNING_AGENT
+            or latest.current_step_id != thread.workflow_step_id
+        ):
+            # The run may advance while cancellation is in progress. Do not
+            # reopen the old step, or strand a newer one we interrupted.
+            if latest is not None and latest.phase is RunPhase.RUNNING_AGENT and not latest.agent_paused:
+                track_workflow(latest.run_id, asyncio.create_task(
+                    workflow_executor.resume_agent_step(latest.run_id)
+                ))
+            raise RuntimeError("the workflow moved to another step before the instruction could be delivered; try again")
         if (
             state.phase is RunPhase.RUNNING_AGENT
             and state.current_step_id == thread.workflow_step_id
@@ -1472,10 +1533,20 @@ def create_app(
             )
         )
         track_workflow(thread.workflow_run_id, task)
+        if active_only or resume_only:
+            while True:
+                history = await service.history(thread.instance_id)
+                if any(message.role is Role.USER and message.content == text for message in history[before:]):
+                    return
+                if task.done():
+                    raise RuntimeError("the agent stopped before the instruction was recorded; check the WorkOrder page")
+                # The agent task records the message independently. Yielding with
+                # zero delay turns this acknowledgement wait into a hot loop.
+                await asyncio.sleep(0.01)
         while (
             len(await service.history(thread.instance_id)) <= before and not task.done()
         ):
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
         if task.done() and not task.cancelled() and task.exception() is not None:
             raise RuntimeError(str(task.exception()))
 
@@ -2060,35 +2131,37 @@ def create_app(
 
     async def complete_human_review(request: Request) -> JSONResponse:
         run_id = RunId(request.path_params["run_id"])
-        state = await session.state_store.load(run_id)
-        if state is None:
-            return _error("run not found", 404)
         body = await _json_body(request)
         approved = body.get("approved")
         if not isinstance(approved, bool):
             return _error("approved must be a boolean", 400)
-        if (
-            state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
-            or state.current_step_id is None
-        ):
-            return _error("run is not awaiting human review", 409)
         summary = str(body.get("summary", "")).strip()
-        try:
-            next_state = await workflow_executor.complete_human_review(
-                HumanReviewCompleted(
-                    run_id=run_id,
-                    step_id=state.current_step_id,
-                    approved=approved,
-                    summary=summary,
+        lock = workflow_restart_locks.setdefault(run_id, asyncio.Lock())
+        async with lock:
+            state = await session.state_store.load(run_id)
+            if state is None:
+                return _error("run not found", 404)
+            if (
+                state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
+                or state.current_step_id is None
+            ):
+                return _error("run is not awaiting human review", 409)
+            try:
+                next_state = await workflow_executor.complete_human_review(
+                    HumanReviewCompleted(
+                        run_id=run_id,
+                        step_id=state.current_step_id,
+                        approved=approved,
+                        summary=summary,
+                    )
                 )
-            )
-            if next_state.phase is RunPhase.RUNNING_AGENT:
-                track_workflow(
-                    run_id,
-                    asyncio.create_task(workflow_executor.resume_agent_step(run_id)),
-                )
-        except WorkflowExecutionError as error:
-            return _error(str(error), 409)
+                if next_state.phase is RunPhase.RUNNING_AGENT:
+                    track_workflow(
+                        run_id,
+                        asyncio.create_task(workflow_executor.resume_agent_step(run_id)),
+                    )
+            except WorkflowExecutionError as error:
+                return _error(str(error), 409)
         run = await run_reader.get(run_id)
         assert run is not None
         return JSONResponse(_run_json(run))
@@ -2345,7 +2418,7 @@ def create_app(
         if thread is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
-        try:
+        async def apply_approval_decision() -> ApprovalRecord:
             workflow_agent_run_id = None
             if thread.workflow_run_id is not None:
                 workflow_state = await session.state_store.load(thread.workflow_run_id)
@@ -2373,9 +2446,20 @@ def create_app(
                 )
             else:
                 decision = _required_string(body, "decision")
-                approval = await service.decide_approval(
+                return await service.decide_approval(
                     instance_id, approval_id, decision, workflow_agent_run_id
                 )
+            return approval
+
+        try:
+            if thread.workflow_run_id is None:
+                approval = await apply_approval_decision()
+            else:
+                lock = workflow_restart_locks.setdefault(
+                    thread.workflow_run_id, asyncio.Lock()
+                )
+                async with lock:
+                    approval = await apply_approval_decision()
         except ValueError as error:
             return _error(str(error), 400)
         except UnknownApprovalError as error:
@@ -2899,11 +2983,154 @@ def create_app(
         ))
         return link.url if link else "", str(state.run_id)
 
+    async def concierge_find_workorders(origin: RunOrigin) -> list[RunState]:
+        return [
+            state for state in await session.state_store.list_runs()
+            if state.origin is not None
+            and state.origin.channel == origin.channel
+            and state.origin.thread_id == origin.thread_id
+        ]
+
+    async def concierge_controlled_workorder(origin: RunOrigin) -> RunState:
+        linked = await concierge_find_workorders(origin)
+        if len(linked) != 1:
+            raise RuntimeError(
+                "this thread has no work order" if not linked else
+                "this thread has multiple work orders; use the WorkOrder page to select one"
+            )
+        state = linked[0]
+        assert state.origin is not None
+        if (
+            origin.author != state.origin.author
+            and origin.author not in work_orders.slack_operators
+        ):
+            raise RuntimeError(
+                "only the person who started this WorkOrder or a configured Slack operator can control it"
+            )
+        return state
+
+    async def concierge_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        if state.phase is not RunPhase.RUNNING_AGENT or state.agent_paused:
+            raise RuntimeError("this work order is not running an agent; continue it on the WorkOrder page")
+        instances = await session.state_store.list_instances(workflow_run_id=state.run_id)
+        current = [item for item in instances if item.workflow_step_id == state.current_step_id]
+        if len(current) != 1:
+            raise RuntimeError("the active agent conversation is not ready or is ambiguous; try again")
+        thread = await service.get(current[0].instance_id)
+        if thread is None:
+            raise RuntimeError("the active agent conversation is unavailable")
+        await continue_workflow(
+            thread, f"Slack instruction from <@{origin.author}>:\n{prompt}", active_only=True,
+        )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
+    async def concierge_resume_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        definition = state.workflow_definition or catalog.get(state.workflow_id)
+        if definition is None:
+            raise RuntimeError("the stored step workflow is unavailable")
+        instances = await session.state_store.list_instances(workflow_run_id=state.run_id)
+        candidates = [
+            instance for instance in instances
+            if instance.workflow_step_id is not None
+            and isinstance(step := definition.step(instance.workflow_step_id), AgentStep)
+            and step.editable and step.workspace_access.value == "write"
+        ]
+        if len(candidates) != 1:
+            raise RuntimeError("no unique editable implementation to resume; select a conversation on the WorkOrder page")
+        thread = await service.get(candidates[0].instance_id)
+        if thread is None:
+            raise RuntimeError("the implementation conversation is unavailable")
+        await continue_workflow(
+            thread, f"Slack follow-up from <@{origin.author}>:\n{prompt}", resume_only=True,
+        )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
+    async def concierge_find_questions(origin: RunOrigin) -> list[dict]:
+        linked = await concierge_find_workorders(origin)
+        if len(linked) != 1 or linked[0].phase is not RunPhase.RUNNING_AGENT:
+            return []
+        state = linked[0]
+        if state.current_agent_run_id is None:
+            return []
+        return [
+            {"approval_id": str(record.approval_id), "questions": json.loads(record.questions)}
+            for record in await session.state_store.list_approvals(agent_run_id=state.current_agent_run_id)
+            if record.is_pending and record.kind is ApprovalKind.USER_INPUT and record.questions
+        ]
+
+    async def concierge_answer_question(
+        origin: RunOrigin, approval_id: str, answers: dict[str, list[str]],
+    ) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        lock = workflow_restart_locks.setdefault(state.run_id, asyncio.Lock())
+        async with lock:
+            state = await session.state_store.load(state.run_id)
+            record = await session.state_store.load_approval(ApprovalId(approval_id))
+            if (
+                state is None or state.phase is not RunPhase.RUNNING_AGENT
+                or record is None or not record.is_pending
+                or record.kind is not ApprovalKind.USER_INPUT or not record.questions
+                or record.agent_run_id != state.current_agent_run_id
+            ):
+                raise RuntimeError("this question is not pending for the active WorkOrder")
+            instance = await session.state_store.load_instance(record.instance_id)
+            if instance is None or instance.workflow_run_id != state.run_id:
+                raise RuntimeError("this question belongs to another WorkOrder")
+            await service.answer_question(
+                record.instance_id, record.approval_id,
+                tuple(UserInputAnswer(question_id=key, answers=tuple(values)) for key, values in answers.items()),
+                state.current_agent_run_id,
+            )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
+    async def concierge_decide_review(
+        origin: RunOrigin, approved: bool, summary: str,
+    ) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        lock = workflow_restart_locks.setdefault(state.run_id, asyncio.Lock())
+        async with lock:
+            state = await session.state_store.load(state.run_id)
+            if (
+                state is None
+                or state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
+                or state.current_step_id is None
+            ):
+                raise RuntimeError("this WorkOrder is not awaiting a review decision")
+            try:
+                next_state = await workflow_executor.complete_human_review(
+                    HumanReviewCompleted(
+                        run_id=state.run_id,
+                        step_id=state.current_step_id,
+                        approved=approved,
+                        summary=summary,
+                    )
+                )
+            except WorkflowExecutionError as error:
+                raise RuntimeError(str(error)) from error
+            if next_state.phase is RunPhase.RUNNING_AGENT:
+                track_workflow(
+                    state.run_id,
+                    asyncio.create_task(workflow_executor.resume_agent_step(state.run_id)),
+                )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
     slack_concierge = SlackConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
         turn_finished=concierge_turn_finished,
+        find_workorders=concierge_find_workorders,
+        steer_workorder=concierge_steer_workorder,
+        resume_workorder=concierge_resume_workorder,
+        find_questions=concierge_find_questions,
+        answer_question=concierge_answer_question,
+        decide_review=concierge_decide_review,
     )
     _slack_comms = SlackCommunications(_slack_store)
     slack_ingress = SlackIngress(

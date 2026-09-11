@@ -22,6 +22,9 @@ from contextlib import suppress
 
 #: Given (repository, prompt) create a work order and return (url, run_id).
 CreateWorkorder = Callable[[str, str], Awaitable[tuple[str, str]]]
+SteerWorkorder = Callable[[str], Awaitable[tuple[str, str]]]
+AnswerQuestion = Callable[[str, dict[str, list[str]]], Awaitable[tuple[str, str]]]
+DecideReview = Callable[[bool, str], Awaitable[tuple[str, str]]]
 
 McpRequestId = str | int
 _PROTOCOL_VERSION = "2025-06-18"
@@ -51,6 +54,66 @@ _TOOL_SPEC: dict[str, object] = {
     },
 }
 
+_STEER_TOOL_SPEC = {
+    **_TOOL_SPEC,
+    "name": "steer_workorder",
+    "description": (
+        "Send new instructions to the running work order in this Slack thread. "
+        "Preserves its work and conversation. Does not create a new work order, "
+        "reopen completed work, or approve a pending decision. The host selects "
+        "the linked work order; ambiguous or non-editable work is refused."
+    ),
+}
+
+_RESUME_TOOL_SPEC = {
+    **_TOOL_SPEC,
+    "name": "resume_workorder",
+    "description": (
+        "Continue the existing work order in this Slack thread after it finishes, "
+        "fails or awaits review. Use for follow-up fixes such as failing "
+        "tests. Retains the existing work order and history. Does not create new "
+        "work or approve a decision. The host selects a unique editable implementation."
+    ),
+}
+
+_ANSWER_TOOL_SPEC = {
+    "name": "answer_workorder_question",
+    "description": (
+        "Submit the human's answers to a pending structured question shown in host context. "
+        "Use the exact approval_id and question IDs. Never invent answers; ask the human "
+        "if their reply is ambiguous or incomplete. This cannot grant tool permissions or approve reviews."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "approval_id": {"type": "string", "minLength": 1},
+            "answers": {"type": "object", "minProperties": 1, "additionalProperties": {
+                "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1},
+            }},
+        },
+        "required": ["approval_id", "answers"], "additionalProperties": False,
+    },
+}
+
+_REVIEW_TOOL_SPEC = {
+    "name": "decide_workorder_review",
+    "description": (
+        "Submit an explicit approval or request for changes for the pending human review "
+        "in this Slack thread. The host chooses the linked WorkOrder. Set approved true only "
+        "when the user clearly approves; set it false only when they clearly request changes, "
+        "putting their feedback in summary. Never infer a decision from a question or status check."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "approved": {"type": "boolean"},
+            "summary": {"type": "string"},
+        },
+        "required": ["approved"],
+        "additionalProperties": False,
+    },
+}
+
 
 class ConciergeBroker:
     """Expose ``create_workorder`` to a provider CLI over a local MCP server.
@@ -66,8 +129,16 @@ class ConciergeBroker:
         *,
         create_workorder: CreateWorkorder,
         default_repository: str = "",
+        steer_workorder: SteerWorkorder | None = None,
+        resume_workorder: SteerWorkorder | None = None,
+        answer_question: AnswerQuestion | None = None,
+        decide_review: DecideReview | None = None,
     ) -> None:
         self._create_workorder = create_workorder
+        self._steer_workorder = steer_workorder
+        self._resume_workorder = resume_workorder
+        self._answer_question = answer_question
+        self._decide_review = decide_review
         self._default_repository = default_repository
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
@@ -104,7 +175,11 @@ class ConciergeBroker:
             "args": ["-m", "engine.slack_concierge.slack_egress",
                      "--host", "127.0.0.1", "--port",
                      str(self._server.sockets[0].getsockname()[1]),
-                     "--token-file", self._credential.name],
+                     "--token-file", self._credential.name,
+                     *(["--enable-steering"] if self._steer_workorder else []),
+                     *(["--enable-resuming"] if self._resume_workorder else []),
+                     *(["--enable-answers"] if self._answer_question else []),
+                     *(["--enable-review-decisions"] if self._decide_review else [])],
             "env": [],
         }
 
@@ -128,7 +203,46 @@ class ConciergeBroker:
             return {"ok": False, "error": "invalid concierge credential"}
         name = request.get("name")
         arguments = request.get("arguments")
-        if name != CONCIERGE_TOOL_NAME:
+        if name == "decide_workorder_review":
+            if self._decide_review is None:
+                return {"ok": False, "error": "review decisions are not enabled"}
+            if not isinstance(arguments, dict) or set(arguments) - {"approved", "summary"}:
+                return {"ok": False, "error": "provide approved and optional summary only"}
+            approved = arguments.get("approved")
+            summary = arguments.get("summary", "")
+            if not isinstance(approved, bool) or not isinstance(summary, str):
+                return {"ok": False, "error": "approved must be a boolean and summary must be a string"}
+            if not approved and not summary.strip():
+                return {"ok": False, "error": "a request for changes needs feedback"}
+            try:
+                url, run_id = await self._decide_review(approved, summary.strip())
+            except Exception as error:
+                return {"ok": False, "error": f"could not submit the review decision: {error}"}
+            outcome = "approved" if approved else "changes requested"
+            return {"ok": True, "text": f"Review {outcome} for work order `{run_id}`.",
+                    "data": {"run_id": run_id, "url": url, "approved": approved}}
+        if name == "answer_workorder_question":
+            if self._answer_question is None:
+                return {"ok": False, "error": "answering questions is not enabled"}
+            if not isinstance(arguments, dict) or set(arguments) != {"approval_id", "answers"}:
+                return {"ok": False, "error": "provide approval_id and answers only"}
+            approval_id, answers = arguments["approval_id"], arguments["answers"]
+            if not isinstance(approval_id, str) or not approval_id.strip():
+                return {"ok": False, "error": "approval_id must be a non-empty string"}
+            if not isinstance(answers, dict) or not answers or any(
+                not isinstance(key, str) or not key.strip()
+                or not isinstance(values, list) or not values
+                or any(not isinstance(value, str) or not value.strip() for value in values)
+                for key, values in answers.items()
+            ):
+                return {"ok": False, "error": "answers must map question IDs to non-empty arrays of strings"}
+            try:
+                url, run_id = await self._answer_question(approval_id, answers)
+            except Exception as error:
+                return {"ok": False, "error": f"could not answer the question: {error}"}
+            return {"ok": True, "text": f"Answer recorded for work order `{run_id}` and delivered to the waiting agent.",
+                    "data": {"run_id": run_id, "url": url}}
+        if name not in (CONCIERGE_TOOL_NAME, "steer_workorder", "resume_workorder"):
             return {"ok": False, "error": f"unknown concierge tool: {name}"}
         if not isinstance(arguments, dict):
             return {"ok": False, "error": "arguments must be an object"}
@@ -137,6 +251,20 @@ class ConciergeBroker:
             return {"ok": False, "error": "prompt must be a non-empty string"}
         if set(arguments) - {"prompt"}:
             return {"ok": False, "error": "unknown work-order arguments"}
+        if name in ("steer_workorder", "resume_workorder"):
+            action = "steer" if name == "steer_workorder" else "resume"
+            callback = self._steer_workorder if action == "steer" else self._resume_workorder
+            if callback is None:
+                return {"ok": False, "error": f"{action} is not enabled"}
+            try:
+                url, run_id = await callback(prompt.strip())
+            except Exception as error:
+                return {"ok": False, "error": f"could not {action} the work order: {error}"}
+            return {
+                "ok": True,
+                "text": f"Instruction delivered to work order `{run_id}`. This does not mean the change is implemented yet.",
+                "data": {"run_id": run_id, "url": url},
+            }
         repository = self._default_repository or "."
         try:
             url, run_id = await self._create_workorder(repository, prompt.strip())
@@ -189,6 +317,11 @@ async def _mcp_response(
     port: int,
     token: str,
     request: object,
+    *,
+    steer_enabled: bool = False,
+    resume_enabled: bool = False,
+    answers_enabled: bool = False,
+    review_decisions_enabled: bool = False,
 ) -> dict[str, object] | None:
     if not isinstance(request, dict):
         return _rpc_error(None, -32600, "Invalid Request")
@@ -208,7 +341,12 @@ async def _mcp_response(
     if method == "ping":
         return _rpc_result(request_id, {})
     if method == "tools/list":
-        return _rpc_result(request_id, {"tools": [_TOOL_SPEC]})
+        return _rpc_result(request_id, {"tools": [
+            _TOOL_SPEC, *([_STEER_TOOL_SPEC] if steer_enabled else []),
+            *([_RESUME_TOOL_SPEC] if resume_enabled else []),
+            *([_ANSWER_TOOL_SPEC] if answers_enabled else []),
+            *([_REVIEW_TOOL_SPEC] if review_decisions_enabled else []),
+        ]})
     if method != "tools/call":
         return _rpc_error(request_id, -32601, "Method not found")
     if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
@@ -241,10 +379,10 @@ async def _mcp_response(
     )
 
 
-async def _serve_stdio(host: str, port: int, token: str) -> None:
+async def _serve_stdio(host: str, port: int, token: str, *, steer_enabled: bool = False, resume_enabled: bool = False, answers_enabled: bool = False, review_decisions_enabled: bool = False) -> None:
     while line := await asyncio.to_thread(sys.stdin.buffer.readline):
         try:
-            response = await _mcp_response(host, port, token, json.loads(line))
+            response = await _mcp_response(host, port, token, json.loads(line), steer_enabled=steer_enabled, resume_enabled=resume_enabled, answers_enabled=answers_enabled, review_decisions_enabled=review_decisions_enabled)
             if response is None:
                 continue
         except Exception as error:
@@ -270,8 +408,12 @@ def main() -> None:
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--token-file", required=True)
+    parser.add_argument("--enable-steering", action="store_true")
+    parser.add_argument("--enable-resuming", action="store_true")
+    parser.add_argument("--enable-answers", action="store_true")
+    parser.add_argument("--enable-review-decisions", action="store_true")
     arguments = parser.parse_args()
-    asyncio.run(_serve_stdio(arguments.host, arguments.port, Path(arguments.token_file).read_text()))
+    asyncio.run(_serve_stdio(arguments.host, arguments.port, Path(arguments.token_file).read_text(), steer_enabled=arguments.enable_steering, resume_enabled=arguments.enable_resuming, answers_enabled=arguments.enable_answers, review_decisions_enabled=arguments.enable_review_decisions))
 
 
 __all__ = [
@@ -281,9 +423,10 @@ __all__ = [
 
 
 async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
-    """Approve only the one named MCP grant; decline all other operations."""
+    """Approve only the named concierge MCP grants."""
 
-    names = {"mcp__concierge__create_workorder", "concierge/create_workorder"}
+    names = {f"{prefix}{name}" for prefix in ("mcp__concierge__", "concierge/")
+             for name in ("create_workorder", "steer_workorder", "resume_workorder", "answer_workorder_question", "decide_workorder_review")}
     if any(isinstance(value, str) and value in names
            for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
         for option in request.options:

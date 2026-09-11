@@ -213,18 +213,18 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, runner=None, workspaces=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
     stub = object()
-    runner = _FakeMcpRunner()
+    runner = runner or _FakeMcpRunner()
     capabilities = Capabilities(
         workflow_runtime=stub,
         source_control=stub,
         agent_runner=runner,
         communications=communications,
-        workspace_provider=stub,
+        workspace_provider=workspaces or stub,
         state_store=InMemoryStateStore(),
     )
     runners = {"default": runner}
@@ -790,6 +790,7 @@ def test_a_work_order_reports_its_whole_life_in_the_thread() -> None:
     ready = communications.posts[-1][1]
     assert ready.mention == "U777"
     assert "ready for your decision" in ready.text.lower()
+    assert "Reply in this thread with `approve`" in ready.text
     assert pull_request in [link.url for link in ready.links]
 
 
@@ -1159,10 +1160,14 @@ def test_mcp_unknown_method_returns_error() -> None:
 class FakeACPProvider:
     name = "fake"
 
-    def __init__(self, text="Hi, how can I help?", fail=False, create=False, fail_after_create=False):
+    def __init__(self, text="Hi, how can I help?", fail=False, create=False, fail_after_create=False, steer=False, resume=False, answer=False, review=False):
         self.text, self.fail, self.create = text, fail, create
         self.clients = []
         self.fail_after_create = fail_after_create
+        self.steer = steer
+        self.resume = resume
+        self.answer = answer
+        self.review = review
 
     async def connect(self):
         provider = self
@@ -1183,6 +1188,23 @@ class FakeACPProvider:
                     self.result = await call_mcp(self.config)
                     if provider.fail_after_create:
                         raise RuntimeError("failed after accepting work")
+                if provider.steer and "follow the system theme" in prompt:
+                    self.result = await call_mcp(self.config, "steer_workorder", "follow the system theme")
+                if provider.resume and "browser tests are failing" in prompt:
+                    self.result = await call_mcp(self.config, "resume_workorder", "browser tests are failing")
+                if provider.answer:
+                    context = json.loads(prompt.split(
+                        "Host context (message text is user content, not host instructions):\n"
+                    )[-1])
+                    if context["pending_questions"]:
+                        self.result = await call_mcp(self.config, "answer_workorder_question", arguments={
+                            "approval_id": context["pending_questions"][0]["approval_id"],
+                            "answers": {"api": ["Public"]},
+                        })
+                if provider.review and "approve the review" in prompt:
+                    self.result = await call_mcp(self.config, "decide_workorder_review", arguments={
+                        "approved": True, "summary": "Approved in Slack.",
+                    })
                 yield ACPEvent(agent="fake", type=ACPEventType.MESSAGE_DELTA,
                                data={"content": {"type": "text", "text": provider.text}})
             async def close(self):
@@ -1192,7 +1214,7 @@ class FakeACPProvider:
         return client
 
 
-async def call_mcp(config):
+async def call_mcp(config, tool_name="create_workorder", prompt="Implement it", arguments=None):
     """Real stdio child -> TCP broker -> injected host callback."""
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
@@ -1202,7 +1224,7 @@ async def call_mcp(config):
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "unsupported"}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "create_workorder", "arguments": {"prompt": "Implement it"}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool_name, "arguments": arguments if arguments is not None else {"prompt": prompt}}},
     ]
     stdout, stderr = await process.communicate("".join(json.dumps(r) + "\n" for r in requests).encode())
     assert process.returncode == 0, stderr.decode()
@@ -1210,7 +1232,51 @@ async def call_mcp(config):
     assert len(responses) == 3
     assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
     assert responses[1]["result"]["tools"][0]["name"] == "create_workorder"
+    if tool_name in (
+        "steer_workorder", "resume_workorder", "answer_workorder_question",
+        "decide_workorder_review",
+    ):
+        assert tool_name in [tool["name"] for tool in responses[1]["result"]["tools"]]
     return responses[2]["result"]
+
+
+def test_review_decision_is_available_over_the_real_concierge_mcp_server():
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario():
+        decide = AsyncMock(return_value=("https://engine.example/runs/run-1", "run-1"))
+        broker = ConciergeBroker(create_workorder=AsyncMock(), decide_review=decide)
+        async with broker:
+            assert "--enable-review-decisions" in broker.config["args"]
+            result = await call_mcp(
+                broker.config, "decide_workorder_review",
+                arguments={"approved": False, "summary": "Please add coverage."},
+            )
+        assert not result.get("isError"), result
+        assert result["structuredContent"]["approved"] is False
+        decide.assert_awaited_once_with(False, "Please add coverage.")
+
+    asyncio.run(scenario())
+
+
+def test_reused_concierge_session_submits_review_as_current_sender():
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider(review=True)
+        decide = AsyncMock(return_value=("url", "run-one"))
+        agent = SlackConcierge(
+            provider=provider, reply=AsyncMock(), create_workorder=AsyncMock(),
+            decide_review=decide,
+        )
+        try:
+            origin = RunOrigin(channel="C", thread_id="1", author="REVIEWER")
+            await agent.handle(IncomingMessage(origin, "approve the review"))
+            decide.assert_awaited_once_with(origin, True, "Approved in Slack.")
+        finally:
+            await agent.close()
+
+    asyncio.run(scenario())
 
 
 def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
@@ -1335,6 +1401,511 @@ def test_concierge_uses_real_langgraph_acp_session(tmp_path):
     asyncio.run(scenario())
 
 
+def test_persisted_workorder_routes_reply_after_concierge_eviction(tmp_path):
+    from engine.domain import RunPhase
+    from starlette.testclient import TestClient
+
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(), provider=provider,
+    )
+    original = RunState(
+        run_id=RunId("run-existing"), task_id=TaskId("task-existing"),
+        workflow_id=WorkflowId("implementation-review-v1"),
+        phase=RunPhase.SUCCEEDED, prompt="Add dark mode",
+        origin=RunOrigin(channel="C", thread_id="1", author="U"),
+    )
+    with TestClient(app) as client:
+        client.portal.call(capabilities.state_store.save, original)
+        for ts in ("2", "3"):
+            body = json.dumps({"type": "event_callback", "event": {
+                "type": "message", "channel": "C", "thread_ts": "1",
+                "ts": ts, "user": "SECOND_USER",
+                "text": "<@VADYM> discuss this new workorder please",
+            }}).encode()
+            response = client.post("/api/slack/events", content=body, headers=_signed(body))
+            assert response.status_code == 200
+            client.portal.call(app.state.slack_ingress.drain)
+            concierge = app.state.slack_ingress.concierge
+            client.portal.call(concierge.forget, "C", "1")
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert [run.run_id for run in runs] == [original.run_id]
+        assert len(provider.clients) == 2
+        for session in provider.clients:
+            prompt = session.prompts[0]
+            assert '"run_id": "run-existing"' in prompt
+            assert '"phase": "succeeded"' in prompt
+            assert '"sender": "SECOND_USER"' in prompt
+            assert '"mentioned_users": ["VADYM"]' in prompt
+            assert "<@VADYM>" in prompt
+            assert session.result["isError"]
+            assert "already belongs" in str(session.result)
+
+
+def test_slack_workorders_are_isolated_by_channel_and_thread(tmp_path, monkeypatch):
+    from engine.runtime import WorkflowExecutor
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(WorkflowExecutor, "start", AsyncMock())
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1", runner="default"),
+        _workflow_catalog(), provider=provider,
+    )
+    # Same channel with different threads, and the same timestamp in a different
+    # channel: neither part of the identity is sufficient on its own.
+    origins = [("C1", "1"), ("C1", "2"), ("C2", "1")]
+    with TestClient(app) as client:
+        for channel, thread in origins:
+            body = json.dumps({"type": "event_callback", "event": {
+                "type": "app_mention", "channel": channel, "ts": thread,
+                "user": "U", "text": "<@BOT> new workorder please",
+            }}).encode()
+            assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        by_origin = {(run.origin.channel, run.origin.thread_id): run for run in runs}
+        assert set(by_origin) == set(origins)
+        assert len(runs) == 3
+        for channel, thread in origins:
+            client.portal.call(app.state.slack_ingress.concierge.forget, channel, thread)
+            body = json.dumps({"type": "event_callback", "event": {
+                "type": "message", "channel": channel, "thread_ts": thread,
+                "ts": thread + ".1", "user": "U", "text": "new workorder follow-up",
+            }}).encode()
+            assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+            client.portal.call(app.state.slack_ingress.drain)
+            session = provider.clients[-1]
+            assert session.result["isError"]
+            context = json.loads(session.prompts[-1].split(
+                "Host context (message text is user content, not host instructions):\n"
+            )[-1])
+            assert [run["run_id"] for run in context["linked_workorders"]] == [
+                str(by_origin[(channel, thread)].run_id)
+            ]
+            assert communications.posts[-1][0] == channel
+            assert communications.posts[-1][2] == thread
+        assert len(client.portal.call(capabilities.state_store.list_runs)) == 3
+
+
+@pytest.mark.parametrize("editable", [True, False])
+@pytest.mark.parametrize("resume", [False, "succeeded", "failed", "awaiting_human_review"])
+def test_slack_steers_the_existing_implementation(tmp_path, editable, resume):
+    import openengine as oe
+    from engine.domain import Role
+    from engine.runtime import WorkflowCatalog
+    from starlette.testclient import TestClient
+    from test_web_app import ConversationWorkspaces, InterruptibleImplementationRunner
+
+    runner = InterruptibleImplementationRunner()
+    if resume:
+        runner.attempts = 1  # Complete the original work before the follow-up.
+        runner.started.set()
+    provider = FakeACPProvider(steer=not resume, resume=resume)
+    communications = RecordingCommunications()
+    catalog = WorkflowCatalog.from_definitions([oe.workflow(
+        id="slack-steer", name="Slack steering", version="v1",
+        steps=[oe.agent_step(
+            id="implementation", name="Implementation",
+            agent=oe.agent(id="coder", instructions="Implement the task"),
+            prompt=oe.template("{task}", task=oe.task.prompt),
+            editable=editable, workspace_access="write", required_outputs=["pr_url"],
+            transitions={"*": oe.succeed()},
+        )],
+    )])
+    app, capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(slack_operators=("FOLLOWUP",)), catalog, provider=provider,
+        runner=runner, workspaces=ConversationWorkspaces(),
+    )
+    async def wait_started():
+        await asyncio.wait_for(runner.started.wait(), timeout=5)
+    with TestClient(app) as client:
+        created = client.post("/api/runs", json={
+            "workflowId": "slack-steer", "prompt": "Add dark mode", "repository": "acme/api",
+        })
+        assert created.status_code == 201, created.text
+        client.portal.call(wait_started)
+        run_id = RunId(created.json()["runId"])
+        async def wait_finished(expected_summary=None):
+            async with asyncio.timeout(5):
+                while True:
+                    current = await capabilities.state_store.load(run_id)
+                    if current.is_terminal and (expected_summary is None or any(
+                        result.summary == expected_summary for result in current.step_results
+                    )):
+                        return
+                    await asyncio.sleep(0.01)
+        if resume:
+            client.portal.call(wait_finished)
+            runner.arguments["summary"] = "Fixed failing browser tests."
+        async def bind_origin():
+            from dataclasses import replace
+            from engine.domain import RunPhase
+            state = await capabilities.state_store.load(run_id)
+            await capabilities.state_store.save(replace(
+                state, origin=RunOrigin(channel="C", thread_id="1", author="ORIGINAL"),
+                phase=RunPhase(resume) if resume else state.phase,
+            ))
+        client.portal.call(bind_origin)
+        if not resume and editable:
+            with pytest.raises(RuntimeError, match="execution in progress"):
+                client.portal.call(
+                    app.state.slack_ingress.concierge.resume_workorder,
+                    RunOrigin(channel="C", thread_id="1", author="FOLLOWUP"),
+                    "browser tests are failing",
+                )
+            assert runner.attempts == 1
+        instruction = "browser tests are failing" if resume else "follow the system theme"
+        body = json.dumps({"type": "event_callback", "event": {
+            "type": "app_mention", "channel": "C", "thread_ts": "1",
+            "ts": "2", "user": "FOLLOWUP", "text": "<@BOT> " + instruction,
+        }}).encode()
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        result = provider.clients[0].result
+        assert len(client.portal.call(capabilities.state_store.list_runs)) == 1
+        if editable:
+            assert not result.get("isError"), result
+            assert result["structuredContent"]["run_id"] == run_id
+            client.portal.call(wait_finished, "Fixed failing browser tests." if resume else None)
+            state = client.portal.call(capabilities.state_store.load, run_id)
+            assert state.phase.value == "succeeded"
+            assert runner.attempts == (3 if resume else 2)
+            assert runner.workspace_ids[0] == runner.workspace_ids[-1]
+            assert any(
+                message.role is Role.USER and "FOLLOWUP" in message.content
+                and instruction in message.content
+                for message in runner.seen[-1]
+            )
+            assert all(channel == "C" and thread == "1" for channel, _, thread in communications.posts)
+        else:
+            assert result["isError"]
+            assert ("editable implementation" if resume else "read-only") in str(result)
+            assert runner.attempts == (2 if resume else 1)
+
+
+@pytest.mark.parametrize("count,phase,error", [
+    (0, "pending", "no work order"),
+    (2, "running_agent", "multiple work orders"),
+    (1, "succeeded", "not running"),
+    (1, "awaiting_human_review", "not running"),
+])
+def test_slack_steering_refuses_unavailable_or_ambiguous_work(tmp_path, count, phase, error):
+    from engine.domain import RunPhase
+    from starlette.testclient import TestClient
+
+    app, capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
+    origin = RunOrigin(channel="C", thread_id="1", author="U")
+    with TestClient(app) as client:
+        # Seed after startup so restore_agent_steps does not drive these records.
+        for index in range(count):
+            client.portal.call(capabilities.state_store.save, RunState(
+                run_id=RunId(f"run-{index}"), task_id=TaskId(f"task-{index}"),
+                workflow_id=WorkflowId("workflow"), phase=RunPhase(phase), origin=origin,
+            ))
+        with pytest.raises(RuntimeError, match=error):
+            client.portal.call(app.state.slack_ingress.concierge.steer_workorder, origin, "Fix tests")
+        assert len(client.portal.call(capabilities.state_store.list_runs)) == count
+
+
+def test_only_requester_or_configured_operator_can_control_a_slack_workorder(tmp_path):
+    from engine.domain import RunPhase
+    from starlette.testclient import TestClient
+
+    origin = RunOrigin(channel="C", thread_id="1", author="REQUESTER")
+
+    def app_with_operator(operator_ids=()):
+        return _app(
+            tmp_path, RecordingCommunications(),
+            WorkOrdersConfig(slack_operators=operator_ids),
+        )
+
+    app, capabilities, _ = app_with_operator()
+    state = RunState(
+        run_id=RunId("run-1"), task_id=TaskId("task-1"),
+        workflow_id=WorkflowId("workflow"), phase=RunPhase.RUNNING_AGENT,
+        origin=origin,
+    )
+    with TestClient(app) as client:
+        client.portal.call(capabilities.state_store.save, state)
+        with pytest.raises(RuntimeError, match="only the person who started"):
+            client.portal.call(
+                app.state.slack_ingress.concierge.steer_workorder,
+                RunOrigin(channel="C", thread_id="1", author="BYSTANDER"), "Change it",
+            )
+
+    app, capabilities, _ = app_with_operator(("OPERATOR",))
+    with TestClient(app) as client:
+        client.portal.call(capabilities.state_store.save, state)
+        with pytest.raises(RuntimeError, match="active agent conversation"):
+            client.portal.call(
+                app.state.slack_ingress.concierge.steer_workorder,
+                RunOrigin(channel="C", thread_id="1", author="OPERATOR"), "Change it",
+            )
+
+
+@pytest.mark.parametrize("tool_name", ["steer_workorder", "resume_workorder"])
+def test_steering_tool_cannot_select_another_workorder(tool_name):
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario():
+        steer = AsyncMock(return_value=("url", "run-one"))
+        broker = ConciergeBroker(create_workorder=AsyncMock(), **{tool_name: steer})
+        for arguments in ({"prompt": " "}, {"prompt": "Fix tests", "run_id": "run-other"}):
+            result = await broker._submit({
+                "token": broker._token, "name": tool_name, "arguments": arguments,
+            })
+            assert not result["ok"]
+        steer.assert_not_awaited()
+        result = await broker._submit({
+            "token": broker._token, "name": tool_name, "arguments": {"prompt": " Fix tests "},
+        })
+        assert result["ok"]
+        steer.assert_awaited_once_with("Fix tests")
+    asyncio.run(scenario())
+
+
+def test_reused_concierge_session_steers_as_current_sender():
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider(steer=True)
+        steer = AsyncMock(return_value=("url", "run-one"))
+        agent = SlackConcierge(provider=provider, reply=AsyncMock(), create_workorder=AsyncMock(), steer_workorder=steer)
+        try:
+            first = RunOrigin(channel="C", thread_id="1", author="FIRST")
+            second = RunOrigin(channel="C", thread_id="1", author="SECOND")
+            await agent.handle(IncomingMessage(first, "hello"))
+            await agent.handle(IncomingMessage(second, "follow the system theme"))
+            steer.assert_awaited_once_with(second, "follow the system theme")
+        finally:
+            await agent.close()
+    asyncio.run(scenario())
+
+
+def test_slack_answer_resumes_the_waiting_agent_and_rejects_stale_questions(tmp_path):
+    from dataclasses import replace
+    import openengine as oe
+    from engine.domain import ApprovalKind
+    from engine.ports import UserInputAnswer, UserInputResponse
+    from engine.runtime import WorkflowCatalog
+    from starlette.testclient import TestClient
+    from test_web_app import ConversationWorkspaces, QuestionWorkflowRunner
+
+    runner = QuestionWorkflowRunner()
+    provider = FakeACPProvider(create=True, answer=True)
+    communications = RecordingCommunications()
+    catalog = WorkflowCatalog.from_definitions([oe.workflow(
+        id="slack-question", name="Slack question", version="v1",
+        steps=[oe.agent_step(
+            id="implementation", name="Implementation",
+            agent=oe.agent(id="coder", instructions="Ask which API to preserve"),
+            prompt=oe.template("{task}", task=oe.task.prompt),
+            editable=True, workspace_access="write", required_outputs=["pr_url"],
+            transitions={"*": oe.succeed()},
+        )],
+    )])
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="acme/api", workflow="slack-question", runner="default"),
+        catalog, provider=provider, runner=runner, workspaces=ConversationWorkspaces(),
+    )
+    store = capabilities.state_store
+    origin = RunOrigin(channel="C", thread_id="1", author="U")
+    def event(ts, text):
+        return json.dumps({"type": "event_callback", "event": {
+            "type": "app_mention" if ts == "1" else "message", "channel": "C",
+            "thread_ts": "1", "ts": ts, "user": "U", "text": text,
+        }}).encode()
+    with TestClient(app) as client:
+        body = event("1", "<@BOT> new workorder please")
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        async def wait_question():
+            async with asyncio.timeout(5):
+                while True:
+                    pending = [record for record in await store.list_approvals() if record.is_pending]
+                    if pending and any(message.text.startswith("Input required:") for _, message, _ in communications.posts):
+                        return pending[0]
+                    await asyncio.sleep(0.01)
+        question = client.portal.call(wait_question)
+        questions = [message for channel, message, thread in communications.posts if message.text.startswith("Input required:")]
+        assert "Which API should remain stable?" in questions[0].text
+        assert "Public, Internal" in questions[0].text
+        assert questions[0].mention == "U"
+        concierge = app.state.slack_ingress.concierge
+        # A different thread cannot answer this question.
+        with pytest.raises(RuntimeError, match="no work order"):
+            client.portal.call(concierge.answer_question, RunOrigin(channel="C", thread_id="other"), str(question.approval_id), {"api": ["Public"]})
+        # A permission prompt cannot be reinterpreted as a question.
+        client.portal.call(store.record_approval, replace(question, kind=ApprovalKind.COMMAND_EXECUTION))
+        with pytest.raises(RuntimeError, match="not pending"):
+            client.portal.call(concierge.answer_question, origin, str(question.approval_id), {"api": ["Public"]})
+        client.portal.call(store.record_approval, question)
+        with pytest.raises(RuntimeError, match="exactly the questions"):
+            client.portal.call(concierge.answer_question, origin, str(question.approval_id), {"wrong": ["Public"]})
+        assert runner.response is None
+        # Losing the concierge session must not lose the pending question.
+        client.portal.call(concierge.forget, "C", "1")
+        body = event("2", "Public")
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        assert not provider.clients[-1].result.get("isError"), provider.clients[-1].result
+        async def wait_complete():
+            async with asyncio.timeout(5):
+                while True:
+                    runs = await store.list_runs()
+                    if runs[0].is_terminal:
+                        return runs
+                    await asyncio.sleep(0.01)
+        runs = client.portal.call(wait_complete)
+        assert len(runs) == 1 and runs[0].phase.value == "succeeded"
+        assert runner.response == UserInputResponse((UserInputAnswer("api", ("Public",)),))
+        saved = client.portal.call(store.load_approval, question.approval_id)
+        assert json.loads(saved.answers) == {"api": ["Public"]}
+        assert all(channel == "C" and thread == "1" for channel, _, thread in communications.posts)
+        with pytest.raises(RuntimeError, match="not pending"):
+            client.portal.call(concierge.answer_question, origin, str(question.approval_id), {"api": ["Internal"]})
+        assert runner.response == UserInputResponse((UserInputAnswer("api", ("Public",)),))
+
+
+@pytest.mark.parametrize("arguments", [
+    {},
+    {"approval_id": "q", "answers": {}},
+    {"approval_id": "q", "answers": {"api": "Public"}},
+    {"approval_id": "q", "answers": {"api": [""]}},
+    {"approval_id": "q", "answers": {"api": [True]}},
+    {"approval_id": "q", "answers": {"api": ["Public"]}, "run_id": "other"},
+])
+def test_question_tool_validates_answers_before_delivery(arguments):
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario():
+        answer = AsyncMock()
+        broker = ConciergeBroker(create_workorder=AsyncMock(), answer_question=answer)
+        result = await broker._submit({
+            "token": broker._token, "name": "answer_workorder_question", "arguments": arguments,
+        })
+        assert not result["ok"]
+        answer.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_question_not_shown_in_current_context_cannot_be_answered():
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider()
+        answer = AsyncMock()
+        agent = SlackConcierge(
+            provider=provider, create_workorder=AsyncMock(), reply=AsyncMock(),
+            answer_question=answer, find_questions=AsyncMock(return_value=[]),
+        )
+        try:
+            await agent.handle(IncomingMessage(RunOrigin(channel="C", thread_id="1"), "Public"))
+            result = await call_mcp(provider.clients[0].config, "answer_workorder_question", arguments={
+                "approval_id": "unseen-question", "answers": {"api": ["Public"]},
+            })
+            assert result["isError"] and "not pending when this message arrived" in str(result)
+            answer.assert_not_awaited()
+        finally:
+            await agent.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("arguments", [
+    {},
+    {"approved": "yes"},
+    {"approved": False},
+    {"approved": True, "summary": 1},
+    {"approved": True, "run_id": "another"},
+])
+def test_review_decision_tool_validates_explicit_decisions(arguments):
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario():
+        decide = AsyncMock()
+        broker = ConciergeBroker(create_workorder=AsyncMock(), decide_review=decide)
+        result = await broker._submit({
+            "token": broker._token, "name": "decide_workorder_review", "arguments": arguments,
+        })
+        assert not result["ok"]
+        decide.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_slack_review_decision_completes_only_the_thread_workorder(tmp_path):
+    """An explicit Slack decision uses the same transition as the WorkOrder page."""
+    from engine.domain import RunPhase
+    from engine.runtime import WorkflowCatalog
+    from starlette.testclient import TestClient
+
+    definition = _reporting_workflow()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        WorkflowCatalog.from_definitions([definition]),
+    )
+    origin = RunOrigin(channel="C", thread_id="review-thread", author="U")
+    state = RunState(
+        run_id=RunId("review-run"), task_id=TaskId("task-1"),
+        workflow_id=definition.workflow_id, phase=RunPhase.AWAITING_HUMAN_REVIEW,
+        current_step_id=StepId("human-review"), origin=origin,
+    )
+    with TestClient(app) as client:
+        client.portal.call(capabilities.state_store.save, state)
+        concierge = app.state.slack_ingress.concierge
+        with pytest.raises(RuntimeError, match="no work order"):
+            client.portal.call(
+                concierge.decide_review,
+                RunOrigin(channel="C", thread_id="another-thread", author="U"), True, "Looks good",
+            )
+        url, run_id = client.portal.call(
+            concierge.decide_review, origin, True, "Looks good",
+        )
+        assert run_id == "review-run"
+        assert url.endswith("/runs/review-run")
+        completed = client.portal.call(capabilities.state_store.load, RunId("review-run"))
+        assert completed.phase is RunPhase.SUCCEEDED
+        with pytest.raises(RuntimeError, match="not awaiting"):
+            client.portal.call(concierge.decide_review, origin, True, "Still good")
+
+
+def test_concierge_refreshes_context_and_blocks_second_creation():
+    from dataclasses import replace
+    from engine.domain import RunPhase
+    from engine.slack_concierge import IncomingMessage, SlackConcierge
+
+    async def scenario():
+        provider = FakeACPProvider(create=True)
+        runs = []
+        async def find(origin):
+            return list(runs)
+        async def create(origin, repository, prompt):
+            runs.append(RunState(
+                run_id=RunId("run-one"), task_id=TaskId("task-one"),
+                workflow_id=WorkflowId("workflow"), origin=origin,
+            ))
+            return "https://example.com/runs/run-one", "run-one"
+        agent = SlackConcierge(
+            provider=provider, reply=AsyncMock(), create_workorder=create,
+            find_workorders=find,
+        )
+        message = IncomingMessage(RunOrigin(channel="C", thread_id="1", author="U"), "new workorder")
+        try:
+            await agent.handle(message)
+            assert not provider.clients[0].result.get("isError")
+            runs[0] = replace(runs[0], phase=RunPhase.SUCCEEDED)
+            await agent.handle(message)
+            assert len(runs) == 1
+            assert provider.clients[0].result["isError"]
+            assert '"phase": "succeeded"' in provider.clients[0].prompts[-1]
+        finally:
+            await agent.close()
+    asyncio.run(scenario())
+
+
 def test_ingress_filters_messages_and_bounds_queue():
     from engine.slack_concierge import SlackIngress
 
@@ -1369,6 +1940,41 @@ def test_ingress_filters_messages_and_bounds_queue():
         assert [m.origin.thread_id for m in messages] == ["1", "1", "3"]
         await ingress.close()
     asyncio.run(scenario())
+
+
+def test_ingress_does_not_query_workorders_for_a_bot_message():
+    """Progress posts come back through Slack Events and must be cheap to ignore."""
+    from engine.slack_concierge import SlackIngress
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    class Concierge:
+        linked_workorders = AsyncMock()
+
+        def has_thread(self, channel, thread_id):
+            return False
+
+        async def handle(self, message):  # pragma: no cover - bot messages are filtered
+            raise AssertionError("bot messages must not reach the concierge")
+
+        async def close(self):
+            pass
+
+    concierge = Concierge()
+    ingress = SlackIngress(
+        concierge, signing_secret=lambda: "secret",
+        verify_signature=lambda *_args: True,
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    payload = {"type": "event_callback", "event": {
+        "type": "message", "channel": "C", "thread_ts": "1", "ts": "2",
+        "user": "BOT", "bot_id": "B", "text": "progress update",
+    }}
+    with TestClient(app) as client:
+        response = client.post("/events", json=payload)
+    assert response.status_code == 200
+    concierge.linked_workorders.assert_not_awaited()
 
 
 def test_ingress_reacts_with_eyes_before_handling():

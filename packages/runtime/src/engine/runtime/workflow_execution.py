@@ -356,7 +356,9 @@ class WorkflowExecutor:
             await self._notifier.announce(
                 state,
                 f"Review complete and ready for your decision: {command.title}\n"
-                f"Outcome: {outcome}",
+                f"Outcome: {outcome}\n"
+                "Reply in this thread with `approve` or "
+                "`request changes: <feedback>`.",
                 links=links,
                 mention=True,
             )
