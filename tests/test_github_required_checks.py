@@ -43,7 +43,7 @@ def test_confirmed_empty_requirements(source):
 
 @pytest.mark.parametrize("with_status_checks", [False, True])
 @pytest.mark.parametrize("conclusion", [None, "failure", "success"])
-def test_workflow_rules_block_ci_approval(source, monkeypatch, with_status_checks, conclusion):
+def test_workflow_rules_warn_and_fail_open(source, monkeypatch, caplog, with_status_checks, conclusion):
     from types import SimpleNamespace
 
     from engine.graph_runtime_langgraph.components import CICheck
@@ -73,12 +73,20 @@ def test_workflow_rules_block_ci_approval(source, monkeypatch, with_status_check
         "engine.graph_runtime_langgraph.components.ci_check.current_execution",
         lambda: execution,
     )
-    # Even a green same-name workflow is not proof of the required source identity.
-    with pytest.raises(GitHubSourceControlError, match="required workflows.*CI approval is blocked"):
-        asyncio.run(CICheck()({
+    result = asyncio.run(CICheck()({
+        "workspaceId": "workspace", "pr_url": "https://github.com/owner/repo/pull/42",
+    }))
+    assert result["ci_check"]["passed"] is True
+    assert "Unsupported required workflows ruleset" in caplog.text
+    assert "owner/repo:release/test" in caplog.text
+    assert "failing open" in caplog.text
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+    if with_status_checks:
+        data["/commits/head/check-runs"]["check_runs"][0]["conclusion"] = "failure"
+        result = asyncio.run(CICheck()({
             "workspaceId": "workspace", "pr_url": "https://github.com/owner/repo/pull/42",
         }))
-    assert not any("CI passed" in call.args[0] for call in execution.say.call_args_list)
+        assert result["ci_check"]["passed"] is False
 
 
 def test_classic_and_ruleset_requirements_include_missing_and_legacy(source):
