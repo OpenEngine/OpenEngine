@@ -37,6 +37,7 @@ from enum import Enum
 from typing import Protocol, runtime_checkable
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
+from engine.ports import WorkspaceState
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
 from engine.graph_runtime.events import EventObserver
@@ -253,7 +254,13 @@ class GraphRuntime(Protocol):
         ...
 
     async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
-        """What this run is doing now, or `None` when there is no such run."""
+        """What this run is doing now, or `None` when there is no such run.
+
+        Raises `UnknownGraphError` for a run whose graph is not registered.
+        A deployment may stop offering a graph while runs of it remain, and
+        that is a different answer from "no such run": the run is there, and
+        nothing here can say what it is doing.
+        """
         ...
 
     async def history(self, run_id: RunId) -> tuple[Checkpoint, ...]:
@@ -312,6 +319,16 @@ class GraphRuntime(Protocol):
         `AmbiguousExecutionError` when several do and none was named -- two
         tasks fanned into the same node make even a node name ambiguous.
         """
+        ...
+
+    async def workspace(self, run_id: RunId) -> WorkspaceState:
+        """Read the current checkout state of the run's workspace."""
+        ...
+
+    async def set_workspace_attached(
+        self, run_id: RunId, attached: bool
+    ) -> WorkspaceState:
+        """Detach or restore an idle run's checkout, preserving its work."""
         ...
 
     async def set_runner(

@@ -81,6 +81,12 @@ class GitWorktreeWorkspaceProvider:
         if not root_path.is_dir():
             return
         await _snapshot(root_path)
+        # Agents publish from a descriptive branch. Keep that work on the
+        # workspace's durable ref too, since attach restores that ref.
+        branch = _branch_for(workspace_id)
+        current = await _git(str(root_path), "rev-parse", "--abbrev-ref", "HEAD")
+        if current != branch:
+            await _git(str(root_path), "branch", "--force", branch, "HEAD")
         await _git(str(root_path), "worktree", "remove", "--force", str(root_path))
 
     async def dispose(self, workspace_id: WorkspaceId) -> None:

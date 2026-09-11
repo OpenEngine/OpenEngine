@@ -24,6 +24,7 @@ def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     assert loaded.config.attribution is True
     assert loaded.config.default_branch == "main"
     assert loaded.config.public_url == ""
+    assert loaded.config.github.repository == ""
     assert loaded.config.communications.provider == "slack"
     assert loaded.config.communications.channel == ""
     assert loaded.config.work_orders.repository == ""
@@ -136,6 +137,17 @@ def test_rejects_an_unknown_work_order_key(tmp_path: Path) -> None:
         load_engine_config(path, environ={}, cwd=tmp_path)
 
 
+def test_loads_the_repository_webhook_deliveries_are_accepted_from(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text('[github]\nrepository = "owner/name"\n')
+
+    loaded = load_engine_config(path, environ={}, cwd=tmp_path)
+
+    assert loaded.config.github.repository == "owner/name"
+
+
 def test_loads_github_deployment_credentials(tmp_path: Path) -> None:
     path = tmp_path / "engine.toml"
     path.write_text(
@@ -188,6 +200,17 @@ def test_selection_is_explicit_then_environment_then_working_directory(
         ({"default_branch": 1}, "default_branch must be a non-empty string"),
         ({"github_client_id": 1}, "github_client_id must be a string"),
         ({"github_token": " "}, "github_token must not be blank"),
+        ({"github": {"repo": "owner/name"}}, "unknown key in github: repo"),
+        ({"github": {"repository": "name"}}, 'github.repository must be "owner/name"'),
+        (
+            {"github": {"repository": "owner/name/extra"}},
+            'github.repository must be "owner/name"',
+        ),
+        (
+            {"github": {"repository": "owner /name"}},
+            'github.repository must be "owner/name"',
+        ),
+        ({"github": {"repository": " "}}, "github.repository must not be blank"),
         ({"orchestrator": {"host": ""}}, "orchestrator.host must not be blank"),
         (
             {"orchestrator": {"health_check_interval": 0}},

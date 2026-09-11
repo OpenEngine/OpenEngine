@@ -10,7 +10,6 @@ from engine.domain import (
     RunFailed,
     RunId,
     Message,
-    Role,
     StepCompleted,
     StepOutput,
     StepSpec,
@@ -80,33 +79,6 @@ def step_result_instructions(step: StepSpec, *, status_updates: bool = False) ->
 def requests_clarification_or_escalation(turn: AgentTurn) -> bool:
     """Whether a provider tool call validly pauses an unfinished step."""
     return _messages_request_clarification_or_escalation(turn.transcript)
-
-
-def awaits_human_answer(turn: AgentTurn) -> bool:
-    """Whether this turn stopped on a question rather than on `clarify`.
-
-    Both end the turn the same way, and both are valid, but they are opposite
-    things to say to a person watching: one is waiting on them, and the other
-    is the agent reporting that it answered and changed nothing.
-    """
-    return any(
-        name != "clarify" for name in _clarification_tools(turn.transcript)
-    )
-
-
-def latest_turn_requests_clarification_or_escalation(
-    messages: Sequence[Message],
-) -> bool:
-    """Whether the conversation's latest agent turn paused for a human."""
-    last_user = next(
-        (
-            index
-            for index in range(len(messages) - 1, -1, -1)
-            if messages[index].role is Role.USER
-        ),
-        -1,
-    )
-    return _messages_request_clarification_or_escalation(messages[last_user + 1 :])
 
 
 def _messages_request_clarification_or_escalation(
@@ -351,10 +323,8 @@ __all__ = [
     "INVALID_COMPLETION_ERROR",
     "INVALID_COMPLETION_CORRECTIONS",
     "InvalidStepResultError",
-    "awaits_human_answer",
     "complete_step_tool",
     "fail_step_tool",
-    "latest_turn_requests_clarification_or_escalation",
     "run_failed_from_tool_call",
     "run_failed_from_arguments",
     "requests_clarification_or_escalation",

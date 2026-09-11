@@ -49,8 +49,8 @@ from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
-from engine.ports import SourceControl
+from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
+from engine.ports import SourceControl, WorkspaceState
 from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
@@ -144,6 +144,17 @@ class LangGraphRuntime:
         source_control: SourceControl | None = None,
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
+        # What a graph used to be called, pointing at what it is called now. A
+        # run keeps the id it was started under forever, so without this a
+        # rename would strand every WorkOrder made before it. A retired id that
+        # some other graph now claims is ignored rather than allowed to shadow
+        # it: the live definition is the one that owns the name.
+        self._renamed = {
+            previous: graph.graph_id
+            for graph in graphs
+            for previous in graph.previous_ids
+            if previous not in self._definitions
+        }
         self._store: GraphRuntimeStore = store or InMemoryGraphRuntimeStore()
         self._observer: EventObserver | None = None
         self._registry = ExecutionRegistry()
@@ -165,7 +176,7 @@ class LangGraphRuntime:
         return tuple(graph.topology for graph in self._definitions.values())
 
     def topology(self, graph_id: GraphId) -> GraphTopology | None:
-        definition = self._definitions.get(graph_id)
+        definition = self._definition(graph_id)
         return definition.topology if definition is not None else None
 
     async def start(
@@ -175,7 +186,10 @@ class LangGraphRuntime:
         if definition is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
         run_id = RunId(f"run-{uuid4().hex[:12]}")
-        await self._store.remember_run(RunRecord(run_id, graph_id))
+        await self._store.remember_run(RunRecord(
+            run_id, graph_id,
+            runner_overrides=definition.initial_runner_overrides(values),
+        ))
         live = _Live(run_id, graph_id)
         self._live[run_id] = live
         await self.publish(run_id, EventKind.RUN_STARTED, {"values": dict(values)})
@@ -208,6 +222,41 @@ class LangGraphRuntime:
         # interleaved with it.
         return tuple(self._checkpoint(definition, state) for state in reversed(saved))
 
+    async def workspace(self, run_id: RunId) -> WorkspaceState:
+        definition = await self._definition_for(run_id)
+        state = await self._state(definition, run_id)
+        node = definition.workspace_node
+        workspace_id = state.values.get("workspaceId")
+        if node is None or not isinstance(workspace_id, str) or not workspace_id:
+            raise NoSuchPositionError("this run has no workspace to attach or detach")
+        return await node.provider.state(WorkspaceId(workspace_id))
+
+    async def set_workspace_attached(
+        self, run_id: RunId, attached: bool
+    ) -> WorkspaceState:
+        definition = await self._definition_for(run_id)
+        live = self._live.setdefault(run_id, _Live(run_id, definition.graph_id))
+        async with live.control:
+            snapshot = await self._snapshot(run_id)
+            if snapshot.status in (RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL):
+                raise RunNotSteerableError("stop the run before changing its workspace")
+            if live.task is not None and not live.task.done():
+                raise RunNotSteerableError("the run is still stopping; try again")
+            workspace = await self.workspace(run_id)
+            node = definition.workspace_node
+            try:
+                if attached:
+                    await node.provider.attach(
+                        workspace.workspace_id,
+                        node.repository or str(snapshot.values.get("repository") or "."),
+                        node.base_ref,
+                    )
+                else:
+                    await node.provider.detach(workspace.workspace_id)
+            except (RuntimeError, ValueError, OSError) as error:
+                raise RunNotSteerableError(str(error)) from error
+            return await self.workspace(run_id)
+
     async def resume_from(
         self, run_id: RunId, checkpoint_id: CheckpointId
     ) -> RunSnapshot:
@@ -223,6 +272,16 @@ class LangGraphRuntime:
         # once are serialised rather than dropped: both are honoured, and the
         # second one's first act is stopping the driver the first one started.
         async with live.control:
+            position = await definition.graph.aget_state(at)
+            workspace_id = position.values.get("workspaceId")
+            if workspace_id and definition.workspace_node is not None:
+                workspace = await definition.workspace_node.provider.state(
+                    WorkspaceId(workspace_id)
+                )
+                if not workspace.attached:
+                    raise RunNotSteerableError(
+                        "this run's worktree is detached; reattach it to run the agent"
+                    )
             await self._stop(live)
             # Questions raised by the attempt being replaced can never be
             # answered: the executions that asked them are gone. Recorded as
@@ -315,7 +374,7 @@ class LangGraphRuntime:
         self, run_id: RunId, node_id: NodeId, runner: str
     ) -> RunSnapshot:
         record = await self._require(run_id)
-        node = self._definitions[record.graph_id].topology.node(node_id)
+        node = self._graph_of(record).topology.node(node_id)
         if node is None:
             raise UnknownNodeError(f"unknown node: {node_id}")
         if not node.runner or runner not in (*node.runners, node.runner):
@@ -333,7 +392,7 @@ class LangGraphRuntime:
         self, run_id: RunId, node_id: NodeId, enabled: bool
     ) -> RunSnapshot:
         record = await self._require(run_id)
-        if self._definitions[record.graph_id].topology.node(node_id) is None:
+        if self._graph_of(record).topology.node(node_id) is None:
             raise UnknownNodeError(f"unknown node: {node_id}")
         nodes = tuple(node for node in record.auto_approve_nodes if node != node_id)
         if enabled:
@@ -887,15 +946,33 @@ class LangGraphRuntime:
             raise UnknownRunError(f"unknown run: {run_id}")
         return record
 
-    async def _definition_for(self, run_id: RunId) -> LangGraphDefinition:
-        record = await self._require(run_id)
-        definition = self._definitions.get(record.graph_id)
+    def _definition(self, graph_id: GraphId) -> LangGraphDefinition | None:
+        """The graph by that id, whether it is the current one or a retired one."""
+        definition = self._definitions.get(graph_id)
+        if definition is not None:
+            return definition
+        renamed = self._renamed.get(graph_id)
+        return self._definitions.get(renamed) if renamed is not None else None
+
+    def _graph_of(self, record: RunRecord) -> LangGraphDefinition:
+        """The graph this run is of, refusing rather than raising a `KeyError`.
+
+        A deployment can stop defining a graph -- removed from the workflow
+        directory, or renamed without retiring the id it had -- while its runs
+        stay in the store. That is a request this runtime cannot answer, not a
+        bug in the caller, so it is refused like every other unknown thing and
+        can be reported as one.
+        """
+        definition = self._definition(record.graph_id)
         if definition is None:
             raise UnknownGraphError(
-                f"run {run_id} is of graph {record.graph_id}, which this runtime "
-                "does not have"
+                f"run {record.run_id} is of graph {record.graph_id}, which this "
+                "runtime does not have"
             )
         return definition
+
+    async def _definition_for(self, run_id: RunId) -> LangGraphDefinition:
+        return self._graph_of(await self._require(run_id))
 
     async def _state(self, definition: LangGraphDefinition, run_id: RunId) -> Any:
         return await definition.graph.aget_state(self._config(run_id))
@@ -972,7 +1049,7 @@ class LangGraphRuntime:
 
     async def _snapshot(self, run_id: RunId) -> RunSnapshot:
         record = await self._require(run_id)
-        definition = self._definitions[record.graph_id]
+        definition = self._graph_of(record)
         state = await self._state(definition, run_id)
         pending = await self._store.pending_approvals(run_id)
         active = self._registry.active(run_id)
@@ -983,7 +1060,11 @@ class LangGraphRuntime:
         )
         return RunSnapshot(
             run_id=run_id,
-            graph_id=record.graph_id,
+            # The graph as it is called now, which is the id a client can ask
+            # for a topology by. A run started before a rename remembers the
+            # old one, and answering with that would send every reader of it to
+            # a graph the deployment does not offer any more.
+            graph_id=definition.graph_id,
             status=_status(record.error, self._frontier(definition, state.next), pending),
             active_executions=active,
             next_nodes=next_nodes,

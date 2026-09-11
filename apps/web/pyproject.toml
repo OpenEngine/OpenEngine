@@ -10,7 +10,7 @@ dependencies = [
     "engine-runtime",
     "engine-scoper",
     "engine-slack-concierge",
-    # The engine that runs the `[BETA]` graph workflows, and the contract it
+    # The engine that runs the graph workflows, and the contract it
     # implements. Startup reads every file in the workflow directory and a
     # workflow file imports the binding, so it would have to be installed even
     # if this app started none of them. (The worker and control server list it

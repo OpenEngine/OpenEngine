@@ -7,9 +7,9 @@ Two things can go wrong with `workflows/implementation_review_graph.py`:
 * it breaks something that reads the workflow directory, which is every app
   here. A directory that refuses to load takes the deployment down.
 
-The interface now offers these graphs, marked `[BETA]`, and picking one starts
-it on the graph engine. That is checked here at `/api/config` -- the dropdown a
-person actually meets -- and end to end in `tests/test_web_app.py`.
+The interface offers these graphs and picking one starts it on the graph
+engine. That is checked here at `/api/config` -- the dropdown a person actually
+meets -- and end to end in `tests/test_web_app.py`.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from engine.apps.web.composition import Settings
 from engine.apps.worker.__main__ import main as worker
 from engine.apps.worker.composition import Settings as WorkerSettings
 from engine.domain import WorkflowId, WorkspaceId
-from engine.graph_runtime import GraphWorkflow
+from engine.graph_runtime import GraphId, GraphWorkflow
 from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode
 from engine.graph_runtime_langgraph.components.name import NAMING_PROMPT
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
@@ -46,8 +46,7 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 #: Started by every composition root under test, and by the interface.
 CONFIG = Path(__file__).resolve().parents[1] / "engine.toml"
 
-STARTABLE = "implementation-review-v1"
-GRAPHS = ("implementation-review-codex", "implementation-review-claude")
+GRAPHS = ("implementation-review-rerank",)
 
 
 class RecordingWorkspaceProvider:
@@ -107,12 +106,40 @@ def test_the_repository_offers_the_same_workflow_on_either_engine() -> None:
 
     assert [str(one.graph_id) for one in loaded.graphs] == list(GRAPHS)
     assert [one.name for one in loaded.graphs] == [
-        "Implementation review (codex)",
-        "Implementation review (claude)",
+        "Implementation review rerank",
     ]
-    # One per runner, because an agent node names the agent it runs. Choosing a
-    # runner means choosing a graph, not filling in a field on one.
+    # One graph exposes both runner selections as creation inputs.
     assert all(isinstance(one, GraphWorkflow) for one in loaded.graphs)
+
+
+def test_the_workflow_retires_the_ids_it_used_to_have(tmp_path: Path) -> None:
+    """The rename in #367 left WorkOrders behind, and this is what keeps them.
+
+    The runner used to be part of the id -- one graph per agent -- and became a
+    creation input instead. Every WorkOrder started before that remembers the
+    id it began with, so the engine goes on answering for those ids: a run of
+    one still has a topology to be drawn with, which is the difference between
+    an old WorkOrder opening and an old WorkOrder failing to load.
+    """
+    graphs = catalog().graphs
+    assert [str(one) for one in graphs[0].previous_ids] == [
+        "implementation-review-codex",
+        "implementation-review-claude",
+    ]
+
+    async def scenario():
+        async with sqlite_runtime(graphs, tmp_path / "state") as runtime:
+            return [
+                runtime.topology(GraphId(retired))
+                for retired in ("implementation-review-codex", "unheard-of")
+            ]
+
+    retired, unheard = asyncio.run(scenario())
+
+    assert retired is not None and str(retired.graph_id) == GRAPHS[0]
+    # Retiring an id is not answering for every id: a graph this deployment
+    # never had is still nothing.
+    assert unheard is None
 
 
 def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
@@ -326,37 +353,33 @@ def test_the_human_stage_is_the_shared_component_rather_than_a_bespoke_node() ->
 # --- how it is offered -------------------------------------------------------
 
 
-def test_a_graph_workflow_is_not_one_of_the_step_workflows() -> None:
-    """The two kinds stay apart in the catalog, whatever a client does with them.
+def test_the_catalog_answers_for_the_workflow_by_id() -> None:
+    """What the interface looks a picked workflow up by.
 
-    The catalog is what the step executor reads, and it must never find a graph
-    in there: a graph has no steps for it to run. Offering one is the
-    interface's decision, made once in `/api/config` -- which is the next test.
+    A dropdown sends back an id; this is the lookup that turns it into
+    something startable, and the one that refuses an id nobody offers.
     """
     loaded = catalog()
 
-    assert [str(one.workflow_id) for one in loaded] == [STARTABLE]
-    assert len(loaded) == 1
+    assert len(loaded) == len(GRAPHS)
     for graph_id in GRAPHS:
-        assert WorkflowId(graph_id) not in loaded
-        assert loaded.get(WorkflowId(graph_id)) is None
+        assert WorkflowId(graph_id) in loaded
+        assert str(loaded.require(WorkflowId(graph_id)).graph_id) == graph_id
+    assert loaded.get(WorkflowId("nothing-ships-this")) is None
 
 
-def test_the_interface_offers_the_graphs_as_beta_choices(
+def test_the_interface_offers_the_graphs_by_their_own_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The dropdown itself, through the endpoint the client reads it from.
 
-    Both kinds, in one list: the step workflow as it always read, and the two
-    graphs after it wearing `[BETA]`. The prefix is the warning that these are
-    new -- picking one runs it on the graph engine, which this deployment
-    starts because its workflow directory holds graphs.
+    Every entry is a workflow under the name its definition gives it.
 
     Asked of a *started* application, which is the whole condition for a graph
     being offered: the engine that runs one is opened on startup, and an engine
-    that did not open means no `[BETA]` entries rather than entries nothing can
-    start. Starting it here also compiles every graph in the directory against
-    real files, so a graph this repository could not actually run fails this.
+    that did not open means no entries rather than entries nothing can start.
+    Starting it here also compiles every graph in the directory against real
+    files, so a graph this repository could not actually run fails this.
     """
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
     monkeypatch.chdir(tmp_path)
@@ -373,14 +396,12 @@ def test_the_interface_offers_the_graphs_as_beta_choices(
 
     offered = asyncio.run(ask())["workflows"]
 
-    assert [one["id"] for one in offered] == [STARTABLE, *GRAPHS]
-    assert [one["name"] for one in offered if one["id"] in GRAPHS] == [
-        "[BETA] Implementation review (codex)",
-        "[BETA] Implementation review (claude)",
-    ]
-    # A graph has no version, and the client leaves the version out rather than
-    # printing a trailing separator.
-    assert [one["version"] for one in offered if one["id"] in GRAPHS] == ["", ""]
+    assert [one["id"] for one in offered] == list(GRAPHS)
+    assert [one["name"] for one in offered] == ["Implementation review rerank"]
+    # Every entry declares the inputs the creation form asks for.
+    assert [
+        [item["name"] for item in one["inputs"]] for one in offered
+    ] == [["implementation_runner", "review_runner"]]
 
 
 # --- and nothing falls over --------------------------------------------------
@@ -402,3 +423,84 @@ def test_every_composition_root_still_starts(
     # `engine-web` does before it serves anything, so building it is the test.
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
     assert build_app() is not None
+
+
+@pytest.mark.parametrize("implementation", ("codex", "claude"))
+@pytest.mark.parametrize("review", ("codex", "claude"))
+def test_stage_runners_configure_models_and_mcp_identity(
+    implementation, review,
+) -> None:
+    module = definition_module()
+    graph = module.graph_for("codex")
+    assert [item.name for item in graph.inputs] == [
+        "implementation_runner", "review_runner",
+    ]
+    nodes = nodes_of(graph.builder)
+    observed = [
+        nodes[name]._for_runner(runner)
+        for name, runner in (
+            ("implementation", implementation), ("review-security", review),
+            ("review-bugs", review), ("reranker", implementation),
+        )
+    ]
+    assert [node.agent for node in observed] == [implementation, review, review, implementation]
+    for node in observed:
+        assert all(binding.agent_id == node.agent for binding in node.mcp_server_bindings)
+    assert observed[1].session_config["model"] == module.REVIEW_MODELS[review]["elevated"]
+    assert observed[2].session_config["model"] == module.REVIEW_MODELS[review]["default"]
+
+
+def test_input_runner_can_be_reset_to_workflow_default_and_retried(tmp_path):
+    """Run the real ACP node and persist the selection across a runtime restart."""
+    from dataclasses import replace
+    from engine.graph_runtime import EventLog, NodeId
+    from engine.graph_runtime_langgraph import State, graph_workflow
+    from langgraph.graph import START, END, StateGraph
+    from langgraph_acp import ACPAgentRegistry
+    from test_graph_runtime_langgraph_acp import registry, until
+
+    module = definition_module()
+    provider = registry(tmp_path).resolve("stub")
+    agents = ACPAgentRegistry([
+        replace(provider, name="codex"), replace(provider, name="claude"),
+    ])
+    # Keep the repository's real input-aware node, replacing only the external
+    # agent process and the checkout/MCP dependencies this test does not need.
+    node = replace(
+        nodes_of(module.pipeline("codex", agents=agents))["implementation"],
+        cwd=str(tmp_path), mcp_server_bindings=(),
+    )
+    builder = StateGraph(State)
+    builder.add_node("implementation", node)
+    builder.add_edge(START, "implementation")
+    builder.add_edge("implementation", END)
+    graph = graph_workflow(builder, id="input-retry", name="Input retry")
+    implementation = NodeId("implementation")
+
+    async def scenario():
+        async with sqlite_runtime((graph,), tmp_path / "runtime") as runtime:
+            log = EventLog()
+            runtime.observe(log.append)
+            run = await runtime.start(graph.graph_id, {
+                "inputs": {"implementation_runner": "claude"},
+            })
+            events = await until(log, run.run_id, "run.finished")
+            assert next(e for e in events if e.kind.value == "conversation.started").payload["agent"] == "claude"
+            snapshot = await runtime.snapshot(run.run_id)
+            default = runtime.topology(graph.graph_id).node(implementation).runner
+            assert snapshot.runner_overrides.get(implementation, default) == "claude"
+            point = next(p for p in await runtime.history(run.run_id) if implementation in p.next_nodes)
+            changed = await runtime.set_runner(run.run_id, implementation, "codex")
+            assert changed.runner_overrides.get(implementation, default) == "codex"
+            assert changed.values["inputs"]["implementation_runner"] == "claude"
+
+        async with sqlite_runtime((graph,), tmp_path / "runtime") as runtime:
+            log = EventLog()
+            runtime.observe(log.append)
+            assert (await runtime.snapshot(run.run_id)).runner_overrides == {}
+            await runtime.resume_from(run.run_id, point.checkpoint_id)
+            events = await until(log, run.run_id, "run.finished")
+            assert next(e for e in events if e.kind.value == "conversation.started").payload["agent"] == "codex"
+            assert (await runtime.store.session(run.run_id, "implementation")).agent == "codex"
+
+    asyncio.run(scenario())

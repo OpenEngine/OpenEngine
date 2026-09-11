@@ -13,6 +13,7 @@ from typing import Literal, TypeVar
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
     ChangeRequest,
+    CommentResult,
     GitResult,
     JobLogs,
     PipelineRetry,
@@ -193,8 +194,11 @@ class RoutingSourceControl:
         comment: str,
         file: str | None = None,
         line: int | None = None,
-    ) -> None:
-        await self._call(lambda source: source.add_comment(pr_url, comment, file, line))
+        in_reply_to_id: int | None = None,
+    ) -> CommentResult:
+        return await self._call(
+            lambda source: source.add_comment(pr_url, comment, file, line, in_reply_to_id)
+        )
 
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int

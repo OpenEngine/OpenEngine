@@ -6,7 +6,6 @@ import {
   api,
   newChatAgent,
   setProjectArchived,
-  setThreadAutoApprove,
   setThreadRunner,
   type ApiThread,
   type ApiProject,
@@ -75,9 +74,6 @@ function ChatPanel({
 type ThreadCustom = {
   agentId?: string;
   runner?: string;
-  workflowRunId?: string;
-  editable?: boolean;
-  autoApprove?: boolean;
 };
 
 /** The header speaks for whatever is on screen: the defaults the next
@@ -111,7 +107,6 @@ function ChatHeader({
         threadId={remoteId}
         listed={custom}
         runners={config.runners}
-        workflowRunners={config.workflowRunners}
         fallbackRunner={runner}
         compact={compact}
       />
@@ -165,14 +160,12 @@ function ConversationHeader({
   threadId,
   listed,
   runners,
-  workflowRunners,
   fallbackRunner,
   compact,
 }: {
   threadId: string;
   listed?: ThreadCustom;
   runners: RunnerOption[];
-  workflowRunners: string[];
   fallbackRunner: string;
   compact: boolean;
 }) {
@@ -183,18 +176,11 @@ function ConversationHeader({
   // list is a snapshot taken whenever it was last refreshed.
   const [fetched, setFetched] = useState<ApiThread>();
   const [chosen, setChosen] = useState<string>();
-  const [chosenAutoApprove, setChosenAutoApprove] = useState<boolean>();
-  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
   const [error, setError] = useState<string>();
   const thread = fetched ?? listed;
   // A chat nothing has described yet was started on the defaults, so those are
   // the truthful thing to show while it is being read.
   const runner = chosen ?? thread?.runner ?? fallbackRunner;
-  const workflowConversation = Boolean(thread?.workflowRunId);
-  const availableRunners = workflowConversation
-    ? workflowRunners.map((id) => ({ id, implementation: id }))
-    : runners;
-  const autoApprove = chosenAutoApprove ?? thread?.autoApprove ?? false;
   // Title generation refreshes the thread list after the first message. That
   // refreshed value can be newer than the conversation snapshot fetched when
   // this header first mounted.
@@ -225,34 +211,11 @@ function ConversationHeader({
     }
   }
 
-  async function chooseAutoApprove(next: boolean) {
-    setChosenAutoApprove(next);
-    setAutoApproveBusy(true);
-    setError(undefined);
-    try {
-      setFetched(await setThreadAutoApprove(threadId, next));
-    } catch (failure) {
-      setChosenAutoApprove(undefined);
-      setError(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      setAutoApproveBusy(false);
-    }
-  }
-
   return (
-    <header
-      className={`panel-head ${workflowConversation ? "panel-head-workflow" : ""} ${compact ? "panel-head-compact" : ""}`}
-    >
+    <header className={`panel-head ${compact ? "panel-head-compact" : ""}`}>
       <div className="panel-head-copy">
         <p className="eyebrow">{compact ? "This project" : "This conversation"}</p>
         <h1>{title}</h1>
-        {workflowConversation && (
-          <p className="lede">
-            {thread?.editable
-              ? "A WorkOrder step owns this transcript; sending guidance reactivates it if it has closed."
-              : "A WorkOrder step owns this read-only transcript."}
-          </p>
-        )}
       </div>
       <div className="field">
         <span>Agent</span>
@@ -266,7 +229,7 @@ function ConversationHeader({
             value={runner}
             onChange={(event) => void choose(event.target.value)}
           >
-            {availableRunners.map((option) => (
+            {runners.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.id}
               </option>
@@ -274,21 +237,6 @@ function ConversationHeader({
           </select>
           {error && <span className="field-error">{error}</span>}
         </label>
-        {workflowConversation && (
-          <label className="field">
-            <span>Approvals</span>
-            <span className="field-box auto-approve-control">
-              <input
-                type="checkbox"
-                checked={autoApprove}
-                disabled={autoApproveBusy}
-                onChange={(event) => void chooseAutoApprove(event.target.checked)}
-              />
-              <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
-            </span>
-            {error && <span className="field-error">{error}</span>}
-          </label>
-        )}
       </div>
     </header>
   );
@@ -372,7 +320,7 @@ function App() {
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
   const { runs, error: runsError, loaded: runsLoaded, remove: deleteRun } = useRuns();
-  // What a [BETA] WorkOrder offers in the rail: its graph's nodes, since a
+  // What a graph WorkOrder offers in the rail: its graph's nodes, since a
   // graph run has no steps for the list to carry.
   const graphNodes = useGraphNodes(runs);
   const { projects, archive: archiveProject } = useProjects();

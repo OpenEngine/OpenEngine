@@ -106,6 +106,17 @@ class LangGraphDefinition:
     names: dict[str, str] = field(default_factory=dict)
     """Display names per node id, overriding what a node calls itself."""
 
+    previous_ids: tuple[GraphId, ...] = ()
+    """Ids this graph used to be called, still answered to.
+
+    A run remembers the id it was started under, and nothing rewrites it: the
+    graph engine's record of a run is the durable half, and a deployment that
+    renamed a graph would otherwise have every WorkOrder started before the
+    rename pointing at a graph nobody has any more. Naming the old ids here is
+    what keeps those runs readable -- their state, their topology and their
+    transcripts -- rather than turning them into rows that cannot be opened.
+    """
+
     def __post_init__(self) -> None:
         if getattr(self.graph, "checkpointer", None) is None:
             raise ValueError(
@@ -113,6 +124,33 @@ class LangGraphDefinition:
                 "checkpoints, history and resumption are LangGraph's, and a "
                 "runtime cannot supply them on its behalf"
             )
+
+    @cached_property
+    def workspace_node(self) -> Any:
+        """The workspace component that owns this graph's checkout, if unambiguous."""
+        nodes = [
+            _described(node)
+            for node in self.graph.get_graph().nodes.values()
+            if _kind_of(node) == "workspace"
+        ]
+        return nodes[0] if len(nodes) == 1 else None
+
+    def initial_runner_overrides(self, values: Any) -> dict[NodeId, str]:
+        """Resolve creation inputs once into the runtime's runner selections."""
+        inputs = values.get("inputs", {})
+        overrides = {}
+        for node in self.graph.get_graph().nodes.values():
+            described = _described(node)
+            key = getattr(described, "graph_node_runner_input", "")
+            runner = inputs.get(key) if key else None
+            default = getattr(described, "graph_node_runner", "")
+            if runner is not None:
+                supported = getattr(described, "graph_node_runners", ())
+                if runner not in (*supported, default):
+                    raise ValueError(f"unsupported runner for {node.id}: {runner}")
+                if runner != default:
+                    overrides[NodeId(node.id)] = runner
+        return overrides
 
     @cached_property
     def topology(self) -> GraphTopology:

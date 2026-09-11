@@ -4,9 +4,6 @@ Durable persistence of run state, agent identity, and conversation history.
 Postgres is the intended first implementation; an in-memory dict satisfies it
 for tests.
 
-`append_events` plus `load` is deliberately event-sourcing-shaped: state can
-always be rebuilt by folding history through `engine.core.decide`.
-
 Conversations live here rather than inside a model provider's session. An
 adapter may keep a native session for efficiency, but if the store is not the
 source of truth then history cannot be resumed after a restart, inspected by a
@@ -19,7 +16,6 @@ from typing import Protocol, runtime_checkable
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
 from engine.domain.chat import Conversation, Message
-from engine.domain.events import Event
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
@@ -29,7 +25,6 @@ from engine.domain.ids import (
     MilestoneId,
     ProjectId,
     RunId,
-    StepId,
     TaskId,
     WorkstreamId,
     WorkspaceId,
@@ -40,7 +35,7 @@ from engine.domain.state import RunState
 
 @runtime_checkable
 class StateStore(Protocol):
-    """Persists run state, the events that produced it, and agent history."""
+    """Persists run state, agent identity, and conversation history."""
 
     async def load(self, run_id: RunId) -> RunState | None:
         """Return the stored state, or None if the run is unknown."""
@@ -56,18 +51,7 @@ class StateStore(Protocol):
         ...
 
     async def delete_run(self, run_id: RunId) -> bool:
-        """Forget one run and its events, returning whether it existed.
-
-        The run is the record, so removing it removes the whole record: a row
-        left without its history would still be listed, and would answer its
-        own page with a run that cannot say how it got anywhere.
-        """
-        ...
-
-    async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
-        ...
-
-    async def history(self, run_id: RunId) -> Sequence[Event]:
+        """Forget one run, returning whether it existed."""
         ...
 
     # --- planning hierarchy ---------------------------------------------
@@ -145,8 +129,6 @@ class StateStore(Protocol):
         *,
         instance_id: AgentInstanceId | None = None,
         conversation_id: ConversationId | None = None,
-        workflow_run_id: RunId | None = None,
-        workflow_step_id: StepId | None = None,
     ) -> AgentInstance:
         """Start a durable instance of an agent role, with an empty conversation.
 
@@ -162,7 +144,6 @@ class StateStore(Protocol):
         title: str,
         archived: bool,
         runner: str,
-        auto_approve: bool = False,
     ) -> AgentInstance:
         """Persist the user-facing state of an interactive instance."""
         ...
@@ -182,10 +163,7 @@ class StateStore(Protocol):
         ...
 
     async def list_instances(
-        self,
-        agent_id: AgentId | None = None,
-        *,
-        workflow_run_id: RunId | None = None,
+        self, agent_id: AgentId | None = None
     ) -> Sequence[AgentInstance]:
         """Every instance, or every instance of one role. Newest first."""
         ...

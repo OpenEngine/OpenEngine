@@ -214,7 +214,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for package in @agentclientprotocol/codex-acp @zed-industries/claude-agent-acp; do
+          for package in @agentclientprotocol/codex-acp @agentclientprotocol/claude-agent-acp; do
             version=$(npm view "$package" version)
             echo "::notice::$package resolves to $version"
             echo "### $package $version" >> "$GITHUB_STEP_SUMMARY"

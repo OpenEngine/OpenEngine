@@ -8,7 +8,7 @@ approval policy plumbing -- and changes only what a test must own:
     where it works        a fixture repository, so worktrees are disposable
     what it remembers     a SQLite file under the test's own directory
     which CLI it runs     `tests/provider_fakes.py`, scripted per test
-    which agent ACP finds the same fakes, for the `[BETA]` graph workflows
+    which agent ACP finds the same fakes, for the graph workflows
     GitHub API calls      stubbed so tests run without a real token or network
 
 Everything else is production wiring, including the parts that are easy to get
@@ -47,7 +47,6 @@ from engine.apps.web.composition import (  # noqa: E402
     build_read_only_runners,
     build_runners,
     build_session,
-    build_workflow_runners,
 )
 from engine.runtime import (  # noqa: E402
     EngineConfigError,
@@ -140,8 +139,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
         runners,
         STATIC_DIRECTORY,
-        workflow_runners=build_workflow_runners(settings),
-        review_runners=read_only_runners,
         workflow_catalog=catalog,
         graph_runtime=build_graph_runtime(
             settings,
@@ -149,7 +146,6 @@ def main(argv: list[str] | None = None) -> int:
             source_control=capabilities.source_control,
         ),
         approval_policy=loaded.config.approvals,
-        default_branch=loaded.config.default_branch,
         milestone_scoper=MilestoneScoper(
             Scoper(agent="codex", registry=scoper_registry)
         ),
@@ -166,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
             body = (kwargs.get("json") or {}).get("body", "")
             with gh_log.open("a", encoding="utf-8") as f:
                 f.write(_json.dumps({"path": path, "body": body}) + "\n")
+            owner, repo, kind, number = path.removeprefix("/repos/").split("/")[:4]
+            anchor = "discussion_r" if kind == "pulls" else "issuecomment-"
+            return {
+                "id": 123,
+                "html_url": f"https://github.com/{owner}/{repo}/pull/{number}#{anchor}123",
+            }
         return {}
 
     GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]

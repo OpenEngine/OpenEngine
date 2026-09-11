@@ -22,10 +22,17 @@ from typing import Any
 import pytest
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
-from engine.graph_runtime import EventKind, EventLog, GraphId, NodeId
+from engine.graph_runtime import (
+    EventKind,
+    EventLog,
+    GraphId,
+    NodeId,
+    UnknownGraphError,
+)
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime_langgraph import (
     ApprovalRecord,
+    InMemoryGraphRuntimeStore,
     LangGraphDefinition,
     LangGraphRuntime,
     NoExecutionError,
@@ -103,6 +110,88 @@ def test_a_graph_compiled_without_a_checkpointer_is_refused() -> None:
         LangGraphDefinition(graph_id=GRAPH, name="Triage", graph=builder.compile())
 
     assert "checkpointer" in str(refused.value)
+
+
+def test_a_run_of_a_graph_this_runtime_lost_is_refused_rather_than_crashing() -> None:
+    """A deployment can stop defining a graph; its runs stay in the store.
+
+    Withdrawn from the workflow directory, or renamed without retiring the id
+    it had -- either way there is nothing left to read the run's position with.
+    That is a refusal a control surface can answer with a 404 and a client can
+    show, and it used to be a `KeyError` on the way out of `snapshot`, which is
+    a 500 on every list and page the run appears in.
+    """
+
+    async def scenario() -> None:
+        store = InMemoryGraphRuntimeStore()
+        await store.remember_run(RunRecord(RunId("run-orphan"), GraphId("withdrawn")))
+        runtime = LangGraphRuntime(_branching(), store=store)
+        try:
+            with pytest.raises(UnknownGraphError) as refused:
+                await runtime.snapshot(RunId("run-orphan"))
+        finally:
+            await runtime.aclose()
+        assert "withdrawn" in str(refused.value)
+
+    asyncio.run(scenario())
+
+
+def test_a_renamed_graph_still_answers_for_the_runs_it_started() -> None:
+    """The reason a rename is survivable: a run remembers the id it began with.
+
+    The graph is rebuilt under a new id, retiring the old one, sharing the
+    checkpointer and the store a restart would have. Everything a client needs
+    to draw the run -- its state, its history, and a topology to draw it with --
+    is still answered, and the snapshot names the graph as it is called now so
+    that asking for that topology finds one.
+    """
+    saver = InMemorySaver()
+    store = InMemoryGraphRuntimeStore()
+
+    def graph(graph_id: GraphId, previous: tuple[GraphId, ...] = ()) -> LangGraphDefinition:
+        builder: StateGraph = StateGraph(State)
+        builder.add_node(str(TRIAGE), _triage)
+        builder.add_node(str(FAST), _fast)
+        builder.add_edge(START, str(TRIAGE))
+        builder.add_edge(str(TRIAGE), str(FAST))
+        builder.add_edge(str(FAST), END)
+        return LangGraphDefinition(
+            graph_id=graph_id,
+            name="Triage",
+            graph=builder.compile(checkpointer=saver),
+            previous_ids=previous,
+        )
+
+    async def scenario():
+        runtime = LangGraphRuntime(graph(GRAPH), store=store)
+        log = EventLog()
+        runtime.observe(log.append)
+        run = await runtime.start(GRAPH, {"size": "small"})
+        await _drain(runtime, log, run.run_id)
+        await runtime.aclose()
+
+        renamed = LangGraphRuntime(
+            graph(GraphId("triage-v2"), previous=(GRAPH,)), store=store
+        )
+        try:
+            return (
+                await renamed.snapshot(run.run_id),
+                await renamed.history(run.run_id),
+                renamed.topology(GRAPH),
+            )
+        finally:
+            await renamed.aclose()
+
+    snapshot, history, described = asyncio.run(scenario())
+
+    assert snapshot is not None
+    assert dict(snapshot.values)["took"] == "fast"
+    assert history
+    # Named as the graph is called now, because that is the id a client can ask
+    # for a topology by -- and the old id is answered for the same reason.
+    assert snapshot.graph_id == GraphId("triage-v2")
+    assert described is not None
+    assert described.graph_id == GraphId("triage-v2")
 
 
 def test_a_node_outside_a_driven_run_has_no_execution() -> None:
@@ -383,6 +472,65 @@ def test_the_sqlite_store_round_trips_everything_a_restart_needs(
     # race that lost rather than a request that never existed.
     assert found["after"].decision is ApprovalDecision.ACCEPT
     assert found["still_pending"] == ()
+
+
+@pytest.mark.parametrize("store_factory", ["memory", "sqlite"])
+def test_comments_a_run_posted_are_kept_for_the_runs_after_it(
+    tmp_path: Path, store_factory: str
+) -> None:
+    from engine.graph_runtime_langgraph.store import CommentRecord
+
+    posted = CommentRecord(
+        comment_id=123,
+        repository="acme/api",
+        kind="issue",
+        pr_number=42,
+        run_id=RunId("run-1"),
+        posted_at="2026-09-10T18:00:00+00:00",
+        node_id=NodeId("reranker"),
+        url="https://github.com/acme/api/pull/42#issuecomment-123",
+    )
+    # Same number, another id space: GitHub hands review comments out from a
+    # counter of their own, and this is a different comment.
+    inline = CommentRecord(
+        comment_id=123,
+        repository="acme/api",
+        kind="review",
+        pr_number=42,
+        run_id=RunId("run-1"),
+        posted_at="2026-09-10T18:00:30+00:00",
+        url="https://github.com/acme/api/pull/42#discussion_r123",
+    )
+    elsewhere = CommentRecord(
+        comment_id=124,
+        repository="acme/web",
+        kind="issue",
+        pr_number=7,
+        run_id=RunId("run-2"),
+        posted_at="2026-09-10T18:01:00+00:00",
+    )
+
+    async def scenario() -> tuple[CommentRecord, ...]:
+        path = tmp_path / "runtime.db"
+        store = (
+            InMemoryGraphRuntimeStore()
+            if store_factory == "memory"
+            else SqliteGraphRuntimeStore(path)
+        )
+        await store.remember_comment(posted)
+        await store.remember_comment(inline)
+        await store.remember_comment(elsewhere)
+        if store_factory == "sqlite":
+            store.close()
+            store = SqliteGraphRuntimeStore(path)
+        found = await store.comments(RunId("run-1"))
+        # A comment posted twice is one comment: the forge's id owns the row.
+        await store.remember_comment(posted)
+        assert await store.comments(RunId("run-1")) == found
+        assert await store.comments(RunId("run-2")) == (elsewhere,)
+        return found
+
+    assert asyncio.run(scenario()) == (posted, inline)
 
 
 def test_auto_approve_keeps_human_requests_manual() -> None:

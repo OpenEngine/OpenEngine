@@ -11,13 +11,15 @@ import argparse
 import asyncio
 import dataclasses
 import json
+import logging
 import secrets
 import shlex
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from engine.domain import (
     AgentRunId,
@@ -29,12 +31,20 @@ from engine.domain import (
     StepSpec,
 )
 from engine.domain.ids import WorkspaceId
-from engine.ports import ApprovalHandler, ApprovalRequest, McpServerConfig, SourceControl
+from engine.ports import (
+    ApprovalHandler,
+    ApprovalRequest,
+    CommentResult,
+    McpServerConfig,
+    SourceControl,
+)
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
     step_completed_from_arguments,
 )
+
+logger = logging.getLogger(__name__)
 
 TerminalEvent = StepCompleted | RunFailed
 TerminalDelivery = Callable[[TerminalEvent], Awaitable[None]]
@@ -50,6 +60,11 @@ ToolCallLookup = Callable[[str, str], str | None]
 #: Given a line of progress the agent wants a person to see, put it in front of
 #: them. Bound by whoever knows where the run is being watched.
 StatusReporter = Callable[[str], Awaitable[None]]
+
+#: Given a comment that is now on the forge, write it down somewhere that
+#: outlives the run. Bound by whoever owns the durable store; a broker without
+#: one still posts comments, it just keeps no record of them.
+CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -92,6 +107,23 @@ READ_ONLY_REPOSITORY_TOOLS: frozenset[str] = frozenset(
 
 #: What `open_pull_request` proposes against when the agent names no base.
 DEFAULT_BASE_REF = "main"
+
+
+@dataclass(frozen=True, slots=True)
+class PostedComment:
+    """A comment that is on the forge, named the way a later run can find it.
+
+    `repository` and `kind` are part of the name because `comment_id` alone is
+    not one: GitHub numbers issue comments and pull-request review comments
+    from separate sequences, and every repository has its own #1 of each.
+    """
+
+    repository: str
+    """Canonical lowercase owner/repo; prefixed with the host outside github.com."""
+    pr_number: int
+    kind: Literal["issue", "review"]
+    """Which of GitHub's two comment id spaces `result.id` was drawn from."""
+    result: CommentResult
 
 
 class TerminalResultAlreadySubmittedError(RuntimeError):
@@ -162,6 +194,7 @@ class TerminalMcpBroker:
         self._tool_call_ids: ToolCallLookup | None = None
         self._comments_added = 0
         self._status_reporter: StatusReporter | None = None
+        self._comment_recorder: CommentRecorder | None = None
 
     def enable_status_updates(self, report: StatusReporter) -> None:
         """Serve `update_status`, delivering what it is told to `report`.
@@ -171,6 +204,16 @@ class TerminalMcpBroker:
         than offered one whose updates go nowhere.
         """
         self._status_reporter = report
+
+    def enable_comment_records(self, record: CommentRecorder) -> None:
+        """Keep a durable record of every comment `add_comment` posts.
+
+        Only bound when the run has a store to keep one in. A comment is
+        posted whether or not anything is recording, so this is bookkeeping
+        rather than part of the tool: what it enables is a later run being
+        able to find the comments an earlier one left.
+        """
+        self._comment_recorder = record
 
     def enable_repository_tools(
         self,
@@ -398,13 +441,25 @@ class TerminalMcpBroker:
 
         assert self._source_control is not None
         if name == "add_comment":
-            pr_url, comment, file, line = _comment_arguments(arguments)
+            pr_url, comment, file, line, in_reply_to_id = _comment_arguments(arguments)
             try:
-                await self._source_control.add_comment(pr_url, comment, file, line)
+                result = await self._source_control.add_comment(
+                    pr_url, comment, file, line, in_reply_to_id
+                )
             except Exception as error:
                 return {"ok": False, "error": f"could not add comment: {error}"}
             self._comments_added += 1
-            return {"ok": True, "acknowledgement": "comment added"}
+            # Which id space GitHub drew the id from follows from how the
+            # comment was addressed, the same way the adapter routes it.
+            kind: Literal["issue", "review"] = (
+                "review" if file is not None or in_reply_to_id is not None else "issue"
+            )
+            await self._record_comment(kind, result)
+            return {
+                "ok": True,
+                "acknowledgement": "comment added",
+                "output": json.dumps(dataclasses.asdict(result), sort_keys=True),
+            }
 
         if self._workspace_id is None:
             return {"ok": False, "error": f"{name} needs a workspace and this step has none"}
@@ -490,6 +545,34 @@ class TerminalMcpBroker:
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _record_comment(
+        self, kind: Literal["issue", "review"], result: CommentResult
+    ) -> None:
+        """Write down a comment that is already posted, if anyone is keeping it.
+
+        Failures here are logged without failing the tool. The comment exists on the forge by now, so
+        the only thing the agent could do with the bad news is call
+        `add_comment` again and post it twice.
+        """
+        if self._comment_recorder is None:
+            return
+        try:
+            pull_request = _github_pull_request(result.url)
+            if pull_request is None:
+                logger.warning(
+                    "Could not identify posted comment %s for recording: %s",
+                    result.id, result.url,
+                )
+                return
+            repository, number = pull_request
+            await self._comment_recorder(
+                PostedComment(repository, number, kind, result)
+            )
+        except Exception:
+            logger.exception(
+                "Could not record posted comment %s: %s", result.id, result.url
+            )
 
     async def _approve_git(
         self, arguments: tuple[str, ...], request_id: McpRequestId
@@ -701,7 +784,9 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
         "name": "add_comment",
         "description": (
             "Add a comment to a pull request. Provide file and line together "
-            "for an inline comment; omit both for a general comment."
+            "for an inline comment; omit both for a general comment. Returns id and url. "
+            "For GitHub thread replies, provide in_reply_to_id with the top-level "
+            "review comment ID instead of file and line."
         ),
         "inputSchema": {
             "type": "object",
@@ -710,9 +795,14 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
                 "comment": {"type": "string", "minLength": 1},
                 "file": {"type": "string", "minLength": 1},
                 "line": {"type": "integer", "minimum": 1},
+                "in_reply_to_id": {"type": "integer", "minimum": 1},
             },
             "required": ["pr_url", "comment"],
             "dependentRequired": {"file": ["line"], "line": ["file"]},
+            "not": {
+                "required": ["in_reply_to_id"],
+                "anyOf": [{"required": ["file"]}, {"required": ["line"]}],
+            },
             "additionalProperties": False,
         },
     },
@@ -857,10 +947,10 @@ def _review_arguments(arguments: object) -> tuple[str, str, str, str]:
 
 def _comment_arguments(
     arguments: object,
-) -> tuple[str, str, str | None, int | None]:
+) -> tuple[str, str, str | None, int | None, int | None]:
     if not isinstance(arguments, dict):
         raise ValueError("add_comment arguments must be an object")
-    unexpected = set(arguments) - {"pr_url", "comment", "file", "line"}
+    unexpected = set(arguments) - {"pr_url", "comment", "file", "line", "in_reply_to_id"}
     if unexpected:
         names = ", ".join(sorted(str(name) for name in unexpected))
         raise ValueError(f"unexpected add_comment arguments: {names}")
@@ -880,7 +970,46 @@ def _comment_arguments(
         raise ValueError("line must be a positive integer")
     if (file is None) != (line is None):
         raise ValueError("file and line must be provided together")
-    return pr_url, comment, file, line
+    in_reply_to_id = arguments.get("in_reply_to_id")
+    if in_reply_to_id is not None:
+        if (
+            not isinstance(in_reply_to_id, int)
+            or isinstance(in_reply_to_id, bool)
+            or in_reply_to_id < 1
+        ):
+            raise ValueError("in_reply_to_id must be a positive integer")
+        if file is not None or line is not None:
+            raise ValueError("in_reply_to_id cannot be combined with file or line")
+    return pr_url, comment, file, line, in_reply_to_id
+
+
+def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
+    """Identify a PR from the comment URL returned by the source control API.
+
+    Preserve github.com's owner/repo keys and namespace Enterprise repositories
+    by authority. Use the returned path to follow renames and normalize casing.
+    GitLab merge-request URLs do not match this path.
+    """
+    parsed = urlsplit(pr_url)
+    if parsed.scheme not in ("https", "http") or not parsed.hostname:
+        return None
+    segments = parsed.path.strip("/").split("/")
+    if (
+        len(segments) < 4
+        or "-" in segments
+        or not all(segments[:2])
+        or segments[2] != "pull"
+        or not segments[3].isdigit()
+    ):
+        return None
+    repository = f"{segments[0]}/{segments[1]}".lower()
+    host = parsed.hostname.lower()
+    port = parsed.port
+    if port is not None and port != (443 if parsed.scheme == "https" else 80):
+        host = f"{host}:{port}"
+    if host != "github.com":
+        repository = f"{host}/{repository}"
+    return repository, int(segments[3])
 
 
 async def _forward_call(
@@ -1084,7 +1213,9 @@ def main() -> None:
 
 
 __all__ = [
+    "CommentRecorder",
     "DEFAULT_BASE_REF",
+    "PostedComment",
     "READ_ONLY_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",
     "REPOSITORY_TOOL_NAMES",

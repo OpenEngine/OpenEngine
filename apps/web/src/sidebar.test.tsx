@@ -8,9 +8,8 @@ import { Sidebar } from "./sidebar";
 const run: ApiWorkflowRun = {
   runId: "run-1",
   name: "First run",
-  workflowId: "work-v1",
-  workflowName: "Work",
-  workflowVersion: "v1",
+  workflowId: "implementation-review-codex",
+  workflowName: "Implementation review (codex)",
   taskId: "task-1",
   workstreamId: null,
   milestoneId: null,
@@ -18,42 +17,20 @@ const run: ApiWorkflowRun = {
   repository: ".",
   repositoryContext: { repository: "." },
   phase: "running_agent",
-  currentStepId: "implement",
   terminalOutcome: null,
   failureReason: "",
-  steps: [
-    {
-      stepId: "implement",
-      name: "Implementation",
-      kind: "agent",
-      status: "in_progress",
-      outcome: null,
-      summary: "",
-      outputs: [],
-      changesRequested: false,
-      agentId: "agent",
-      agentInstanceId: "instance",
-      agentRunId: "agent-run",
-      conversationId: "conversation",
-      conversationUrl: "/runs/run-1/conversations/conversation",
-      waiting: false,
-    },
-  ],
-  pendingHumanReview: null,
-  humanDecision: null,
+  graphProgress: {
+    activeNodeIds: ["implementation"],
+    waitingNodeIds: [],
+    nextNodeIds: [],
+  },
 };
 
-/** The same WorkOrder on the graph engine: no version, and no steps, because a
- *  graph is not made of them. */
+/** A second WorkOrder of the same workflow, for the tests about two rows. */
 const graphRun: ApiWorkflowRun = {
   ...run,
   runId: "run-2",
   name: "Second run",
-  workflowId: "implementation-review-codex",
-  workflowName: "Implementation review (codex)",
-  workflowVersion: "",
-  currentStepId: null,
-  steps: [],
 };
 
 /** Its graph, as the engine describes one: the two agents a person can read,
@@ -92,13 +69,19 @@ describe("Sidebar", () => {
 
   it("filters multiple stages and outcomes without toggling the accordion", async () => {
     const user = userEvent.setup();
+    const at = (id: string) =>
+      ({ activeNodeIds: [id], waitingNodeIds: [], nextNodeIds: [] });
     const runs = [run,
-      { ...run, runId: "review", name: "Review run", steps: [{ ...run.steps[0], name: "Review" }] },
-      { ...run, runId: "human", name: "Human run", phase: "awaiting_human_review", steps: [{ ...run.steps[0], name: "Human Review" }] },
+      { ...run, runId: "review", name: "Review run", graphProgress: at("review") },
+      { ...run, runId: "human", name: "Human run", phase: "awaiting_human_review",
+        graphProgress: at("human-review") },
       { ...run, runId: "failed", name: "Failed run", phase: "failed" },
       { ...run, runId: "succeeded", name: "Succeeded run", phase: "succeeded" },
     ];
-    const { rerender } = render(<Sidebar runs={runs} initialSection="workflows" />);
+    const graphNodes = { [run.workflowId]: nodes };
+    const { rerender } = render(
+      <Sidebar runs={runs} graphNodes={graphNodes} initialSection="workflows" />,
+    );
     await user.click(header("Filter WorkOrders"));
     expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
     for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeChecked();
@@ -108,9 +91,9 @@ describe("Sidebar", () => {
     await user.click(screen.getByRole("checkbox", { name: "Review" }));
     expect(screen.queryByRole("link", { name: /Review run/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Human run/ })).toBeVisible();
-    rerender(<Sidebar runs={[...runs]} initialSection="workflows" />);
+    rerender(<Sidebar runs={[...runs]} graphNodes={graphNodes} initialSection="workflows" />);
     expect(screen.queryByRole("link", { name: /Succeeded run/ })).not.toBeInTheDocument();
-    for (const name of ["Implementation", "Human Review", "failed"]) {
+    for (const name of ["Implementation", "Human review", "failed"]) {
       await user.click(screen.getByRole("checkbox", { name }));
     }
     expect(screen.getByText("No WorkOrders match the selected filters.")).toBeVisible();
@@ -123,20 +106,24 @@ describe("Sidebar", () => {
 
   it("derives unique options from history and preserves exclusions across refreshes", async () => {
     const user = userEvent.setup();
-    const custom = { ...run, steps: [{ ...run.steps[0], name: "Deploy" }] };
-    const { rerender } = render(<Sidebar runs={[]} initialSection="workflows" />);
+    const graphNodes = { [run.workflowId]: nodes };
+    const custom = run;
+    const { rerender } = render(
+      <Sidebar runs={[]} graphNodes={graphNodes} initialSection="workflows" />,
+    );
     await user.click(header("Filter WorkOrders"));
     expect(screen.getByText("No WorkOrder history yet.")).toBeVisible();
-    rerender(<Sidebar runs={[custom, { ...custom, runId: "duplicate" }]} initialSection="workflows" />);
+    rerender(<Sidebar runs={[custom, { ...custom, runId: "duplicate" }]}
+      graphNodes={graphNodes} initialSection="workflows" />);
     expect(screen.getAllByRole("checkbox")).toHaveLength(1);
-    await user.click(screen.getByRole("checkbox", { name: "Deploy" }));
+    await user.click(screen.getByRole("checkbox", { name: "Implementation" }));
     expect(screen.queryByRole("link", { name: /First run/ })).not.toBeInTheDocument();
     const finished = { ...run, runId: "done", name: "Finished run", phase: "succeeded" };
-    rerender(<Sidebar runs={[finished]} initialSection="workflows" />);
-    expect(screen.queryByRole("checkbox", { name: "Deploy" })).not.toBeInTheDocument();
+    rerender(<Sidebar runs={[finished]} graphNodes={graphNodes} initialSection="workflows" />);
+    expect(screen.queryByRole("checkbox", { name: "Implementation" })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "succeeded" })).toBeChecked();
-    rerender(<Sidebar runs={[custom, finished]} initialSection="workflows" />);
-    expect(screen.getByRole("checkbox", { name: "Deploy" })).not.toBeChecked();
+    rerender(<Sidebar runs={[custom, finished]} graphNodes={graphNodes} initialSection="workflows" />);
+    expect(screen.getByRole("checkbox", { name: "Implementation" })).not.toBeChecked();
     expect(screen.getByRole("link", { name: /Finished run/ })).toBeVisible();
   });
 
@@ -511,31 +498,31 @@ describe("Sidebar", () => {
   });
 
   it("lists runs with their conversations and marks the one on screen", () => {
-    render(<Sidebar runs={[run]} initialSection="workflows" activeRunId="run-1" />);
+    render(<Sidebar runs={[run]} graphNodes={{ [run.workflowId]: nodes }} initialSection="workflows" activeRunId="run-1" />);
 
     const entry = within(body("WorkOrders")).getByRole("link", { name: /First run/ });
     expect(entry).toHaveAttribute("href", "/runs/run-1");
-    expect(entry).toHaveTextContent("Implementation · v1");
+    expect(entry).toHaveTextContent("Implementation · implementation-review-codex");
     expect(entry.closest(".rail-item")).toHaveAttribute("data-active", "true");
     expect(
-      within(body("WorkOrders")).getByRole("link", { name: "Implementation conversation" }),
-    ).toHaveAttribute("href", "/runs/run-1/conversations/conversation");
+      within(body("WorkOrders")).getByRole("link", { name: "Implementation" }),
+    ).toHaveAttribute("href", "/runs/run-1/conversations/graph--implementation");
   });
 
   it("marks the open conversation rather than the run it belongs to", () => {
     render(
       <Sidebar
-        runs={[run]}
+        runs={[run]} graphNodes={{ [run.workflowId]: nodes }}
         initialSection="workflows"
         activeRunId="run-1"
-        activeConversationUrl="/runs/run-1/conversations/conversation"
+        activeConversationUrl="/runs/run-1/conversations/graph--implementation"
       />,
     );
 
     const entry = within(body("WorkOrders")).getByRole("link", { name: /First run/ });
     expect(entry.closest(".rail-item")).not.toHaveAttribute("data-active");
     expect(
-      within(body("WorkOrders")).getByRole("link", { name: "Implementation conversation" }),
+      within(body("WorkOrders")).getByRole("link", { name: "Implementation" }),
     ).toHaveAttribute("aria-current", "page");
   });
 
@@ -563,7 +550,7 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
-  /** A `[BETA]` WorkOrder has no steps -- a graph is not made of them -- so the
+  /** A graph WorkOrder has no steps -- a graph is not made of them -- so the
    *  shortcuts under its name are its graph's nodes, offered from the moment
    *  the run exists rather than once an agent has said something. */
   it("offers a graph WorkOrder's nodes as its conversations", () => {
@@ -717,19 +704,6 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: /Second run/ })).toHaveTextContent("succeeded ·");
     expect(screen.queryByLabelText("WorkOrder is in progress")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Waiting for input")).not.toBeInTheDocument();
-  });
-
-  it("marks a workflow conversation that is waiting for input", () => {
-    const waiting = {
-      ...run,
-      steps: [{ ...run.steps[0], waiting: true }],
-    };
-    render(<Sidebar runs={[waiting]} initialSection="workflows" />);
-
-    const entry = within(body("WorkOrders")).getByRole("link", {
-      name: "Implementation conversation Waiting for input",
-    });
-    expect(entry).toHaveTextContent("Implementation conversation ❔");
   });
 
   /** The foot's second control, beside the gear rather than inside it: what a

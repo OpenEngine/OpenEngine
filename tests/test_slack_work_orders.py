@@ -27,16 +27,14 @@ from engine.domain import (
     AgentRunId,
     RunId,
     RunOrigin,
-    RunRequested,
     RunState,
     StepId,
     StepSpec,
     TaskId,
     WorkflowId,
-    WorkspaceId,
 )
 from engine.domain.chat import Message
-from engine.ports import AgentTurn, Message as CommunicationsMessage, McpServerConfig
+from engine.ports import AgentTurn, Message as CommunicationsMessage
 from engine.runtime import RunNotifier, WorkOrdersConfig
 from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
 from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
@@ -213,7 +211,11 @@ class _FakeMcpRunner:
         pass
 
 
+<<<<<<< HEAD
 def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, runner=None, workspaces=None):
+=======
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None):
+>>>>>>> main
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -236,10 +238,8 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
     return create_app(
         session,
         runners,
-        workflow_runners=runners,
-        review_runners=runners,
         workflow_catalog=(
-            catalog if catalog is not None else WorkflowCatalog.from_definitions(())
+            catalog if catalog is not None else WorkflowCatalog.from_graphs(())
         ),
         slack_credential_store=slack_store,
         github_login_config=github_login_config,
@@ -247,32 +247,52 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         work_orders=work_orders,
         credential_store=MagicMock(),
         concierge_provider=provider or FakeACPProvider(),
+        graph_runtime=graph_runtime,
+        github_comment_handler=github_comment_handler,
     ), capabilities, slack_store
+
+def _mention_graph():
+    """The workflow these mentions name, doing nothing in particular."""
+    from engine.graph_runtime_langgraph import State, graph_workflow
+    from langgraph.graph import END, START, StateGraph
+
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {})
+    builder.add_edge(START, "work")
+    builder.add_edge("work", END)
+    return graph_workflow(
+        builder, id="implementation-review-v1", name="Implementation review"
+    )
+
+def _github_event_route(app) -> bool:
+    return any(getattr(r, "path", None) == "/api/github/events" for r in app.routes)
+
+
+def test_the_github_webhook_route_is_absent_until_something_answers_it(tmp_path):
+    """An endpoint that accepts a delivery it can never act on is a trap: a
+    webhook pointed at it collects failed deliveries until GitHub disables it."""
+    app, _capabilities, _slack_store = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig()
+    )
+    assert not _github_event_route(app)
+
+
+def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
+    async def handle(_comment):
+        pass
+
+    app, _capabilities, _slack_store = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        github_comment_handler=handle,
+    )
+    assert _github_event_route(app)
 
 
 def _workflow_catalog():
-    import openengine as oe
+    """A catalog holding the workflow these mentions name."""
     from engine.runtime import WorkflowCatalog
 
-    coder = oe.agent(id="coder", instructions="Implement it.")
-    return WorkflowCatalog.from_definitions(
-        [
-            oe.workflow(
-                id="implementation-review-v1",
-                name="Implementation review",
-                version="v1",
-                steps=[
-                    oe.agent_step(
-                        id="implementation",
-                        name="Implementation",
-                        agent=coder,
-                        prompt=oe.template("{task}", task=oe.task.prompt),
-                        transitions={"*": oe.succeed()},
-                    )
-                ],
-            )
-        ]
-    )
+    return WorkflowCatalog.from_graphs((_mention_graph(),))
 
 
 def test_handshake_is_answered_with_the_challenge(tmp_path) -> None:
@@ -583,6 +603,7 @@ def test_a_run_from_the_web_is_never_announced() -> None:
     assert communications.posts == []
 
 
+<<<<<<< HEAD
 class CompletingMcpRunner:
     """A runner that completes each step through the real run-bound server.
 
@@ -809,6 +830,8 @@ def test_the_author_is_pinged_even_without_an_operator_notification() -> None:
     assert PULL_REQUEST in [link.url for link in ready.links]
 
 
+=======
+>>>>>>> main
 def test_the_signing_secret_can_be_added_without_reconnecting(tmp_path) -> None:
     """Enabling mentions must not cost an operator their Slack connection.
 
@@ -1155,8 +1178,6 @@ def test_mcp_unknown_method_returns_error() -> None:
     asyncio.run(scenario())
 
 
-
-
 class FakeACPProvider:
     name = "fake"
 
@@ -1313,18 +1334,17 @@ def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
 
 
 @pytest.mark.parametrize("fail_after_create", [False, True])
-def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch, fail_after_create):
+def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, fail_after_create):
     from starlette.testclient import TestClient
-    from engine.runtime import WorkflowExecutor
-    posts_at_start = []
-    async def no_drive(self, event, runner_name):
-        posts_at_start.append(list(communications.posts))
-    monkeypatch.setattr(WorkflowExecutor, "start", no_drive)
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+
+    graph = _mention_graph()
     provider = FakeACPProvider(create=True, fail_after_create=fail_after_create)
     communications = RecordingCommunications()
     app, capabilities, _ = _app(tmp_path, communications,
         WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1", runner="default"),
-        _workflow_catalog(), provider=provider)
+        _workflow_catalog(), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"))
     def body(kind, ts, text, **extra):
         return json.dumps({"type": "event_callback", "event": dict(
             type=kind, channel="C", user="U", ts=ts, text=text, **extra)}).encode()
@@ -1347,22 +1367,21 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, monkeypatch,
         assert not result.get("isError"), result
         assert result["structuredContent"]["url"].startswith("https://engine.example")
         assert len(provider.clients[0].prompts) == 2
-    assert len(posts_at_start) == 1
-    announcements = [m for _, m, _ in posts_at_start[0] if m.text.startswith("Started a work order")]
+    announcements = [
+        m for _, m, _ in communications.posts
+        if m.text.startswith("Started a work order")
+    ]
     assert len(announcements) == 1
     assert announcements[0].links
-    if not fail_after_create:
-        assert posts_at_start[0][-2][1].text == provider.text
     assert any(m.links for _, m, _ in communications.posts)
     assert all(thread == "1" for _, _, thread in communications.posts)
     # The work-order announcement (with the link) must follow the conversational
     # reply so that messages appear in the expected order in the thread.
-    link_indices = [i for i, (_, m, _) in enumerate(communications.posts) if m.links]
-    reply_indices = [i for i, (_, m, _) in enumerate(communications.posts) if not m.links]
-    assert reply_indices and link_indices
-    assert fail_after_create or max(reply_indices) < min(link_indices), (
-        "announcement with link should appear after the conversational reply"
-    )
+    texts = [m.text for _, m, _ in communications.posts]
+    if not fail_after_create:
+        assert texts.index(provider.text) < texts.index(announcements[0].text), (
+            "announcement with link should appear after the conversational reply"
+        )
 
 
 def test_concierge_uses_real_langgraph_acp_session(tmp_path):
@@ -2088,3 +2107,103 @@ def test_checked_in_slack_repository_is_current_checkout():
 
     config = tomllib.loads((Path(__file__).resolve().parents[1] / "engine.toml").read_text())
     assert config["work_orders"]["repository"] == "."
+
+
+@pytest.mark.parametrize("ending", ("finished", "human_review", "failed"))
+@pytest.mark.parametrize("before_row", (False, True))
+def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, before_row):
+    from starlette.testclient import TestClient
+    from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+    from engine.runtime import WorkflowCatalog
+    from engine.runtime.config import load_engine_config
+    from langgraph.graph import START, END, StateGraph
+    from pathlib import Path
+
+    configured = load_engine_config(Path(__file__).resolve().parents[1] / "engine.toml")
+    assert configured.config.work_orders.workflow == "implementation-review-rerank"
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {"received": state["inputs"]})
+    builder.add_edge(START, "work")
+    if ending == "human_review":
+        from engine.graph_runtime_langgraph.components import HumanReviewNode
+        builder.add_node("decision", HumanReviewNode())
+        builder.add_edge("work", "decision")
+        builder.add_edge("decision", END)
+    elif ending == "failed":
+        def fail(state):
+            raise RuntimeError("review service unavailable")
+        builder.add_node("failure", fail)
+        builder.add_edge("work", "failure")
+        builder.add_edge("failure", END)
+    else:
+        builder.add_edge("work", END)
+    graph = graph_workflow(
+        builder, id="implementation-review-rerank", name="Implementation review rerank",
+        inputs=(WorkflowInput("implementation_runner", "Implementation runner", "codex"),
+                WorkflowInput("review_runner", "Review runner", "claude")),
+    )
+    # Force the graph to reach its ending before start() returns: notifications
+    # must survive events arriving before the WorkOrder row/origin is saved.
+    from contextlib import asynccontextmanager
+    from engine.graph_runtime import RunStatus
+
+    @asynccontextmanager
+    async def runtime_before_row():
+        async with sqlite_runtime((graph,), tmp_path / "graph") as runtime:
+            start = runtime.start
+            async def start_and_wait(*args, **kwargs):
+                run = await start(*args, **kwargs)
+                async with asyncio.timeout(10):
+                    while (await runtime.snapshot(run.run_id)).status is RunStatus.RUNNING:
+                        await asyncio.sleep(0.01)
+                return await runtime.snapshot(run.run_id)
+            if before_row:
+                runtime.start = start_and_wait
+            yield runtime
+
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications, configured.config.work_orders,
+        WorkflowCatalog.from_graphs((graph,)), provider=provider,
+        graph_runtime=runtime_before_row(),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        result = provider.clients[0].result
+        assert not result.get("isError"), result
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        assert str(runs[0].workflow_id) == graph.graph_id
+        assert runs[0].origin.thread_id == "1"
+        snapshot = client.get(f"/graph/api/runs/{runs[0].run_id}").json()
+        assert snapshot["values"]["inputs"] == {
+            "implementation_runner": "codex", "review_runner": "claude",
+        }
+        expected = {
+            "finished": "Work order finished.",
+            "human_review": "Review complete and ready for your decision.",
+            "failed": "Work order failed: review service unavailable",
+        }[ending]
+        async def wait_for_notification():
+            async with asyncio.timeout(10):
+                while not any(message.text == expected for _, message, _ in communications.posts):
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_for_notification)
+        notifications = [
+            (channel, message, thread) for channel, message, thread in communications.posts
+            if message.text == expected
+        ]
+        assert len(notifications) == 1
+        channel, message, thread = notifications[0]
+        assert (channel, thread) == ("C", "1")
+        assert message.mention == ("" if ending == "finished" else "U")
+        assert any(str(runs[0].run_id) in link.url for link in message.links)
+        assert any(message.text == "*work* started." for _, message, _ in communications.posts)
+    assert any(message.links for _, message, _ in communications.posts)

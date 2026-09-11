@@ -79,7 +79,7 @@ def restarts_on(watch: dev.ReloadWatch) -> FileFilter:
         # Read once at startup, which is the whole of "restart if necessary":
         # an edit to either is invisible until the process that read it dies.
         "engine.toml",
-        "workflows/implementation_review.py",
+        "workflows/implementation_review_graph.py",
     ],
 )
 def test_a_change_the_running_process_cannot_see_restarts_it(

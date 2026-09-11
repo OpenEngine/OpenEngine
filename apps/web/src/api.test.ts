@@ -7,7 +7,6 @@ import {
   getProjectMilestones,
   messageText,
   newChatAgent,
-  setThreadAutoApprove,
   type EngineConfig,
 } from "./api";
 
@@ -79,8 +78,6 @@ describe("newChatAgent", () => {
     defaultAgent: "coder",
     planAgent: "planner",
     defaultRunner: "claude",
-    workflowRunners: [],
-    defaultWorkflowRunner: "claude",
     workflows: [],
   } satisfies EngineConfig;
 
@@ -93,24 +90,6 @@ describe("newChatAgent", () => {
    *  so with an empty one -- and the page still opens on something. */
   it("falls back to the default agent when no planner is composed", () => {
     expect(newChatAgent({ ...config, planAgent: "" }, true)).toBe("coder");
-  });
-});
-
-describe("setThreadAutoApprove", () => {
-  it("updates the conversation setting", async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "thread-1", autoApprove: true }), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetch);
-
-    await setThreadAutoApprove("thread-1", true);
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/threads/thread-1",
-      expect.objectContaining({ method: "PATCH", body: '{"autoApprove":true}' }),
-    );
   });
 });
 

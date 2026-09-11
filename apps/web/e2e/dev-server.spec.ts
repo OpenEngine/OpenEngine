@@ -9,13 +9,9 @@
  *  "unexpected character at line 1 column 1" instead.
  *
  *  Which is a state no other spec in this directory can reach, and is why the
- *  `[BETA]` WorkOrder below was broken in development while all six `@beta`
- *  tests were green: its page reads the graph engine under `/graph`, and only
- *  `/api` was proxied.
- *
- *  Deliberately not tagged `@beta`. The `@beta` job is allowed to be red and is
- *  left out of `npm run test:e2e`; this is a bug in the dev server rather than
- *  a gap in the graph interface, and it has to go red for everyone.
+ *  graph WorkOrder below was broken in development while every spec in
+ *  `graph-workflow.spec.ts` was green: its page reads the graph engine under
+ *  `/graph`, and only `/api` was proxied.
  *
  *  This proves the proxy carries a page that reads both servers. It does not
  *  notice a *third* prefix added to the application and not to the proxy --
@@ -24,7 +20,7 @@
 
 import { expect, shot, test, type Script } from "./harness";
 
-const WORKFLOW = "[BETA] Implementation review (codex)";
+const WORKFLOW = "Implementation review rerank";
 const TASK = "Add a greeting file to the repository.";
 const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";

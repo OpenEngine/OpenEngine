@@ -9,6 +9,10 @@ import {
   type SeededDatabase,
 } from "./harness";
 
+/** What the workflow dropdown calls the graph this repository ships. */
+const WORKFLOW = "Implementation review rerank";
+const FRESH_TITLE = "Fresh workflow beside history";
+const NAMING_REQUEST = "Give this WorkOrder a concise display name";
 const SEEDED_RUN = "Seeded navigation coverage";
 const SEEDED_CHAT = "Seeded SQLite conversation";
 const SEEDED_CHAT_URL = "/conversations/agi-seeded-chat";
@@ -52,48 +56,40 @@ async function verifyPersistedNavigation({
   await seededRunCard.click();
   await expect(page.getByRole("heading", { name: SEEDED_RUN })).toBeVisible();
   await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
-  await expect(step(page, "Implementation")).toContainText("Preserved every browser route.");
-  await expect(step(page, "Review")).toContainText("No navigation regressions found.");
-  await expect(page.getByRole("heading", { name: "approved" })).toBeVisible();
-  await shot(page, testInfo, "2 seeded workflow detail");
+  await expect(page.getByText("Preserve browser navigation and durable conversation history.")).toBeVisible();
+  await expect(page.getByText(/no longer has/)).toBeVisible();
+  await shot(page, testInfo, "2 persisted WorkOrder with retired workflow");
 
-  await step(page, "Implementation")
-    .getByRole("link", { name: "Open conversation" })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Seeded implementation conversation" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Preserve browser navigation and durable conversation history."),
-  ).toBeVisible();
-  await expect(
-    page.getByText("I preserved the routes and added durable history coverage."),
-  ).toBeVisible();
-  await shot(page, testInfo, "3 seeded implementation history");
-
-  await page.getByRole("link", { name: /Back to WorkOrder run-seeded-history/ }).click();
-  await step(page, "Review").getByRole("link", { name: "Open conversation" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Seeded review conversation" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("I found no navigation regressions in the seeded workflow."),
-  ).toBeVisible();
-  await shot(page, testInfo, "4 seeded review history");
-
-  // Workflow transcripts and ordinary chats share SQLite but have different
-  // routes. Cross that boundary directly and verify both turns of the
-  // pre-existing standalone conversation survived the cold start.
+  // Chats remain fully navigable after opening the existing state store.
   await page.goto(SEEDED_CHAT_URL);
   await expectSeededChatHistory(page);
   await shot(page, testInfo, "5 seeded standalone chat history");
 
+  // New graph runs can start alongside the existing WorkOrder rows.
   const pullRequest = "https://github.com/acme/engine/pull/42";
   const workflowScript: Script = {
-    title: "Fresh workflow beside history",
+    title: FRESH_TITLE,
     scenarios: [
       {
-        when: "Inspect the workspace",
+        when: NAMING_REQUEST,
+        steps: [{ type: "say", text: JSON.stringify({ name: FRESH_TITLE }) }],
+      },
+      {
+        when: "Review the implementation",
+        steps: [
+          {
+            type: "tool",
+            name: "complete_step",
+            arguments: {
+              outcome: "success",
+              summary: "Reviewed the fresh workflow.",
+              outputs: { findings: "[]" },
+            },
+          },
+        ],
+      },
+      {
+        when: "You are a senior reviewer consolidating findings",
         steps: [
           { type: "say", text: "Reviewing the fresh workflow." },
           {
@@ -109,15 +105,14 @@ async function verifyPersistedNavigation({
             name: "complete_step",
             arguments: {
               outcome: "success",
-              summary: "Reviewed the fresh workflow.",
-              outputs: { findings: "No findings." },
+              summary: "The fresh workflow is ready for human review.",
+              outputs: { findings: "[]" },
             },
           },
-          { type: "say", text: "The fresh workflow is ready for human review." },
         ],
       },
       {
-        when: "fresh workflow",
+        when: "Implement the requested change",
         steps: [
           { type: "say", text: "Starting a workflow beside the seeded run." },
           {
@@ -129,7 +124,6 @@ async function verifyPersistedNavigation({
               outputs: { pr_url: pullRequest },
             },
           },
-          { type: "say", text: "The fresh workflow implementation completed." },
         ],
       },
     ],
@@ -139,14 +133,16 @@ async function verifyPersistedNavigation({
   await page.getByRole("link", { name: "+ New WorkOrder", exact: true }).click();
   await expect(page).toHaveURL("/runs/new");
   await expect(page.getByRole("heading", { name: "Create a WorkOrder" })).toBeVisible();
+  await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
   await page.getByLabel("Repository").fill(engine.repository);
   await page.getByLabel("Task prompt").fill("Start a fresh workflow beside history.");
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
-  await expect(page.locator(".detail-title .chip")).toHaveText("Human review");
   await expect(step(page, "Implementation")).toContainText(
     "Started from the populated SQLite database.",
+    { timeout: 60_000 },
   );
+  await expect(page.locator(".callout-action")).toContainText("Action required");
   await shot(page, testInfo, "6 fresh workflow beside seeded history");
 
   // Creating new records did not replace the old ones: the original run is

@@ -84,6 +84,28 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("offers graph workspace controls in the conversation and shows refusals", async () => {
+  const run = graphRun({ values: { workspaceId: "ws-1", workspace: "/worktrees/ws-1" } });
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === `/graph/api/runs/${runId}/workspace`) {
+      if (init?.method === "DELETE")
+        return json({ error: "stop the run before changing its workspace" }, { status: 409 });
+      return json({ workspaceRoot: "/worktrees/ws-1", workspaceRef: "engine/ws-1", workspaceAttached: true });
+    }
+    if (path === `/graph/api/runs/${runId}`) return json(run);
+    if (path === `/api/runs/${runId}/graph-events`) return json({ events: [] });
+    return json({ graphId: run.graphId, nodes: [] });
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  await user.click(await screen.findByRole("button", { name: "Detach" }));
+  expect(await screen.findByText("stop the run before changing its workspace")).toBeVisible();
+  expect(screen.getByText("cd /worktrees/ws-1")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Detach" })).toBeEnabled();
+});
+
 describe("graphConversation", () => {
   it("opens with what the node was asked, then what it said back", () => {
     const { messages } = graphConversation([
@@ -970,13 +992,24 @@ it("shows a retry failure and lets the operator try again", async () => {
   );
   render(<GraphConversationPage runId={runId} nodeId={NODE} />);
   const retry = await screen.findByRole("button", { name: "Retry" });
-  fetch.mockImplementationOnce(async () => json({ error: "Unable to resume" }, { status: 500 }));
+  const serveRequest = fetch.getMockImplementation()!;
+  let retryRequests = 0;
+  fetch.mockImplementation(async (input) => {
+    // Background reads must not consume the retry's failure response.
+    if (String(input) === `/graph/api/runs/${runId}/transitions`) {
+      retryRequests += 1;
+      if (retryRequests === 1)
+        return json({ error: "Unable to resume" }, { status: 500 });
+    }
+    return serveRequest(input);
+  });
   await user.click(retry);
   expect(await screen.findByRole("alert")).toHaveTextContent("Unable to resume");
   expect(screen.getByText("Agent limit reached")).toBeVisible();
   expect(retry).toBeEnabled();
   await user.click(retry);
   await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  expect(retryRequests).toBe(2);
 });
 
 it("stops a working node by cancelling the graph run", async () => {

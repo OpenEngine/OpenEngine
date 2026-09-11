@@ -103,7 +103,18 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         return JSONResponse(_snapshot_json(run), status_code=201)
 
     async def get_run(request: Request) -> JSONResponse:
-        run = await runtime.snapshot(_run_id(request))
+        """This run as it is now, or a refusal saying why there is no answer.
+
+        Two ways there is none, and a client tells them apart by the message
+        rather than the status: the run is not one this deployment has, or its
+        graph is not -- removed, or renamed without retiring the id. Both are
+        404s, because the second is no more the caller's mistake than the
+        first, and a run of a graph nobody has is a run nothing can report on.
+        """
+        try:
+            run = await runtime.snapshot(_run_id(request))
+        except Exception as error:
+            return _refusal(error)
         if run is None:
             return _error("run not found", 404)
         return JSONResponse(_snapshot_json(run))
@@ -124,7 +135,11 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
 
     async def run_events(request: Request) -> Response:
         run_id = _run_id(request)
-        if await runtime.snapshot(run_id) is None:
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except Exception as error:
+            return _refusal(error)
+        if snapshot is None:
             return _error("run not found", 404)
         try:
             cursor = _cursor(request)
@@ -227,6 +242,23 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
+    async def workspace(request: Request) -> JSONResponse:
+        try:
+            state = (
+                await runtime.workspace(_run_id(request))
+                if request.method == "GET"
+                else await runtime.set_workspace_attached(
+                    _run_id(request), request.method == "POST"
+                )
+            )
+        except Exception as error:
+            return _refusal(error)
+        return JSONResponse({
+            "workspaceRef": state.ref,
+            "workspaceRoot": state.root_path,
+            "workspaceAttached": state.attached,
+        })
+
     async def cancel_run(request: Request) -> JSONResponse:
         try:
             run = await runtime.cancel(_run_id(request))
@@ -250,6 +282,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             Route("/api/graphs/{graph_id}", describe_graph),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", get_run),
+            Route("/api/runs/{run_id}/workspace", workspace, methods=["GET", "POST", "DELETE"]),
             Route("/api/runs/{run_id}/runner", set_runner, methods=["PATCH"]),
             Route("/api/runs/{run_id}/auto-approve", set_auto_approve, methods=["PATCH"]),
             Route("/api/runs/{run_id}/checkpoints", get_checkpoints),

@@ -1,4 +1,4 @@
-/** A `[BETA]` WorkOrder's agent, read and steered as the conversation it is.
+/** A graph WorkOrder's agent, read and steered as the conversation it is.
  *
  *  The graph engine does not keep a transcript. It keeps an event log -- what a
  *  node said, what it called, what it stopped to ask -- and this is the half
@@ -29,6 +29,7 @@ import {
 } from "@assistant-ui/react";
 import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { WorkspaceControl } from "./workspace";
 
 import {
   ApiError,
@@ -470,7 +471,7 @@ function GraphDock({
   canSteer,
   working,
   stop,
-  workspace,
+  workspaceRunId,
   error,
   failure,
   retry,
@@ -483,7 +484,7 @@ function GraphDock({
   canSteer: boolean;
   working: boolean;
   stop: () => void;
-  workspace: string;
+  workspaceRunId: string;
   error: string;
   failure: string;
   retry: () => void;
@@ -517,12 +518,9 @@ function GraphDock({
       {retryError && <p className="notice" role="alert">{retryError}</p>}
       {canSteer ? <GraphComposer working={working} stop={stop} /> : <p className="step-note">{IDLE_NOTE}</p>}
       {error && <p className="notice">{error}</p>}
-      {workspace && (
+      {workspaceRunId && (
         <div className="dock-foot">
-          <div className="workspace-control">
-            <span className="micro">Working in</span>
-            <code className="dock-path">cd {workspace}</code>
-          </div>
+          <WorkspaceControl runId={workspaceRunId} />
         </div>
       )}
     </ThreadPrimitive.ViewportFooter>
@@ -635,8 +633,8 @@ export function GraphConversationPage({
     graphId && topology?.graphId === graphId &&
     topology.nodes.some((node) => node.nodeId === nodeId && node.alwaysOpen),
   );
-  const workspace =
-    typeof run?.values.workspace === "string" ? run.values.workspace : "";
+  const workspaceRunId =
+    typeof run?.values.workspaceId === "string" ? runId : "";
 
   // The requests the transcript can place, and only those. An unplaced one is
   // held rather than published: the store keeps what it is given and keeps the
@@ -776,7 +774,7 @@ export function GraphConversationPage({
               canSteer={canSteer}
               working={working}
               stop={() => void stop()}
-              workspace={workspace}
+              workspaceRunId={workspaceRunId}
               error={steerError}
               failure={conversation.failure}
               retry={() => void retry()}

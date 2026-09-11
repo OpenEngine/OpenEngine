@@ -23,7 +23,6 @@ from uuid import uuid4
 from engine.domain.agents import AgentInstance, AgentRun
 from engine.domain.approvals import ApprovalRecord, ApprovalStatus, SessionGrant
 from engine.domain.chat import Conversation, Message
-from engine.domain.events import Event
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
@@ -35,7 +34,6 @@ from engine.domain.ids import (
     ProjectId,
     RunId,
     SessionGrantId,
-    StepId,
     TaskId,
     WorkstreamId,
     WorkspaceId,
@@ -56,7 +54,6 @@ class InMemoryStateStore:
     def __init__(self) -> None:
         self._lock = Lock()
         self._states: dict[RunId, RunState] = {}
-        self._events: dict[RunId, list[Event]] = {}
         self._projects: dict[ProjectId, Project] = {}
         self._milestones: dict[MilestoneId, Milestone] = {}
         self._workstreams: dict[WorkstreamId, Workstream] = {}
@@ -100,16 +97,7 @@ class InMemoryStateStore:
 
     async def delete_run(self, run_id: RunId) -> bool:
         with self._lock:
-            self._events.pop(run_id, None)
             return self._states.pop(run_id, None) is not None
-
-    async def append_events(self, run_id: RunId, events: Sequence[Event]) -> None:
-        with self._lock:
-            self._events.setdefault(run_id, []).extend(events)
-
-    async def history(self, run_id: RunId) -> Sequence[Event]:
-        with self._lock:
-            return tuple(self._events.get(run_id, ()))
 
     # --- planning hierarchy ---------------------------------------------
 
@@ -203,8 +191,6 @@ class InMemoryStateStore:
         *,
         instance_id: AgentInstanceId | None = None,
         conversation_id: ConversationId | None = None,
-        workflow_run_id: RunId | None = None,
-        workflow_step_id: StepId | None = None,
     ) -> AgentInstance:
         instance = AgentInstance(
             instance_id=instance_id or AgentInstanceId(f"agi-{uuid4().hex[:12]}"),
@@ -214,8 +200,6 @@ class InMemoryStateStore:
             task_id=task_id,
             workspace_id=workspace_id,
             runner=runner,
-            workflow_run_id=workflow_run_id,
-            workflow_step_id=workflow_step_id,
         )
         with self._lock:
             existing = self._instances.get(instance.instance_id)
@@ -236,7 +220,6 @@ class InMemoryStateStore:
         title: str,
         archived: bool,
         runner: str,
-        auto_approve: bool = False,
     ) -> AgentInstance:
         with self._lock:
             instance = self._instances.get(instance_id)
@@ -247,7 +230,6 @@ class InMemoryStateStore:
                 title=title,
                 archived=archived,
                 runner=runner,
-                auto_approve=auto_approve,
             )
             self._instances[instance_id] = updated
         return updated
@@ -268,17 +250,12 @@ class InMemoryStateStore:
         return updated
 
     async def list_instances(
-        self,
-        agent_id: AgentId | None = None,
-        *,
-        workflow_run_id: RunId | None = None,
+        self, agent_id: AgentId | None = None
     ) -> Sequence[AgentInstance]:
         with self._lock:
             instances = list(self._instances.values())
         if agent_id is not None:
             instances = [i for i in instances if i.agent_id == agent_id]
-        if workflow_run_id is not None:
-            instances = [i for i in instances if i.workflow_run_id == workflow_run_id]
         return tuple(reversed(instances))  # newest first
 
     async def load_conversation(self, instance_id: AgentInstanceId) -> Conversation | None:

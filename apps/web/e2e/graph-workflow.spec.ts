@@ -1,29 +1,27 @@
-/** The same WorkOrder, run by the graph engine instead of the step executor.
+/** The WorkOrder this repository ships, end to end, run by the graph engine.
  *
- *  `workflow-run.spec.ts` is one long test, because a step WorkOrder does all
- *  of this and a single spec can walk through it. This one is the same journey
- *  split into the states it passes through, one test each, because a `[BETA]`
- *  WorkOrder does *not* do all of it yet: split, a run reports every gap it
- *  has, where one long test would report only the first.
- *
- *  That is what this file is for. It is expected to fail, its CI job says so,
- *  and each red test names one thing the graph WorkOrder cannot do that the
- *  step one can. Turning them green is the work; deleting them is not.
+ *  Split into the states a run passes through, one test each, rather than
+ *  written as one long journey: a graph run reaches each of them for its own
+ *  reasons, and a spec per state reports every one that broke instead of only
+ *  the first. It began as the split half of `workflow-run.spec.ts`, which
+ *  covered the step workflow this repository no longer ships; what that spec
+ *  was the only cover for -- the reviewer's finding leaving through `gh`, and
+ *  the finished run surviving a reload -- is in the last test here.
  *
  *  Everything here is the real thing except the model: a real server, the real
  *  graph engine, real LangGraph, real checkpoint files, a real worktree, and
  *  agents reached over real ACP -- answered by `tests/provider_fakes.py`
  *  instead of by codex or claude. */
 
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Page } from "@playwright/test";
 
 import { expect, shot, test, type Script } from "./harness";
 
-/** What the dropdown calls the graph, and what the runner-less form promises. */
-const WORKFLOW = "[BETA] Implementation review (codex)";
+/** What the workflow dropdown calls the graph. */
+const WORKFLOW = "Implementation review rerank";
 const TASK = "Add a greeting file to the repository.";
 const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";
@@ -223,7 +221,7 @@ const STEERING_SCRIPT: Script = {
   ],
 };
 
-/** Create one `[BETA]` WorkOrder and land on its page. */
+/** Create one graph WorkOrder and land on its page. */
 async function create(
   page: Page,
   repository: string,
@@ -246,7 +244,7 @@ async function graphRun(page: Page, runUrl: string) {
   return response.json();
 }
 
-test("@beta a graph workflow is offered, and does not ask for a runner", async ({
+test("a graph workflow accepts independent stage runners", async ({
   page,
   engine,
 }, testInfo) => {
@@ -258,12 +256,46 @@ test("@beta a graph workflow is offered, and does not ask for a runner", async (
     page.getByLabel("Workflow definition").getByRole("option", { name: WORKFLOW }),
   ).toHaveCount(1);
   await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
-  // The graph names the agent it runs, so there is nothing to choose.
-  await expect(page.getByLabel("Implementation runner")).toHaveCount(0);
+  const implementation = page.getByLabel("Implementation runner");
+  const review = page.getByLabel("Review runner");
+  await expect(implementation).toHaveValue("codex");
+  await expect(review).toHaveValue("claude");
+  await implementation.selectOption("claude");
+  await expect(review).toHaveValue("claude");
+  await review.selectOption("codex");
+  await expect(implementation).toHaveValue("claude");
+  await page.getByText("Workflow inputs", { exact: true }).click();
+  await expect(implementation).toBeHidden();
+  await expect(review).toBeHidden();
+  await page.getByText("Workflow inputs", { exact: true }).click();
+  await expect(implementation).toHaveValue("claude");
+  await expect(review).toHaveValue("codex");
   await shot(page, testInfo, "1 the beta choice");
+
+  await page.getByLabel("Repository").fill(engine.repository);
+  await page.getByLabel("Task prompt").fill(TASK);
+  await page.getByRole("button", { name: "Create WorkOrder" }).click();
+  await expect(page).toHaveURL(/\/runs\/run-/);
+  const runUrl = new URL(page.url()).pathname;
+  await expect.poll(async () => (await graphRun(page, runUrl)).values?.review, {
+    timeout: 60_000,
+  }).toEqual([]);
+  const run = await graphRun(page, runUrl);
+  expect(run.values.inputs).toEqual({
+    implementation_runner: "claude",
+    review_runner: "codex",
+  });
+  await openConversation(page, runUrl);
+  await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("claude");
+  await page.getByLabel("Runner", { exact: true }).selectOption("codex");
+  await expect.poll(async () =>
+    (await graphRun(page, runUrl)).runnerOverrides?.implementation ?? "codex"
+  ).toBe("codex");
+  await page.reload();
+  await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("codex");
 });
 
-test("@beta a graph WorkOrder provisions a checkout and runs its agents", async ({
+test("a graph WorkOrder provisions a checkout and runs its agents", async ({
   page,
   engine,
 }, testInfo) => {
@@ -288,7 +320,7 @@ test("@beta a graph WorkOrder provisions a checkout and runs its agents", async 
   await shot(page, testInfo, "2 implemented");
 });
 
-test("@beta the workflow tools reach the agent in a session it accepts", async ({
+test("the workflow tools reach the agent in a session it accepts", async ({
   page,
   engine,
 }) => {
@@ -316,7 +348,7 @@ test("@beta the workflow tools reach the agent in a session it accepts", async (
     .toEqual({ error: "", implementation: expect.stringContaining(IMPLEMENTED) });
 });
 
-test("@beta the WorkOrder page shows a graph run's stages", async ({ page, engine }) => {
+test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) => {
   engine.script(SCRIPT);
 
   const runUrl = await create(page, engine.repository);
@@ -334,7 +366,7 @@ test("@beta the WorkOrder page shows a graph run's stages", async ({ page, engin
   ]);
 });
 
-test("@beta the checkout a graph run works in is on its WorkOrder page", async ({
+test("the checkout a graph run works in is on its WorkOrder page", async ({
   page,
   engine,
 }) => {
@@ -347,7 +379,7 @@ test("@beta the checkout a graph run works in is on its WorkOrder page", async (
   await expect(checkout).toContainText("cd ");
 });
 
-test("@beta the rail offers a graph WorkOrder's conversations by node", async ({
+test("the rail offers a graph WorkOrder's conversations by node", async ({
   page,
   engine,
 }) => {
@@ -394,7 +426,7 @@ async function openConversation(page: Page, runUrl: string): Promise<void> {
   await expect(page).toHaveURL(/\/conversations\//);
 }
 
-test("@beta an agent's conversation is readable from the WorkOrder page", async ({
+test("an agent's conversation is readable from the WorkOrder page", async ({
   page,
   engine,
 }, testInfo) => {
@@ -414,7 +446,7 @@ test("@beta an agent's conversation is readable from the WorkOrder page", async 
   await shot(page, testInfo, "4 the conversation");
 });
 
-test("@beta an agent waiting on permission is answered in its conversation", async ({
+test("an agent waiting on permission is answered in its conversation", async ({
   page,
   engine,
 }, testInfo) => {
@@ -445,7 +477,7 @@ test("@beta an agent waiting on permission is answered in its conversation", asy
   await expect(page.getByText(STEERED)).toBeVisible({ timeout: 60_000 });
 });
 
-test("@beta a graph agent responds when steered during an executing turn", async ({
+test("a graph agent responds when steered during an executing turn", async ({
   page,
   engine,
 }) => {
@@ -471,7 +503,16 @@ test("@beta a graph agent responds when steered during an executing turn", async
   }
 });
 
-test("@beta a graph run waiting on a person says so, and can be answered", async ({
+/** One step's card on the run page, by the name the read model gives it.
+ *
+ *  Exactly, because "Review" is also how "Human review" starts. */
+function step(page: Page, name: string) {
+  return page
+    .locator(".step")
+    .filter({ has: page.getByRole("heading", { name, exact: true }) });
+}
+
+test("a graph run waiting on a person says so, and can be answered", async ({
   page,
   engine,
 }, testInfo) => {
@@ -489,10 +530,37 @@ test("@beta a graph run waiting on a person says so, and can be answered", async
   await page.goto(runUrl);
   await shot(page, testInfo, "3 waiting for a person");
 
-  // What a person is shown, and what they press. Both are what the step
-  // WorkOrder does at exactly this point.
+  // What each node reported, on the page rather than only in the graph state.
+  // Its *summary*, not the outputs it declared: a graph run's page does not
+  // show those yet -- see the note in `README.md` -- and a step run's did.
+  await expect(step(page, "Implementation")).toContainText(IMPLEMENTED);
+
+  // The reranker's comment left the process the way a real one would, through
+  // `gh` -- which here records rather than commenting on somebody's repository.
+  expect(readFileSync(engine.ghLog, "utf-8")).toContain(REVIEWED);
+
+  // What a person is shown, and what they press. Pressing one of these is the
+  // only thing in the browser that can end a run.
   await expect(page.locator(".callout-action")).toContainText("Action required");
-  await page.getByLabel("Decision note").fill("Ship it.");
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
+  await shot(page, testInfo, "6 approved");
+
+  // Reload rather than re-render: the end state is the store's, so it has to
+  // survive the page that submitted it going away.
+  await page.reload();
+  await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
+  await expect(page.locator(".stats")).toContainText("succeeded");
+  const stages = page.locator(".stages .stage");
+  await expect(stages).toHaveText([
+    "Workspace",
+    "Naming",
+    "Implementation",
+    "Review",
+    "Reranker",
+    "Human review",
+  ]);
+  for (const index of [0, 1, 2, 3, 4, 5])
+    await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
+  await expect(page.locator(".callout-action")).toHaveCount(0);
 });

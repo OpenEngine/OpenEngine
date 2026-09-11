@@ -2,7 +2,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   api,
-  completeHumanReview,
+  ApiError,
   decideGraphApproval,
   deleteRun,
   getGraphEvents,
@@ -20,6 +20,7 @@ import {
   type ApiWorkflowRunListing,
   type ApprovalDecision,
   type EngineConfig,
+  type RunView,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
 import { useProjectMilestones } from "./milestone-timeline";
@@ -50,13 +51,11 @@ export function runFinished(run: ApiWorkflowRunListing) {
   return run.phase === "succeeded" || run.phase === "failed";
 }
 
-/** Prefer the workflow's vocabulary while a run is active. The engine phase
- *  still drives behavior, but an operator cares which step is doing the work. */
+/** What a row says a run is doing, when nothing more specific is known.
+ *
+ *  The rail prefers the graph's own vocabulary -- the nodes on the frontier --
+ *  and falls back to this when the engine has not answered for the run yet. */
 export function runStatusLabel(run: ApiWorkflowRunListing) {
-  if (!runFinished(run)) {
-    const current = run.steps.find((step) => step.stepId === run.currentStepId);
-    if (current) return current.name;
-  }
   return phaseLabel(run.phase);
 }
 
@@ -68,25 +67,13 @@ export function phaseAccent(phase: string): "flame" | "quiet" | undefined {
   return undefined;
 }
 
-export function conversationCount(run: ApiWorkflowRunListing) {
-  return run.steps.filter((step) => step.conversationUrl).length;
-}
-
-/** Whether the graph engine runs this WorkOrder: the `[BETA]` kind.
- *
- *  A graph has no version yet, and that absence is the only tell the runs list
- *  carries. Written down once so the two readers of it agree. */
-export function isGraphRun(run: Pick<ApiWorkflowRunListing, "workflowVersion">) {
-  return !run.workflowVersion;
-}
-
 /** The nodes of every graph the WorkOrders on screen run.
  *
- *  A `[BETA]` WorkOrder keeps no steps in the runs list -- a graph is not made
- *  of them -- so what it offers instead is its graph's nodes, which exist from
- *  the moment the run does. Read once per graph rather than per run or per
- *  poll: a compiled graph's shape does not change while the server is up, and
- *  the list this follows is re-read every second.
+ *  A WorkOrder keeps no stages of its own in the runs list -- a graph's nodes
+ *  are its stages, and they exist from the moment the run does. Read once per
+ *  graph rather than per run or per poll: a compiled graph's shape does not
+ *  change while the server is up, and the list this follows is re-read every
+ *  second.
  *
  *  A graph the engine will not describe -- it is not running these workflows,
  *  or it is on its way back up -- contributes nothing, which leaves the rail
@@ -98,7 +85,7 @@ export function useGraphNodes(runs: ApiWorkflowRunListing[]) {
   // rather than joined, because nothing promises a graph id has no separator
   // in it.
   const graphIds = JSON.stringify(
-    [...new Set(runs.filter(isGraphRun).map((run) => run.workflowId))].sort(),
+    [...new Set(runs.map((run) => run.workflowId))].sort(),
   );
   useEffect(() => {
     const wanted: string[] = JSON.parse(graphIds);
@@ -182,7 +169,7 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
 
   const awaiting = runs.filter((run) => run.phase === "awaiting_human_review").length;
   const failed = runs.filter((run) => run.phase === "failed").length;
-  const conversations = runs.reduce((total, run) => total + conversationCount(run), 0);
+  const running = runs.filter((run) => IN_PROGRESS_PHASES.has(run.phase)).length;
 
   return (
     <main className="panel-scroll">
@@ -197,7 +184,7 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
         <Stat label="WorkOrders" value={runs.length} />
         <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />
         <Stat label="Failed" value={failed} tone={failed ? "alert" : undefined} />
-        <Stat label="Conversations" value={conversations} />
+        <Stat label="Running" value={running} />
       </StatStrip>
       {runs.length > 0 && (
         <div className="toolbar">
@@ -233,7 +220,6 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
       ) : runs.length ? (
         <div className="cards">
           {shown.map((run) => {
-            const current = run.steps.find((step) => step.stepId === run.currentStepId);
             return (
               <a
                 className="card"
@@ -250,23 +236,15 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
                 <h2>{run.name}</h2>
                 <dl className="card-stats">
                   <div>
-                    <dt>Steps</dt>
-                    <dd>{run.steps.length}</dd>
-                  </div>
-                  <div>
-                    <dt>Chats</dt>
-                    <dd>{conversationCount(run)}</dd>
+                    <dt>Repository</dt>
+                    <dd>{run.repository}</dd>
                   </div>
                   <div>
                     <dt>Stage</dt>
-                    <dd>{current?.name ?? run.terminalOutcome ?? "—"}</dd>
+                    <dd>{run.terminalOutcome ?? phaseLabel(run.phase)}</dd>
                   </div>
                 </dl>
-                <footer>
-                  {run.workflowVersion
-                    ? `${run.workflowName} · ${run.workflowVersion}`
-                    : run.workflowName}
-                </footer>
+                <footer>{run.workflowName}</footer>
               </a>
             );
           })}
@@ -293,17 +271,12 @@ export function NewWorkflowPage({
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
   );
   const [repository, setRepository] = useState(".");
-  const [runner, setRunner] = useState(config.defaultWorkflowRunner);
   const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
   const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  // A graph workflow — the [BETA] kind — names the agent it runs, so there is
-  // one entry per agent and nothing left for a runner field to decide. Asking
-  // anyway would be a control that looks like a choice and is not: the server
-  // reads no runner for these.
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const selected = config.workflows.find((workflow) => workflow.id === workflowId);
-  const picksItsOwnAgent = selected?.kind === "graph";
 
   useEffect(() => {
     if (prompt) window.localStorage.setItem(WORKFLOW_DRAFT_KEY, prompt);
@@ -321,7 +294,9 @@ export function NewWorkflowPage({
           workflowId,
           prompt,
           repository,
-          ...(picksItsOwnAgent ? {} : { runner }),
+          inputs: Object.fromEntries((selected?.inputs ?? []).map((input) => [
+            input.name, inputValues[input.name] ?? input.default,
+          ])),
           ...(milestone
             ? { milestoneId: milestone.milestoneId, workstreamId: workstreamId || undefined }
             : {}),
@@ -355,14 +330,14 @@ export function NewWorkflowPage({
           <select
             required
             value={workflowId}
-            onChange={(event) => setWorkflowId(event.target.value)}
+            onChange={(event) => {
+              setWorkflowId(event.target.value);
+              setInputValues({});
+            }}
           >
-            {/* The version is only shown when there is one. A [BETA] graph
-                workflow has no version yet, and "name · " reads like something
-                failed to load. */}
             {config.workflows.map((workflow) => (
               <option key={workflow.id} value={workflow.id}>
-                {workflow.version ? `${workflow.name} · ${workflow.version}` : workflow.name}
+                {workflow.name}
               </option>
             ))}
           </select>
@@ -392,26 +367,31 @@ export function NewWorkflowPage({
             placeholder="owner/repository or local path"
           />
         </label>
-        {picksItsOwnAgent ? (
-          <p className="form-note">
-            This workflow runs the agent named in its own definition, so there is no
-            runner to choose.
-          </p>
-        ) : (
-          <label>
-            <span>Implementation runner</span>
-            <select
-              required
-              value={runner}
-              onChange={(event) => setRunner(event.target.value)}
-            >
-              {config.workflowRunners.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
+        {!!selected?.inputs?.length && (
+          <details className="workflow-inputs" open>
+            <summary>Workflow inputs</summary>
+            {selected.inputs.map((input) => (
+              <label key={input.name}>
+                <span>{input.label}</span>
+                {input.choices.length ? (
+                  <select
+                    required={input.required}
+                    value={inputValues[input.name] ?? input.default}
+                    onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
+                  >
+                    {!input.default && <option value="">Select…</option>}
+                    {input.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    required={input.required}
+                    value={inputValues[input.name] ?? input.default}
+                    onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
+                  />
+                )}
+              </label>
+            ))}
+          </details>
         )}
         <label>
           <span>Task prompt</span>
@@ -441,15 +421,14 @@ export function NewWorkflowPage({
           </a>
           <button
             className="btn btn-primary"
-            disabled={submitting || (!runner && !picksItsOwnAgent) || !workflowId}
+            disabled={submitting || !workflowId}
             type="submit"
           >
             {submitting ? "Creating…" : milestone ? "Create task" : "Create WorkOrder"}
           </button>
         </div>
         <p className="form-note">
-          The implementation starts after the WorkOrder is created. Reviewer execution is not
-          available yet.
+          The workflow starts after the WorkOrder is created.
         </p>
       </form>
     </main>
@@ -487,13 +466,15 @@ export function NewTaskPage({
   return <NewWorkflowPage config={config} project={project} milestone={milestone} />;
 }
 
-function StageProgress({ run }: { run: ApiWorkflowRun }) {
+function StageProgress({ run }: { run: RunView }) {
   const preparing = run.phase === "pending" || run.phase === "preparing_workspace";
   const stages = [
     {
       id: "workspace",
       name: run.phase === "pending" ? "Queued" : "Workspace",
       status: preparing ? "in_progress" : "completed",
+      steps: [] as ApiRunStep[],
+      grouped: false,
     },
     ...collapseStepGroups(run.steps),
   ];
@@ -511,6 +492,18 @@ function StageProgress({ run }: { run: ApiWorkflowRun }) {
           key={stage.id}
         >
           <span>{stage.name}</span>
+          {stage.grouped && stage.steps.length > 1 && (
+            <span className="stage-subnodes">
+              {stage.steps.map((step) => (
+                <span
+                  className="stage-subnode"
+                  data-status={step.status}
+                  key={step.stepId}
+                  title={step.name}
+                />
+              ))}
+            </span>
+          )}
         </li>
       ))}
     </ol>
@@ -561,75 +554,6 @@ function collapseStepGroups(steps: ApiRunStep[]): StepGroupEntry[] {
   return entries;
 }
 
-/** The decision that ends a run, on the run it ends.
- *
- *  A run stops at human review and waits there indefinitely, and this is the
- *  only thing that moves it -- so it sits inside the callout that presents what
- *  the decision is made from rather than on a page of its own. The note is
- *  optional, because the button already says what was decided; it is where the
- *  reason goes, and the run keeps it as the decision's summary. */
-function HumanReviewDecision({
-  run,
-  onDecided,
-}: {
-  run: ApiWorkflowRun;
-  onDecided: (decided: ApiWorkflowRun) => void;
-}) {
-  const [note, setNote] = useState("");
-  // Which button was pressed, so the one that is working says so and neither
-  // can be pressed twice into two decisions on one run.
-  const [deciding, setDeciding] = useState<"approve" | "reject">();
-  const [error, setError] = useState("");
-
-  async function decide(approved: boolean) {
-    setDeciding(approved ? "approve" : "reject");
-    setError("");
-    try {
-      onDecided(await completeHumanReview(run.runId, approved, note.trim()));
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-      setDeciding(undefined);
-    }
-  }
-
-  return (
-    <div className="decision">
-      <label>
-        <span>Decision note</span>
-        <textarea
-          rows={3}
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-          placeholder="Optional — why this WorkOrder was approved or rejected."
-        />
-      </label>
-      {error && (
-        <p className="notice" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="decision-actions">
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={deciding !== undefined}
-          onClick={() => void decide(true)}
-        >
-          {deciding === "approve" ? "Approving…" : "Approve"}
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={deciding !== undefined}
-          onClick={() => void decide(false)}
-        >
-          {deciding === "reject" ? "Rejecting…" : "Reject"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
   return (
     <article
@@ -650,7 +574,7 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
           </span>
         </header>
         {step.outcome && (
-          <p className="step-outcome" data-changes={step.changesRequested || undefined}>
+          <p className="step-outcome">
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
           </p>
         )}
@@ -699,9 +623,12 @@ function StepGroup({ name, status, steps, currentStepId }: {
   return (
     <details className="step-group">
       <summary className="step-group-summary">
-        <span>
-          <span className="eyebrow">agent group</span>
-          <strong>{name}</strong>
+        <span className="step-group-label">
+          <span className="step-group-caret" aria-hidden="true">▶</span>
+          <span>
+            <span className="eyebrow">agent group</span>
+            <strong>{name}</strong>
+          </span>
         </span>
         <span className={`chip ${status === "action_required" ? "chip-flame" : ""}`}>
           {phaseLabel(status)}
@@ -742,10 +669,6 @@ function GraphApprovalDecision({
 
   return (
     <div className="decision">
-      <label>
-        <span>Decision note</span>
-        <textarea rows={3} />
-      </label>
       {error && <p className="notice">Could not record decision: {error}</p>}
       <div className="decision-actions">
         {approval.allowedDecisions.includes("accept") && (
@@ -783,11 +706,30 @@ function GraphApprovalDecision({
   );
 }
 
+/** A read the engine answered with "there is no such thing", as distinct from
+ *  one that failed.
+ *
+ *  What a graph WorkOrder's workflow leaving the deployment looks like from
+ *  here: the run is still on the rail and still has its transcripts, but there
+ *  is no graph to describe it with. That is worth saying on the page rather
+ *  than throwing, which would replace the whole WorkOrder with an error. */
+async function ifPresent<T>(read: Promise<T>): Promise<T | undefined> {
+  try {
+    return await read;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404) return undefined;
+    throw reason;
+  }
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
   const [baseRun, setRun] = useState<ApiWorkflowRun>();
   const [graph, setGraph] = useState<ApiGraphRun>();
   const [topology, setTopology] = useState<ApiGraphTopology>();
   const [graphEvents, setGraphEvents] = useState<ApiGraphEvent[]>([]);
+  // Set once a poll has been told there is no such graph, so the page says why
+  // it has no progress to show instead of drawing an empty WorkOrder.
+  const [workflowGone, setWorkflowGone] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
@@ -801,17 +743,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
         const value = await api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`);
         if (cancelled) return;
         setRun(value);
-        if (isGraphRun(value)) {
-          const [nextGraph, nextTopology, eventLog] = await Promise.all([
-            getGraphRun(runId),
-            getGraphTopology(value.workflowId),
-            getGraphEvents(runId),
-          ]);
-          if (cancelled) return;
-          setGraph(nextGraph);
-          setTopology(nextTopology);
-          setGraphEvents(eventLog.events);
-        }
+        const [nextGraph, nextTopology, eventLog] = await Promise.all([
+          ifPresent(getGraphRun(runId)),
+          ifPresent(getGraphTopology(value.workflowId)),
+          getGraphEvents(runId),
+        ]);
+        if (cancelled) return;
+        setGraph(nextGraph);
+        setTopology(nextTopology);
+        setGraphEvents(eventLog.events);
+        setWorkflowGone(nextTopology === undefined);
         setError("");
       } catch (reason) {
         if (!cancelled) setError((reason as Error).message);
@@ -825,15 +766,22 @@ export function RunDetailPage({ runId }: { runId: string }) {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runId]);
-  const shownRun = useMemo(() => {
-    if (!baseRun || !graph || !topology) return baseRun;
+  const shownRun = useMemo<RunView | undefined>(() => {
+    if (!baseRun) return undefined;
+    const empty: RunView = {
+      ...baseRun,
+      currentStepId: null,
+      steps: [],
+      pendingHumanReview: null,
+    };
+    if (!graph || !topology) return empty;
     const completed = new Set(
       graphEvents.filter((event) => event.type === "node.finished").map((event) => event.nodeId),
     );
     const active = new Set(graph.activeExecutions.map((execution) => execution.nodeId));
     const waiting = new Set(graph.pendingApprovals.map((approval) => approval.nodeId));
     return {
-      ...baseRun,
+      ...empty,
       phase: graph.status === "awaiting_approval" ? "awaiting_human_review" : baseRun.phase,
       currentStepId: graph.activeExecutions[0]?.nodeId ?? graph.nextNodes[0] ?? null,
       failureReason: graph.error || baseRun.failureReason,
@@ -847,11 +795,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           kind: node.kind === "human" ? "human" as const : "agent" as const,
           status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed" : "pending",
           outcome: completed.has(node.nodeId) ? "completed" : null,
-          changesRequested: false,
           agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
-          agentInstanceId: null,
-          agentRunId: null,
-          conversationId: null,
           conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
             event.type === "conversation.started" || event.type === "transcript"
           ))
@@ -871,7 +815,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
       pendingHumanReview: graph.pendingApprovals[0] ? {
         stepId: graph.pendingApprovals[0].nodeId,
         title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
-        summary: "",
         prUrl: Object.values(graph.values).reduce<string | null>((found, val) => {
           if (found) return found;
           if (val != null && typeof val === "object" && !Array.isArray(val)) {
@@ -881,15 +824,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
           return null;
         }, null),
       } : null,
-    } satisfies ApiWorkflowRun;
+    } satisfies RunView;
   }, [baseRun, graph, topology, graphEvents, runId]);
   const run = shownRun;
-  const workspaceThreadId = run
-    ? (run.steps.find(
-        (step) => step.stepId === run.currentStepId && step.agentInstanceId,
-      )?.agentInstanceId ??
-      run.steps.find((step) => step.agentInstanceId)?.agentInstanceId)
-    : undefined;
 
   return (
     <main className="panel-scroll">
@@ -907,11 +844,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </a>
             <div className="detail-title">
               <div>
-                <p className="eyebrow">
-                  {run.workflowVersion
-                    ? `${run.workflowName} / ${run.workflowVersion}`
-                    : run.workflowName}
-                </p>
+                <p className="eyebrow">{run.workflowName}</p>
                 <h1>{run.name}</h1>
                 <p className="lede">{run.taskPrompt}</p>
               </div>
@@ -926,31 +859,39 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
           </StatStrip>
-          {graph && typeof graph.values.workspace === "string" ? (
+          {graph && typeof graph.values.workspaceId === "string" && (
             <section className="run-workspace" aria-label="WorkOrder checkout">
-              <div className="workspace-control"><span className="micro">Working in</span><code className="dock-path">cd {graph.values.workspace}</code></div>
-            </section>
-          ) : workspaceThreadId && (
-            <section className="run-workspace" aria-label="WorkOrder checkout">
-              <WorkspaceControl threadId={workspaceThreadId} />
+              <WorkspaceControl runId={graph.runId} />
             </section>
           )}
           <StageProgress run={run} />
-          {/* A [BETA] WorkOrder's stages are the graph's nodes, so having none
-              means the graph engine could not be read -- not that the run has
-              no stages. Saying so beats a page that looks like a WorkOrder
-              which never started. */}
-          {run.steps.length === 0 && !run.workflowVersion && (
+          {/* A WorkOrder's stages are its graph's nodes, so having none means
+              the graph engine could not be read -- not that the run has no
+              stages. Saying so beats a page that looks like a WorkOrder which
+              never started.
+
+              Two reasons it could not be read, and the second is permanent: a
+              WorkOrder outlives the workflow it ran, so one started before its
+              workflow was withdrawn has nothing left to draw its stages from.
+              That one is named, because "try again" is not the advice. */}
+          {run.steps.length === 0 && (
             <section className="callout">
-              <p className="eyebrow">Beta workflow</p>
-              <p>
-                This WorkOrder runs on the graph engine, and its stages could not
-                be read from it. They are served under{" "}
-                <code>/graph/api/runs/{run.runId}</code>.
-              </p>
+              <p className="eyebrow">Stages unavailable</p>
+              {workflowGone ? (
+                <p>
+                  This WorkOrder ran <code>{run.workflowId}</code>, a workflow
+                  this deployment no longer has, so its stages cannot be loaded.
+                </p>
+              ) : (
+                <p>
+                  This WorkOrder runs on the graph engine, and its stages could not
+                  be read from it. They are served under{" "}
+                  <code>/graph/api/runs/{run.runId}</code>.
+                </p>
+              )}
             </section>
           )}
-          {run.pendingHumanReview && graph?.pendingApprovals[0] ? (
+          {run.pendingHumanReview && graph?.pendingApprovals[0] && (
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
               <h2>{run.pendingHumanReview.title}</h2>
@@ -966,32 +907,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 approval={graph.pendingApprovals[0]}
                 onDecided={setGraph}
               />
-            </section>
-          ) : run.pendingHumanReview && (
-            <section className="callout callout-action">
-              <p className="eyebrow">Action required</p>
-              <h2>{run.pendingHumanReview.title}</h2>
-              <p>
-                The implementation and agent review are complete. A human approval or rejection
-                is the final decision.
-              </p>
-              {run.pendingHumanReview.prUrl && (
-                <p>
-                  <a href={run.pendingHumanReview.prUrl} target="_blank" rel="noreferrer">
-                    View pull request ↗
-                  </a>
-                </p>
-              )}
-              <HumanReviewDecision run={run} onDecided={setRun} />
-            </section>
-          )}
-          {run.humanDecision && (
-            <section
-              className={`callout ${run.humanDecision.outcome === "rejected" ? "callout-rejected" : ""}`}
-            >
-              <p className="eyebrow">Final human decision</p>
-              <h2>{run.humanDecision.outcome}</h2>
-              <p>{run.humanDecision.summary || "No decision summary was provided."}</p>
             </section>
           )}
           {run.failureReason && (

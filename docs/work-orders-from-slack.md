@@ -2,7 +2,7 @@
 
 Mention `@OpenEngineBot` to open a conversation. A greeting or test message gets
 “Hi, how can I help?”. Ask for a new work order in that thread and the concierge
-uses its `create_workorder` tool. The host starts the configured step workflow,
+uses its `create_workorder` tool. The host starts the configured graph workflow,
 posts its UI link, and reports progress in the same thread.
 
 ## Setup and diagnosis
@@ -29,12 +29,16 @@ public_url = "https://engine.example"
 
 [work_orders]
 repository = "."                        # local checkout path; defaults to "."
+<<<<<<< HEAD
 workflow = "implementation-review-v1"   # optional if exactly one is installed
 runner = "claude"                       # work-order executor, not concierge
 slack_operators = ["U01234567"]          # may control work started by others
+=======
+workflow = "implementation-review-rerank"  # optional if exactly one is installed
+>>>>>>> main
 ```
 
-A greeting needs no work-order configuration. Creating work requires a resolvable step workflow. The repository is a local
+A greeting needs no work-order configuration. Creating work requires a resolvable workflow. The repository is a local
 checkout path, not a GitHub owner/name, and cannot be supplied by the agent. Missing configuration becomes a tool error so the
 concierge can explain what is needed.
 
@@ -158,10 +162,12 @@ single-workspace deployment; a dedicated index can replace it as volume grows.
 
 ## What it will not do
 
-- **`[BETA]` graph workflows are not startable this way.** They are run by the
-  other engine, which has neither the run-bound tools an agent reports through
-  nor anywhere to keep where the request came from — so one started from a
-  mention would go silent the moment it began. Only step workflows are offered.
+- **A graph workflow's stages are not narrated into the thread.** A graph run
+  is startable from a mention -- `workflow` above names one, and this repository
+  ships nothing else -- and its ending is reported. What is not reported is each
+  stage as it passes: a graph node has no run-bound step tool to report through,
+  so the thread hears that the run started and how it ended, and the WorkOrder
+  page is where the middle is read.
 - **Duplicate deliveries are ignored while remembered.** Accepted message identities
   are bounded to 4096 entries. A retry that was never accepted can be processed;
   no cross-restart exactly-once guarantee is claimed.
