@@ -860,6 +860,67 @@ def test_concierge_broker_rejects_unknown_tool() -> None:
     asyncio.run(scenario())
 
 
+# --- concierge MCP protocol --------------------------------------------------
+#
+# What a Slack agent's CLI sees when it connects. The transport answering these
+# is shared and tested once in `test_single_tool_mcp.py`; kept here as well
+# because the answers are this surface's, and a shared implementation is
+# exactly where a change made for the other surface could quietly alter them.
+
+
+def _slack_mcp_answer(request: object) -> dict[str, object] | None:
+    from engine.single_tool_mcp import mcp_response
+    from engine.slack_concierge import slack_egress
+
+    async def scenario() -> dict[str, object] | None:
+        # Port 0 connects to nothing: none of these reach the host, which is
+        # part of what they assert.
+        return await mcp_response(
+            "127.0.0.1", 0, "tok", request,
+            tool_spec=slack_egress._TOOL_SPEC,
+            server_info_name=slack_egress._SERVER_INFO_NAME,
+        )
+
+    return asyncio.run(scenario())
+
+
+def test_mcp_initialize_returns_server_protocol_version() -> None:
+    """The server always returns its own version, not the client's."""
+    from engine.single_tool_mcp import PROTOCOL_VERSION
+
+    result = _slack_mcp_answer(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "1999-01-01",
+            "clientInfo": {"name": "test", "version": "1"},
+        }},
+    )
+    assert result is not None
+    assert result["result"]["protocolVersion"] == PROTOCOL_VERSION
+
+
+def test_mcp_tools_list_returns_create_workorder() -> None:
+    result = _slack_mcp_answer({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    assert result is not None
+    tools = result["result"]["tools"]
+    assert len(tools) == 1
+    assert tools[0]["name"] == "create_workorder"
+
+
+def test_mcp_notifications_are_swallowed() -> None:
+    assert _slack_mcp_answer(
+        {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    ) is None
+
+
+def test_mcp_unknown_method_returns_error() -> None:
+    result = _slack_mcp_answer(
+        {"jsonrpc": "2.0", "id": 3, "method": "resources/list"}
+    )
+    assert result is not None
+    assert result["error"]["code"] == -32601
+
+
+
 class FakeACPProvider:
     name = "fake"
 
