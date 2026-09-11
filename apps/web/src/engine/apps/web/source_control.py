@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeVar
+from urllib.parse import urlsplit
 
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
@@ -147,9 +148,16 @@ class RoutingSourceControl:
         return selected, self._providers[selected]
 
     async def _call(
-        self, operation: Callable[[SourceControl], Awaitable[_Result]]
+        self, operation: Callable[[SourceControl], Awaitable[_Result]],
+        *, pr_url: str = "",
     ) -> _Result:
         provider, source_control = self._selected()
+        if provider == "gitlab-oauth" and urlsplit(pr_url).hostname == "github.com":
+            # Webhook targets are independent of the workspace provider choice.
+            # Use the normal GitHub credential detection without saving a choice.
+            status = gh_cli_status()
+            provider = "gh-cli" if status.installed and status.authenticated else "github-oauth"
+            source_control = self._providers[provider]
         try:
             return await operation(source_control)
         except RuntimeError as error:
@@ -190,7 +198,8 @@ class RoutingSourceControl:
 
     async def can_write_repository(self, pr_url: str, username: str) -> bool:
         return await self._call(
-            lambda source: source.can_write_repository(pr_url, username)
+            lambda source: source.can_write_repository(pr_url, username),
+            pr_url=pr_url,
         )
 
     async def add_comment(
@@ -202,7 +211,8 @@ class RoutingSourceControl:
         in_reply_to_id: int | None = None,
     ) -> CommentResult:
         return await self._call(
-            lambda source: source.add_comment(pr_url, comment, file, line, in_reply_to_id)
+            lambda source: source.add_comment(pr_url, comment, file, line, in_reply_to_id),
+            pr_url=pr_url,
         )
 
     async def view_change_request(

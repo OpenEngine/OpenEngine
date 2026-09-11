@@ -212,3 +212,46 @@ def test_router_checks_permissions_with_selected_github_credentials(tmp_path, se
     source.can_write_repository.assert_awaited_once_with(
         "https://github.com/acme/api/pull/1", "someone")
     unused.can_write_repository.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cli_authenticated", [False, True])
+def test_github_operations_ignore_gitlab_preference(tmp_path, monkeypatch, cli_authenticated):
+    cli, oauth, gitlab = AsyncMock(), AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: GhCliStatus(True, cli_authenticated),
+    )
+    router = RoutingSourceControl(preferences, cli, oauth, gitlab)
+    source, unused = (cli, oauth) if cli_authenticated else (oauth, cli)
+    source.can_write_repository.return_value = False
+    url = "https://github.com/acme/api/pull/1"
+    assert asyncio.run(router.can_write_repository(url, "someone")) is False
+    source.can_write_repository.assert_awaited_once_with(url, "someone")
+    asyncio.run(router.add_comment(url, "Fixed", in_reply_to_id=123))
+    source.add_comment.assert_awaited_once_with(url, "Fixed", None, None, 123)
+    assert not unused.mock_calls
+    assert not gitlab.mock_calls
+    assert preferences.get() == "gitlab-oauth"
+    source.can_write_repository.side_effect = RuntimeError("permission lookup failed")
+    with pytest.raises(RuntimeError, match="permission lookup failed"):
+        asyncio.run(router.can_write_repository(url, "someone"))
+    assert not unused.mock_calls
+    assert not gitlab.mock_calls
+
+
+def test_gitlab_urls_still_use_selected_provider(tmp_path, monkeypatch):
+    cli, oauth, gitlab = AsyncMock(), AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("GitLab operations must not detect GitHub credentials"),
+    )
+    router = RoutingSourceControl(preferences, cli, oauth, gitlab)
+    url = "https://gitlab.example/acme/api/-/merge_requests/1"
+    asyncio.run(router.add_comment(url, "Hello"))
+    gitlab.add_comment.assert_awaited_once_with(url, "Hello", None, None, None)
+    assert not cli.mock_calls
+    assert not oauth.mock_calls
