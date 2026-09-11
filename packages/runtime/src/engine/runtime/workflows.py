@@ -1,24 +1,19 @@
 """Load trusted Python workflow modules into an immutable runtime catalog.
 
 A repository's workflow directory says what this deployment can run. A module
-there is classified by what it exports:
-
-    openengine.workflow(...)   steps      -> the workflow runtime
-    a `GraphWorkflow`          a graph    -> a graph runtime
-
-Recognising a graph workflow is all this module does with one. It is loaded,
-checked for an id nothing else claims, and set aside in `graphs`; nothing here
-runs or serves it. An app that has a graph engine -- `apps/web` -- reads that
-list and runs them, and one that has not simply ignores it, rather than the
-directory refusing to load and taking the deployment down.
+there exports a `GraphWorkflow` -- or a sequence of them, so the same graph on
+several runners can be one file rather than a file per variant that drifts.
 
 `GraphWorkflow` is `engine.graph_runtime`'s protocol: an id and a name. So no
-graph engine is imported here, and this module never learns what a graph is.
+graph engine is imported here, and this module never learns what a graph is. It
+loads the directory, refuses two workflows claiming the same id, and hands the
+result to whoever has an engine to run them -- `apps/web` does.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -26,8 +21,6 @@ from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 
-import openengine
-from engine.domain import WorkflowDefinition, WorkflowId
 from engine.graph_runtime import GraphWorkflow
 
 
@@ -37,67 +30,45 @@ class WorkflowLoadError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class WorkflowCatalog:
-    """Definitions available for starting runs in this process.
+    """Workflows available for starting runs in this process.
 
-    Iterating a catalog yields step definitions and only those, because that is
-    what every caller means by "the workflows": the ones that can be started.
-    `get`, `require`, `in` and `len` answer about the same set.
-
-    That is also what keeps a graph workflow away from the step executor: it
-    iterates a catalog to find what to run, and a graph is not something it
-    could run. An interface that offers both reads both -- `graphs` beside this
-    iteration -- and says which is which.
-
-    A catalog holding nothing but graphs is therefore falsy. Ask what you mean:
-    `catalog is not None`, or `catalog.graphs`.
+    Iterating a catalog yields the graphs, in the order the directory declares
+    them. `get`, `require`, `in` and `len` answer about the same set.
     """
 
-    _definitions: Mapping[WorkflowId, WorkflowDefinition]
-    graphs: tuple[GraphWorkflow, ...] = ()
-    """Workflows that run as a graph, in the order the directory declares them.
-
-    Set aside rather than mixed in: a graph has no steps, so anything that
-    iterates this catalog to run something must never be handed one. Whoever
-    can run a graph asks for them here by name -- `apps/web` does, and offers
-    them in its dropdown alongside the step workflows.
-    """
+    _graphs: Mapping[str, GraphWorkflow]
 
     @classmethod
-    def from_definitions(
-        cls,
-        definitions: Iterable[WorkflowDefinition],
-        graphs: Iterable[GraphWorkflow] = (),
-    ) -> "WorkflowCatalog":
-        indexed: dict[WorkflowId, WorkflowDefinition] = {}
-        for definition in definitions:
-            try:
-                openengine.validate(definition)
-            except (TypeError, ValueError) as error:
-                raise WorkflowLoadError(str(error)) from error
-            if definition.workflow_id in indexed:
-                raise WorkflowLoadError(
-                    f"duplicate workflow id: {definition.workflow_id}"
-                )
-            indexed[definition.workflow_id] = definition
-        return cls(MappingProxyType(indexed), _unique_graphs(graphs, indexed))
+    def from_graphs(cls, graphs: Iterable[GraphWorkflow]) -> "WorkflowCatalog":
+        indexed: dict[str, GraphWorkflow] = {}
+        for graph in graphs:
+            identifier = str(graph.graph_id)
+            if identifier in indexed:
+                raise WorkflowLoadError(f"duplicate workflow id: {identifier}")
+            indexed[identifier] = graph
+        return cls(MappingProxyType(indexed))
 
-    def get(self, workflow_id: WorkflowId) -> WorkflowDefinition | None:
-        return self._definitions.get(workflow_id)
+    @property
+    def graphs(self) -> tuple[GraphWorkflow, ...]:
+        return tuple(self._graphs.values())
 
-    def require(self, workflow_id: WorkflowId) -> WorkflowDefinition:
-        definition = self.get(workflow_id)
-        if definition is None:
+    def get(self, workflow_id: object) -> GraphWorkflow | None:
+        return self._graphs.get(str(workflow_id))
+
+    def require(self, workflow_id: object) -> GraphWorkflow:
+        graph = self.get(workflow_id)
+        if graph is None:
             raise WorkflowLoadError(f"unknown workflow definition: {workflow_id}")
-        return definition
+        return graph
 
     def __contains__(self, workflow_id: object) -> bool:
-        return workflow_id in self._definitions
+        return str(workflow_id) in self._graphs
 
-    def __iter__(self) -> Iterator[WorkflowDefinition]:
-        return iter(self._definitions.values())
+    def __iter__(self) -> Iterator[GraphWorkflow]:
+        return iter(self._graphs.values())
 
     def __len__(self) -> int:
-        return len(self._definitions)
+        return len(self._graphs)
 
 
 def load_workflow_catalog(
@@ -107,11 +78,11 @@ def load_workflow_catalog(
 ) -> WorkflowCatalog:
     """Import sorted, non-private ``*.py`` definitions from one directory.
 
-    When ``session_config`` is given, graph workflow modules that export both
-    ``graph_for`` and ``RUNNERS`` are rebuilt with that config rather than
-    using their pre-built ``workflow`` tuple. This lets a composition root
-    wire deployment settings (attribution, output style) into ACP nodes
-    without modifying the workflow definitions themselves.
+    When ``session_config`` is given, modules that export both ``graph_for``
+    and ``RUNNERS`` are rebuilt with that config rather than using their
+    pre-built ``workflow`` value. This lets a composition root wire deployment
+    settings (attribution, output style) into ACP nodes without modifying the
+    workflow definitions themselves.
     """
 
     root = Path(directory).resolve()
@@ -120,7 +91,6 @@ def load_workflow_catalog(
     paths = sorted(path for path in root.glob("*.py") if not path.name.startswith("_"))
     if not paths:
         raise WorkflowLoadError(f"workflow directory contains no definitions: {root}")
-    definitions: list[WorkflowDefinition] = []
     graphs: list[GraphWorkflow] = []
     sources: dict[str, Path] = {}
     for path in paths:
@@ -140,33 +110,19 @@ def load_workflow_catalog(
         finally:
             sys.modules.pop(module_name, None)
         for value in exported:
-            identifier = (
-                str(value.workflow_id)
-                if isinstance(value, WorkflowDefinition)
-                else str(value.graph_id)
-            )
+            identifier = str(value.graph_id)
             if identifier in sources:
                 raise WorkflowLoadError(
                     f"{path}: duplicate workflow id {identifier}; "
                     f"first defined in {sources[identifier]}"
                 )
             sources[identifier] = path
-            if isinstance(value, WorkflowDefinition):
-                definitions.append(value)
-            else:
-                graphs.append(value)
-    return WorkflowCatalog.from_definitions(iter(definitions), graphs)
+            graphs.append(value)
+    return WorkflowCatalog.from_graphs(graphs)
 
 
-def _exported(
-    module: object, path: Path
-) -> tuple[WorkflowDefinition | GraphWorkflow, ...]:
-    """What one module contributes: one workflow, or a family of variants.
-
-    A sequence is allowed so that the same graph on several agents can be one
-    file. A file per variant would mean the body copied per variant, and copies
-    drift.
-    """
+def _exported(module: object, path: Path) -> tuple[GraphWorkflow, ...]:
+    """What one module contributes: one workflow, or a family of variants."""
     try:
         exported = getattr(module, "workflow")
     except AttributeError as error:
@@ -176,31 +132,26 @@ def _exported(
     values = tuple(exported) if isinstance(exported, (list, tuple)) else (exported,)
     if not values:
         raise WorkflowLoadError(f"{path}: exported 'workflow' is empty")
-    checked: list[WorkflowDefinition | GraphWorkflow] = []
     for value in values:
-        if isinstance(value, WorkflowDefinition):
-            openengine.validate(value)
-        elif not isinstance(value, GraphWorkflow):
+        if not isinstance(value, GraphWorkflow):
             raise WorkflowLoadError(
-                f"{path}: exported 'workflow' is neither an openengine workflow "
-                "nor a graph workflow"
+                f"{path}: exported 'workflow' is not a graph workflow"
             )
-        checked.append(value)
-    return tuple(checked)
+    return values
 
 
 def _exported_with_config(
     module: object,
     path: Path,
     session_config: Mapping[str, object] | None,
-) -> tuple[WorkflowDefinition | GraphWorkflow, ...]:
+) -> tuple[GraphWorkflow, ...]:
     """Like `_exported`, but rebuilds graph workflows with session config.
 
     When a module exports both ``graph_for`` (a callable that accepts
     ``session_config``) and ``RUNNERS`` (a sequence of runner names), and a
     non-``None`` session config was requested, the graph workflows are rebuilt
     through ``graph_for(runner, session_config=...)`` instead of reading the
-    pre-built ``workflow`` tuple. Step workflows are unaffected.
+    pre-built ``workflow`` value.
     """
     graph_for = getattr(module, "graph_for", None)
     runners = getattr(module, "RUNNERS", None)
@@ -210,46 +161,20 @@ def _exported_with_config(
         and isinstance(runners, (list, tuple))
         and _accepts_session_config(graph_for)
     ):
-        configured = _exported(module, path)
-        # Keep step workflows as-is; rebuild only the graph workflows.
-        result: list[WorkflowDefinition | GraphWorkflow] = [
-            value for value in configured if isinstance(value, WorkflowDefinition)
-        ]
-        for runner in runners:
-            result.append(graph_for(runner, session_config=session_config))
-        return tuple(result)
+        _exported(module, path)
+        return tuple(
+            graph_for(runner, session_config=session_config) for runner in runners
+        )
     return _exported(module, path)
 
 
 def _accepts_session_config(func: object) -> bool:
     """Whether ``func`` has a ``session_config`` keyword parameter."""
-    import inspect
-
     try:
-        sig = inspect.signature(func)  # type: ignore[arg-type]
+        signature = inspect.signature(func)  # type: ignore[arg-type]
     except (ValueError, TypeError):
         return False
-    return "session_config" in sig.parameters
-
-
-def _unique_graphs(
-    graphs: Iterable[GraphWorkflow],
-    definitions: Mapping[WorkflowId, WorkflowDefinition],
-) -> tuple[GraphWorkflow, ...]:
-    """Graph ids, checked against each other and against the step workflows.
-
-    One namespace across both kinds, because somebody picking something to run
-    is choosing from one list and does not care which engine is behind it.
-    """
-    seen: set[str] = {str(workflow_id) for workflow_id in definitions}
-    ordered: list[GraphWorkflow] = []
-    for graph in graphs:
-        identifier = str(graph.graph_id)
-        if identifier in seen:
-            raise WorkflowLoadError(f"duplicate workflow id: {identifier}")
-        seen.add(identifier)
-        ordered.append(graph)
-    return tuple(ordered)
+    return "session_config" in signature.parameters
 
 
 __all__ = ["WorkflowCatalog", "WorkflowLoadError", "load_workflow_catalog"]

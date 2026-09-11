@@ -17,7 +17,7 @@ import io
 import os
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.github.transports import (
     GitHubApiTransport,
@@ -185,6 +185,29 @@ class GitHubSourceControl:
         if not url:
             raise GitHubSourceControlError("GitHub API returned no pull-request URL")
         return url
+
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        """Check effective access, including team and organization grants."""
+        owner, repo, _ = _pull_request_parts(pr_url)
+        response = await self._api(
+            "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
+        )
+        # GitHub maps maintain to write and triage to read, including custom
+        # roles' base permissions. Unknown/missing permissions never grant access.
+        return response.get("permission") in ("write", "admin")
+
+    async def authenticated_login(self, repository_url: str) -> str:
+        """Who this token posts as, so Engine can recognise its own comments.
+
+        A GitHub app is recognisable from a comment's ``Bot`` user type, but a
+        personal access token belonging to a machine user is not: asking the
+        API who is calling is the only way to tell Engine's own replies apart
+        from everybody else's.
+        """
+        login = _string(_object(await self._api("GET", "/user")), "login")
+        if not login:
+            raise GitHubSourceControlError("GitHub API returned no authenticated login")
+        return login
 
     async def add_comment(
         self,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeVar
+from urllib.parse import urlsplit
 
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
@@ -26,6 +28,11 @@ from platformdirs import user_config_path
 SourceControlProvider = Literal["gh-cli", "github-oauth", "gitlab-oauth"]
 _PROVIDERS = frozenset({"gh-cli", "github-oauth", "gitlab-oauth"})
 _Result = TypeVar("_Result")
+
+#: How long the GitHub CLI may take to report its authentication state. It
+#: talks to github.com, so an unreachable forge would otherwise hold a caller
+#: open for as long as the network does.
+_STATUS_TIMEOUT_SECONDS = 10
 
 
 class SourceControlPreferences:
@@ -82,9 +89,14 @@ def gh_cli_status(binary_path: str = "gh") -> GhCliStatus:
             [binary_path, "auth", "status", "--hostname", "github.com"],
             capture_output=True,
             check=False,
+            timeout=_STATUS_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
         return GhCliStatus(False, False, message="GitHub CLI is not installed")
+    except subprocess.TimeoutExpired:
+        # These calls reach github.com, so they are as slow as the network is:
+        # an unauthenticated answer beats blocking a caller indefinitely.
+        return GhCliStatus(True, False, message="GitHub CLI did not answer in time")
     except OSError as error:
         return GhCliStatus(False, False, message=f"Could not start GitHub CLI: {error}")
     if process.returncode:
@@ -96,8 +108,10 @@ def gh_cli_status(binary_path: str = "gh") -> GhCliStatus:
             [binary_path, "api", "user", "--jq", ".login"],
             capture_output=True,
             check=False,
+            timeout=_STATUS_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
+        # The account name is a nicety; authentication is already established.
         user = None
     account = (
         user.stdout.decode(errors="replace").strip()
@@ -147,9 +161,19 @@ class RoutingSourceControl:
         return selected, self._providers[selected]
 
     async def _call(
-        self, operation: Callable[[SourceControl], Awaitable[_Result]]
+        self, operation: Callable[[SourceControl], Awaitable[_Result]],
+        *, pr_url: str = "",
     ) -> _Result:
         provider, source_control = self._selected()
+        if provider == "gitlab-oauth" and urlsplit(pr_url).hostname == "github.com":
+            # Webhook targets are independent of the workspace provider choice.
+            # Use the normal GitHub credential detection without saving a choice.
+            # Detection shells out to the GitHub CLI, so it runs off the event
+            # loop: a slow `gh` must not stall every other request this process
+            # is serving.
+            status = await asyncio.to_thread(gh_cli_status)
+            provider = "gh-cli" if status.installed and status.authenticated else "github-oauth"
+            source_control = self._providers[provider]
         try:
             return await operation(source_control)
         except RuntimeError as error:
@@ -188,6 +212,18 @@ class RoutingSourceControl:
             )
         )
 
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        return await self._call(
+            lambda source: source.can_write_repository(pr_url, username),
+            pr_url=pr_url,
+        )
+
+    async def authenticated_login(self, repository_url: str) -> str:
+        return await self._call(
+            lambda source: source.authenticated_login(repository_url),
+            pr_url=repository_url,
+        )
+
     async def add_comment(
         self,
         pr_url: str,
@@ -197,7 +233,8 @@ class RoutingSourceControl:
         in_reply_to_id: int | None = None,
     ) -> CommentResult:
         return await self._call(
-            lambda source: source.add_comment(pr_url, comment, file, line, in_reply_to_id)
+            lambda source: source.add_comment(pr_url, comment, file, line, in_reply_to_id),
+            pr_url=pr_url,
         )
 
     async def view_change_request(

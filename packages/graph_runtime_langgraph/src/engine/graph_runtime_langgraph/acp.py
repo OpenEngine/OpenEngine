@@ -693,13 +693,19 @@ class ACPNode:
                     await execution.say(opening, role="user")
                 corrections = 0
                 said = ""
+                terminal_result: TerminalEvent | None = None
                 steering_replaced_empty_turn = False
                 while True:
                     result = await self._speak_or_terminal(
-                        turn, session, asked, terminal_tasks, clarifications
+                        turn, session, asked,
+                        terminal_tasks if terminal_result is None else [],
+                        clarifications,
                     )
                     if isinstance(result, (StepCompleted, RunFailed)):
-                        return self._terminal_update(result)
+                        # Keep the accepted result while queued steering runs.
+                        # Racing its completed task again would cancel those turns.
+                        terminal_result = result
+                        result = ""
                     if result is _CLARIFIED:
                         # Do not return from the LangGraph node: that would commit
                         # this superstep and follow its outgoing edge. The live
@@ -726,6 +732,8 @@ class ACPNode:
                         steering_replaced_empty_turn = not said
                         await execution.say(asked, role="user")
                         continue
+                    if terminal_result is not None:
+                        return self._terminal_update(terminal_result)
                     if not terminal_tasks:
                         return {self.output_key or str(execution.node_id): said}
                     if steering_replaced_empty_turn and not said:
@@ -739,8 +747,15 @@ class ACPNode:
                             (task for task in terminal_tasks if task in done), None
                         )
                         if completed is not None:
-                            return self._terminal_update(completed.result())
-                        asked = await execution.next_message()
+                            terminal_result = completed.result()
+                        pending_prompts.extend(execution.pending_messages())
+                        if terminal_result is not None and not pending_prompts:
+                            return self._terminal_update(terminal_result)
+                        asked = (
+                            pending_prompts.popleft()
+                            if pending_prompts
+                            else await execution.next_message()
+                        )
                         steering_replaced_empty_turn = False
                         await execution.say(asked, role="user")
                         continue

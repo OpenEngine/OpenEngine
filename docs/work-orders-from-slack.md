@@ -2,7 +2,7 @@
 
 Mention `@OpenEngineBot` to open a conversation. A greeting or test message gets
 “Hi, how can I help?”. Ask for a new work order in that thread and the concierge
-uses its `create_workorder` tool. The host starts the configured step workflow,
+uses its `create_workorder` tool. The host starts the configured graph workflow,
 posts its UI link, and reports progress in the same thread.
 
 ## Setup and diagnosis
@@ -30,7 +30,6 @@ public_url = "https://engine.example"
 [work_orders]
 repository = "."                        # local checkout path; defaults to "."
 workflow = "implementation-review-rerank"  # optional if exactly one is installed
-runner = "claude"                       # work-order executor, not concierge
 ```
 
 A greeting needs no work-order configuration. Creating work requires a resolvable workflow. The repository is a local

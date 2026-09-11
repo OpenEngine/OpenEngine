@@ -353,24 +353,19 @@ def test_the_human_stage_is_the_shared_component_rather_than_a_bespoke_node() ->
 # --- how it is offered -------------------------------------------------------
 
 
-def test_a_graph_workflow_is_not_one_of_the_step_workflows() -> None:
-    """The two kinds stay apart in the catalog, whatever a client does with them.
+def test_the_catalog_answers_for_the_workflow_by_id() -> None:
+    """What the interface looks a picked workflow up by.
 
-    The catalog is what the step executor reads, and it must never find a graph
-    in there: a graph has no steps for it to run. Offering one is the
-    interface's decision, made once in `/api/config` -- which is the next test.
-
-    This repository ships no step workflow at all now, so the catalog it loads
-    is empty of them -- and falsy, which is why nothing here asks it a yes/no
-    question about itself.
+    A dropdown sends back an id; this is the lookup that turns it into
+    something startable, and the one that refuses an id nobody offers.
     """
     loaded = catalog()
 
-    assert list(loaded) == []
-    assert len(loaded) == 0
+    assert len(loaded) == len(GRAPHS)
     for graph_id in GRAPHS:
-        assert WorkflowId(graph_id) not in loaded
-        assert loaded.get(WorkflowId(graph_id)) is None
+        assert WorkflowId(graph_id) in loaded
+        assert str(loaded.require(WorkflowId(graph_id)).graph_id) == graph_id
+    assert loaded.get(WorkflowId("nothing-ships-this")) is None
 
 
 def test_the_interface_offers_the_graphs_by_their_own_names(
@@ -378,9 +373,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
 ) -> None:
     """The dropdown itself, through the endpoint the client reads it from.
 
-    Every entry here is a graph, under the name its definition gives it: this
-    deployment ships no step workflow, and the graphs no longer wear a `[BETA]`
-    prefix warning that they are new.
+    Every entry is a workflow under the name its definition gives it.
 
     Asked of a *started* application, which is the whole condition for a graph
     being offered: the engine that runs one is opened on startup, and an engine
@@ -405,9 +398,10 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
 
     assert [one["id"] for one in offered] == list(GRAPHS)
     assert [one["name"] for one in offered] == ["Implementation review rerank"]
-    # A graph has no version, and the client leaves the version out rather than
-    # printing a trailing separator.
-    assert [one["version"] for one in offered if one["id"] in GRAPHS] == [""]
+    # Every entry declares the inputs the creation form asks for.
+    assert [
+        [item["name"] for item in one["inputs"]] for one in offered
+    ] == [["implementation_runner", "review_runner"]]
 
 
 # --- and nothing falls over --------------------------------------------------

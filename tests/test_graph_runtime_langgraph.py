@@ -474,6 +474,135 @@ def test_the_sqlite_store_round_trips_everything_a_restart_needs(
     assert found["still_pending"] == ()
 
 
+@pytest.mark.parametrize("store_factory", ["memory", "sqlite"])
+def test_comments_a_run_posted_are_kept_for_the_runs_after_it(
+    tmp_path: Path, store_factory: str
+) -> None:
+    from engine.graph_runtime_langgraph.store import CommentRecord
+
+    posted = CommentRecord(
+        comment_id=123,
+        repository="acme/api",
+        kind="issue",
+        pr_number=42,
+        run_id=RunId("run-1"),
+        posted_at="2026-09-10T18:00:00+00:00",
+        node_id=NodeId("reranker"),
+        url="https://github.com/acme/api/pull/42#issuecomment-123",
+    )
+    # Same number, another id space: GitHub hands review comments out from a
+    # counter of their own, and this is a different comment.
+    inline = CommentRecord(
+        comment_id=123,
+        repository="acme/api",
+        kind="review",
+        pr_number=42,
+        run_id=RunId("run-1"),
+        posted_at="2026-09-10T18:00:30+00:00",
+        url="https://github.com/acme/api/pull/42#discussion_r123",
+    )
+    elsewhere = CommentRecord(
+        comment_id=124,
+        repository="acme/web",
+        kind="issue",
+        pr_number=7,
+        run_id=RunId("run-2"),
+        posted_at="2026-09-10T18:01:00+00:00",
+    )
+
+    async def scenario() -> tuple[CommentRecord, ...]:
+        path = tmp_path / "runtime.db"
+        store = (
+            InMemoryGraphRuntimeStore()
+            if store_factory == "memory"
+            else SqliteGraphRuntimeStore(path)
+        )
+        await store.remember_comment(posted)
+        await store.remember_comment(inline)
+        await store.remember_comment(elsewhere)
+        if store_factory == "sqlite":
+            store.close()
+            store = SqliteGraphRuntimeStore(path)
+        found = await store.comments(RunId("run-1"))
+        # A comment posted twice is one comment: the forge's id owns the row.
+        await store.remember_comment(posted)
+        assert await store.comments(RunId("run-1")) == found
+        assert await store.comments(RunId("run-2")) == (elsewhere,)
+        # Commenting is not owning: every run that speaks on a pull request is
+        # recorded here, so this says nothing about whose work order it is.
+        assert await store.run_for_pull_request("acme/api", 42) is None
+        return found
+
+    assert asyncio.run(scenario()) == (posted, inline)
+
+
+@pytest.mark.parametrize("store_factory", ["memory", "sqlite"])
+def test_a_pull_request_belongs_to_the_run_that_opened_it(
+    tmp_path: Path, store_factory: str
+) -> None:
+    """Ownership comes from opening, and survives anyone else commenting.
+
+    A webhook holding a pull request needs the work order behind it without
+    knowing a run id. Reading that off the comments cannot answer it: a review
+    or a follow-up run comments on a pull request it does not own, and the
+    newest commenter would inherit feedback meant for the run that did the work.
+    """
+    from engine.graph_runtime_langgraph.store import CommentRecord, PullRequestRecord
+
+    opened = PullRequestRecord(
+        repository="acme/api",
+        number=42,
+        run_id=RunId("run-1"),
+        opened_at="2026-09-10T17:00:00+00:00",
+        node_id=NodeId("coder"),
+        url="https://github.com/acme/api/pull/42",
+    )
+    elsewhere = PullRequestRecord(
+        repository="acme/web",
+        number=7,
+        run_id=RunId("run-2"),
+        opened_at="2026-09-10T17:01:00+00:00",
+    )
+
+    async def scenario() -> None:
+        path = tmp_path / "runtime.db"
+        store = (
+            InMemoryGraphRuntimeStore()
+            if store_factory == "memory"
+            else SqliteGraphRuntimeStore(path)
+        )
+        await store.remember_pull_request(opened)
+        await store.remember_pull_request(elsewhere)
+        if store_factory == "sqlite":
+            store.close()
+            store = SqliteGraphRuntimeStore(path)
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-1")
+        assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
+        # The repository is part of the question: two forges number their pull
+        # requests from counters of their own.
+        assert await store.run_for_pull_request("acme/web", 42) is None
+        assert await store.run_for_pull_request("acme/other", 42) is None
+        # A pull request opened by hand belongs to no run, and says so.
+        assert await store.run_for_pull_request("acme/api", 999) is None
+        # The reviewing run leaves comments all over it and owns none of it.
+        for comment_id, posted_at in ((500, "18:00:00"), (501, "19:00:00")):
+            await store.remember_comment(CommentRecord(
+                comment_id=comment_id, repository="acme/api", kind="review",
+                pr_number=42, run_id=RunId("reviewer"),
+                posted_at=f"2026-09-10T{posted_at}+00:00",
+            ))
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-1")
+        # Opening it again is the one thing that does move it: still the act of
+        # opening, not the act of commenting.
+        await store.remember_pull_request(replace(
+            opened, run_id=RunId("run-3"), opened_at="2026-09-10T20:00:00+00:00"
+        ))
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-3")
+        assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
+
+    asyncio.run(scenario())
+
+
 def test_auto_approve_keeps_human_requests_manual() -> None:
     from httpx import ASGITransport, AsyncClient
     from engine.graph_runtime.api import create_app

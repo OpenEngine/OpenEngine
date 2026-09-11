@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 
 import pytest
 
@@ -22,6 +23,8 @@ from engine.domain import (
 from engine.ports import ApprovalRequest, GitResult
 from engine.runtime.terminal_mcp import (
     DEFAULT_BASE_REF,
+    OpenedPullRequest,
+    PostedComment,
     TerminalMcpBroker,
     TerminalResultRegistry,
     _mcp_response,
@@ -868,3 +871,240 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         source.add_comment.assert_awaited_once_with("https://github.com/acme/api/pull/42", "Fixed", None, None, 123)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "pr_url, expected",
+    [
+        ("https://github.com/acme/api/pull/42", ("acme/api", 42)),
+        ("https://github.com/acme/api/pull/42/files", ("acme/api", 42)),
+        ("https://github.com/acme/api/pull/42#issuecomment-9", ("acme/api", 42)),
+        ("https://github.example.com/acme/api/pull/42", ("github.example.com/acme/api", 42)),
+        ("https://GITHUB.COM/Acme/API/pull/42", ("acme/api", 42)),
+        ("https://github.example.com:8443/acme/api/pull/42", ("github.example.com:8443/acme/api", 42)),
+        ("/acme/api/pull/42", None),
+        # Another forge numbers its notes from its own counter, so it is left
+        # out rather than filed under a GitHub comment's name.
+        ("https://gitlab.com/acme/api/-/merge_requests/7", None),
+        ("https://gitlab.example.com/x/y/pull/7/-/merge_requests/1#note_123", None),
+        ("https://github.com/acme/api/issues/42", None),
+        ("https://github.com/acme/api", None),
+    ],
+)
+def test_a_github_pull_request_is_read_off_the_review_url(
+    pr_url: str, expected: tuple[str, int] | None
+) -> None:
+    from engine.runtime.terminal_mcp import _github_pull_request
+
+    assert _github_pull_request(pr_url) == expected
+
+
+@pytest.mark.parametrize(
+    "host, repository",
+    [
+        ("github.com", "acme/renamed"),
+        ("github.example.com", "github.example.com/acme/renamed"),
+    ],
+)
+def test_posted_comments_are_recorded_against_the_change_request(
+    host: str, repository: str,
+) -> None:
+    comment_url = f"https://{host}/Acme/Renamed/pull/42#issuecomment-123"
+
+    class RecordingSourceControl:
+        async def add_comment(self, *_arguments: object) -> CommentResult:
+            return CommentResult(123, comment_url)
+
+    async def scenario() -> list[PostedComment]:
+        recorded: list[PostedComment] = []
+
+        async def record(posted: PostedComment) -> None:
+            recorded.append(posted)
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(RecordingSourceControl(), ("add_comment",))  # type: ignore[arg-type]
+        broker.enable_comment_records(record)
+        answer = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "comment-1",
+                "name": "add_comment",
+                "arguments": {
+                    "pr_url": "https://github.com/acme/api/pull/42",
+                    "comment": "Looks good.",
+                },
+            }
+        )
+        assert answer["ok"] is True
+        return recorded
+
+    assert asyncio.run(scenario()) == [
+        PostedComment(
+            repository, 42, "issue", CommentResult(123, comment_url)
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "url, repository, number",
+    [
+        ("https://github.com/Acme/Renamed/pull/42", "acme/renamed", 42),
+        ("https://github.com/acme/api/pull/7", "acme/api", 7),
+    ],
+)
+def test_an_opened_pull_request_is_claimed_by_the_run_that_opened_it(
+    url: str, repository: str, number: int,
+) -> None:
+    """Opening is the act that makes a run the pull request's owner.
+
+    Recorded here rather than read back off the comments on the pull request,
+    because commenting is something any run may do to one it does not own: a
+    review run's note would otherwise make it the owner of somebody else's work.
+    """
+
+    class OpeningSourceControl:
+        async def request_review(self, *_arguments: object) -> str:
+            return url
+
+    async def scenario() -> list[OpenedPullRequest]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(opened: OpenedPullRequest) -> None:
+            claimed.append(opened)
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            OpeningSourceControl(),  # type: ignore[arg-type]
+            ("open_pull_request",),
+            WorkspaceId("workspace"),
+        )
+        broker.enable_pull_request_records(claim)
+        answer = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "open-1",
+                "name": "open_pull_request",
+                "arguments": {"branch": "feature", "title": "Add a thing"},
+            }
+        )
+        assert answer["ok"] is True
+        assert answer["output"] == url
+        return claimed
+
+    assert asyncio.run(scenario()) == [OpenedPullRequest(repository, number, url)]
+
+
+@pytest.mark.parametrize("failure", ["unrecordable", "unrecognisable"])
+def test_a_pull_request_that_cannot_be_claimed_is_still_reported_as_opened(
+    caplog: pytest.LogCaptureFixture, failure: str,
+) -> None:
+    """It is open on the forge by now; retrying would open a second one."""
+    url = (
+        "https://gitlab.example/acme/api/-/merge_requests/42"
+        if failure == "unrecognisable"
+        else "https://github.com/acme/api/pull/42"
+    )
+
+    class OpeningSourceControl:
+        async def request_review(self, *_arguments: object) -> str:
+            return url
+
+    async def scenario() -> dict[str, object]:
+        async def claim(_opened: OpenedPullRequest) -> None:
+            raise RuntimeError("the store is gone")
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            OpeningSourceControl(),  # type: ignore[arg-type]
+            ("open_pull_request",),
+            WorkspaceId("workspace"),
+        )
+        broker.enable_pull_request_records(claim)
+        return await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "open-1",
+                "name": "open_pull_request",
+                "arguments": {"branch": "feature", "title": "Add a thing"},
+            }
+        )
+
+    with caplog.at_level(logging.WARNING):
+        answer = asyncio.run(scenario())
+
+    assert answer["ok"] is True
+    assert answer["output"] == url
+    assert caplog.text
+
+
+def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The comment is on the forge by now; retrying would post it twice."""
+
+    class RecordingSourceControl:
+        async def add_comment(self, *_arguments: object) -> CommentResult:
+            return CommentResult(123, "https://github.com/Acme/Renamed/pull/42#issuecomment-123")
+
+    async def scenario() -> dict[str, object]:
+        async def record(_posted: PostedComment) -> None:
+            raise RuntimeError("the store is gone")
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(RecordingSourceControl(), ("add_comment",))  # type: ignore[arg-type]
+        broker.enable_comment_records(record)
+        broker._result = asyncio.get_running_loop().create_future()
+        answer = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "comment-1",
+                "name": "add_comment",
+                "arguments": {
+                    "pr_url": "https://github.com/acme/api/pull/42",
+                    "comment": "Looks good.",
+                },
+            }
+        )
+        # And the comment still counts towards finishing the review.
+        completed = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "complete-1",
+                "name": "complete_step",
+                "arguments": {
+                    "outcome": "success",
+                    "summary": "Done.",
+                    "outputs": {"revision": "abc123"},
+                },
+            }
+        )
+        assert completed["ok"] is True
+        return answer
+
+    answer = asyncio.run(scenario())
+    assert answer["ok"] is True
+    assert answer["acknowledgement"] == "comment added"
+
+    assert "Could not record posted comment 123" in caplog.text
+    assert "the store is gone" in caplog.text
+    assert "https://github.com/Acme/Renamed/pull/42#issuecomment-123" in caplog.text

@@ -1,6 +1,9 @@
 """Provider preference, first-run selection, and GH CLI transport tests."""
 
 import asyncio
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -100,6 +103,145 @@ def test_cli_transport_turns_missing_binary_into_actionable_error() -> None:
         asyncio.run(transport.request("GET", "/user"))
 
 
+def test_cli_transport_abandons_and_kills_a_gh_that_never_answers() -> None:
+    """An unbounded `gh` is not merely slow where callers are serialized.
+
+    The GitHub webhook queue runs one comment at a time, so a stalled process
+    is every queued comment stalled behind it. The timeout only cancels the
+    read, though -- the process itself has to be ended, or an abandoned `gh`
+    stays a child of this one holding its pipes open forever.
+    """
+    transport = GitHubCliTransport(
+        sys.executable, timeout_seconds=0.25
+    )
+    started: list[asyncio.subprocess.Process] = []
+    create = asyncio.create_subprocess_exec
+
+    async def remember(*arguments: object, **kwargs: object):
+        # `gh` is stood in for by a python that ignores SIGTERM, so the escalation
+        # to kill is exercised rather than assumed.
+        process = await create(
+            arguments[0],
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)",
+            **kwargs,
+        )
+        started.append(process)
+        return process
+
+    async def scenario() -> None:
+        with pytest.raises(GitHubTransportError, match="timed out"):
+            await transport.request("GET", "/user")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(asyncio, "create_subprocess_exec", remember)
+        asyncio.run(scenario())
+
+    assert len(started) == 1
+    # Reaped, not merely signalled: an un-awaited process is a zombie, and the
+    # caller that timed out is long gone.
+    assert started[0].returncode is not None
+
+
+def test_cli_transport_kills_a_gh_that_its_caller_gave_up_on_first() -> None:
+    """A caller's own deadline cancels this call; the child is still ours.
+
+    The webhook path bounds both of its forge lookups together, so a slow first
+    lookup can leave the second cancelled before its own 30s has a chance to
+    expire. That arrives as CancelledError rather than TimeoutError, and an
+    abandoned `gh` is no less abandoned for the difference -- repeated lookups
+    would otherwise accumulate orphans holding their pipes open.
+    """
+    transport = GitHubCliTransport(sys.executable, timeout_seconds=30)
+    started: list[asyncio.subprocess.Process] = []
+    create = asyncio.create_subprocess_exec
+
+    async def remember(*arguments: object, **kwargs: object):
+        process = await create(
+            arguments[0],
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)",
+            **kwargs,
+        )
+        started.append(process)
+        return process
+
+    async def scenario() -> None:
+        # The caller's bound, not the transport's: it expires long before the
+        # 30s above, so nothing inside `_run` ever times out on its own.
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.25):
+                await transport.request("GET", "/user")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(asyncio, "create_subprocess_exec", remember)
+        asyncio.run(scenario())
+
+    assert len(started) == 1
+    assert started[0].returncode is not None
+
+
+def test_cli_transport_kills_a_gh_when_the_cleanup_is_itself_cancelled() -> None:
+    """A shutdown mid-cleanup ends the child rather than abandoning it.
+
+    The polite end waits for the process to go, and that wait can be cancelled
+    in turn -- a shutdown arriving while this is already tidying up after a
+    caller that gave up. There is no time left to escalate by degrees then, so
+    the child is killed outright: a `gh` still running after the process that
+    started it has gone is the worse end.
+    """
+    transport = GitHubCliTransport(sys.executable, timeout_seconds=30)
+    started: list[asyncio.subprocess.Process] = []
+    create = asyncio.create_subprocess_exec
+
+    async def remember(*arguments: object, **kwargs: object):
+        process = await create(
+            arguments[0],
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)",
+            **kwargs,
+        )
+        started.append(process)
+        return process
+
+    async def scenario() -> None:
+        call = asyncio.create_task(transport.request("GET", "/user"))
+        await asyncio.sleep(0.3)
+        call.cancel()  # the caller gives up
+        await asyncio.sleep(0.2)  # it is now waiting for the child to go
+        call.cancel()  # and a shutdown arrives mid-wait
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        await asyncio.sleep(0.5)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(asyncio, "create_subprocess_exec", remember)
+        asyncio.run(scenario())
+
+    assert len(started) == 1
+    # SIGTERM is ignored by the stand-in, so only the kill can account for this.
+    assert started[0].returncode == -signal.SIGKILL
+
+
+def test_cli_transport_lets_a_prompt_answer_through_before_the_bound() -> None:
+    """The bound is a ceiling on a hung forge, not a deadline on a slow one."""
+    transport = GitHubCliTransport(sys.executable, timeout_seconds=30)
+
+    async def scenario() -> object:
+        create = asyncio.create_subprocess_exec
+
+        async def answer(*arguments: object, **kwargs: object):
+            return await create(
+                arguments[0], "-c", 'print(\'{"login":"octocat"}\')', **kwargs
+            )
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(asyncio, "create_subprocess_exec", answer)
+            return await transport.request("GET", "/user")
+
+    assert asyncio.run(scenario()) == {"login": "octocat"}
+
+
 def test_oauth_transport_refreshes_once_after_401_and_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,3 +339,135 @@ def test_router_forwards_comment_reply_and_provenance(tmp_path: Path) -> None:
     router = RoutingSourceControl(preferences, source, source)
     assert asyncio.run(router.add_comment("https://github.com/acme/api/pull/1", "Fixed", in_reply_to_id=123)) == result
     source.add_comment.assert_awaited_once_with("https://github.com/acme/api/pull/1", "Fixed", None, None, 123)
+
+
+@pytest.mark.parametrize("selected", ["gh-cli", "github-oauth"])
+def test_router_checks_permissions_with_selected_github_credentials(tmp_path, selected):
+    cli, oauth = AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set(selected)
+    router = RoutingSourceControl(preferences, cli, oauth)
+    source, unused = (cli, oauth) if selected == "gh-cli" else (oauth, cli)
+    source.can_write_repository.return_value = False
+    assert asyncio.run(router.can_write_repository(
+        "https://github.com/acme/api/pull/1", "someone")) is False
+    source.can_write_repository.assert_awaited_once_with(
+        "https://github.com/acme/api/pull/1", "someone")
+    unused.can_write_repository.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cli_authenticated", [False, True])
+def test_github_operations_ignore_gitlab_preference(tmp_path, monkeypatch, cli_authenticated):
+    cli, oauth, gitlab = AsyncMock(), AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: GhCliStatus(True, cli_authenticated),
+    )
+    router = RoutingSourceControl(preferences, cli, oauth, gitlab)
+    source, unused = (cli, oauth) if cli_authenticated else (oauth, cli)
+    source.can_write_repository.return_value = False
+    url = "https://github.com/acme/api/pull/1"
+    assert asyncio.run(router.can_write_repository(url, "someone")) is False
+    source.can_write_repository.assert_awaited_once_with(url, "someone")
+    asyncio.run(router.add_comment(url, "Fixed", in_reply_to_id=123))
+    source.add_comment.assert_awaited_once_with(url, "Fixed", None, None, 123)
+    assert not unused.mock_calls
+    assert not gitlab.mock_calls
+    assert preferences.get() == "gitlab-oauth"
+    source.can_write_repository.side_effect = RuntimeError("permission lookup failed")
+    with pytest.raises(RuntimeError, match="permission lookup failed"):
+        asyncio.run(router.can_write_repository(url, "someone"))
+    assert not unused.mock_calls
+    assert not gitlab.mock_calls
+
+
+def test_gitlab_urls_still_use_selected_provider(tmp_path, monkeypatch):
+    cli, oauth, gitlab = AsyncMock(), AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("GitLab operations must not detect GitHub credentials"),
+    )
+    router = RoutingSourceControl(preferences, cli, oauth, gitlab)
+    url = "https://gitlab.example/acme/api/-/merge_requests/1"
+    asyncio.run(router.add_comment(url, "Hello"))
+    gitlab.add_comment.assert_awaited_once_with(url, "Hello", None, None, None)
+    assert not cli.mock_calls
+    assert not oauth.mock_calls
+
+
+def test_authenticated_login_uses_a_github_provider_despite_gitlab(tmp_path, monkeypatch):
+    cli, oauth, gitlab = AsyncMock(), AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: GhCliStatus(True, True),
+    )
+    router = RoutingSourceControl(preferences, cli, oauth, gitlab)
+    cli.authenticated_login.return_value = "OpenEngine-worker"
+    assert asyncio.run(
+        router.authenticated_login("https://github.com/acme/api")
+    ) == "OpenEngine-worker"
+    cli.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
+    assert not oauth.mock_calls
+    assert not gitlab.mock_calls
+
+
+def test_github_credential_detection_runs_off_the_event_loop(tmp_path, monkeypatch):
+    """A slow `gh` must not stall the loop that is serving other requests."""
+    import threading
+
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth")
+    loop_thread = threading.get_ident()
+    detecting: list[int] = []
+
+    def detect() -> GhCliStatus:
+        detecting.append(threading.get_ident())
+        return GhCliStatus(True, True)
+
+    monkeypatch.setattr("engine.apps.web.source_control.gh_cli_status", detect)
+    cli = AsyncMock()
+    router = RoutingSourceControl(preferences, cli, AsyncMock(), AsyncMock())
+
+    async def exercise() -> None:
+        nonlocal loop_thread
+        loop_thread = threading.get_ident()
+        await router.add_comment("https://github.com/acme/api/pull/1", "Hi")
+
+    asyncio.run(exercise())
+    assert detecting and loop_thread not in detecting
+
+
+@pytest.mark.parametrize("failure", [subprocess.TimeoutExpired("gh", 10), OSError("boom")])
+def test_gh_cli_status_survives_a_stuck_cli(monkeypatch, failure):
+    calls: list[dict] = []
+
+    def run(_arguments, **kwargs):
+        calls.append(kwargs)
+        raise failure
+
+    monkeypatch.setattr(subprocess, "run", run)
+    status = gh_cli_status()
+    assert not status.authenticated
+    assert status.message
+    assert calls[0]["timeout"] > 0
+
+
+def test_gh_cli_status_bounds_the_account_lookup(monkeypatch):
+    timeouts: list[float] = []
+
+    def run(arguments, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        if arguments[1] == "api":
+            raise subprocess.TimeoutExpired("gh", kwargs["timeout"])
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    status = gh_cli_status()
+    assert status.installed and status.authenticated and status.account == ""
+    assert len(timeouts) == 2 and all(value > 0 for value in timeouts)

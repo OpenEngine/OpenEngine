@@ -558,15 +558,12 @@ def _make_github_app(tmp_path, client_id: str = "test-client-id"):
         workspace_provider=_stub,
         state_store=store,
     )
-    # WorkflowExecutor validates runners ⊆ review_runners; pass a matching pair.
     _runner_stub = {"default": _stub}
     session = AgentSession(caps, profiles={}, runners=_runner_stub)
     credential_store = GitHubCredentialStore()
     app = create_app(
         session,
         _runner_stub,
-        workflow_runners=_runner_stub,
-        review_runners=_runner_stub,
         credential_store=credential_store,
         github_client_id=client_id,
         source_control_preferences=SourceControlPreferences(tmp_path / "settings.json"),

@@ -27,7 +27,6 @@ from pathlib import Path
 
 from engine.adapters.agent_runner.claude_code import (
     READ_ONLY_TOOLS,
-    WORKSPACE_WRITE_TOOLS,
     ClaudeCodeAgentRunner,
     allowed_tools_for,
     claude_session_config,
@@ -65,6 +64,7 @@ from engine.apps.web.gitlab_auth import (
 from engine.apps.web.gitlab_auth import (
     refresh_access_token as refresh_gitlab_access_token,
 )
+from engine.apps.web.github_webhook import GitHubWebhookConfig
 from engine.apps.web.oauth_lifecycle import oauth_lifecycle_event, token_fingerprint
 from engine.apps.web.oauth_lock import credential_lock
 from engine.apps.web.source_control import (
@@ -127,13 +127,15 @@ class Settings:
     sandbox narrowed before the turn started would refuse what they just
     allowed. Codex's policy is applied to its requests instead.
     """
-    workflow_codex_sandbox: str = "workspace-write"
-    """Workflow implementation may edit only its isolated worktree."""
-    workflow_claude_allowed_tools: tuple[str, ...] = WORKSPACE_WRITE_TOOLS
-    """Claude workflows may read and edit files, but not run unrestricted Bash."""
     temporal_host: str = "localhost:7233"
     github_token: str = ""
     github_client_id: str = ""
+    github_webhook: GitHubWebhookConfig | None = None
+    """Which repository's webhook deliveries are answered, and their secret.
+
+    ``None`` when the deployment named neither, which is what leaves the
+    webhook route refusing deliveries instead of trusting unsigned ones.
+    """
     source_control_preferences: SourceControlPreferences | None = None
     workspace_root: str = DEFAULT_ROOT_DIRECTORY
     sqlite_path: str = "conversations.sqlite3"
@@ -422,11 +424,6 @@ def build_graph_runtime(
 ) -> AbstractAsyncContextManager[GraphRuntime] | None:
     """The engine that runs graph workflows, or nothing when there are none.
 
-    Two kinds of workflow live in the `workflows` directory. The older kind is
-    a list of steps, and the executor wired above runs those. The newer kind --
-    the ones the interface offers as graphs -- is a graph, and LangGraph runs
-    those. This builds the second engine.
-
     It hands back an *unopened* context manager rather than a running engine,
     because starting one opens database files that somebody then has to close.
     The web application opens it when the server starts and closes it when the
@@ -556,44 +553,6 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     }
 
 
-def build_workflow_runners(settings: Settings) -> Mapping[str, AgentRunner]:
-    """Write-enabled runners used only for workflow implementation steps.
-
-    Named to match `build_read_only_runners` on purpose, and a subset of it: a run
-    implements with the write-enabled runner of the provider it picked, and is
-    then reviewed by the read-only runner of that same name. The reviewer is
-    told not to modify the workspace, but what actually stops it is being run
-    without the tools to.
-
-    Structural for the same reason its sibling is: an implementation step exists
-    to change the tree it was given, and a policy that had not thought about
-    workflows would otherwise silently produce one that cannot. The approvals it
-    raises are still governed -- those go through the broker like any other.
-    """
-    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    return {
-        "codex": CodexAgentRunner(
-            binary_path=settings.codex_binary,
-            timeout_seconds=settings.codex_timeout_seconds,
-            sandbox=settings.workflow_codex_sandbox,
-            working_directory=settings.codex_working_directory,
-            model=settings.codex_model,
-            attribution=settings.engine_config.attribution,
-            workspace_provider=workspace_provider,
-        ),
-        "claude": ClaudeCodeAgentRunner(
-            binary_path=settings.claude_binary,
-            timeout_seconds=settings.claude_timeout_seconds,
-            allowed_tools=settings.workflow_claude_allowed_tools,
-            working_directory=settings.claude_working_directory,
-            model=settings.claude_model,
-            attribution=settings.engine_config.attribution,
-            output_style=settings.engine_config.claude.output_style,
-            workspace_provider=workspace_provider,
-        ),
-    }
-
-
 def build_session(
     capabilities: Capabilities,
     runners: Mapping[str, AgentRunner],
@@ -630,6 +589,5 @@ __all__ = [
     "build_read_only_runners",
     "build_runners",
     "build_session",
-    "build_workflow_runners",
     "claude_session_config_for",
 ]

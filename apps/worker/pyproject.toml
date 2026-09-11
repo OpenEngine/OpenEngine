@@ -5,7 +5,6 @@ description = "Worker: executes engine commands against real capabilities."
 requires-python = ">=3.11"
 # Composition root: the only layer allowed to depend on concrete adapters.
 dependencies = [
-    "engine-core",
     "engine-runtime",
     "engine-graph-runtime-langgraph",
     # One adapter per capability, named <capability>-<vendor>: what is needed
@@ -29,7 +28,6 @@ build-backend = "hatchling.build"
 packages = ["src/engine"]
 
 [tool.uv.sources]
-engine-core = { workspace = true }
 engine-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-codex = { workspace = true }

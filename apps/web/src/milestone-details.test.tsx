@@ -42,7 +42,6 @@ function run(
     name,
     workflowId: "delivery",
     workflowName: "Delivery",
-    workflowVersion: "1",
     taskId: `task-${runId}`,
     workstreamId,
     milestoneId,
@@ -50,12 +49,8 @@ function run(
     repository: ".",
     repositoryContext: { repository: "." },
     phase,
-    currentStepId: null,
     terminalOutcome: null,
     failureReason: "",
-    steps: [],
-    pendingHumanReview: null,
-    humanDecision: null,
   };
 }
 

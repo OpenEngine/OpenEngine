@@ -58,8 +58,10 @@ from engine.graph_runtime_langgraph.graphs import DescribesItself, LangGraphDefi
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
 from engine.graph_runtime_langgraph.store import (
     ApprovalRecord,
+    CommentRecord,
     GraphRuntimeStore,
     InMemoryGraphRuntimeStore,
+    PullRequestRecord,
     RunRecord,
     SqliteGraphRuntimeStore,
 )
@@ -80,6 +82,7 @@ __all__ = [
     "RUN_ID",
     "ACPNode",
     "ApprovalRecord",
+    "CommentRecord",
     "DescribesItself",
     "GraphRuntimeStore",
     "GraphWorkflow",
@@ -92,6 +95,7 @@ __all__ = [
     "NoExecutionError",
     "NoWorkingDirectoryError",
     "NodeExecution",
+    "PullRequestRecord",
     "RunRecord",
     "SqliteGraphRuntimeStore",
     "State",

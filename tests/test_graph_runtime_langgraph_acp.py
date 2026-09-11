@@ -35,7 +35,10 @@ from typing import Any
 
 import pytest
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
+from engine.domain import (
+    ApprovalDecision, ApprovalId, ApprovalKind, RunFailed, RunId, StepCompleted,
+    WorkspaceId,
+)
 from engine.graph_runtime import EventLog, GraphId, NodeId, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     LangGraphDefinition,
@@ -239,6 +242,12 @@ class RecordingSourceControl:
 
     async def publish(self, _workspace_id: WorkspaceId, _branch: str) -> None:
         pass
+
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        return False
+
+    async def authenticated_login(self, repository_url: str) -> str:
+        return "OpenEngineBot"
 
     async def add_comment(
         self,
@@ -1093,6 +1102,55 @@ def test_a_line_explaining_a_request_is_published_before_the_wait(
 
 
 # --- steering ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("terminal", ["complete_step", "fail_step"])
+def test_terminal_result_waits_for_queued_steering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal: str,
+) -> None:
+    speak_or_terminal = ACPNode._speak_or_terminal
+    follow_ups = ["Run the fast suite.", "Check the documentation.", "Check formatting."]
+    injected = False
+
+    async def queue_at_completion(self: ACPNode, turn: Any, *args: Any) -> Any:
+        nonlocal injected
+        result = await speak_or_terminal(self, turn, *args)
+        if isinstance(result, (StepCompleted, RunFailed)) and not injected:
+            injected = True
+            for message in follow_ups[:2]:
+                await turn.execution.steer(message)
+        elif injected and args[1] == follow_ups[0]:
+            # Also drain messages arriving while a queued follow-up is handled.
+            await turn.execution.steer(follow_ups[2])
+        return result
+
+    monkeypatch.setattr(ACPNode, "_speak_or_terminal", queue_at_completion)
+
+    async def scenario() -> Any:
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_terminal=terminal),
+            pipeline_with_run_bound_mcp,
+            RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(
+                log, run.run_id,
+                "run.finished" if terminal == "complete_step" else "run.failed",
+            )
+            return await runtime.snapshot(run.run_id)
+
+    final = asyncio.run(scenario())
+
+    assert prompts(tmp_path) == [PROMPT, *follow_ups]
+    assert len(sent(tmp_path, "session/new")) == 1
+    if terminal == "complete_step":
+        assert final.values[str(IMPLEMENTATION)] == "Implemented through MCP."
+        assert final.values["pr_url"] == "https://github.com/acme/repository/pull/7"
+        assert final.values[str(REVIEW)] == "Looks right."
+    else:
+        assert final.error == "The implementation cannot continue."
+        assert str(REVIEW) not in final.values
 
 
 def test_steering_interrupts_the_turn_in_flight(tmp_path: Path) -> None:
@@ -2109,3 +2167,85 @@ def test_retry_after_follow_up_failure_preserves_context_on_new_runner(
                 await retry(runtime, log, run.run_id)
 
     asyncio.run(scenario())
+
+
+def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
+    tmp_path: Path,
+) -> None:
+    """The binding, end to end: MCP call -> forge -> the store the run keeps."""
+
+    from engine.ports import CommentResult
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    class CommentingSourceControl:
+        async def add_comment(
+            self,
+            _pr_url: str,
+            _comment: str,
+            _file: str | None = None,
+            _line: int | None = None,
+            _in_reply_to_id: int | None = None,
+        ) -> CommentResult:
+            return CommentResult(123, "https://github.com/acme/api/pull/42#c123")
+
+    class Runtime:
+        def __init__(self, store: Any) -> None:
+            self.store = store
+            self.source_control = CommentingSourceControl()
+
+    class Execution:
+        def __init__(self, store: Any) -> None:
+            self.runtime = Runtime(store)
+            self.run_id = RunId("run-1")
+            self.execution_id = "task-1"
+            self.node_id = NodeId("reranker")
+
+    async def refuse(_request: Any) -> ApprovalDecision:
+        raise AssertionError("a comment is not approved through the broker")
+
+    async def scenario() -> tuple[Any, ...]:
+        store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        server = TerminalMcpServer(
+            step_id="reranker",
+            agent_id=AGENT,
+            required_outputs=("findings",),
+            repository_tools=("add_comment",),
+        )
+        async with server(
+            {"workspaceId": "ws-graph-run"}, Execution(store), refuse  # type: ignore[arg-type]
+        ) as bound:
+            arguments = list(bound.config["args"])
+            answer = await _mcp_response(
+                arguments[arguments.index("--host") + 1],
+                int(arguments[arguments.index("--port") + 1]),
+                arguments[arguments.index("--token") + 1],
+                {
+                    "jsonrpc": "2.0",
+                    "id": "comment-1",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "add_comment",
+                        "arguments": {
+                            "pr_url": "https://github.com/acme/api/pull/42",
+                            "comment": "Looks good.",
+                        },
+                    },
+                },
+                repository_tools=("add_comment",),
+            )
+        assert json.loads(answer["result"]["content"][0]["text"]) == {
+            "id": 123,
+            "url": "https://github.com/acme/api/pull/42#c123",
+        }
+        found = await store.comments(RunId("run-1"))
+        store.close()
+        return found
+
+    found = asyncio.run(scenario())
+
+    assert len(found) == 1
+    assert (found[0].comment_id, found[0].pr_number) == (123, 42)
+    assert (found[0].repository, found[0].kind) == ("acme/api", "issue")
+    assert found[0].node_id == NodeId("reranker")
+    assert found[0].url == "https://github.com/acme/api/pull/42#c123"
+    assert found[0].posted_at

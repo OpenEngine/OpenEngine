@@ -232,17 +232,16 @@ class AgentSession:
         title: str,
         archived: bool,
         runner: str,
-        auto_approve: bool = False,
     ) -> AgentInstance:
         return await self._capabilities.state_store.update_instance_metadata(
-            instance_id, title, archived, runner, auto_approve
+            instance_id, title, archived, runner
         )
 
     async def instances(self, agent_id: AgentId | None = None) -> Sequence[AgentInstance]:
         return await self._capabilities.state_store.list_instances(agent_id)
 
     async def instance(self, instance_id: AgentInstanceId) -> AgentInstance | None:
-        """Load one durable instance, including workflow ownership metadata."""
+        """Load one durable instance."""
         return await self._capabilities.state_store.load_instance(instance_id)
 
     async def history(self, instance_id: AgentInstanceId) -> tuple[Message, ...]:
@@ -272,26 +271,17 @@ class AgentSession:
             return None
         return await self._capabilities.workspace_provider.state(instance.workspace_id)
 
-    async def attach_workspace(
-        self,
-        instance_id: AgentInstanceId,
-        *,
-        repository: str | None = None,
-        base_ref: str | None = None,
-    ) -> WorkspaceState:
+    async def attach_workspace(self, instance_id: AgentInstanceId) -> WorkspaceState:
         """Give this conversation a checkout to work in, and keep the pairing.
 
         Works from any starting point: a conversation that never had a
         workspace is given one, and one whose checkout was detached or deleted
         gets it back, carrying in whatever work its previous checkout left
         behind.
-
-        Workflow conversations override the session defaults with the
-        repository that originally provisioned their shared workspace.
         """
         instance = await self._require_instance(instance_id)
-        selected_repository = repository or self._workspace_repository
-        selected_base_ref = base_ref or self._workspace_base_ref
+        selected_repository = self._workspace_repository
+        selected_base_ref = self._workspace_base_ref
         if selected_repository is None:
             raise WorkspacesUnavailableError()
         provider = self._capabilities.workspace_provider
