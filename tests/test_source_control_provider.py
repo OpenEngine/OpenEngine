@@ -1,6 +1,7 @@
 """Provider preference, first-run selection, and GH CLI transport tests."""
 
 import asyncio
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -140,6 +141,86 @@ def test_cli_transport_abandons_and_kills_a_gh_that_never_answers() -> None:
     # Reaped, not merely signalled: an un-awaited process is a zombie, and the
     # caller that timed out is long gone.
     assert started[0].returncode is not None
+
+
+def test_cli_transport_kills_a_gh_that_its_caller_gave_up_on_first() -> None:
+    """A caller's own deadline cancels this call; the child is still ours.
+
+    The webhook path bounds both of its forge lookups together, so a slow first
+    lookup can leave the second cancelled before its own 30s has a chance to
+    expire. That arrives as CancelledError rather than TimeoutError, and an
+    abandoned `gh` is no less abandoned for the difference -- repeated lookups
+    would otherwise accumulate orphans holding their pipes open.
+    """
+    transport = GitHubCliTransport(sys.executable, timeout_seconds=30)
+    started: list[asyncio.subprocess.Process] = []
+    create = asyncio.create_subprocess_exec
+
+    async def remember(*arguments: object, **kwargs: object):
+        process = await create(
+            arguments[0],
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)",
+            **kwargs,
+        )
+        started.append(process)
+        return process
+
+    async def scenario() -> None:
+        # The caller's bound, not the transport's: it expires long before the
+        # 30s above, so nothing inside `_run` ever times out on its own.
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.25):
+                await transport.request("GET", "/user")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(asyncio, "create_subprocess_exec", remember)
+        asyncio.run(scenario())
+
+    assert len(started) == 1
+    assert started[0].returncode is not None
+
+
+def test_cli_transport_kills_a_gh_when_the_cleanup_is_itself_cancelled() -> None:
+    """A shutdown mid-cleanup ends the child rather than abandoning it.
+
+    The polite end waits for the process to go, and that wait can be cancelled
+    in turn -- a shutdown arriving while this is already tidying up after a
+    caller that gave up. There is no time left to escalate by degrees then, so
+    the child is killed outright: a `gh` still running after the process that
+    started it has gone is the worse end.
+    """
+    transport = GitHubCliTransport(sys.executable, timeout_seconds=30)
+    started: list[asyncio.subprocess.Process] = []
+    create = asyncio.create_subprocess_exec
+
+    async def remember(*arguments: object, **kwargs: object):
+        process = await create(
+            arguments[0],
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)",
+            **kwargs,
+        )
+        started.append(process)
+        return process
+
+    async def scenario() -> None:
+        call = asyncio.create_task(transport.request("GET", "/user"))
+        await asyncio.sleep(0.3)
+        call.cancel()  # the caller gives up
+        await asyncio.sleep(0.2)  # it is now waiting for the child to go
+        call.cancel()  # and a shutdown arrives mid-wait
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        await asyncio.sleep(0.5)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(asyncio, "create_subprocess_exec", remember)
+        asyncio.run(scenario())
+
+    assert len(started) == 1
+    # SIGTERM is ignored by the stand-in, so only the kill can account for this.
+    assert started[0].returncode == -signal.SIGKILL
 
 
 def test_cli_transport_lets_a_prompt_answer_through_before_the_bound() -> None:

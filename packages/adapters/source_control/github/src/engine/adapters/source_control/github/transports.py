@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from typing import Protocol
 
 import httpx
@@ -201,6 +202,15 @@ class GitHubCliTransport:
             raise GitHubTransportError(
                 f"gh API request timed out after {self._timeout_seconds:g}s"
             ) from error
+        except BaseException:
+            # Cancelled from outside rather than timed out here, which for this
+            # transport is routine and not exceptional: a caller with its own,
+            # shorter deadline -- the webhook path bounds both of its lookups
+            # together -- reaches it first, and this call is cancelled having
+            # never had a chance to time out. The child is no less abandoned
+            # for it, so it is ended on the way out either way.
+            await self._terminate(process)
+            raise
         if process.returncode:
             detail = stderr.decode(errors="replace").strip()
             if "not logged into" in detail.lower() or "authenticate" in detail.lower():
@@ -215,21 +225,32 @@ class GitHubCliTransport:
         """End an abandoned `gh`, escalating once if it ignores the first ask.
 
         Reaped either way: an un-awaited process stays a zombie, and a caller
-        that timed out is not waiting for this.
+        that gave up is not waiting for this.
+
+        Cancelled part-way through -- a shutdown arriving while this is already
+        cleaning up after a cancelled caller -- there is no time left to be
+        polite, so the child is killed outright instead. Signalling is
+        synchronous and lands whatever happens next, and a `gh` still running
+        after the process that started it has gone is the worse end.
         """
         if process.returncode is not None:
             return
-        for stop in (process.terminate, process.kill):
-            try:
-                stop()
-            except ProcessLookupError:
-                return
-            try:
-                async with asyncio.timeout(_TERMINATION_GRACE_SECONDS):
-                    await process.wait()
-                return
-            except TimeoutError:
-                continue
+        try:
+            for stop in (process.terminate, process.kill):
+                try:
+                    stop()
+                except ProcessLookupError:
+                    return
+                try:
+                    async with asyncio.timeout(_TERMINATION_GRACE_SECONDS):
+                        await process.wait()
+                    return
+                except TimeoutError:
+                    continue
+        except BaseException:
+            with suppress(ProcessLookupError):
+                process.kill()
+            raise
 
 
 __all__ = [
