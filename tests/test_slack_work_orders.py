@@ -211,7 +211,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None, github_webhook_secret="", github_bot_login=""):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -245,6 +245,9 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         concierge_provider=provider or FakeACPProvider(),
         graph_runtime=graph_runtime,
         github_comment_handler=github_comment_handler,
+        github_webhook_secret=lambda: github_webhook_secret,
+        github_repository="acme/api",
+        github_bot_login=github_bot_login,
     ), capabilities, slack_store
 
 def _mention_graph():
@@ -259,30 +262,6 @@ def _mention_graph():
     return graph_workflow(
         builder, id="implementation-review-v1", name="Implementation review"
     )
-
-def _github_event_route(app) -> bool:
-    return any(getattr(r, "path", None) == "/api/github/events" for r in app.routes)
-
-
-def test_the_github_webhook_route_is_absent_until_something_answers_it(tmp_path):
-    """An endpoint that accepts a delivery it can never act on is a trap: a
-    webhook pointed at it collects failed deliveries until GitHub disables it."""
-    app, _capabilities, _slack_store = _app(
-        tmp_path, RecordingCommunications(), WorkOrdersConfig()
-    )
-    assert not _github_event_route(app)
-
-
-def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
-    async def handle(_comment):
-        pass
-
-    app, _capabilities, _slack_store = _app(
-        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
-        github_comment_handler=handle,
-    )
-    assert _github_event_route(app)
-
 
 def _workflow_catalog():
     """A catalog holding the workflow these mentions name."""
@@ -882,76 +861,77 @@ def test_concierge_broker_rejects_unknown_tool() -> None:
 
 
 # --- concierge MCP protocol --------------------------------------------------
+#
+# What a Slack agent's CLI sees when it connects. The transport answering these
+# is shared and tested once in `test_single_tool_mcp.py`; kept here as well
+# because the answers are this surface's, and a shared implementation is
+# exactly where a change made for the other surface could quietly alter them.
+
+
+def _slack_mcp_answer(request: object) -> dict[str, object] | None:
+    from engine.single_tool_mcp import mcp_response
+    from engine.slack_concierge import slack_egress
+
+    async def scenario() -> dict[str, object] | None:
+        # Port 0 connects to nothing: none of these reach the host, which is
+        # part of what they assert.
+        return await mcp_response(
+            "127.0.0.1", 0, "tok", request,
+            tool_spec=slack_egress._TOOL_SPEC,
+            server_info_name=slack_egress._SERVER_INFO_NAME,
+        )
+
+    return asyncio.run(scenario())
 
 
 def test_mcp_initialize_returns_server_protocol_version() -> None:
     """The server always returns its own version, not the client's."""
-    from engine.slack_concierge.slack_egress import _mcp_response, _PROTOCOL_VERSION
+    from engine.single_tool_mcp import PROTOCOL_VERSION
 
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-                "protocolVersion": "1999-01-01",
-                "clientInfo": {"name": "test", "version": "1"},
-            }},
-        )
-        assert result is not None
-        assert result["result"]["protocolVersion"] == _PROTOCOL_VERSION
-
-    asyncio.run(scenario())
+    result = _slack_mcp_answer(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "1999-01-01",
+            "clientInfo": {"name": "test", "version": "1"},
+        }},
+    )
+    assert result is not None
+    assert result["result"]["protocolVersion"] == PROTOCOL_VERSION
 
 
 def test_mcp_tools_list_returns_create_workorder() -> None:
-    from engine.slack_concierge.slack_egress import _mcp_response
-
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        )
-        assert result is not None
-        tools = result["result"]["tools"]
-        assert len(tools) == 1
-        assert tools[0]["name"] == "create_workorder"
-
-    asyncio.run(scenario())
+    result = _slack_mcp_answer({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    assert result is not None
+    tools = result["result"]["tools"]
+    assert len(tools) == 1
+    assert tools[0]["name"] == "create_workorder"
 
 
 def test_mcp_notifications_are_swallowed() -> None:
-    from engine.slack_concierge.slack_egress import _mcp_response
-
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        )
-        assert result is None
-
-    asyncio.run(scenario())
+    assert _slack_mcp_answer(
+        {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    ) is None
 
 
 def test_mcp_unknown_method_returns_error() -> None:
-    from engine.slack_concierge.slack_egress import _mcp_response
+    result = _slack_mcp_answer(
+        {"jsonrpc": "2.0", "id": 3, "method": "resources/list"}
+    )
+    assert result is not None
+    assert result["error"]["code"] == -32601
 
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "id": 3, "method": "resources/list"},
-        )
-        assert result is not None
-        assert result["error"]["code"] == -32601
-
-    asyncio.run(scenario())
 
 
 class FakeACPProvider:
     name = "fake"
 
-    def __init__(self, text="Hi, how can I help?", fail=False, create=False, fail_after_create=False):
+    def __init__(self, text="Hi, how can I help?", fail=False, create=False,
+                 fail_after_create=False, calls=1):
         self.text, self.fail, self.create = text, fail, create
         self.clients = []
         self.fail_after_create = fail_after_create
+        #: How many times the model calls the tool in one turn. More than one
+        #: is a model that split a request, or was talked into asking twice.
+        self.calls = calls
 
     async def connect(self):
         provider = self
@@ -969,7 +949,8 @@ class FakeACPProvider:
                     provider.fail = False
                     raise RuntimeError("transient")
                 if provider.create and "new workorder" in prompt:
-                    self.result = await call_mcp(self.config)
+                    self.results = await call_mcp(self.config, calls=provider.calls)
+                    self.result = self.results[-1]
                     if provider.fail_after_create:
                         raise RuntimeError("failed after accepting work")
                 yield ACPEvent(agent="fake", type=ACPEventType.MESSAGE_DELTA,
@@ -981,25 +962,49 @@ class FakeACPProvider:
         return client
 
 
-async def call_mcp(config):
-    """Real stdio child -> TCP broker -> injected host callback."""
+async def call_mcp(config, calls=1):
+    """Real stdio child -> TCP broker -> injected host callback.
+
+    The tool is whichever one the broker advertises, so the same fake drives
+    the Slack broker and the pull-request one without knowing either.
+
+    ``calls`` is how many times the tool is called down the one session, which
+    is what a model doing so within a single turn looks like from here.
+    """
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
-    requests = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "unsupported"}},
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "create_workorder", "arguments": {"prompt": "Implement it"}}},
-    ]
-    stdout, stderr = await process.communicate("".join(json.dumps(r) + "\n" for r in requests).encode())
+
+    async def send(request):
+        process.stdin.write(json.dumps(request).encode() + b"\n")
+        await process.stdin.drain()
+
+    async def roundtrip(request):
+        await send(request)
+        return json.loads(await process.stdout.readline())
+
+    try:
+        initialized = await roundtrip(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "unsupported"}})
+        assert initialized["result"]["protocolVersion"] == "2025-06-18"
+        await send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        listed = await roundtrip({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        tools = listed["result"]["tools"]
+        assert len(tools) == 1, tools
+        answers = [
+            await roundtrip(
+                {"jsonrpc": "2.0", "id": 3 + call, "method": "tools/call",
+                 "params": {"name": tools[0]["name"],
+                            "arguments": {"prompt": "Implement it"}}})
+            for call in range(calls)
+        ]
+    finally:
+        process.stdin.close()
+        _stdout, stderr = await process.communicate()
     assert process.returncode == 0, stderr.decode()
-    responses = [json.loads(line) for line in stdout.splitlines()]
-    assert len(responses) == 3
-    assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert responses[1]["result"]["tools"][0]["name"] == "create_workorder"
-    return responses[2]["result"]
+    return [answer["result"] for answer in answers]
 
 
 def test_concierge_graph_reuse_eviction_failure_and_empty_reply():

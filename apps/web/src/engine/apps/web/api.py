@@ -15,6 +15,8 @@ later transitions without polling the transcript.
 
 from __future__ import annotations
 
+from engine.github_concierge import FeedbackRequest, GithubConcierge
+from engine.github_concierge.github_egress import tool_permission as github_tool_permission
 from engine.slack_concierge import SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
 from langgraph_acp.agent import ACPAgentProvider
@@ -121,6 +123,8 @@ from engine.graph_runtime import (
     GraphRuntime,
     GraphRuntimeError,
     GraphWorkflow,
+    NodeId,
+    RunSnapshot,
     RunStatus,
     RuntimeEvent,
     UnknownGraphError,
@@ -910,6 +914,13 @@ def _graph_workorder_name(values: object) -> str:
 #: would read them is not in the room when a server starts.
 log = logging.getLogger(__name__)
 
+#: How long the forge lookups that authorize a GitHub comment may take before
+#: the comment is abandoned. The ingress behind them has one worker, so this is
+#: not only that comment's latency: whatever it waits, every comment queued
+#: after it waits too. Long enough to cover a slow-but-working forge, short
+#: enough that a hung one costs a redelivery rather than the queue.
+GITHUB_AUTHORIZATION_TIMEOUT_SECONDS = 45
+
 
 @dataclass(slots=True)
 class _GraphSurface:
@@ -942,6 +953,24 @@ class MilestoneScoping(Protocol):
         milestone: MilestoneScope,
         policy: ScopingPolicy,
     ) -> ScopingPlan: ...
+
+
+def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None:
+    """Where feedback re-enters this run, or ``None`` to steer whatever runs.
+
+    Untargeted steering reaches the execution in flight, and there is none once
+    a run is parked at human review -- which is exactly when review feedback
+    arrives. An always-open node is the graph's own statement of where it may
+    be sent back to, so naming it is what makes the ordinary post-pull-request
+    case work instead of raising.
+
+    ``None`` when the graph names no such node, or names more than one: a graph
+    that has not said where to re-enter has not asked to be reset, and guessing
+    between two candidates would reset it somewhere arbitrary.
+    """
+    topology = runtime.topology(snapshot.graph_id)
+    open_nodes = [node for node in topology.nodes if node.always_open] if topology else []
+    return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
 def create_app(
@@ -1189,6 +1218,7 @@ def create_app(
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         async with AsyncExitStack() as opened:
             opened.push_async_callback(slack_ingress.close)
+            opened.push_async_callback(github_concierge.close)
             opened.push_async_callback(github_ingress.close)
             if graph_runtime is not None:
                 # Opening the graph engine is what makes a graph WorkOrder
@@ -2459,15 +2489,129 @@ def create_app(
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
         react=_slack_comms.add_reaction,
     )
-    # GitHub comments arrive on their own signed route, answered by whatever is
-    # passed in. The route is only mounted when something is: an endpoint that
-    # could accept a delivery but never act on it is a trap, because a webhook
-    # pointed at it collects failed deliveries until GitHub disables the hook.
+    async def github_reply(origin: RunOrigin, text: str) -> None:
+        number, _, review_id = origin.thread_id.partition("/review/")
+        await session.capabilities.source_control.add_comment(
+            f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}",
+            text,
+            in_reply_to_id=int(review_id) if review_id else None,
+        )
+
+    async def github_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+        repository = origin.channel.removeprefix("github:")
+        number = int(origin.thread_id.partition("/review/")[0])
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("could not identify an existing work order: graph runtime unavailable")
+        # Read through the binding that owns the provenance table rather than
+        # through the control surface, which is deliberately forge-agnostic and
+        # has no business growing a method shaped like a pull request.
+        store = getattr(runtime, "store", None)
+        run_id = (
+            None if store is None
+            else await store.run_for_pull_request(repository.lower(), number)
+        )
+        if run_id is None:
+            raise RuntimeError("could not identify one existing work order for this pull request")
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except UnknownGraphError:
+            # A saved work order can outlive the graph it was started from.
+            snapshot = None
+        if snapshot is None:
+            raise RuntimeError("could not identify one existing work order for this pull request")
+        await runtime.steer(run_id, prompt, node_id=_reentry_node(runtime, snapshot))
+        state = await session.state_store.load(run_id)
+        link = run_notifier.work_order_link(state) if state is not None else None
+        return link.url if link else "", str(run_id)
+
+    github_concierge = GithubConcierge(
+        provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
+        steer_workorder=github_steer_workorder, reply=github_reply,
+    )
+
+    posting_login: dict[str, str] = {}
+
+    async def github_posting_login(repository: str) -> str:
+        """The account Engine replies as, asked once per repository.
+
+        Keyed rather than global: a deployment answers one repository today,
+        but a resolved login is a property of the credentials *on that forge
+        repository*, and an unkeyed cache would quietly hand the first
+        repository's answer to the second one's comments.
+
+        ``GITHUB_BOT_LOGIN`` is optional and usually unset, and a token held by
+        a machine user posts comments that look like anybody else's: without
+        knowing who this process posts as, the concierge answers its own reply
+        and then answers that, forever. The credentials themselves are the
+        authority on this, so they are asked rather than configured. A failure
+        to answer propagates: the turn is retried on redelivery instead of
+        replying into a loop this process cannot recognise.
+        """
+        if repository not in posting_login:
+            posting_login[repository] = (
+                github_bot_login
+                or await session.capabilities.source_control.authenticated_login(
+                    f"https://github.com/{repository}"
+                )
+            )
+        return posting_login[repository]
+
+    async def github_concierge_turn(comment: GithubComment) -> None:
+        # Issue-driven work orders are not supported. PR conversation comments
+        # and inline review replies both belong to an existing work order.
+        if not comment.is_pull_request:
+            return
+        # Both lookups reach the forge, and the queue behind this has one
+        # worker: a comment that waits here is every later comment waiting too,
+        # so they are bounded together rather than left to whatever the
+        # configured transport happens to bound. Timing out raises, which the
+        # ingress treats like any other failure -- the comment is forgotten and
+        # can be redelivered -- so a slow forge costs a retry, not the queue.
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            if comment.author.lower() == (
+                await github_posting_login(comment.repository)
+            ).lower():
+                # GitHub logins are case-insensitive, so the comparison is too.
+                return
+            # Before the comment becomes a prompt, not after the model has
+            # acted on one. A comment is untrusted text and the agent that
+            # reads it can read the host it runs on, so whoever writes one is
+            # choosing what this process reads and what it says back in public.
+            # `author_association` does not bound that -- a COLLABORATOR may
+            # hold read access alone -- and gating the outbound tool alone
+            # would still have run the turn. Write access is the line: it is
+            # already the authority to change this repository, so it is no
+            # escalation to reach the agent working on it.
+            may_write = await session.capabilities.source_control.can_write_repository(
+                f"https://github.com/{comment.repository}/pull/{comment.number}",
+                comment.author,
+            )
+        if not may_write:
+            # Ignored rather than answered, like the association filter above:
+            # a refusal posted back is both noise on the pull request and a way
+            # to make this process talk to somebody it will not act for.
+            log.info(
+                "ignored a GitHub comment from %s, who cannot write to %s",
+                comment.author, comment.repository,
+            )
+            return
+        thread_id = str(comment.number)
+        if comment.event == "pull_request_review_comment":
+            thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
+        await github_concierge.handle(FeedbackRequest(
+            origin=RunOrigin(
+                channel=f"github:{comment.repository}", thread_id=thread_id,
+                author=comment.author,
+            ),
+            text=comment.body, comment_id=comment.comment_id,
+        ))
+
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         self_login=lambda: github_bot_login,
-        handle=github_comment_handler,
+        handle=github_comment_handler or github_concierge_turn,
     )
 
     def _mentioned_workflow() -> GraphWorkflow | None:
@@ -2604,10 +2748,7 @@ def create_app(
             methods=["POST"],
         ),
     ]
-    if github_comment_handler is not None:
-        routes.append(
-            Route("/api/github/events", github_ingress.webhook, methods=["POST"])
-        )
+    routes.append(Route("/api/github/events", github_ingress.webhook, methods=["POST"]))
     if static_directory is not None and (static_directory / "index.html").is_file():
 
         async def spa_page(_request: Request) -> Response:

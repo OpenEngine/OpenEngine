@@ -10,9 +10,14 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from typing import Protocol
 
 import httpx
+
+
+#: How long a `gh` that has been asked to stop is given before it is killed.
+_TERMINATION_GRACE_SECONDS = 5
 
 
 class GitHubTransportError(RuntimeError):
@@ -119,11 +124,23 @@ class GitHubOAuthTransport:
         )
 
 
+#: How long one ``gh api`` call may take before it is abandoned. The OAuth
+#: transport is bounded by httpx's own default; this one shells out, so it is
+#: bounded here or not at all -- and an unbounded API call is not merely slow,
+#: because callers are serialized behind a single worker in places (the GitHub
+#: webhook queue among them), where one stalled process stops all of them.
+#: Generous next to a REST call GitHub answers in well under a second.
+CLI_TIMEOUT_SECONDS = 30
+
+
 class GitHubCliTransport:
     """GitHub REST transport delegated to the user's authenticated ``gh`` CLI."""
 
-    def __init__(self, binary_path: str = "gh") -> None:
+    def __init__(
+        self, binary_path: str = "gh", timeout_seconds: float = CLI_TIMEOUT_SECONDS
+    ) -> None:
         self._binary_path = binary_path
+        self._timeout_seconds = timeout_seconds
 
     async def request(self, method: str, path: str, **kwargs: object) -> object:
         arguments = [
@@ -174,7 +191,26 @@ class GitHubCliTransport:
             raise GitHubTransportError(
                 f"could not start {self._binary_path}: {error}"
             ) from error
-        stdout, stderr = await process.communicate(input_bytes)
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                stdout, stderr = await process.communicate(input_bytes)
+        except TimeoutError as error:
+            # `communicate` is cancelled by the timeout, but the process it was
+            # reading is not: without this, an abandoned `gh` keeps the pipes
+            # open and stays a child of this process forever.
+            await self._terminate(process)
+            raise GitHubTransportError(
+                f"gh API request timed out after {self._timeout_seconds:g}s"
+            ) from error
+        except BaseException:
+            # Cancelled from outside rather than timed out here, which for this
+            # transport is routine and not exceptional: a caller with its own,
+            # shorter deadline -- the webhook path bounds both of its lookups
+            # together -- reaches it first, and this call is cancelled having
+            # never had a chance to time out. The child is no less abandoned
+            # for it, so it is ended on the way out either way.
+            await self._terminate(process)
+            raise
         if process.returncode:
             detail = stderr.decode(errors="replace").strip()
             if "not logged into" in detail.lower() or "authenticate" in detail.lower():
@@ -184,8 +220,41 @@ class GitHubCliTransport:
             raise GitHubTransportError(detail or "gh API request failed")
         return stdout
 
+    @staticmethod
+    async def _terminate(process: asyncio.subprocess.Process) -> None:
+        """End an abandoned `gh`, escalating once if it ignores the first ask.
+
+        Reaped either way: an un-awaited process stays a zombie, and a caller
+        that gave up is not waiting for this.
+
+        Cancelled part-way through -- a shutdown arriving while this is already
+        cleaning up after a cancelled caller -- there is no time left to be
+        polite, so the child is killed outright instead. Signalling is
+        synchronous and lands whatever happens next, and a `gh` still running
+        after the process that started it has gone is the worse end.
+        """
+        if process.returncode is not None:
+            return
+        try:
+            for stop in (process.terminate, process.kill):
+                try:
+                    stop()
+                except ProcessLookupError:
+                    return
+                try:
+                    async with asyncio.timeout(_TERMINATION_GRACE_SECONDS):
+                        await process.wait()
+                    return
+                except TimeoutError:
+                    continue
+        except BaseException:
+            with suppress(ProcessLookupError):
+                process.kill()
+            raise
+
 
 __all__ = [
+    "CLI_TIMEOUT_SECONDS",
     "GitHubApiTransport",
     "GitHubCliTransport",
     "GitHubOAuthTransport",
