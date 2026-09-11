@@ -1374,3 +1374,57 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
         assert any(str(runs[0].run_id) in link.url for link in message.links)
         assert any(message.text == "*work* started." for _, message, _ in communications.posts)
     assert any(message.links for _, message, _ in communications.posts)
+
+
+def test_the_human_review_notification_links_to_the_pull_request(tmp_path):
+    """The reviewer's Slack ping links straight to what they are deciding on."""
+    from starlette.testclient import TestClient
+    from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
+    from engine.graph_runtime_langgraph.components import HumanReviewNode
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+    from engine.runtime import WorkflowCatalog
+    from langgraph.graph import START, END, StateGraph
+
+    PR_URL = "https://github.com/acme/api/pull/7"
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {"pr_url": PR_URL})
+    builder.add_node("decision", HumanReviewNode())
+    builder.add_edge(START, "work")
+    builder.add_edge("work", "decision")
+    builder.add_edge("decision", END)
+    graph = graph_workflow(
+        builder, id="implementation-review-rerank", name="Implementation review rerank",
+        inputs=(WorkflowInput("implementation_runner", "Implementation runner", "codex"),
+                WorkflowInput("review_runner", "Review runner", "claude")),
+    )
+
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, _capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(),
+        WorkflowCatalog.from_graphs((graph,)), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/slack/events", content=body, headers=_signed(body)
+        ).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+
+        async def wait_for_notification():
+            async with asyncio.timeout(10):
+                while not any(
+                    message.text == "Review complete and ready for your decision."
+                    for _, message, _ in communications.posts
+                ):
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_for_notification)
+    _, message, _ = next(
+        (channel, message, thread) for channel, message, thread in communications.posts
+        if message.text == "Review complete and ready for your decision."
+    )
+    assert any(link.url == PR_URL for link in message.links)

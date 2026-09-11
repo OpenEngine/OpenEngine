@@ -135,6 +135,7 @@ from engine.ports import (
     ApprovalHandler,
     InteractiveAgentRunner,
     Message as CommunicationsMessage,
+    MessageLink,
     StateStore,
     UserInputAnswer,
     WorkspaceState,
@@ -1047,6 +1048,25 @@ def create_app(
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
     graph_notification_lock = asyncio.Lock()
 
+    async def _pr_url_once_committed(run_id: RunId) -> str | None:
+        """The run's `pr_url`, waiting briefly for the checkpoint that carries it.
+
+        The node that asks for human review can suspend before the checkpoint
+        holding an earlier node's `pr_url` output has finished committing, so a
+        snapshot taken right as the approval is raised can still read as if that
+        output never happened. Best effort: give the write a moment to land, and
+        say nothing about the pull request rather than block the notification.
+        """
+        if surface.runtime is None:
+            return None
+        for _ in range(20):
+            snapshot = await surface.runtime.snapshot(run_id)
+            pr_url = snapshot.values.get("pr_url") if snapshot else None
+            if isinstance(pr_url, str) and pr_url:
+                return pr_url
+            await asyncio.sleep(0.1)
+        return None
+
     async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
         """Report lifecycle events without making delivery failure fail the graph."""
         text = ""
@@ -1059,11 +1079,15 @@ def create_app(
         )
         node = topology.node(event.node_id) if topology and event.node_id else None
         label = node.name if node else str(event.node_id or "Workflow")
+        pull_request_link: MessageLink | None = None
         if event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
         elif event.kind is EventKind.APPROVAL_REQUESTED:
             if event.payload.get("toolName") == "human_review":
                 text = "Review complete and ready for your decision."
+                pr_url = await _pr_url_once_committed(state.run_id)
+                if pr_url:
+                    pull_request_link = MessageLink("View pull request", pr_url)
             else:
                 text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
             mention = True
@@ -1073,10 +1097,8 @@ def create_app(
         elif event.kind is EventKind.RUN_FINISHED:
             text = "Work order finished."
         if text:
-            link = run_notifier.work_order_link(state)
-            await run_notifier.announce(
-                state, text, links=(link,) if link else (), mention=mention,
-            )
+            links = [link for link in (run_notifier.work_order_link(state), pull_request_link) if link]
+            await run_notifier.announce(state, text, links=links, mention=mention)
 
     async def graph_notifications(event: RuntimeEvent) -> None:
         if event.kind not in (
