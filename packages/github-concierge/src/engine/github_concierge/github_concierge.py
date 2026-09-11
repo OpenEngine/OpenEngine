@@ -12,6 +12,12 @@ to the pull request is fixed text chosen by whether that tool succeeded, plus
 identifiers this process already held. A pull-request comment is untrusted
 text, the agent reading it can read the host it runs on, and a reply is public
 -- so the one thing a commenter can dictate is not given a way out.
+
+Forwarding happens once per comment. Steering a work order changes what an
+agent is building, while posting the reply that announces it is a separate
+step that can fail on its own -- and a failed turn is redelivered. A comment
+whose feedback already landed is answered from what was recorded rather than
+run again, so a retried reply cannot ask for the same work twice.
 """
 from __future__ import annotations
 
@@ -46,6 +52,12 @@ text chosen by whether that tool succeeded, so do not compose an answer and do
 not try to tell the reader anything except by calling the tool. When a comment
 asks for no change, call nothing.
 """
+
+#: How many already-forwarded comments are remembered, so a reply retried after
+#: a failure is not mistaken for a fresh request. Generous next to one pull
+#: request's conversation, and bounded because this is process-local: a restart
+#: loses it, and the ingress has by then acknowledged those deliveries.
+_FORWARDED_LIMIT = 1024
 
 #: Everything the concierge is allowed to say in public. Fixed strings, chosen
 #: by what happened rather than written by a model.
@@ -128,6 +140,12 @@ class GithubConcierge:
     an active session. Conversation state is intentionally process-local.
     """
 
+    #: The comment this turn is answering, so the callback that steers work can
+    #: record what it forwarded without the session's closure -- which outlives
+    #: the turn -- having to carry a request. Safe as one slot because `handle`
+    #: serializes turns: exactly one is ever in flight to write it.
+    _forwarding: tuple[str, str, str] | None
+
     def __init__(self, *, provider: ACPAgentProvider, steer_workorder: SteerWorkorder,
                  reply: Reply, max_threads: int = 32,
                  timeout_seconds: float = 180) -> None:
@@ -146,6 +164,10 @@ class GithubConcierge:
         # say. One slot rather than one per session because `handle` serializes
         # turns: exactly one is ever in flight to write it.
         self._delivery = Delivery()
+        self._forwarding = None
+        # What forwarding achieved for comments already dealt with, so a reply
+        # retried by redelivery is only a reply.
+        self._forwarded: OrderedDict[tuple[str, str, str], Delivery] = OrderedDict()
         self.graph = build_graph(self._turn, self._reply)
 
     @staticmethod
@@ -178,11 +200,38 @@ class GithubConcierge:
                 await self._forget(self._key(request.origin))
                 raise
 
+    def _forwarded_key(self, request: FeedbackRequest) -> tuple[str, str, str] | None:
+        """This comment's identity, or ``None`` if the caller did not give one.
+
+        The repository and pull request are part of it because a comment id is
+        unique only within one forge and one comment kind. A caller that passes
+        no id gets no protection, which is the honest outcome: there is nothing
+        to recognise the comment by on a second delivery.
+        """
+        if not request.comment_id:
+            return None
+        channel, thread_id, _author = self._key(request.origin)
+        return (channel, thread_id, request.comment_id)
+
+    def _remember_forwarded(self) -> None:
+        if self._forwarding is not None:
+            self._forwarded[self._forwarding] = self._delivery
+            while len(self._forwarded) > _FORWARDED_LIMIT:
+                self._forwarded.popitem(last=False)
+
     async def _turn(self, state: ConversationState) -> dict[str, str]:
         request = state["request"]
         origin = request.origin
         key = self._key(origin)
+        forwarded = self._forwarded_key(request)
+        landed = self._forwarded.get(forwarded) if forwarded else None
+        if landed is not None:
+            # This comment's feedback reached the work order on an earlier
+            # attempt and only the reply is outstanding. Running the turn again
+            # would ask the agent to do the same work a second time.
+            return {"reply": landed.announcement()}
         self._delivery = Delivery()
+        self._forwarding = forwarded
         fresh = key not in self._threads
         if fresh:
             while len(self._threads) >= self.max_threads:
@@ -198,6 +247,11 @@ class GithubConcierge:
                     self._delivery = Delivery(attempted=True)
                     url, run_id = await self.steer_workorder(origin, prompt)
                     self._delivery = Delivery(run_id=run_id, url=url, attempted=True)
+                    # Recorded here rather than once the turn ends, because the
+                    # work order already has the feedback: everything after this
+                    # point, including the rest of the turn, is a step that may
+                    # fail and be retried.
+                    self._remember_forwarded()
                     return url, run_id
 
                 broker = await opened.enter_async_context(

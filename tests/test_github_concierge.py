@@ -341,6 +341,59 @@ def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
     assert all(c.closed for c in provider.clients)
 
 
+@pytest.mark.parametrize("failure", ["reply", "turn"])
+def test_a_retried_delivery_does_not_forward_the_same_comment_twice(tmp_path, failure):
+    """Forwarding is the effect; announcing it is a separate, failable step.
+
+    Steering a work order changes what an agent is building, and the reply that
+    announces it can fail on its own -- whereupon the ingress forgets the
+    comment so the reply can be retried by redelivery. Running the whole turn
+    again would ask for the same work a second time, so a comment whose
+    feedback already landed is answered from what was recorded.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True, fail_after_create=failure == "turn")
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(), provider=provider,
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    if failure == "reply":
+        source_control.add_comment.side_effect = [RuntimeError("GitHub unavailable"), None]
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "new workorder please")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issue_comment"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.steer.assert_awaited_once()
+        # The failure lost the acknowledged delivery, so the same comment is
+        # accepted again rather than deduplicated away.
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        # Asked for once, however many times the comment arrived.
+        runtime.steer.assert_awaited_once_with(
+            RunId("existing"), "Implement it", node_id=NodeId("implementation"))
+        # The retry reached no agent at all: there was nothing left to decide.
+        assert len(provider.clients) == 1
+        # And it still announces what actually happened the first time.
+        assert source_control.add_comment.await_args.args[1] == (
+            "Forwarded to work order `existing`.")
+        assert source_control.add_comment.await_count == (2 if failure == "reply" else 1)
+    assert not communications.posts
+
+
+
 @pytest.mark.parametrize("is_pr", [False, True])
 def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path, is_pr):
     from starlette.testclient import TestClient
