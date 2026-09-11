@@ -425,6 +425,14 @@ class GitHubSourceControl:
                 requirements.add((context, None))
         rules = await self._paginated_objects(f"/repos/{owner}/{repo}/rules/branches/{branch}")
         for rule in rules:
+            if rule.get("type") == "workflows":
+                # Workflow rules bind a source repository/path/ref, not a check
+                # name. Until we can verify that identity and its PR execution,
+                # fail closed rather than report an empty (or partial) policy.
+                raise GitHubSourceControlError(
+                    "Cannot verify required workflows ruleset rules for "
+                    f"{owner}/{repo}:{base}; CI approval is blocked"
+                )
             if rule.get("type") == "required_status_checks":
                 for check in _objects(_object(rule.get("parameters", {})).get("required_status_checks", [])):
                     requirements.add((_string(check, "context"), check.get("integration_id")))

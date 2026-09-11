@@ -41,6 +41,46 @@ def test_confirmed_empty_requirements(source):
     assert snapshot(adapter).required_checks == ()
 
 
+@pytest.mark.parametrize("with_status_checks", [False, True])
+@pytest.mark.parametrize("conclusion", [None, "failure", "success"])
+def test_workflow_rules_block_ci_approval(source, monkeypatch, with_status_checks, conclusion):
+    from types import SimpleNamespace
+
+    from engine.graph_runtime_langgraph.components import CICheck
+
+    adapter, data = source
+    rules = [{"type": "workflows", "parameters": {"workflows": [{
+        "repository_id": 123, "path": ".github/workflows/required.yml",
+        "ref": "refs/heads/main",
+    }]}}]
+    if with_status_checks:
+        rules.insert(0, {"type": "required_status_checks", "parameters": {
+            "required_status_checks": [{"context": "tests"}],
+        }})
+    data["/rules/branches/release%2Ftest"] = rules
+    data["/commits/head/check-runs"] = {"check_runs": [{
+        "name": "tests", "status": "completed", "conclusion": "success",
+    }]}
+    data["/actions/runs"] = {"workflow_runs": [{
+        "id": 1, "name": "required", "path": ".github/workflows/required.yml",
+        "status": "completed" if conclusion else "in_progress",
+        "conclusion": conclusion,
+    }]}
+    execution = SimpleNamespace(
+        runtime=SimpleNamespace(source_control=adapter), say=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "engine.graph_runtime_langgraph.components.ci_check.current_execution",
+        lambda: execution,
+    )
+    # Even a green same-name workflow is not proof of the required source identity.
+    with pytest.raises(GitHubSourceControlError, match="required workflows.*CI approval is blocked"):
+        asyncio.run(CICheck()({
+            "workspaceId": "workspace", "pr_url": "https://github.com/owner/repo/pull/42",
+        }))
+    assert not any("CI passed" in call.args[0] for call in execution.say.call_args_list)
+
+
 def test_classic_and_ruleset_requirements_include_missing_and_legacy(source):
     adapter, data = source
     data["/branches/release%2Ftest"] = {"protected": True, "protection": {
