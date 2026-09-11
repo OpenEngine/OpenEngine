@@ -71,64 +71,48 @@ describe("ProjectMilestonesPage", () => {
     );
   });
 
-  it("draws the timeline first, then a card per milestone in the same order", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([launch, foundation])));
-
-    const { container } = render(<ProjectMilestonesPage projectId="project-1" />);
-    await act(async () => {});
-
-    const timeline = screen.getByRole("region", { name: "Milestone timeline" });
-    expect(timeline.querySelector(".milestone-map")).not.toBeNull();
-
-    const cards = [...container.querySelectorAll<HTMLElement>(".milestone-card")];
-    // A dependency is drawn before the goal that needs it, and the cards read
-    // in that same order rather than in the store's.
-    expect(cards.map((card) => card.querySelector("h2")?.textContent)).toEqual([
-      "Foundation",
-      "Launch",
-    ]);
-    expect(timeline.compareDocumentPosition(cards[0])).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-  });
-
-  it("gives each card the detail a timeline node has no room for", async () => {
+  it("draws the timeline first, then the two work tables under it", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([launch, foundation])));
 
     render(<ProjectMilestonesPage projectId="project-1" />);
     await act(async () => {});
 
-    const planned = document.querySelector<HTMLElement>(
-      '.milestone-card[href="/projects/project-1/milestones/milestone-foundation"]',
-    )!;
-    expect(planned).toHaveAttribute(
-      "href",
-      "/projects/project-1/milestones/milestone-foundation",
-    );
-    expect(within(planned).getByText("Build the shared project model.")).toBeInTheDocument();
-    expect(within(planned).getByText("milestone-foundation")).toBeInTheDocument();
-    expect(within(planned).getByText("2 workstreams")).toBeInTheDocument();
-    const workstreams = within(planned).getByRole("list", {
-      name: "Workstreams for Foundation",
-    });
-    expect(
-      within(workstreams).getAllByRole("listitem").map((item) => item.textContent),
-    ).toEqual(["Data modelPersist the plan.", "Timeline view"]);
-    expect(within(workstreams).queryByRole("link")).toBeNull();
+    const timeline = screen.getByRole("region", { name: "Milestone timeline" });
+    expect(timeline.querySelector(".milestone-map")).not.toBeNull();
 
-    const shipping = document.querySelector<HTMLElement>(
-      '.milestone-card[href="/projects/project-1/milestones/milestone-launch"]',
-    )!;
-    expect(shipping).toHaveAttribute(
-      "href",
-      "/projects/project-1/milestones/milestone-launch",
+    const tables = screen.getAllByRole("table");
+    expect(tables.map((table) => table.getAttribute("aria-labelledby"))).toEqual([
+      "scheduled-work-title",
+      "finished-work-title",
+    ]);
+    // The graph keeps the top of the page; the tables read below it.
+    expect(timeline.compareDocumentPosition(tables[0])).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    // The dependency reads as the goal it names, not as the id recorded.
-    expect(within(shipping).getByText("Depends on Foundation")).toBeInTheDocument();
-    expect(within(shipping).getByText("0 workstreams")).toBeInTheDocument();
-    expect(within(shipping).getByText("No workstreams yet.")).toBeInTheDocument();
+  });
+
+  it("gives each work table its columns, and no rows until something fills them", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([launch, foundation])));
+
+    render(<ProjectMilestonesPage projectId="project-1" />);
+    await act(async () => {});
+
+    for (const [title, empty] of [
+      ["Scheduled Work", "No scheduled work yet."],
+      ["Finished Work", "No finished work yet."],
+    ]) {
+      expect(screen.getByRole("heading", { name: title, level: 2 })).toBeInTheDocument();
+      const table = screen.getByRole("table", { name: title });
+      expect(
+        within(table).getAllByRole("columnheader").map((cell) => cell.textContent),
+      ).toEqual(["Workorder Name", "Workorder Description", "Milestone"]);
+      // Nothing is wired to these yet, so the one row says so rather than
+      // leaving a headed table that looks like it failed to load.
+      expect(within(table).getByText(empty)).toBeInTheDocument();
+      expect(within(table).queryAllByRole("link")).toHaveLength(0);
+    }
   });
 
   it("follows the plan as it is written, without redrawing the page", async () => {
@@ -145,7 +129,7 @@ describe("ProjectMilestonesPage", () => {
 
     await act(async () => vi.advanceTimersByTimeAsync(1000));
 
-    expect(screen.getAllByRole("link", { name: "Launch" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "Launch" })).toHaveLength(1);
     expect(screen.queryByText("Loading milestones…")).toBeNull();
   });
 
@@ -155,14 +139,14 @@ describe("ProjectMilestonesPage", () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockImplementation(plan([])));
 
-    const { container } = render(<ProjectMilestonesPage projectId="project-1" />);
+    render(<ProjectMilestonesPage projectId="project-1" />);
     await act(async () => {});
 
     expect(screen.queryByText("Loading milestones…")).toBeNull();
     expect(
       screen.getByText("No milestones have been added to this project yet."),
     ).toBeInTheDocument();
-    expect(container.querySelectorAll(".milestone-card")).toHaveLength(0);
+    expect(screen.queryAllByRole("link", { name: /milestone/i })).toHaveLength(0);
   });
 
   it("reports a failure that leaves it with nothing to show", async () => {
@@ -191,7 +175,7 @@ describe("ProjectMilestonesPage", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
 
     expect(screen.getByText("Not updating: store unavailable")).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "Foundation" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "Foundation" })).toHaveLength(1);
   });
 
   it("stops polling once it leaves the page", async () => {

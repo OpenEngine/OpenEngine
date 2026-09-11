@@ -213,7 +213,7 @@ export function MilestoneDetailsPage({
     ? (grouped.get(selectedWorkstream.workstreamId) ?? [])
     : tasks;
   // The goals this one waits on, read as the names the planner gave them rather
-  // than as the ids it recorded -- the same way the milestone's card does.
+  // than as the ids it recorded.
   const dependencies = (milestone?.dependencies ?? []).map((id) => names.get(id) ?? id);
   // Two polls feed this page and either can fall over on its own. Whichever it
   // is, the page holds what it last read and says so, rather than letting the

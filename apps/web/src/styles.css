@@ -684,25 +684,23 @@ select:disabled { cursor: default; }
 .milestone-error { color: var(--flame-deep); }
 
 /* The project's own milestones page: the same graph with room to breathe, and
-   a card apiece under it for what a 170px node cannot hold. */
+   the scheduled and finished work read as tables under it. */
 .milestone-page-map { padding: 0 var(--gutter) 10px; }
-.milestone-card {
-  /* The run card's five fixed rows are its own; a milestone has as many parts
-     as the planner gave it. */
-  grid-template-rows: none;
-  gap: 12px;
-  align-content: start;
+.work-table-section { display: grid; gap: 12px; padding: 26px var(--gutter) 0; }
+.work-table-section:last-child { padding-bottom: 48px; }
+.work-table-section h2 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.work-table { width: 100%; border-collapse: collapse; text-align: left; }
+.work-table th {
+  padding: 11px 14px;
+  color: var(--faint);
+  font: 500 10px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  background: var(--fill);
+  border-bottom: 1px solid var(--rule);
 }
-.milestone-card .lede { font-size: 14px; }
-.milestone-card-workstreams {
-  display: grid;
-  gap: 10px;
-  padding-top: 14px;
-  border-top: 1px solid var(--rule);
-}
-.milestone-card-workstreams li { display: grid; gap: 3px; }
-.milestone-card-workstreams strong { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
-.milestone-card-workstreams span { color: var(--muted); font: 500 12px/1.45 var(--mono); }
+.work-table td { padding: 14px; border-bottom: 1px solid var(--rule); font-size: 14px; }
+.work-table-empty { color: var(--muted); font: 500 13px/1.5 var(--mono); text-align: center; }
 
 /* One milestone's own page: workstream cards filter the complete task list
    below them. */
