@@ -20,7 +20,7 @@ from .slack_egress import ConciergeBroker
 CreateWorkorder = Callable[[RunOrigin, str, str], Awaitable[tuple[str, str]]]
 Reply = Callable[[RunOrigin, str], Awaitable[None]]
 
-INSTRUCTIONS = """You are OpenEngineBot, a conversation concierge. For a greeting or test
+INSTRUCTIONS = """You are OpenEngineBot, a Slack concierge. For a greeting or test
 message respond 'Hi, how can I help?'. Only when the user requests work, use
 create_workorder with their task. The repository is chosen automatically.
 Do not claim work started unless the tool succeeds. Work-order progress and its
@@ -34,7 +34,6 @@ class IncomingMessage:
     origin: RunOrigin
     text: str
     message_ts: str = ""
-    repository: str = ""
 
 
 class ConversationState(TypedDict):
@@ -65,12 +64,10 @@ class SlackConcierge:
 
     def __init__(self, *, provider: ACPAgentProvider, create_workorder: CreateWorkorder,
                  reply: Reply, default_repository: str = "", max_threads: int = 32,
-                 timeout_seconds: float = 180, continue_existing: bool = False,
+                 timeout_seconds: float = 180,
                  turn_finished: Callable[[RunOrigin], Awaitable[None]] | None = None) -> None:
         if max_threads < 1:
             raise ValueError("max_threads must be positive")
-        self.continue_existing = continue_existing
-        self._current_origin: RunOrigin | None = None
         self.provider = provider
         self.create_workorder = create_workorder
         self.reply = reply
@@ -109,13 +106,11 @@ class SlackConcierge:
                 await self._forget(key)
                 raise
             finally:
-                self._current_origin = None
                 if self.turn_finished is not None:
                     await self.turn_finished(message.origin)
 
     async def _turn(self, state: ConversationState) -> dict[str, str]:
         message = state["message"]
-        self._current_origin = message.origin
         key = (message.origin.channel, message.origin.thread_id)
         fresh = key not in self._threads
         if fresh:
@@ -125,15 +120,9 @@ class SlackConcierge:
             try:
                 cwd = opened.enter_context(TemporaryDirectory(prefix="slack-concierge-"))
                 async def create(repository: str, prompt: str) -> tuple[str, str]:
-                    origin = self._current_origin
-                    if origin is None or (origin.channel, origin.thread_id) != key:
-                        raise RuntimeError("no active turn for this conversation")
-                    # Sessions are reused across authors; turns are serialized.
-                    return await self.create_workorder(origin, repository, prompt)
+                    return await self.create_workorder(message.origin, repository, prompt)
                 broker = await opened.enter_async_context(ConciergeBroker(
-                    create_workorder=create,
-                    default_repository=message.repository or self.default_repository,
-                    continue_existing=self.continue_existing))
+                    create_workorder=create, default_repository=self.default_repository))
                 client = await self.provider.connect()
                 opened.push_async_callback(client.close)
                 session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])
@@ -143,13 +132,7 @@ class SlackConcierge:
                 raise
         self._threads.move_to_end(key)
         session = self._threads[key][1]
-        instructions = INSTRUCTIONS if not self.continue_existing else (
-            "You are OpenEngineBot, a pull request concierge. Reply briefly to questions. "
-            "When asked to address feedback, use continue_workorder with the request. "
-            "It forwards feedback to the existing work order for this PR. Never create "
-            "a new work order or claim feedback was delivered unless the tool succeeds."
-        )
-        prompt = (instructions + "\nUser: " if fresh else "") + message.text
+        prompt = (INSTRUCTIONS + "\nUser: " if fresh else "") + message.text
         parts = []
         async for event in session.prompt(prompt):
             if event.type == ACPEventType.MESSAGE_DELTA:

@@ -15,6 +15,8 @@ later transitions without polling the transcript.
 
 from __future__ import annotations
 
+from engine.github_concierge import FeedbackRequest, GithubConcierge
+from engine.github_concierge.github_egress import tool_permission as github_tool_permission
 from engine.slack_concierge import IncomingMessage, SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
 from langgraph_acp.agent import ACPAgentProvider
@@ -2468,11 +2470,12 @@ def create_app(
             in_reply_to_id=int(review_id) if review_id else None,
         )
 
-    async def github_continue_workorder(
-        origin: RunOrigin, repository: str, prompt: str,
-    ) -> tuple[str, str]:
+    async def github_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
         number = origin.thread_id.partition("/review/")[0]
         pr_url = f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}"
+        # The session this call came from belongs to one author for its whole
+        # life, so the permission asked about here is the permission of whoever
+        # the model was answering -- not of whoever happened to comment first.
         if not await session.capabilities.source_control.can_write_repository(
             pr_url, origin.author
         ):
@@ -2496,10 +2499,9 @@ def create_app(
         link = run_notifier.work_order_link(state)
         return link.url if link else "", str(state.run_id)
 
-    github_concierge = SlackConcierge(
-        provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
-        create_workorder=github_continue_workorder, reply=github_reply,
-        continue_existing=True,
+    github_concierge = GithubConcierge(
+        provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
+        steer_workorder=github_steer_workorder, reply=github_reply,
     )
 
     posting_login: list[str] = []
@@ -2537,13 +2539,12 @@ def create_app(
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":
             thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
-        await github_concierge.handle(IncomingMessage(
+        await github_concierge.handle(FeedbackRequest(
             origin=RunOrigin(
                 channel=f"github:{comment.repository}", thread_id=thread_id,
                 author=comment.author,
             ),
-            text=comment.body, message_ts=comment.comment_id,
-            repository=f"https://github.com/{comment.repository}.git",
+            text=comment.body, comment_id=comment.comment_id,
         ))
 
     github_ingress = GithubIngress(

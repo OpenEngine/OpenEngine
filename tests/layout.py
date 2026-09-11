@@ -67,6 +67,7 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.adapters",
         "engine.graph_runtime",
         "engine.graph_runtime_langgraph",
+        "engine.github_concierge",
         "engine.scoper",
         "engine.slack_concierge",
     ),
@@ -107,7 +108,7 @@ def _layer_for(root: Path) -> str:
             return APP
         case ("packages", "domain"):
             return DOMAIN
-        case ("packages", "scoper" | "slack-concierge"):
+        case ("packages", "github-concierge" | "scoper" | "slack-concierge"):
             return RUNTIME
         case ("packages", "graph_runtime"):
             return RUNTIME

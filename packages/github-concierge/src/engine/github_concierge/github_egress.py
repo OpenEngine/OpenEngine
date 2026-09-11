@@ -1,7 +1,12 @@
-"""Outbound work-order tool: validated host callback exposed through stdio MCP.
+"""Outbound feedback tool: a validated host callback behind a stdio MCP server.
 
-The host binds the Slack origin and posts status and links through its notifier.
-The agent supplies only a repository and task; it cannot redirect those replies.
+Deliberately independent of the Slack broker rather than a mode of it. The two
+grant different authority -- Slack's tool starts work, this one may only steer
+work that already exists -- and a shared implementation would mean every change
+to one conversation's authority is a change to the other's.
+
+The host binds the pull request the feedback belongs to. The agent supplies
+only the feedback text: it cannot choose which work order hears it.
 """
 
 from __future__ import annotations
@@ -12,30 +17,29 @@ import json
 import secrets
 import sys
 import tempfile
-from pathlib import Path
-from typing import TextIO
-from langgraph_acp.permissions import ACPPermissionRequest, ACPPermissionOutcome
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from pathlib import Path
+from typing import TextIO
 
+from langgraph_acp.permissions import ACPPermissionOutcome, ACPPermissionRequest
 
-
-#: Given (repository, prompt) create a work order and return (url, run_id).
-CreateWorkorder = Callable[[str, str], Awaitable[tuple[str, str]]]
+#: Given a prompt, forward it to this pull request's work order and return
+#: (url, run_id).
+SteerWorkorder = Callable[[str], Awaitable[tuple[str, str]]]
 
 McpRequestId = str | int
 _PROTOCOL_VERSION = "2025-06-18"
 _SERVER_NAME = "concierge"
 
-CONCIERGE_TOOL_NAME = "create_workorder"
+FEEDBACK_TOOL_NAME = "continue_workorder"
 
 _TOOL_SPEC: dict[str, object] = {
-    "name": CONCIERGE_TOOL_NAME,
+    "name": FEEDBACK_TOOL_NAME,
     "description": (
-        "Start a new work order. The work order runs a workflow that "
-        "implements the requested task, and status updates will be posted "
-        "in this conversation. Returns the work order URL so you can share "
-        "it with the user."
+        "Send feedback to the work order that opened this pull request, so the "
+        "agent behind it can act on the request. Never starts a new work order. "
+        "Returns the work order URL so you can share it with the user."
     ),
     "inputSchema": {
         "type": "object",
@@ -43,7 +47,7 @@ _TOOL_SPEC: dict[str, object] = {
             "prompt": {
                 "type": "string",
                 "minLength": 1,
-                "description": "What the work order should accomplish.",
+                "description": "The feedback the work order should act on.",
             },
         },
         "required": ["prompt"],
@@ -52,28 +56,21 @@ _TOOL_SPEC: dict[str, object] = {
 }
 
 
-class ConciergeBroker:
-    """Expose ``create_workorder`` to a provider CLI over a local MCP server.
+class FeedbackBroker:
+    """Expose ``continue_workorder`` to a provider CLI over a local MCP server.
 
-    The factory that creates it binds the callback that actually starts the
-    work order, so the broker itself has no opinion about workflows, runners,
-    or repositories -- it validates the call, forwards it, and returns the
-    answer.
+    The factory that creates it binds the callback that reaches the work order,
+    so the broker itself has no opinion about runtimes or runs -- it validates
+    the call, forwards it, and returns the answer.
     """
 
-    def __init__(
-        self,
-        *,
-        create_workorder: CreateWorkorder,
-        default_repository: str = "",
-    ) -> None:
-        self._create_workorder = create_workorder
-        self._default_repository = default_repository
+    def __init__(self, *, steer_workorder: SteerWorkorder) -> None:
+        self._steer_workorder = steer_workorder
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
         self._credential: TextIO | None = None
 
-    async def __aenter__(self) -> ConciergeBroker:
+    async def __aenter__(self) -> FeedbackBroker:
         self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-")
         self._credential.write(self._token)
         self._credential.flush()
@@ -101,7 +98,7 @@ class ConciergeBroker:
         return {
             "name": _SERVER_NAME,
             "command": sys.executable,
-            "args": ["-m", "engine.slack_concierge.slack_egress",
+            "args": ["-m", "engine.github_concierge.github_egress",
                      "--host", "127.0.0.1", "--port",
                      str(self._server.sockets[0].getsockname()[1]),
                      "--token-file", self._credential.name],
@@ -128,7 +125,7 @@ class ConciergeBroker:
             return {"ok": False, "error": "invalid concierge credential"}
         name = request.get("name")
         arguments = request.get("arguments")
-        if name != CONCIERGE_TOOL_NAME:
+        if name != FEEDBACK_TOOL_NAME:
             return {"ok": False, "error": f"unknown concierge tool: {name}"}
         if not isinstance(arguments, dict):
             return {"ok": False, "error": "arguments must be an object"}
@@ -136,19 +133,15 @@ class ConciergeBroker:
         if not isinstance(prompt, str) or not prompt.strip():
             return {"ok": False, "error": "prompt must be a non-empty string"}
         if set(arguments) - {"prompt"}:
-            return {"ok": False, "error": "unknown work-order arguments"}
-        repository = self._default_repository or "."
+            return {"ok": False, "error": "unknown feedback arguments"}
         try:
-            url, run_id = await self._create_workorder(repository, prompt.strip())
+            url, run_id = await self._steer_workorder(prompt.strip())
         except Exception as error:
-            return {"ok": False, "error": f"could not start the work order: {error}"}
+            return {"ok": False, "error": f"could not deliver the feedback: {error}"}
         return {
             "ok": True,
-            "text": (
-                f"Work order `{run_id}` started on `{repository}`. "
-                "Status updates will appear in this thread."
-            ),
-            "data": {"run_id": run_id, "url": url, "repository": repository},
+            "text": f"Feedback delivered to work order `{run_id}`.",
+            "data": {"run_id": run_id, "url": url},
         }
 
 
@@ -274,22 +267,23 @@ def main() -> None:
     asyncio.run(_serve_stdio(arguments.host, arguments.port, Path(arguments.token_file).read_text()))
 
 
-__all__ = [
-    "CONCIERGE_TOOL_NAME",
-    "ConciergeBroker",
-]
-
-
 async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
     """Approve only the one named MCP grant; decline all other operations."""
 
-    names = {"mcp__concierge__create_workorder", "concierge/create_workorder"}
+    names = {f"mcp__concierge__{FEEDBACK_TOOL_NAME}", f"concierge/{FEEDBACK_TOOL_NAME}"}
     if any(isinstance(value, str) and value in names
            for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
         for option in request.options:
             if option.kind == "allow_once":
                 return ACPPermissionOutcome.selected(option.option_id)
     return ACPPermissionOutcome.cancelled()
+
+
+__all__ = [
+    "FEEDBACK_TOOL_NAME",
+    "FeedbackBroker",
+    "tool_permission",
+]
 
 
 if __name__ == "__main__":

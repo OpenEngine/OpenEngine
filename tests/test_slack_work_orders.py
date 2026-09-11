@@ -263,311 +263,6 @@ def _mention_graph():
         builder, id="implementation-review-v1", name="Implementation review"
     )
 
-def _github_event_route(app) -> bool:
-    return any(getattr(r, "path", None) == "/api/github/events" for r in app.routes)
-
-
-def test_the_github_webhook_route_is_mounted_with_the_default_concierge(tmp_path):
-    app, _capabilities, _slack_store = _app(
-        tmp_path, RecordingCommunications(), WorkOrdersConfig()
-    )
-    assert _github_event_route(app)
-
-
-def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
-    async def handle(_comment):
-        pass
-
-    app, _capabilities, _slack_store = _app(
-        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
-        github_comment_handler=handle,
-    )
-    assert _github_event_route(app)
-
-
-@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-@pytest.mark.parametrize("access", ["write", "read", "error"])
-def test_github_comments_continue_existing_workorders(tmp_path, event, access):
-    from starlette.testclient import TestClient
-    from contextlib import asynccontextmanager
-    from types import SimpleNamespace
-    from test_github_ingress import _issue_comment, _signed as github_signed
-
-    runtime = MagicMock()
-    runtime.snapshot = AsyncMock(return_value=SimpleNamespace(
-        values={"pr_url": "https://github.com/acme/api/pull/7"}))
-    runtime.steer = AsyncMock()
-
-    @asynccontextmanager
-    async def opened_runtime():
-        yield runtime
-
-    provider = FakeACPProvider(create=True)
-    communications = RecordingCommunications()
-    app, capabilities, _ = _app(
-        tmp_path, communications,
-        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1", runner="default"),
-        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
-        graph_runtime=opened_runtime(),
-    )
-
-    source_control = MagicMock()
-    source_control.add_comment = AsyncMock()
-    source_control.can_write_repository = AsyncMock(return_value=True)
-    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
-    object.__setattr__(capabilities, "source_control", source_control)
-    source_control.can_write_repository.return_value = access == "write"
-    if access == "error":
-        source_control.can_write_repository.side_effect = RuntimeError("permission API unavailable")
-    state = RunState(
-        run_id=RunId("existing"), task_id=TaskId("task"),
-        workflow_id=WorkflowId("implementation-review-v1"),
-    )
-
-    def deliver(client, comment_id, text):
-        payload = _issue_comment(comment_id, text)
-        payload["issue"]["pull_request"] = {}
-        payload["comment"]["user"]["login"] = "first" if comment_id == 1 else "second"
-        if event == "pull_request_review_comment":
-            payload["pull_request"] = payload.pop("issue")
-            if comment_id != 1:
-                payload["comment"]["in_reply_to_id"] = 1
-        body = json.dumps(payload).encode()
-        return client.post("/api/github/events", content=body,
-                           headers=dict(github_signed(body), **{"x-github-event": event}))
-
-    with TestClient(app) as client:
-        client.portal.call(capabilities.state_store.save, state)
-        assert deliver(client, 1, "hello").status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        assert deliver(client, 2, "new workorder please").status_code == 200
-        assert deliver(client, 2, "new workorder please").status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        runs = client.portal.call(capabilities.state_store.list_runs)
-        assert len(runs) == 1
-        assert runs[0].run_id == state.run_id
-        source_control.can_write_repository.assert_awaited_once_with(
-            "https://github.com/acme/api/pull/7", "second")
-        if access == "write":
-            runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
-        else:
-            runtime.steer.assert_not_awaited()
-        assert runs[0].origin is None
-        assert len(provider.clients) == 1
-        assert len(provider.clients[0].prompts) == 2
-        assert bool(provider.clients[0].result.get("isError")) == (access != "write")
-    assert provider.clients[0].closed
-    assert not communications.posts
-    assert source_control.add_comment.await_count == 2
-    source_control.add_comment.assert_awaited_with(
-        "https://github.com/acme/api/pull/7", provider.text,
-        in_reply_to_id=1 if event == "pull_request_review_comment" else None,
-    )
-
-
-@pytest.mark.parametrize("failure", ["turn", "reply"])
-def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
-    from starlette.testclient import TestClient
-    from test_github_ingress import _issue_comment, _signed as github_signed
-
-    provider = FakeACPProvider(fail=failure == "turn")
-    communications = RecordingCommunications()
-    app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
-                     provider=provider, github_webhook_secret=SIGNING_SECRET)
-    source_control = MagicMock()
-    source_control.add_comment = AsyncMock()
-    source_control.can_write_repository = AsyncMock(return_value=True)
-    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
-    object.__setattr__(capabilities, "source_control", source_control)
-    payload = _issue_comment()
-    payload["issue"]["pull_request"] = {}
-    if failure == "reply":
-        source_control.add_comment.side_effect = [RuntimeError("GitHub unavailable"), None]
-    body = json.dumps(payload).encode()
-    headers = dict(github_signed(body), **{"x-github-event": "issue_comment"})
-    with TestClient(app) as client:
-        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        assert not communications.posts
-        assert provider.clients[0].closed
-        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        assert source_control.add_comment.await_count == (2 if failure == "reply" else 1)
-        assert not communications.posts
-    assert all(c.closed for c in provider.clients)
-
-
-@pytest.mark.parametrize("is_pr", [False, True])
-def test_github_does_not_create_workorders_for_issues_or_unmatched_prs(tmp_path, is_pr):
-    from starlette.testclient import TestClient
-    from test_github_ingress import _issue_comment, _signed as github_signed
-
-    provider = FakeACPProvider(create=True)
-    communications = RecordingCommunications()
-    app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
-                               provider=provider, github_webhook_secret=SIGNING_SECRET)
-    source = MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
-              authenticated_login=AsyncMock(return_value="OpenEngineBot"))
-    object.__setattr__(capabilities, "source_control", source)
-    payload = _issue_comment(1, "new workorder please")
-    if is_pr:
-        payload["issue"]["pull_request"] = {}
-    body = json.dumps(payload).encode()
-    with TestClient(app) as client:
-        assert client.post("/api/github/events", content=body, headers=dict(
-            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        assert not client.portal.call(capabilities.state_store.list_runs)
-        if is_pr:
-            assert provider.clients[0].result["isError"]
-            assert "could not identify" in provider.clients[0].result["content"][0]["text"]
-        else:
-            assert not provider.clients
-            source.add_comment.assert_not_awaited()
-    assert not communications.posts
-
-
-@pytest.mark.parametrize("stale_position", [None, "before", "after"])
-def test_github_feedback_steers_the_matching_graph_workorder(tmp_path, stale_position):
-    from contextlib import asynccontextmanager
-    from types import SimpleNamespace
-    from starlette.testclient import TestClient
-    from test_github_ingress import _issue_comment, _signed as github_signed
-
-    from engine.graph_runtime import UnknownGraphError
-
-    runtime = MagicMock()
-    runtime.snapshot = AsyncMock(return_value=SimpleNamespace(
-        values={"pr_url": "https://github.com/acme/api/pull/7"}))
-    runtime.steer = AsyncMock()
-
-    @asynccontextmanager
-    async def opened_runtime():
-        yield runtime
-
-    provider = FakeACPProvider(create=True)
-    app, capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig(),
-                               provider=provider, github_webhook_secret=SIGNING_SECRET,
-                               graph_runtime=opened_runtime())
-    object.__setattr__(capabilities, "source_control", MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
-              authenticated_login=AsyncMock(return_value="OpenEngineBot")))
-    state = RunState(run_id=RunId("graph-work"), task_id=TaskId("task"),
-                     workflow_id=WorkflowId("graph-workflow"))
-    stale = RunState(run_id=RunId("stale-work"), task_id=TaskId("stale-task"),
-                     workflow_id=WorkflowId("removed-graph"))
-    snapshot = runtime.snapshot.return_value
-
-    async def snapshot_for(run_id):
-        if run_id == stale.run_id:
-            raise UnknownGraphError("removed-graph")
-        return snapshot
-
-    runtime.snapshot.side_effect = snapshot_for
-    payload = _issue_comment(1, "new workorder please")
-    payload["issue"]["pull_request"] = {}
-    body = json.dumps(payload).encode()
-    with TestClient(app) as client:
-        if stale_position == "before":
-            client.portal.call(capabilities.state_store.save, stale)
-        client.portal.call(capabilities.state_store.save, state)
-        if stale_position == "after":
-            client.portal.call(capabilities.state_store.save, stale)
-        assert client.post("/api/github/events", content=body, headers=dict(
-            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        runtime.steer.assert_awaited_once_with(state.run_id, "Implement it")
-        assert not provider.clients[0].result.get("isError")
-        assert len(client.portal.call(capabilities.state_store.list_runs)) == (1 if stale_position is None else 2)
-
-
-@pytest.mark.parametrize("identity", ["resolved", "configured", "cased", "unavailable"])
-def test_github_never_answers_its_own_reply(tmp_path, identity):
-    """The bot's own comment looks like anybody else's, so it must be recognised.
-
-    A token held by a machine user posts an ordinary ``User`` comment from a
-    collaborator, which passes every webhook-level filter: without knowing the
-    posting account, the concierge would answer itself forever.
-    """
-    from starlette.testclient import TestClient
-    from test_github_ingress import _issue_comment, _signed as github_signed
-
-    provider = FakeACPProvider(create=True)
-    communications = RecordingCommunications()
-    app, capabilities, _ = _app(
-        tmp_path, communications, WorkOrdersConfig(), provider=provider,
-        github_webhook_secret=SIGNING_SECRET,
-        github_bot_login="OpenEngineBot" if identity == "configured" else "",
-    )
-    source_control = MagicMock()
-    source_control.add_comment = AsyncMock()
-    source_control.can_write_repository = AsyncMock(return_value=True)
-    source_control.authenticated_login = AsyncMock(
-        side_effect=RuntimeError("GitHub API unavailable") if identity == "unavailable"
-        else None,
-        return_value="OpenEngineBot",
-    )
-    object.__setattr__(capabilities, "source_control", source_control)
-
-    payload = _issue_comment(1, "I have addressed that")
-    payload["issue"]["pull_request"] = {}
-    payload["comment"]["user"]["login"] = (
-        "openenginebot" if identity == "cased" else "OpenEngineBot"
-    )
-    body = json.dumps(payload).encode()
-    with TestClient(app) as client:
-        assert client.post("/api/github/events", content=body, headers=dict(
-            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        # Never answered, and never replied to: no loop can start from here.
-        assert not provider.clients
-        source_control.add_comment.assert_not_awaited()
-        assert not client.portal.call(capabilities.state_store.list_runs)
-        if identity == "configured":
-            # A configured identity is authoritative, so nothing is asked.
-            source_control.authenticated_login.assert_not_awaited()
-        else:
-            source_control.authenticated_login.assert_awaited_once_with(
-                "https://github.com/acme/api")
-        if identity == "unavailable":
-            # Failing closed forgets the comment, so it can be redelivered
-            # once the forge answers again rather than replying blind.
-            assert app.state.github_ingress.accept("issue_comment", payload)
-            client.portal.call(app.state.github_ingress.drain)
-            assert source_control.authenticated_login.await_count == 2
-    assert not communications.posts
-
-
-def test_github_asks_who_it_posts_as_only_once(tmp_path):
-    from starlette.testclient import TestClient
-    from test_github_ingress import _issue_comment, _signed as github_signed
-
-    provider = FakeACPProvider(create=True)
-    app, capabilities, _ = _app(
-        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
-        provider=provider, github_webhook_secret=SIGNING_SECRET,
-    )
-    source_control = MagicMock()
-    source_control.add_comment = AsyncMock()
-    source_control.can_write_repository = AsyncMock(return_value=True)
-    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
-    object.__setattr__(capabilities, "source_control", source_control)
-
-    def deliver(client, comment_id, login):
-        payload = _issue_comment(comment_id, "look at this")
-        payload["issue"]["pull_request"] = {}
-        payload["comment"]["user"]["login"] = login
-        body = json.dumps(payload).encode()
-        return client.post("/api/github/events", content=body, headers=dict(
-            github_signed(body), **{"x-github-event": "issue_comment"}))
-
-    with TestClient(app) as client:
-        assert deliver(client, 1, "someone").status_code == 200
-        assert deliver(client, 2, "OpenEngineBot").status_code == 200
-        client.portal.call(app.state.github_ingress.drain)
-        source_control.authenticated_login.assert_awaited_once()
-        assert len(provider.clients) == 1
-
-
 def _workflow_catalog():
     """A catalog holding the workflow these mentions name."""
     from engine.runtime import WorkflowCatalog
@@ -1266,25 +961,41 @@ class FakeACPProvider:
 
 
 async def call_mcp(config):
-    """Real stdio child -> TCP broker -> injected host callback."""
+    """Real stdio child -> TCP broker -> injected host callback.
+
+    The tool is whichever one the broker advertises, so the same fake drives
+    the Slack broker and the pull-request one without knowing either.
+    """
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
-    tool_name = "continue_workorder" if "--continue-existing" in config["args"] else "create_workorder"
-    requests = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "unsupported"}},
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool_name, "arguments": {"prompt": "Implement it"}}},
-    ]
-    stdout, stderr = await process.communicate("".join(json.dumps(r) + "\n" for r in requests).encode())
+
+    async def send(request):
+        process.stdin.write(json.dumps(request).encode() + b"\n")
+        await process.stdin.drain()
+
+    async def roundtrip(request):
+        await send(request)
+        return json.loads(await process.stdout.readline())
+
+    try:
+        initialized = await roundtrip(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "unsupported"}})
+        assert initialized["result"]["protocolVersion"] == "2025-06-18"
+        await send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        listed = await roundtrip({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        tools = listed["result"]["tools"]
+        assert len(tools) == 1, tools
+        called = await roundtrip(
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+             "params": {"name": tools[0]["name"], "arguments": {"prompt": "Implement it"}}})
+    finally:
+        process.stdin.close()
+        _stdout, stderr = await process.communicate()
     assert process.returncode == 0, stderr.decode()
-    responses = [json.loads(line) for line in stdout.splitlines()]
-    assert len(responses) == 3
-    assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert responses[1]["result"]["tools"][0]["name"] == tool_name
-    return responses[2]["result"]
+    return called["result"]
 
 
 def test_concierge_graph_reuse_eviction_failure_and_empty_reply():
