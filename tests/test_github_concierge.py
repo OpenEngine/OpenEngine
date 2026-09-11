@@ -56,8 +56,15 @@ def _graph_runtime(
     async def run_for_pull_request(asked_repository, number):
         return claims.get((asked_repository, number))
 
-    async def remember_pull_request(record):
+    async def claim_pull_request(record, *, replacing=None):
+        # Conditional, as the real store's is: a pull request is taken on when
+        # it is free or still held by the run the caller saw stop, and anyone
+        # else is told whose it is.
+        held = claims.get((record.repository, record.number))
+        if held is not None and held != replacing:
+            return held
         claims[(record.repository, record.number)] = record.run_id
+        return record.run_id
 
     async def snapshot(asked):
         if asked == RunId(STARTED_RUN):
@@ -82,11 +89,12 @@ def _graph_runtime(
     runtime = MagicMock()
     runtime.store = MagicMock(
         run_for_pull_request=AsyncMock(side_effect=run_for_pull_request),
-        remember_pull_request=AsyncMock(side_effect=remember_pull_request),
+        claim_pull_request=AsyncMock(side_effect=claim_pull_request),
     )
     runtime.snapshot = AsyncMock(side_effect=snapshot)
     runtime.topology = MagicMock(return_value=topology)
     runtime.steer = AsyncMock()
+    runtime.cancel = AsyncMock()
     runtime.start = AsyncMock(return_value=SimpleNamespace(
         run_id=RunId(STARTED_RUN), graph_id=GraphId(graph_id),
         status=RunStatus.RUNNING, values={},
@@ -609,7 +617,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         # And it claims the pull request, which nothing else would do for it:
         # provenance is otherwise written by opening one, and this run pushes
         # to the pull request that already exists.
-        claimed = runtime.store.remember_pull_request.await_args.args[0]
+        claimed = runtime.store.claim_pull_request.await_args.args[0]
         assert (claimed.repository, claimed.number, claimed.run_id) == (
             "acme/api", 7, RunId(STARTED_RUN))
         assert claimed.url == "https://github.com/acme/api/pull/7"
@@ -666,6 +674,67 @@ def test_a_second_comment_steers_the_work_order_the_first_one_started(tmp_path):
             RunId(STARTED_RUN), "Implement it", node_id=NodeId("implementation"))
         assert [run.run_id for run in
                 client.portal.call(capabilities.state_store.list_runs)] == [RunId(STARTED_RUN)]
+
+
+@pytest.mark.parametrize("claim", ["lost", "unwritable"])
+def test_a_start_that_does_not_win_the_claim_leaves_no_run_behind(tmp_path, claim):
+    """The claim decides which run keeps the pull request; the other is undone.
+
+    A run id only exists once the engine has started the run, so starting and
+    claiming cannot be one act: two comments arriving together both find
+    nothing in flight and both start. The claim is conditional, so exactly one
+    of them keeps the pull request -- and the one that did not cancels itself
+    rather than working a branch no later comment can reach. A claim that
+    cannot be written at all is the same situation: cancel, then report, so the
+    redelivery that follows starts one run rather than adding one.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime(pr_number=99)
+    # Whoever else was starting for this pull request got there first.
+    runtime.store.claim_pull_request = AsyncMock(
+        side_effect=RuntimeError("provenance is unwritable")
+        if claim == "unwritable" else None,
+        return_value=RunId("rival"),
+    )
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+    )
+    source_control = MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "new workorder please")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.cancel.assert_awaited_once_with(RunId(STARTED_RUN))
+        if claim == "lost":
+            # The feedback still lands, on the work order that holds the pull
+            # request, and the reply says forwarded rather than started.
+            runtime.steer.assert_awaited_once_with(
+                RunId("rival"), "Implement it", node_id=NodeId("implementation"))
+            assert provider.clients[0].result["structuredContent"] == {
+                "run_id": "rival", "url": "", "started": False}
+            source_control.add_comment.assert_awaited_once_with(
+                "https://github.com/acme/api/pull/7",
+                "Forwarded to work order `rival`.", in_reply_to_id=None)
+        else:
+            runtime.steer.assert_not_awaited()
+            assert provider.clients[0].result["isError"]
+            source_control.add_comment.assert_awaited_once_with(
+                "https://github.com/acme/api/pull/7", UNDELIVERED, in_reply_to_id=None)
 
 
 @pytest.mark.parametrize("identity", ["resolved", "configured", "cased", "unavailable"])

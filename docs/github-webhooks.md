@@ -93,8 +93,12 @@ from the conversation — and asks the graph engine what it is doing now:
 
 A work order started this way claims the pull request as it starts, so later
 comments steer it rather than starting another: one work order per pull
-request, however many comments arrive. It reports nothing back to chat — the
-pull request is where the conversation is, and Engine answers it there.
+request, however many comments arrive. The claim is what settles it when two
+comments arrive together and both start — one of them keeps the pull request,
+and the run that did not is cancelled rather than left working a branch no
+later comment can reach. A work order started here reports nothing back to
+chat: the pull request is where the conversation is, and Engine answers it
+there.
 
 The agent reading the comment decides only whether it is asking for a change at
 all; a comment that asks for nothing reaches no work order. Comments on issues
