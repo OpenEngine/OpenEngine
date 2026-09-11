@@ -2,6 +2,7 @@
 
 import asyncio
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -99,6 +100,65 @@ def test_cli_transport_turns_missing_binary_into_actionable_error() -> None:
 
     with pytest.raises(GitHubTransportError, match="not installed"):
         asyncio.run(transport.request("GET", "/user"))
+
+
+def test_cli_transport_abandons_and_kills_a_gh_that_never_answers() -> None:
+    """An unbounded `gh` is not merely slow where callers are serialized.
+
+    The GitHub webhook queue runs one comment at a time, so a stalled process
+    is every queued comment stalled behind it. The timeout only cancels the
+    read, though -- the process itself has to be ended, or an abandoned `gh`
+    stays a child of this one holding its pipes open forever.
+    """
+    transport = GitHubCliTransport(
+        sys.executable, timeout_seconds=0.25
+    )
+    started: list[asyncio.subprocess.Process] = []
+    create = asyncio.create_subprocess_exec
+
+    async def remember(*arguments: object, **kwargs: object):
+        # `gh` is stood in for by a python that ignores SIGTERM, so the escalation
+        # to kill is exercised rather than assumed.
+        process = await create(
+            arguments[0],
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)",
+            **kwargs,
+        )
+        started.append(process)
+        return process
+
+    async def scenario() -> None:
+        with pytest.raises(GitHubTransportError, match="timed out"):
+            await transport.request("GET", "/user")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(asyncio, "create_subprocess_exec", remember)
+        asyncio.run(scenario())
+
+    assert len(started) == 1
+    # Reaped, not merely signalled: an un-awaited process is a zombie, and the
+    # caller that timed out is long gone.
+    assert started[0].returncode is not None
+
+
+def test_cli_transport_lets_a_prompt_answer_through_before_the_bound() -> None:
+    """The bound is a ceiling on a hung forge, not a deadline on a slow one."""
+    transport = GitHubCliTransport(sys.executable, timeout_seconds=30)
+
+    async def scenario() -> object:
+        create = asyncio.create_subprocess_exec
+
+        async def answer(*arguments: object, **kwargs: object):
+            return await create(
+                arguments[0], "-c", 'print(\'{"login":"octocat"}\')', **kwargs
+            )
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(asyncio, "create_subprocess_exec", answer)
+            return await transport.request("GET", "/user")
+
+    assert asyncio.run(scenario()) == {"login": "octocat"}
 
 
 def test_oauth_transport_refreshes_once_after_401_and_retries(

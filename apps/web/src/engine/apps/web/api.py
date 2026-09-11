@@ -914,6 +914,13 @@ def _graph_workorder_name(values: object) -> str:
 #: would read them is not in the room when a server starts.
 log = logging.getLogger(__name__)
 
+#: How long the forge lookups that authorize a GitHub comment may take before
+#: the comment is abandoned. The ingress behind them has one worker, so this is
+#: not only that comment's latency: whatever it waits, every comment queued
+#: after it waits too. Long enough to cover a slow-but-working forge, short
+#: enough that a hung one costs a redelivery rather than the queue.
+GITHUB_AUTHORIZATION_TIMEOUT_SECONDS = 45
+
 
 @dataclass(slots=True)
 class _GraphSurface:
@@ -2555,23 +2562,32 @@ def create_app(
         # and inline review replies both belong to an existing work order.
         if not comment.is_pull_request:
             return
-        if comment.author.lower() == (
-            await github_posting_login(comment.repository)
-        ).lower():
-            # GitHub logins are case-insensitive, so the comparison is too.
-            return
-        # Before the comment becomes a prompt, not after the model has acted on
-        # one. A comment is untrusted text and the agent that reads it can read
-        # the host it runs on, so whoever writes one is choosing what this
-        # process reads and what it says back in public. `author_association`
-        # does not bound that -- a COLLABORATOR may hold read access alone --
-        # and gating the outbound tool alone would still have run the turn.
-        # Write access is the line: it is already the authority to change this
-        # repository, so it is no escalation to reach the agent working on it.
-        if not await session.capabilities.source_control.can_write_repository(
-            f"https://github.com/{comment.repository}/pull/{comment.number}",
-            comment.author,
-        ):
+        # Both lookups reach the forge, and the queue behind this has one
+        # worker: a comment that waits here is every later comment waiting too,
+        # so they are bounded together rather than left to whatever the
+        # configured transport happens to bound. Timing out raises, which the
+        # ingress treats like any other failure -- the comment is forgotten and
+        # can be redelivered -- so a slow forge costs a retry, not the queue.
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            if comment.author.lower() == (
+                await github_posting_login(comment.repository)
+            ).lower():
+                # GitHub logins are case-insensitive, so the comparison is too.
+                return
+            # Before the comment becomes a prompt, not after the model has
+            # acted on one. A comment is untrusted text and the agent that
+            # reads it can read the host it runs on, so whoever writes one is
+            # choosing what this process reads and what it says back in public.
+            # `author_association` does not bound that -- a COLLABORATOR may
+            # hold read access alone -- and gating the outbound tool alone
+            # would still have run the turn. Write access is the line: it is
+            # already the authority to change this repository, so it is no
+            # escalation to reach the agent working on it.
+            may_write = await session.capabilities.source_control.can_write_repository(
+                f"https://github.com/{comment.repository}/pull/{comment.number}",
+                comment.author,
+            )
+        if not may_write:
             # Ignored rather than answered, like the association filter above:
             # a refusal posted back is both noise on the pull request and a way
             # to make this process talk to somebody it will not act for.

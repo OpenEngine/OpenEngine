@@ -36,9 +36,9 @@ def _graph_runtime(
 ):
     """A runtime answering the two questions the concierge asks of one.
 
-    Which run owns this pull request -- the indexed provenance lookup the
-    ``github_comments`` table exists to serve -- and where feedback re-enters
-    the graph that run is executing.
+    Which run owns this pull request -- answered from what was written when it
+    was opened, not from who commented last -- and where feedback re-enters the
+    graph that run is executing.
     """
     from engine.graph_runtime import GraphId, GraphNode, GraphTopology, NodeId, RunStatus
     from engine.graph_runtime import UnknownGraphError
@@ -205,6 +205,73 @@ def test_a_comment_reaches_no_agent_without_write_access(tmp_path, access):
         source_control.add_comment.assert_not_awaited()
         runtime.steer.assert_not_awaited()
     assert not communications.posts
+
+
+@pytest.mark.parametrize("stalls", ["login", "permission"])
+def test_a_stalled_forge_lookup_does_not_stop_the_queue_behind_it(tmp_path, stalls, monkeypatch):
+    """One comment's slow lookup must not become every comment's.
+
+    Both lookups reach the forge before the concierge's own timeout starts, and
+    the ingress runs one comment at a time -- so an unbounded lookup is not that
+    comment's latency but the whole queue's, until it fills. Bounded together,
+    the stalled comment fails like any other and the next one is answered.
+    """
+    from starlette.testclient import TestClient
+    from engine.apps.web import api as web_api
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    monkeypatch.setattr(web_api, "GITHUB_AUTHORIZATION_TIMEOUT_SECONDS", 0.25)
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(), provider=provider,
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+
+    stalled = asyncio.Event()
+
+    async def stall(*_arguments):
+        stalled.set()
+        await asyncio.sleep(3600)
+
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    source_control.can_write_repository = AsyncMock(return_value=True)
+    # The login is cached per repository, so it is the first comment that
+    # stalls there; the permission check is asked again for every comment.
+    stalling = (
+        source_control.authenticated_login if stalls == "login"
+        else source_control.can_write_repository
+    )
+    stalling.side_effect = stall
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    def deliver(client, comment_id, text):
+        payload = _issue_comment(comment_id, text)
+        payload["issue"]["pull_request"] = {}
+        body = json.dumps(payload).encode()
+        return client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"}))
+
+    with TestClient(app) as client:
+        assert deliver(client, 1, "this one hangs").status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert stalled.is_set()
+        # Abandoned rather than answered, and -- like any other failure here --
+        # forgotten, so the comment can be redelivered once the forge is well.
+        assert not provider.clients
+        runtime.steer.assert_not_awaited()
+
+        # The worker is free: the comment behind it is answered normally.
+        stalling.side_effect = None
+        assert deliver(client, 2, "new workorder please").status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.steer.assert_awaited_once_with(
+            RunId("existing"), "Implement it", node_id=NodeId("implementation"))
+        source_control.add_comment.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/7",
+            "Forwarded to work order `existing`.", in_reply_to_id=None)
 
 
 def test_github_sessions_do_not_cross_authors(tmp_path):

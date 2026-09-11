@@ -528,8 +528,54 @@ def test_comments_a_run_posted_are_kept_for_the_runs_after_it(
         await store.remember_comment(posted)
         assert await store.comments(RunId("run-1")) == found
         assert await store.comments(RunId("run-2")) == (elsewhere,)
-        # The same provenance read the other way: a webhook holding a pull
-        # request finds its run without scanning every run that ever existed.
+        # Commenting is not owning: every run that speaks on a pull request is
+        # recorded here, so this says nothing about whose work order it is.
+        assert await store.run_for_pull_request("acme/api", 42) is None
+        return found
+
+    assert asyncio.run(scenario()) == (posted, inline)
+
+
+@pytest.mark.parametrize("store_factory", ["memory", "sqlite"])
+def test_a_pull_request_belongs_to_the_run_that_opened_it(
+    tmp_path: Path, store_factory: str
+) -> None:
+    """Ownership comes from opening, and survives anyone else commenting.
+
+    A webhook holding a pull request needs the work order behind it without
+    knowing a run id. Reading that off the comments cannot answer it: a review
+    or a follow-up run comments on a pull request it does not own, and the
+    newest commenter would inherit feedback meant for the run that did the work.
+    """
+    from engine.graph_runtime_langgraph.store import CommentRecord, PullRequestRecord
+
+    opened = PullRequestRecord(
+        repository="acme/api",
+        number=42,
+        run_id=RunId("run-1"),
+        opened_at="2026-09-10T17:00:00+00:00",
+        node_id=NodeId("coder"),
+        url="https://github.com/acme/api/pull/42",
+    )
+    elsewhere = PullRequestRecord(
+        repository="acme/web",
+        number=7,
+        run_id=RunId("run-2"),
+        opened_at="2026-09-10T17:01:00+00:00",
+    )
+
+    async def scenario() -> None:
+        path = tmp_path / "runtime.db"
+        store = (
+            InMemoryGraphRuntimeStore()
+            if store_factory == "memory"
+            else SqliteGraphRuntimeStore(path)
+        )
+        await store.remember_pull_request(opened)
+        await store.remember_pull_request(elsewhere)
+        if store_factory == "sqlite":
+            store.close()
+            store = SqliteGraphRuntimeStore(path)
         assert await store.run_for_pull_request("acme/api", 42) == RunId("run-1")
         assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
         # The repository is part of the question: two forges number their pull
@@ -538,15 +584,23 @@ def test_comments_a_run_posted_are_kept_for_the_runs_after_it(
         assert await store.run_for_pull_request("acme/other", 42) is None
         # A pull request opened by hand belongs to no run, and says so.
         assert await store.run_for_pull_request("acme/api", 999) is None
-        # A second run taking the pull request over is the one still working.
-        await store.remember_comment(replace(
-            inline, comment_id=200, run_id=RunId("run-3"),
-            posted_at="2026-09-10T19:00:00+00:00",
+        # The reviewing run leaves comments all over it and owns none of it.
+        for comment_id, posted_at in ((500, "18:00:00"), (501, "19:00:00")):
+            await store.remember_comment(CommentRecord(
+                comment_id=comment_id, repository="acme/api", kind="review",
+                pr_number=42, run_id=RunId("reviewer"),
+                posted_at=f"2026-09-10T{posted_at}+00:00",
+            ))
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-1")
+        # Opening it again is the one thing that does move it: still the act of
+        # opening, not the act of commenting.
+        await store.remember_pull_request(replace(
+            opened, run_id=RunId("run-3"), opened_at="2026-09-10T20:00:00+00:00"
         ))
         assert await store.run_for_pull_request("acme/api", 42) == RunId("run-3")
-        return found
+        assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
 
-    assert asyncio.run(scenario()) == (posted, inline)
+    asyncio.run(scenario())
 
 
 def test_auto_approve_keeps_human_requests_manual() -> None:
