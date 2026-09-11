@@ -29,13 +29,8 @@ public_url = "https://engine.example"
 
 [work_orders]
 repository = "."                        # local checkout path; defaults to "."
-<<<<<<< HEAD
-workflow = "implementation-review-v1"   # optional if exactly one is installed
-runner = "claude"                       # work-order executor, not concierge
-slack_operators = ["U01234567"]          # may control work started by others
-=======
 workflow = "implementation-review-rerank"  # optional if exactly one is installed
->>>>>>> main
+slack_operators = ["U01234567"]          # may control work started by others
 ```
 
 A greeting needs no work-order configuration. Creating work requires a resolvable workflow. The repository is a local

@@ -211,11 +211,7 @@ class _FakeMcpRunner:
         pass
 
 
-<<<<<<< HEAD
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, runner=None, workspaces=None):
-=======
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None):
->>>>>>> main
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, runner=None, workspaces=None, graph_runtime=None, github_comment_handler=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -603,7 +599,6 @@ def test_a_run_from_the_web_is_never_announced() -> None:
     assert communications.posts == []
 
 
-<<<<<<< HEAD
 class CompletingMcpRunner:
     """A runner that completes each step through the real run-bound server.
 
@@ -829,9 +824,6 @@ def test_the_author_is_pinged_even_without_an_operator_notification() -> None:
     assert "ready for your decision" in ready.text.lower()
     assert PULL_REQUEST in [link.url for link in ready.links]
 
-
-=======
->>>>>>> main
 def test_the_signing_secret_can_be_added_without_reconnecting(tmp_path) -> None:
     """Enabling mentions must not cost an operator their Slack connection.
 

@@ -1016,34 +1016,8 @@ def create_app(
     )
     run_reader = RunReader(session.state_store, catalog)
 
-<<<<<<< HEAD
-    async def approval_presented(approval: ApprovalRecord) -> None:
-        if not approval.is_pending or approval.kind is not ApprovalKind.USER_INPUT or not approval.questions:
-            return
-        instance = await session.state_store.load_instance(approval.instance_id)
-        if instance is None or instance.workflow_run_id is None:
-            return
-        state = await session.state_store.load(instance.workflow_run_id)
-        if state is None or state.origin is None:
-            return
-        questions = json.loads(approval.questions)
-        lines = ["Input required:"]
-        for question in questions:
-            lines.append(str(question["question"]))
-            options = [str(option["label"]) for option in question.get("options", [])]
-            if options:
-                lines.append("Choices: " + ", ".join(options))
-            if question.get("multiSelect"):
-                lines.append("You may choose more than one option.")
-            if question.get("allowsOther"):
-                lines.append("You may also provide your own answer.")
-        lines.append("Reply in this thread with your answer, or answer on the WorkOrder page.")
-        link = run_notifier.work_order_link(state)
-        await run_notifier.announce(state, "\n".join(lines), links=(link,) if link else (), mention=True)
-=======
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
     graph_notification_lock = asyncio.Lock()
->>>>>>> main
 
     async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
         """Report lifecycle events without making delivery failure fail the graph."""
@@ -1265,15 +1239,7 @@ def create_app(
                     surface.app = create_graph_app(surface.runtime, graph_events)
                     surface.runtime.observe(graph_event)
                     await restore_graph_runs(surface.runtime)
-<<<<<<< HEAD
-            await restore_agent_steps()
-            try:
-                yield
-            finally:
-                tasks = tuple(workflow_tasks.values())
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+            yield
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
@@ -1463,9 +1429,6 @@ def create_app(
                 previous = content
                 yield _json_line({"type": "content", "content": content})
             await asyncio.sleep(0.25)
-=======
-            yield
->>>>>>> main
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -1923,7 +1886,6 @@ def create_app(
             }
         )
 
-<<<<<<< HEAD
     async def complete_human_review(request: Request) -> JSONResponse:
         run_id = RunId(request.path_params["run_id"])
         body = await _json_body(request)
@@ -1961,8 +1923,6 @@ def create_app(
         assert run is not None
         return JSONResponse(_run_json(run))
 
-=======
->>>>>>> main
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
         create_project = body.get("createProject", False)
@@ -2166,16 +2126,7 @@ def create_app(
         if await service.get(instance_id) is None:
             return _error("thread not found", 404)
         body = await _json_body(request)
-<<<<<<< HEAD
-        async def apply_approval_decision() -> ApprovalRecord:
-            workflow_agent_run_id = None
-            if thread.workflow_run_id is not None:
-                workflow_state = await session.state_store.load(thread.workflow_run_id)
-                if workflow_state is not None:
-                    workflow_agent_run_id = workflow_state.current_agent_run_id
-=======
         try:
->>>>>>> main
             approval_id = ApprovalId(request.path_params["approval_id"])
             if "answers" in body:
                 raw_answers = body["answers"]
@@ -2198,25 +2149,10 @@ def create_app(
                 )
             else:
                 decision = _required_string(body, "decision")
-<<<<<<< HEAD
-                return await service.decide_approval(
-                    instance_id, approval_id, decision, workflow_agent_run_id
-=======
                 approval = await service.decide_approval(
                     instance_id, approval_id, decision
->>>>>>> main
                 )
             return approval
-
-        try:
-            if thread.workflow_run_id is None:
-                approval = await apply_approval_decision()
-            else:
-                lock = workflow_restart_locks.setdefault(
-                    thread.workflow_run_id, asyncio.Lock()
-                )
-                async with lock:
-                    approval = await apply_approval_decision()
         except ValueError as error:
             return _error(str(error), 400)
         except UnknownApprovalError as error:
@@ -2767,18 +2703,15 @@ def create_app(
 
     async def concierge_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
         state = await concierge_controlled_workorder(origin)
-        if state.phase is not RunPhase.RUNNING_AGENT or state.agent_paused:
-            raise RuntimeError("this work order is not running an agent; continue it on the WorkOrder page")
-        instances = await session.state_store.list_instances(workflow_run_id=state.run_id)
-        current = [item for item in instances if item.workflow_step_id == state.current_step_id]
-        if len(current) != 1:
-            raise RuntimeError("the active agent conversation is not ready or is ambiguous; try again")
-        thread = await service.get(current[0].instance_id)
-        if thread is None:
-            raise RuntimeError("the active agent conversation is unavailable")
-        await continue_workflow(
-            thread, f"Slack instruction from <@{origin.author}>:\n{prompt}", active_only=True,
-        )
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("graph WorkOrders are not running in this process")
+        try:
+            await runtime.steer(
+                state.run_id, f"Slack instruction from <@{origin.author}>:\n{prompt}"
+            )
+        except GraphRuntimeError as error:
+            raise RuntimeError(str(error)) from error
         link = run_notifier.work_order_link(state)
         return link.url if link else "", str(state.run_id)
 
@@ -2883,10 +2816,6 @@ def create_app(
         turn_finished=concierge_turn_finished,
         find_workorders=concierge_find_workorders,
         steer_workorder=concierge_steer_workorder,
-        resume_workorder=concierge_resume_workorder,
-        find_questions=concierge_find_questions,
-        answer_question=concierge_answer_question,
-        decide_review=concierge_decide_review,
     )
     _slack_comms = SlackCommunications(_slack_store)
     slack_ingress = SlackIngress(
