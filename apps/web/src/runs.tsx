@@ -23,6 +23,7 @@ import {
   type RunView,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
+import { GithubActivityPanel } from "./github-activity";
 import { useProjectMilestones } from "./milestone-timeline";
 import { WorkspaceControl } from "./workspace";
 
@@ -278,6 +279,10 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
           <h2>No WorkOrders yet.</h2>
         </div>
       )}
+      {/* Unfiltered here, so a comment on a pull request no WorkOrder owns --
+          and a comment Engine decided not to act on -- is visible somewhere
+          rather than only on a page it never reaches. */}
+      <GithubActivityPanel />
     </main>
   );
 }
@@ -919,6 +924,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
               {run.failureReason}
             </p>
           )}
+          {/* What the pull request this WorkOrder opened has been asked for.
+              Steering by comment happens entirely off this page otherwise:
+              the webhook answers GitHub in milliseconds and the work lands
+              minutes later, so without this the only sign a comment was acted
+              on is the WorkOrder quietly changing course. */}
+          <GithubActivityPanel runId={runId} />
           <section className="timeline" aria-label="WorkOrder steps">
             {collapseStepGroups(run.steps).map((entry) =>
               entry.grouped ? (

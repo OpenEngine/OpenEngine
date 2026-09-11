@@ -45,6 +45,7 @@ from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
+from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_ingress import GithubComment, GithubIngress
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -2530,6 +2531,12 @@ def create_app(
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
         react=_slack_comms.add_reaction,
     )
+    # What each delivered comment has led to, for the panel that shows it. The
+    # steps are recorded where they happen -- the ingress queues and picks up,
+    # the callbacks below forward and answer -- so the panel says what this
+    # process did rather than what it was about to try.
+    github_activity = GithubActivityLog()
+
     async def github_reply(origin: RunOrigin, text: str) -> None:
         number, _, review_id = origin.thread_id.partition("/review/")
         await session.capabilities.source_control.add_comment(
@@ -2537,6 +2544,21 @@ def create_app(
             text,
             in_reply_to_id=int(review_id) if review_id else None,
         )
+        # After the comment lands, so a row reading "replied" means a reader
+        # will find the reply on the pull request.
+        github_activity.replied(text)
+
+    async def github_run_for_pull_request(repository: str, number: int) -> RunId | None:
+        """Which work order opened this pull request, if anything recorded one.
+
+        Read through the binding that owns the provenance table rather than
+        through the control surface, which is deliberately forge-agnostic and
+        has no business growing a method shaped like a pull request.
+        """
+        store = getattr(surface.runtime, "store", None)
+        if store is None:
+            return None
+        return await store.run_for_pull_request(repository.lower(), number)
 
     async def github_start_workorder(
         store: GithubProvenance | None, repository: str, number: int, prompt: str,
@@ -2671,10 +2693,20 @@ def create_app(
                 # A saved work order can outlive the graph it was started from.
                 snapshot = None
         if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
-            return await github_start_workorder(
+            reached = await github_start_workorder(
                 store, repository, number, prompt, replacing=run_id,
             )
-        return await github_steer_workorder(run_id, prompt)
+        else:
+            reached = await github_steer_workorder(run_id, prompt)
+        # Recorded here rather than in either branch: this is the one place
+        # that knows the comment reached a work order at all, and which one --
+        # a start that loses the race for the pull request ends up steering
+        # somebody else's run, and the panel should name the run that got the
+        # feedback rather than the one that was undone.
+        github_activity.dispatched(
+            reached.run_id, reached.url, started_run=reached.started,
+        )
+        return reached
 
     github_concierge = GithubConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
@@ -2712,6 +2744,7 @@ def create_app(
         # Issue-driven work orders are not supported. PR conversation comments
         # and inline review replies both belong to an existing work order.
         if not comment.is_pull_request:
+            github_activity.ignored("not a pull request")
             return
         # Both lookups reach the forge, and the queue behind this has one
         # worker: a comment that waits here is every later comment waiting too,
@@ -2724,6 +2757,7 @@ def create_app(
                 await github_posting_login(comment.repository)
             ).lower():
                 # GitHub logins are case-insensitive, so the comparison is too.
+                github_activity.ignored("posted by Engine itself")
                 return
             # Before the comment becomes a prompt, not after the model has
             # acted on one. A comment is untrusted text and the agent that
@@ -2746,6 +2780,9 @@ def create_app(
                 "ignored a GitHub comment from %s, who cannot write to %s",
                 comment.author, comment.repository,
             )
+            github_activity.ignored(
+                f"{comment.author} cannot write to {comment.repository}"
+            )
             return
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":
@@ -2763,7 +2800,37 @@ def create_app(
         repository=github_repository,
         self_login=lambda: github_bot_login,
         handle=github_comment_handler or github_concierge_turn,
+        activity=github_activity,
     )
+
+    async def github_activity_feed(request: Request) -> JSONResponse:
+        """Recent comment activity, and what the concierge is doing right now.
+
+        The work order each comment belongs to is resolved here rather than
+        remembered with the comment: a pull request's owner is written down
+        when it is opened, which can be after a comment on it was recorded, so
+        joining at read time is what lets a row reach the right page at all.
+        """
+        entries = github_activity.recent()
+        owners: dict[tuple[str, int], str] = {}
+        for entry in entries:
+            pull_request = (entry.repository.lower(), entry.number)
+            if pull_request not in owners:
+                owner = await github_run_for_pull_request(*pull_request)
+                owners[pull_request] = str(owner) if owner is not None else ""
+        return JSONResponse(activity_json(
+            entries,
+            owners=owners,
+            repository=github_repository,
+            # Both halves, because either one missing is a webhook that will
+            # never deliver anything here -- and a panel that stayed empty
+            # without saying so is the confusion this is meant to end.
+            configured=bool(github_repository and github_webhook_secret()),
+            queued=github_ingress.queued,
+            working=github_concierge.busy,
+            sessions=github_concierge.sessions,
+            run_id=request.query_params.get("runId", ""),
+        ))
 
     def _mentioned_workflow() -> GraphWorkflow | None:
         """Which workflow a mention runs: the configured one, or the only one.
@@ -2819,6 +2886,7 @@ def create_app(
         Route("/api/github/connect", github_connect, methods=["POST"]),
         Route("/api/github/connect/poll", github_connect_poll, methods=["POST"]),
         Route("/api/github/disconnect", github_disconnect, methods=["POST"]),
+        Route("/api/github/activity", github_activity_feed),
         Route("/api/gitlab/status", gitlab_status),
         Route("/api/gitlab/client-id", gitlab_set_client_id, methods=["POST"]),
         Route("/api/gitlab/connect", gitlab_connect, methods=["POST"]),

@@ -66,6 +66,17 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
   };
 }
 
+/** A deployment whose GitHub webhook has delivered nothing, which is every
+ *  WorkOrder on this page: the panel that reads it draws nothing at all. */
+const noComments = {
+  repository: "",
+  configured: false,
+  queued: 0,
+  working: false,
+  sessions: 0,
+  comments: [],
+};
+
 function json(value: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(value), {
     headers: { "Content-Type": "application/json" },
@@ -498,6 +509,8 @@ describe("RunDetailPage", () => {
       if (path === "/api/runs/run-1") return json(run());
       if (path === "/graph/api/runs/run-1") return json(awaiting);
       if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
+      // The page reads GitHub comment activity for this WorkOrder too.
+      if (path.startsWith("/api/github/activity")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);
@@ -519,6 +532,8 @@ describe("RunDetailPage", () => {
         pendingApprovals: [{ approvalId: "approval-1", nodeId: "review", reason: "Review the release", allowedDecisions: ["accept", "cancel"] }],
       });
       if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
+      // The page reads GitHub comment activity for this WorkOrder too.
+      if (path.startsWith("/api/github/activity")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);
@@ -782,6 +797,8 @@ describe("RunDetailPage", () => {
           workspaceRoot: attached ? "/worktrees/ws-1" : null,
         });
       }
+      // The page reads GitHub comment activity for this WorkOrder too.
+      if (path.startsWith("/api/github/activity")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);

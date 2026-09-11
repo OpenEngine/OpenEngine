@@ -733,6 +733,59 @@ export function disconnectSlack(): Promise<void> {
 }
 
 /** Where the utilization page lives, which the rail's graph icon opens. */
+/** One GitHub comment the webhook delivered, and what became of it.
+ *
+ *  `status` is where the comment is on the one path through the engine:
+ *  `queued` and `working` are in flight, and `dispatched`, `replied`,
+ *  `ignored`, `failed` and `handled` are where a comment comes to rest. */
+export type ApiGithubComment = {
+  commentId: string;
+  event: string;
+  repository: string;
+  number: number;
+  author: string;
+  url: string;
+  excerpt: string;
+  status: string;
+  /** Why it was ignored, or how the turn failed. Empty otherwise. */
+  detail: string;
+  /** The WorkOrder this comment belongs to: the one its feedback reached, or
+   *  the one that opened the pull request it was left on. */
+  runId: string;
+  /** The WorkOrder its feedback actually reached, empty if none did. */
+  dispatchedRunId: string;
+  runUrl: string;
+  /** Whether that WorkOrder was started for this comment rather than already
+   *  in flight when it arrived. */
+  startedRun: boolean;
+  reply: string;
+  seenAt: number;
+  startedAt: number;
+  dispatchedAt: number;
+  repliedAt: number;
+};
+
+export type ApiGithubActivity = {
+  repository: string;
+  /** Whether a webhook could deliver anything here at all. False means the
+   *  panel is empty because nothing is wired, not because nobody commented. */
+  configured: boolean;
+  queued: number;
+  working: boolean;
+  sessions: number;
+  comments: ApiGithubComment[];
+};
+
+/** Recent comment activity, optionally narrowed to one WorkOrder's own
+ *  pull request. */
+export function getGithubActivity(
+  runId?: string,
+  signal?: AbortSignal,
+): Promise<ApiGithubActivity> {
+  const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+  return api<ApiGithubActivity>(`/api/github/activity${query}`, { signal });
+}
+
 export const UTILIZATION_URL = "/utilization";
 
 /** One limit a provider meters a subscription against.

@@ -1,0 +1,277 @@
+"""What the web UI is told about GitHub comment activity.
+
+Two things have to hold: each comment's row follows the one path through this
+process -- queued, picked up, forwarded, answered -- and a row reaches the work
+order page for the pull request it was left on, whether or not that comment was
+the one that steered anything.
+"""
+from __future__ import annotations
+
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.apps.web.github_activity import (
+    ACTIVITY_LIMIT,
+    EXCERPT_LIMIT,
+    GithubActivityLog,
+    activity_json,
+)
+from engine.apps.web.github_ingress import GithubComment
+from engine.runtime import WorkOrdersConfig
+
+from test_slack_work_orders import (
+    SIGNING_SECRET,
+    FakeACPProvider,
+    RecordingCommunications,
+    _app,
+    _workflow_catalog,
+)
+
+
+def _comment(
+    comment_id: str = "1", body: str = "please fix it", *, is_pull_request: bool = True
+) -> GithubComment:
+    return GithubComment(
+        comment_id=comment_id, repository="acme/api", number=7, author="someone",
+        body=body, url=f"https://github.com/acme/api/pull/7#issuecomment-{comment_id}",
+        event="issue_comment", is_pull_request=is_pull_request,
+    )
+
+
+def _ticking() -> GithubActivityLog:
+    clock = iter(range(1, 100))
+    return GithubActivityLog(now=lambda: float(next(clock)))
+
+
+# --- the record ------------------------------------------------------------
+
+
+def test_a_comment_that_started_the_work_it_asks_about_says_so() -> None:
+    """Starting and steering are different answers, and the row keeps which.
+
+    A comment on a pull request nothing is working on gets a work order of its
+    own; one on a run in flight is steered into it. Both reach a work order,
+    so both are `dispatched`, and only the flag tells them apart.
+    """
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.dispatched("fresh", "http://localhost/runs/fresh", started_run=True)
+
+    (entry,) = log.recent()
+    assert (entry.run_id, entry.started_run) == ("fresh", True)
+    (row,) = activity_json(
+        log.recent(), owners={("acme/api", 7): "fresh"}, run_id="fresh",
+    )["comments"]
+    assert row["startedRun"] is True
+
+
+def test_a_comment_keeps_one_row_through_the_whole_turn() -> None:
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.dispatched("existing", "http://localhost/runs/existing")
+    log.replied("Forwarded to work order `existing`.")
+    log.finished(comment)
+
+    (entry,) = log.recent()
+    assert entry.status == "replied"
+    assert (entry.run_id, entry.run_url) == ("existing", "http://localhost/runs/existing")
+    # Steered, not started: this comment did not create the work order.
+    assert entry.started_run is False
+    assert entry.reply == "Forwarded to work order `existing`."
+    assert entry.url == comment.url
+    # Every step is timed, which is what makes "it sat in the queue" and "the
+    # forge was slow" different readings rather than one shrug.
+    assert entry.seen_at < entry.started_at < entry.dispatched_at < entry.replied_at
+
+
+def test_a_comment_engine_will_not_act_on_says_why() -> None:
+    log = _ticking()
+    comment = _comment(is_pull_request=False)
+    log.seen(comment)
+    log.started(comment)
+    log.ignored("not a pull request")
+    log.finished(comment)
+
+    (entry,) = log.recent()
+    assert (entry.status, entry.detail) == ("ignored", "not a pull request")
+
+
+def test_a_failed_turn_is_recorded_as_one() -> None:
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.failed("permission API unavailable")
+
+    (entry,) = log.recent()
+    assert (entry.status, entry.detail) == ("failed", "permission API unavailable")
+
+
+def test_updates_belong_to_the_comment_being_worked_on() -> None:
+    """Nothing lands on a row whose turn is over.
+
+    The callbacks that report forwarding and replying are handed a
+    conversation rather than a delivery, so the in-flight comment is what says
+    whose row they are writing to. A settled comment is not it.
+    """
+    log = _ticking()
+    first, second = _comment("1"), _comment("2")
+    log.seen(first)
+    log.started(first)
+    log.ignored("not a pull request")
+    log.seen(second)
+    log.started(second)
+    log.dispatched("existing", "")
+    log.replied("Forwarded to work order `existing`.")
+
+    newest, oldest = log.recent()
+    assert (newest.comment_id, newest.status) == ("2", "replied")
+    assert (oldest.comment_id, oldest.status, oldest.run_id) == ("1", "ignored", "")
+
+
+def test_a_handler_that_says_nothing_still_settles_its_row() -> None:
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.finished(comment)
+    log.replied("this belongs to nobody")
+
+    (entry,) = log.recent()
+    assert (entry.status, entry.reply) == ("handled", "")
+
+
+def test_a_redelivered_comment_keeps_the_work_order_it_already_reached() -> None:
+    """A retried delivery is only a reply, and the row has to say so.
+
+    The concierge answers a comment whose feedback already landed from what it
+    recorded rather than forwarding again, so nothing calls `dispatched` the
+    second time round.
+    """
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.dispatched("existing", "http://localhost/runs/existing", started_run=True)
+    log.failed("the reply could not be posted")
+
+    log.seen(comment)
+    log.started(comment)
+    log.replied("Forwarded to work order `existing`.")
+    log.finished(comment)
+
+    (entry,) = log.recent()
+    assert (entry.status, entry.run_id) == ("replied", "existing")
+    # Including that the work order was started for it: forwarding happened
+    # once, and the row that survives is the one that says what happened.
+    assert entry.started_run is True
+
+
+def test_a_comment_is_kept_as_an_excerpt_rather_than_republished() -> None:
+    log = _ticking()
+    log.seen(_comment(body="please  fix\n\nthe thing " + "x" * 500))
+    (entry,) = log.recent()
+    assert len(entry.excerpt) == EXCERPT_LIMIT
+    assert entry.excerpt.startswith("please fix the thing ")
+    assert entry.excerpt.endswith("…")
+
+
+def test_only_the_recent_past_is_remembered() -> None:
+    log = _ticking()
+    for comment_id in range(ACTIVITY_LIMIT + 5):
+        log.seen(_comment(str(comment_id)))
+    remembered = log.recent()
+    assert len(remembered) == ACTIVITY_LIMIT
+    # Newest first, which is the order the panel reads them in.
+    assert remembered[0].comment_id == str(ACTIVITY_LIMIT + 4)
+
+
+# --- the wire shape --------------------------------------------------------
+
+
+def test_a_comment_is_attributed_to_whichever_run_opened_its_pull_request() -> None:
+    """Ownership is joined at read time, so a row is never orphaned by timing.
+
+    A pull request's owner is written down when it is opened, which can be
+    after somebody commented on it -- and a comment Engine ignored never
+    forwards anything to name a run by.
+    """
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.ignored("someone cannot write to acme/api")
+
+    body = activity_json(log.recent(), owners={("acme/api", 7): "existing"})
+    (row,) = body["comments"]
+    assert (row["runId"], row["dispatchedRunId"]) == ("existing", "")
+    assert activity_json(log.recent(), owners={}, run_id="existing")["comments"] == []
+
+
+def test_the_panel_is_told_a_webhook_will_never_deliver_anything() -> None:
+    empty = activity_json((), repository="", configured=False)
+    assert (empty["configured"], empty["comments"]) == (False, [])
+
+
+# --- what the route answers ------------------------------------------------
+
+
+def test_the_route_reports_a_comment_all_the_way_to_its_reply(tmp_path) -> None:
+    from starlette.testclient import TestClient
+    from test_github_concierge import _graph_runtime
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    _runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "new workorder please")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+        feed = client.get("/api/github/activity").json()
+        assert feed["configured"] and feed["repository"] == "acme/api"
+        # Nothing is left in flight once the queue is drained.
+        assert (feed["queued"], feed["working"]) == (0, False)
+        (row,) = feed["comments"]
+        assert row["status"] == "replied"
+        assert (row["author"], row["number"]) == ("someone", 7)
+        assert row["dispatchedRunId"] == "existing"
+        assert row["reply"].startswith("Forwarded to work order `existing`.")
+        assert row["url"] == "https://github.com/acme/api/issues/7#c"
+        assert row["excerpt"] == "new workorder please"
+
+        # The same row, reached from the work order's own page.
+        assert client.get("/api/github/activity?runId=existing").json()["comments"] == [row]
+        assert client.get("/api/github/activity?runId=other").json()["comments"] == []
+
+
+def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
+    """A repository with no webhook secret is a panel that will stay empty."""
+    from starlette.testclient import TestClient
+
+    app, _capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
+    with TestClient(app) as client:
+        feed = client.get("/api/github/activity").json()
+    assert feed == {"repository": "acme/api", "configured": False, "queued": 0,
+                    "working": False, "sessions": 0, "comments": []}

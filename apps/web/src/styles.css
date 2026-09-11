@@ -1176,6 +1176,39 @@ select:disabled { cursor: default; }
 .back-link { color: var(--muted); font: 500 12px/1 var(--mono); letter-spacing: .1em; text-decoration: none; text-transform: uppercase; }
 .back-link:hover { color: var(--flame); }
 
+/* --- github comment activity --------------------------------------------- */
+
+/* One row per comment, ruled rather than boxed: the panel is a list of things
+   that happened, and the page already has enough cards on it. */
+.gh-activity { display: grid; gap: 14px; padding: 26px var(--gutter) 0; }
+.gh-activity-head { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; }
+.gh-activity-head h2 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.gh-activity-figures { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.gh-activity-figures .chip[data-tone="live"] {
+  color: var(--flame);
+  border-color: var(--flame);
+  animation: pip 1.6s ease-in-out infinite;
+}
+.gh-comments { display: grid; gap: 0; border-top: 1px solid var(--rule); }
+.gh-comment { display: grid; gap: 7px; padding: 15px 0; border-bottom: 1px solid var(--rule); }
+.gh-comment-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.gh-comment-who { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.gh-comment-link { color: var(--muted); font: 500 12px/1 var(--mono); text-decoration: none; white-space: nowrap; }
+.gh-comment-link:hover { color: var(--flame); }
+/* The commenter's own words, which is the one thing on this page somebody
+   else wrote: set apart, and never given the weight of an engine statement. */
+.gh-comment-excerpt {
+  padding-left: 12px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.45;
+  border-left: 2px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+.gh-comment-steps { color: var(--muted); }
+.gh-comment-reply { color: var(--ink-soft); }
+.gh-comment-detail { color: var(--flame-deep); }
+
 /* --- milestone scoping chat -------------------------------------------- */
 
 .milestone-scope-page { padding-bottom: 48px; }

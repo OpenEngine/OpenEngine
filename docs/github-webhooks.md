@@ -103,3 +103,25 @@ there.
 The agent reading the comment decides only whether it is asking for a change at
 all; a comment that asks for nothing reaches no work order. Comments on issues
 are not answered.
+
+## Watching what arrives
+
+Every comment the route queues is remembered for the web UI, so a delivery can
+be followed without reading GitHub's delivery log or this process's stdout. The
+panel is on the WorkOrders page, where it shows every recent comment, and on a
+WorkOrder's own page, where it shows only the comments left on that WorkOrder's
+pull request.
+
+A comment's row says when it was received, when the concierge picked it up, the
+WorkOrder its feedback was forwarded to, and the fixed announcement posted back
+to the pull request, with a link to the comment itself at one end and to the
+WorkOrder at the other. A comment Engine decided not to act on says so and why
+-- "not a pull request", or an author without write access -- which is the
+distinction a delivery log cannot draw. Beside them, the queue depth and
+whether the concierge is answering a comment right now.
+
+The record is in memory and bounded, so a restart forgets it. That is
+deliberate: it is a window on what is happening, and GitHub's delivery log and
+the pull request are the durable record.
+
+It is served from `GET /api/github/activity`, narrowed with `?runId=`.
