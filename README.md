@@ -34,6 +34,9 @@ While working on OpenEngine itself, run the development server instead:
 uv run engine-dev
 ```
 
+For phone Safari access over Tailscale, see the
+[remote access troubleshooting guide](docs/remote-access.md).
+
 Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
 ## engine.toml
