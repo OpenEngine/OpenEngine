@@ -16,9 +16,13 @@ import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+
+if TYPE_CHECKING:  # pragma: no cover - imported for the type alone
+    from .github_activity import GithubActivityLog
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +150,7 @@ class GithubIngress:
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
+        activity: GithubActivityLog | None = None,
     ) -> None:
         self._webhook_secret = webhook_secret
         self._repository = repository
@@ -153,6 +158,10 @@ class GithubIngress:
         self._handle = handle
         self._verify_signature = verify_signature
         self._max_body_bytes = max_body_bytes
+        # Where a comment's progress is written down for the web UI. Recording
+        # is bookkeeping and never a reason to refuse a delivery, so a missing
+        # log is a deployment with no panel rather than a failure here.
+        self._activity = activity
         self._queue: asyncio.Queue[GithubComment] = asyncio.Queue(maxsize=capacity)
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._worker: asyncio.Task[None] | None = None
@@ -245,6 +254,8 @@ class GithubIngress:
         if self._queue.full():
             return False
         self._queue.put_nowait(comment)
+        if self._activity is not None:
+            self._activity.seen(comment)
         self._seen[identity] = None
         while len(self._seen) > _SEEN_LIMIT:
             self._seen.popitem(last=False)
@@ -257,8 +268,12 @@ class GithubIngress:
             comment = await self._queue.get()
             try:
                 assert self._handle is not None  # nothing is queued without one
+                if self._activity is not None:
+                    self._activity.started(comment)
                 await self._handle(comment)
-            except Exception:
+            except Exception as failure:
+                if self._activity is not None:
+                    self._activity.failed(str(failure) or type(failure).__name__)
                 # The delivery was acknowledged, so GitHub will not retry on its
                 # own; forgetting the comment is what makes a redelivery -- by
                 # hand from the delivery log, or by a later duplicate -- able to
@@ -269,6 +284,8 @@ class GithubIngress:
                     comment.comment_id, comment.repository, comment.number,
                 )
             finally:
+                if self._activity is not None:
+                    self._activity.finished(comment)
                 self._queue.task_done()
 
     async def drain(self) -> None:

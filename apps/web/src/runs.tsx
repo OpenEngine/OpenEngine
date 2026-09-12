@@ -23,6 +23,11 @@ import {
   type RunView,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
+import {
+  GITHUB_COMMENTS_ANCHOR,
+  GithubActivityPanel,
+  useRunGithubComments,
+} from "./github-activity";
 import { useProjectMilestones } from "./milestone-timeline";
 import { WorkspaceControl } from "./workspace";
 
@@ -728,6 +733,10 @@ async function ifPresent<T>(read: Promise<T>): Promise<T | undefined> {
 }
 
 export function RunDetailPage({ runId }: { runId: string }) {
+  // Read here rather than inside the panel so the strip's link and the panel
+  // it scrolls to are two views of one answer: the link is only offered when
+  // there is something under it.
+  const comments = useRunGithubComments(runId);
   const [baseRun, setRun] = useState<ApiWorkflowRun>();
   const [graph, setGraph] = useState<ApiGraphRun>();
   const [topology, setTopology] = useState<ApiGraphTopology>();
@@ -863,6 +872,21 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Repository" value={run.repository} />
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
+            {/* Where the comments are. Steering by comment happens entirely
+                off screen -- the webhook answers GitHub in milliseconds and
+                the work lands minutes later -- so without something in the
+                strip saying they exist, the panel below is only found by
+                scrolling past everything else on the page. */}
+            {comments.visible && (
+              <Stat
+                label="GitHub comments"
+                value={
+                  <a href={`#${GITHUB_COMMENTS_ANCHOR}`}>
+                    {comments.activity?.comments.length ?? 0} ↓
+                  </a>
+                }
+              />
+            )}
           </StatStrip>
           {graph && typeof graph.values.workspaceId === "string" && (
             <section className="run-workspace" aria-label="WorkOrder checkout">
@@ -919,6 +943,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
               {run.failureReason}
             </p>
           )}
+          {/* What the pull request this WorkOrder opened has been asked for,
+              and what the engine did about it. */}
+          <GithubActivityPanel {...comments} />
           <section className="timeline" aria-label="WorkOrder steps">
             {collapseStepGroups(run.steps).map((entry) =>
               entry.grouped ? (
