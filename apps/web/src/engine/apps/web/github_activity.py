@@ -169,7 +169,28 @@ class GithubActivityLog:
                      started_run=started_run, dispatched_at=self._now())
 
     def replied(self, text: str) -> None:
-        self._update(status=REPLIED, reply=text, replied_at=self._now())
+        """The fixed announcement went back to the pull request.
+
+        A row that already failed to reach a work order keeps saying so. The
+        reply to such a comment is the concierge telling the commenter it
+        could not be delivered, so a row flipping to "replied" here would be
+        this panel contradicting the pull request it reports on.
+        """
+        entry = None if self._current is None else self._entries.get(self._current)
+        failed = entry is not None and entry.status == FAILED
+        self._update(
+            status=FAILED if failed else REPLIED, reply=text, replied_at=self._now(),
+        )
+
+    def dispatch_failed(self, reason: str) -> None:
+        """The comment reached no work order, and why.
+
+        Distinct from `failed`, which settles a turn that raised out of the
+        handler. Dispatch failing does not end the turn -- the concierge is
+        told, and still posts its undelivered notice -- so the row stays open
+        for the reply that follows and only the reason is written now.
+        """
+        self._update(status=FAILED, detail=reason)
 
     def finished(self, comment: GithubComment) -> None:
         """The worker is done with this comment, however it went."""

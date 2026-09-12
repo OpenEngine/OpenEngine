@@ -2661,6 +2661,26 @@ def create_app(
         return Continuation(url=link.url if link else "", run_id=str(run_id))
 
     async def github_continue_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+        """Reach this pull request's work order, and write down what happened.
+
+        The recording is here rather than inside the two branches below
+        because this is the boundary the concierge calls: past it the broker
+        answers the agent instead of raising, so a dispatch that failed would
+        otherwise reach nothing that could record it, and the row would settle
+        at "replied" -- carrying the undelivered notice, with no reason and no
+        sign anything went wrong.
+        """
+        try:
+            reached = await _github_reach_workorder(origin, prompt)
+        except Exception as failure:
+            github_activity.dispatch_failed(str(failure) or type(failure).__name__)
+            raise
+        github_activity.dispatched(
+            reached.run_id, reached.url, started_run=reached.started,
+        )
+        return reached
+
+    async def _github_reach_workorder(origin: RunOrigin, prompt: str) -> Continuation:
         """Steer the work order this pull request already has, or start one.
 
         Which of the two happens is the host's to decide, not the agent's: it
@@ -2698,14 +2718,6 @@ def create_app(
             )
         else:
             reached = await github_steer_workorder(run_id, prompt)
-        # Recorded here rather than in either branch: this is the one place
-        # that knows the comment reached a work order at all, and which one --
-        # a start that loses the race for the pull request ends up steering
-        # somebody else's run, and the panel should name the run that got the
-        # feedback rather than the one that was undone.
-        github_activity.dispatched(
-            reached.run_id, reached.url, started_run=reached.started,
-        )
         return reached
 
     github_concierge = GithubConcierge(
@@ -2821,6 +2833,13 @@ def create_app(
         entries = github_activity.recent()
         owners: dict[tuple[str, int], str] = {}
         for entry in entries:
+            # Only for a comment nothing was forwarded for. A dispatched row
+            # already names the work order its feedback reached and prefers
+            # it, so asking would be a database seek to build an answer the
+            # wire shape discards -- once per row, on every poll, on the loop
+            # the webhook is answered from.
+            if entry.run_id:
+                continue
             pull_request = (entry.repository.lower(), entry.number)
             if pull_request not in owners:
                 owner = await github_run_for_pull_request(*pull_request)

@@ -46,6 +46,16 @@ function statusLabel(status: string): string {
   return STATUS_LABEL[status] ?? status;
 }
 
+/** Whether a URL is safe to put in an `href`.
+ *
+ *  The comment's link comes from the webhook body, so it is GitHub's word
+ *  rather than this engine's, and a `javascript:` URL in an anchor runs on
+ *  click. The same guard the WorkOrder page applies to every other
+ *  externally-sourced link. */
+function linkable(url: string): boolean {
+  return /^https?:\/\//.test(url);
+}
+
 function kindLabel(event: string): string {
   return event === "pull_request_review_comment" ? "Review reply" : "Comment";
 }
@@ -91,7 +101,7 @@ function CommentRow({ comment }: { comment: ApiGithubComment }) {
           {kindLabel(comment.event)} from <strong>{comment.author}</strong> on{" "}
           {comment.repository}#{comment.number}
         </span>
-        {comment.url && (
+        {linkable(comment.url) && (
           <a className="gh-comment-link" href={comment.url} target="_blank" rel="noreferrer">
             View comment ↗
           </a>
@@ -106,7 +116,13 @@ function CommentRow({ comment }: { comment: ApiGithubComment }) {
       {comment.detail && <p className="micro gh-comment-detail">{comment.detail}</p>}
       {comment.dispatchedRunId && (
         <p className="micro">
-          <a href={comment.runUrl || `/runs/${comment.dispatchedRunId}`}>
+          <a
+            href={
+              linkable(comment.runUrl)
+                ? comment.runUrl
+                : `/runs/${encodeURIComponent(comment.dispatchedRunId)}`
+            }
+          >
             Open WorkOrder {comment.dispatchedRunId}
           </a>
         </p>

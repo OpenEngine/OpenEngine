@@ -102,6 +102,29 @@ def test_a_comment_engine_will_not_act_on_says_why() -> None:
     assert (entry.status, entry.detail) == ("ignored", "not a pull request")
 
 
+def test_a_comment_that_reached_no_work_order_says_so_beside_its_reply() -> None:
+    """A dispatch that failed is not a turn that failed.
+
+    The broker answers the agent rather than raising, so the concierge goes on
+    to post its undelivered notice. The row has to carry both: the reply the
+    pull request actually got, and the reason nothing was forwarded -- a row
+    reading "replied" would be this panel contradicting the pull request.
+    """
+    log = _ticking()
+    comment = _comment()
+    log.seen(comment)
+    log.started(comment)
+    log.dispatch_failed("no workflow is configured under `work_orders.workflow`")
+    log.replied("Could not deliver the feedback to a work order.")
+    log.finished(comment)
+
+    (entry,) = log.recent()
+    assert entry.status == "failed"
+    assert entry.detail == "no workflow is configured under `work_orders.workflow`"
+    assert entry.reply == "Could not deliver the feedback to a work order."
+    assert entry.run_id == ""
+
+
 def test_a_failed_turn_is_recorded_as_one() -> None:
     log = _ticking()
     comment = _comment()

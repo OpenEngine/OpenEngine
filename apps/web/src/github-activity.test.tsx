@@ -153,6 +153,33 @@ it("distinguishes a comment that started work from one that steered it", async (
   expect(steps).not.toContain("Forwarded to");
 });
 
+it("will not put a comment's own URL in an href unless it is one", async () => {
+  // The link comes from the webhook body, so it is GitHub's word rather than
+  // the engine's, and a javascript: URL in an anchor runs on click.
+  server(async () =>
+    json(activity({ comments: [comment({ url: "javascript:alert(1)" })] })),
+  );
+  render(<Panel />);
+
+  const row = await screen.findByRole("listitem");
+  expect(within(row).queryByRole("link", { name: /View comment/ })).toBeNull();
+  expect(
+    within(row).getByRole("link", { name: /Open WorkOrder run-1/ }),
+  ).toHaveAttribute("href", "/runs/run-1");
+});
+
+it("falls back to the WorkOrder path when its URL is not a link", async () => {
+  server(async () =>
+    json(activity({ comments: [comment({ runUrl: "javascript:alert(2)" })] })),
+  );
+  render(<Panel />);
+
+  const row = await screen.findByRole("listitem");
+  expect(
+    within(row).getByRole("link", { name: /Open WorkOrder run-1/ }),
+  ).toHaveAttribute("href", "/runs/run-1");
+});
+
 it("says what the concierge is doing right now", async () => {
   server(async () =>
     json(
