@@ -604,6 +604,12 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
 
 
 def test_auto_approve_keeps_human_requests_manual() -> None:
+    """And every request says on the event whether it answered itself.
+
+    A reader that pages a person -- Slack -- has no other way to tell the two
+    apart: auto-approve raises the same request it then answers, so without the
+    flag every command an agent runs is announced as a question.
+    """
     from httpx import ASGITransport, AsyncClient
     from engine.graph_runtime.api import create_app
 
@@ -628,6 +634,10 @@ def test_auto_approve_keeps_human_requests_manual() -> None:
             graph_id=GRAPH, name="Triage", graph=builder.compile(checkpointer=InMemorySaver())
         ))
         app = create_app(runtime)
+        # After the app, which installs an observer of its own: last one wins,
+        # and what this test reads is the events, not the endpoint serving them.
+        log = EventLog()
+        runtime.observe(log.append)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             run = await runtime.start(GRAPH, {})
 
@@ -653,6 +663,22 @@ def test_auto_approve_keeps_human_requests_manual() -> None:
             assert response.json()["autoApproveNodes"] == []
             await runtime.decide(run.run_id, question.approval_id, ApprovalDecision.ACCEPT)
             await pending(ApprovalKind.TOOL_USE)
+            announced = {
+                str(event.payload["reason"]): event.payload["autoApproved"]
+                for event in log.since(run.run_id)
+                if event.kind is EventKind.APPROVAL_REQUESTED
+            }
+            assert announced == {
+                # Raised before the preference was set, so still a question.
+                ApprovalKind.COMMAND_EXECUTION.value: False,
+                # Auto-approve was on, and a file change is the kind it covers.
+                ApprovalKind.FILE_CHANGE.value: True,
+                # On too, but these are nobody's to hand to a machine.
+                ApprovalKind.PLAN_APPROVAL.value: False,
+                ApprovalKind.USER_INPUT.value: False,
+                # Turned off again before this one was raised.
+                ApprovalKind.TOOL_USE.value: False,
+            }
         await runtime.aclose()
 
     asyncio.run(exercise())
