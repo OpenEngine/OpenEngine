@@ -303,6 +303,9 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
         "git_subcommand", "open_pull_request", "list_pipeline_status", "get_job_logs",
     )
     assert impl_binding.required_outputs == ("pr_url",)
+    assert impl_binding.workorder_search is True
+    for state in ({}, {"ci_check": {"passed": False}}):
+        assert "untrusted historical data" in module._implementation_prompt(state)
 
     # Each review facet gets read-only repository tools (no add_comment).
     for facet in module.REVIEW_FACETS:
