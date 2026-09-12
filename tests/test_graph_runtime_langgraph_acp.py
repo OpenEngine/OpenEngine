@@ -1227,7 +1227,10 @@ def test_steering_does_not_send_a_terminal_correction(tmp_path: Path) -> None:
     async def scenario() -> tuple[list[RuntimeEvent], Any]:
         async with runtime_over(
             tmp_path,
-            registry(tmp_path, response="", waits_for_cancel=True),
+            # Model the provider cancellation explicitly. An empty end_turn
+            # is still a completed turn and must obey the terminal contract.
+            registry(tmp_path, response="", waits_for_cancel=True,
+                     cancel_prompt="Use the fast suite."),
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
@@ -2405,3 +2408,46 @@ def test_steering_waits_for_provider_cancellation_acknowledgement(partial: str) 
             await asyncio.gather(task, observer, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("follow_up", [False, True])
+def test_cancelled_turn_accepts_late_terminal_result_and_simultaneous_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, follow_up: bool,
+) -> None:
+    from engine.graph_runtime_langgraph.acp import BoundMcpServer
+    from engine.graph_runtime_langgraph.executions import NodeExecution
+
+    async def scenario() -> Any:
+        waiting = asyncio.Event()
+        terminal: asyncio.Future[RunFailed] = asyncio.get_running_loop().create_future()
+        next_message = NodeExecution.next_message
+
+        async def observe_wait(self: NodeExecution) -> str:
+            waiting.set()
+            return await next_message(self)
+
+        monkeypatch.setattr(NodeExecution, "next_message", observe_wait)
+
+        async def result() -> RunFailed:
+            return await terminal
+
+        @asynccontextmanager
+        async def binding(*args: Any) -> AsyncIterator[BoundMcpServer]:
+            yield BoundMcpServer(config=WORKFLOW_MCP_SERVER, result=result)
+
+        def graph(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
+            return pipeline(saver, agents, where, mcp_server_bindings=(binding,))
+
+        async with runtime_over(tmp_path, registry(tmp_path, cancel_prompt=PROMPT), graph) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            async with asyncio.timeout(PATIENCE):
+                await waiting.wait()
+            if follow_up:
+                await runtime.steer(run.run_id, REOPEN)
+            terminal.set_result(RunFailed(run_id=run.run_id, reason="Accepted after cancellation."))
+            await until(log, run.run_id, "run.failed")
+            return await runtime.snapshot(run.run_id)
+
+    final = asyncio.run(scenario())
+    assert final.error == "Accepted after cancellation."
+    assert prompts(tmp_path) == [PROMPT, *([REOPEN] if follow_up else [])]
