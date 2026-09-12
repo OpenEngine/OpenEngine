@@ -132,6 +132,7 @@ from engine.ports import (
     ApprovalHandler,
     InteractiveAgentRunner,
     Message as CommunicationsMessage,
+    MessageLink,
     StateStore,
     UserInputAnswer,
     WorkspaceState,
@@ -1047,6 +1048,7 @@ def create_app(
     async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
         """Report lifecycle events without making delivery failure fail the graph."""
         text = ""
+        links: list[MessageLink] = []
         mention = False
         if state.origin is None:
             return
@@ -1061,6 +1063,10 @@ def create_app(
         elif event.kind is EventKind.APPROVAL_REQUESTED:
             if event.payload.get("toolName") == "human_review":
                 text = "Review complete and ready for your decision."
+                snapshot = await surface.runtime.snapshot(state.run_id) if surface.runtime else None
+                pr_url = snapshot.values.get("pr_url") if snapshot else None
+                if isinstance(pr_url, str) and pr_url.strip():
+                    links.append(MessageLink("View pull request", pr_url))
             else:
                 text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
             mention = True
@@ -1071,8 +1077,10 @@ def create_app(
             text = "Work order finished."
         if text:
             link = run_notifier.work_order_link(state)
+            if link:
+                links.append(link)
             await run_notifier.announce(
-                state, text, links=(link,) if link else (), mention=mention,
+                state, text, links=links, mention=mention,
             )
 
     async def graph_notifications(event: RuntimeEvent) -> None:
