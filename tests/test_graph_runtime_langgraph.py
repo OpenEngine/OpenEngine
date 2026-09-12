@@ -599,6 +599,26 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
         ))
         assert await store.run_for_pull_request("acme/api", 42) == RunId("run-3")
         assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
+        # Claiming is the conditional form, for a caller that needs one run per
+        # pull request: a held one stays with its holder, and the claimant is
+        # told so rather than displacing it.
+        taken = replace(opened, run_id=RunId("run-4"), opened_at="2026-09-10T21:00:00Z")
+        assert await store.claim_pull_request(taken) == RunId("run-3")
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-3")
+        # Naming the holder the caller saw stop is what takes it over, so two
+        # callers racing to carry on the same finished run cannot both win.
+        assert await store.claim_pull_request(
+            taken, replacing=RunId("run-3")) == RunId("run-4")
+        assert await store.claim_pull_request(
+            replace(taken, run_id=RunId("run-5")), replacing=RunId("run-3"),
+        ) == RunId("run-4")
+        assert await store.run_for_pull_request("acme/api", 42) == RunId("run-4")
+        # A pull request nobody holds is free to claim, and the record is kept
+        # whole rather than only its run id.
+        assert await store.claim_pull_request(replace(
+            opened, number=999, run_id=RunId("run-6"), url="https://example/pr/999",
+        )) == RunId("run-6")
+        assert await store.run_for_pull_request("acme/api", 999) == RunId("run-6")
 
     asyncio.run(scenario())
 

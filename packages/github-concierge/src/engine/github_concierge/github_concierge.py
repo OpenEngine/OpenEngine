@@ -1,10 +1,11 @@
 """Pull-request conversation graph. Transport and work-order steering injected.
 
 A pull-request conversation is not a Slack thread with a different address: the
-concierge here may only steer the work order that already opened the pull
-request, and its participants are whoever can comment on it rather than one
-person in a direct message. Both differences are authority, so this is its own
-graph rather than a mode of the Slack one.
+concierge here may only reach the pull request the comment arrived on -- the
+work order in flight for it, or one the host starts for it when none is -- and
+its participants are whoever can comment on it rather than one person in a
+direct message. Both differences are authority, so this is its own graph rather
+than a mode of the Slack one.
 
 Model output flows inward and never outward. What the agent writes reaches the
 work order through the feedback tool, which is private; what gets posted back
@@ -13,11 +14,12 @@ identifiers this process already held. A pull-request comment is untrusted
 text, the agent reading it can read the host it runs on, and a reply is public
 -- so the one thing a commenter can dictate is not given a way out.
 
-Forwarding happens once per comment. Steering a work order changes what an
-agent is building, while posting the reply that announces it is a separate
-step that can fail on its own -- and a failed turn is redelivered. A comment
-whose feedback already landed is answered from what was recorded rather than
-run again, so a retried reply cannot ask for the same work twice.
+Forwarding happens once per comment. Reaching a work order changes what an
+agent is building, or starts one building, while posting the reply that
+announces it is a separate step that can fail on its own -- and a failed turn
+is redelivered. A comment whose feedback already landed is answered from what
+was recorded rather than run again, so a retried reply cannot ask for the same
+work twice.
 
 Once means once on both sides of that: between deliveries, and within a turn.
 A comment is the unit of authority here -- one person asked for one thing --
@@ -40,18 +42,19 @@ from langgraph.graph import END, START, StateGraph
 from langgraph_acp.agent import ACPAgentProvider
 from langgraph_acp.session import ACPSession
 
-from .github_egress import FeedbackBroker
+from .github_egress import Continuation, FeedbackBroker
 
 #: Given the origin that asked and the feedback, reach that pull request's work
-#: order and return (url, run_id).
-SteerWorkorder = Callable[[RunOrigin, str], Awaitable[tuple[str, str]]]
+#: order -- steering the one in flight, or starting one when there is none.
+ContinueWorkorder = Callable[[RunOrigin, str], Awaitable[Continuation]]
 Reply = Callable[[RunOrigin, str], Awaitable[None]]
 
 INSTRUCTIONS = """You are OpenEngineBot, a pull request concierge. Your one effect
 on this pull request is the continue_workorder tool: when a comment asks for a
 change, or asks for review feedback to be addressed, call it with that request
-and it reaches the work order that opened this pull request. You have no
-implementation role and cannot start work orders.
+and it reaches the work order for this pull request. Whether that is the work
+order already in flight or a new one started for this pull request is the
+host's decision, not yours. You have no implementation role.
 
 Nothing you write is published. The reply posted to the pull request is fixed
 text chosen by whether that tool succeeded, so do not compose an answer and do
@@ -68,18 +71,19 @@ _FORWARDED_LIMIT = 1024
 #: Everything the concierge is allowed to say in public. Fixed strings, chosen
 #: by what happened rather than written by a model.
 FORWARDED = "Forwarded to work order `{run_id}`."
+STARTED = "Started work order `{run_id}` for this pull request."
 UNDELIVERED = (
     "I could not reach the work order for this pull request, so nothing has "
     "been forwarded."
 )
 NOT_FORWARDED = (
-    "I only forward change requests to the work order that opened this pull "
-    "request, and I have not forwarded anything for this comment."
+    "I only forward change requests to the work order for this pull request, "
+    "and I have not forwarded anything for this comment."
 )
 
 
 class AlreadyForwarded(RuntimeError):
-    """Raised when a turn tries to steer its work order a second time.
+    """Raised when a turn tries to reach its work order a second time.
 
     Reaches the agent as a failed tool call, which is the honest answer: what
     it asked for the second time did not happen, and it should not report that
@@ -98,11 +102,15 @@ class Delivery:
     run_id: str = ""
     url: str = ""
     attempted: bool = False
+    #: Whether that work order was started for this comment rather than
+    #: already at work on the pull request. The host decides which happened,
+    #: and the public reply says which rather than eliding the difference.
+    started: bool = False
 
     def announcement(self) -> str:
         if self.run_id:
-            forwarded = FORWARDED.format(run_id=self.run_id)
-            return f"{forwarded} {self.url}" if self.url else forwarded
+            landed = (STARTED if self.started else FORWARDED).format(run_id=self.run_id)
+            return f"{landed} {self.url}" if self.url else landed
         return UNDELIVERED if self.attempted else NOT_FORWARDED
 
 
@@ -161,13 +169,14 @@ class GithubConcierge:
     #: serializes turns: exactly one is ever in flight to write it.
     _forwarding: tuple[str, str, str] | None
 
-    def __init__(self, *, provider: ACPAgentProvider, steer_workorder: SteerWorkorder,
+    def __init__(self, *, provider: ACPAgentProvider,
+                 continue_workorder: ContinueWorkorder,
                  reply: Reply, max_threads: int = 32,
                  timeout_seconds: float = 180) -> None:
         if max_threads < 1:
             raise ValueError("max_threads must be positive")
         self.provider = provider
-        self.steer_workorder = steer_workorder
+        self.continue_workorder = continue_workorder
         self.reply = reply
         self.max_threads = max_threads
         self.timeout_seconds = timeout_seconds
@@ -255,7 +264,7 @@ class GithubConcierge:
             try:
                 cwd = opened.enter_context(TemporaryDirectory(prefix="github-concierge-"))
 
-                async def steer(prompt: str) -> tuple[str, str]:
+                async def continue_workorder(prompt: str) -> Continuation:
                     # The session belongs to this origin for its whole life, so
                     # the authority a tool call carries is the authority of the
                     # author whose history it was reasoning over.
@@ -271,17 +280,20 @@ class GithubConcierge:
                             "is forwarded once"
                         )
                     self._delivery = Delivery(attempted=True)
-                    url, run_id = await self.steer_workorder(origin, prompt)
-                    self._delivery = Delivery(run_id=run_id, url=url, attempted=True)
+                    reached = await self.continue_workorder(origin, prompt)
+                    self._delivery = Delivery(
+                        run_id=reached.run_id, url=reached.url, attempted=True,
+                        started=reached.started,
+                    )
                     # Recorded here rather than once the turn ends, because the
                     # work order already has the feedback: everything after this
                     # point, including the rest of the turn, is a step that may
                     # fail and be retried.
                     self._remember_forwarded()
-                    return url, run_id
+                    return reached
 
                 broker = await opened.enter_async_context(
-                    FeedbackBroker(steer_workorder=steer)
+                    FeedbackBroker(continue_workorder=continue_workorder)
                 )
                 client = await self.provider.connect()
                 opened.push_async_callback(client.close)
@@ -308,6 +320,7 @@ class GithubConcierge:
 
 __all__ = [
     "AlreadyForwarded",
+    "Continuation",
     "Delivery",
     "FeedbackRequest",
     "GithubConcierge",

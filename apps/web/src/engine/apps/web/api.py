@@ -15,7 +15,7 @@ later transitions without polling the transcript.
 
 from __future__ import annotations
 
-from engine.github_concierge import FeedbackRequest, GithubConcierge
+from engine.github_concierge import Continuation, FeedbackRequest, GithubConcierge
 from engine.github_concierge.github_egress import tool_permission as github_tool_permission
 from engine.slack_concierge import SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
@@ -38,6 +38,7 @@ from collections.abc import (
 )
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
@@ -127,6 +128,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime_langgraph.store import PullRequestRecord
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
@@ -950,6 +952,30 @@ class MilestoneScoping(Protocol):
         milestone: MilestoneScope,
         policy: ScopingPolicy,
     ) -> ScopingPlan: ...
+
+
+class GithubProvenance(Protocol):
+    """The half of the runtime's store that says who owns a pull request.
+
+    Named as the pair it is used as: a comment is routed by reading the claim,
+    and a work order started for a comment is findable only if it writes one.
+    Stated as a protocol because this module reaches the store by duck-typing
+    -- the control surface is deliberately forge-agnostic -- and a runtime that
+    keeps no provenance answers ``None`` here rather than growing a method
+    shaped like a pull request.
+    """
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None: ...
+
+    async def claim_pull_request(
+        self, record: PullRequestRecord, *, replacing: RunId | None = None
+    ) -> RunId: ...
+
+
+#: The statuses a run can still be steered in. A completed or failed run has
+#: no execution listening, so feedback for the pull request it opened is a new
+#: request rather than a continuation of that one.
+STEERABLE_RUN_STATUSES = frozenset({RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL})
 
 
 def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None:
@@ -2512,37 +2538,147 @@ def create_app(
             in_reply_to_id=int(review_id) if review_id else None,
         )
 
-    async def github_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+    async def github_start_workorder(
+        store: GithubProvenance | None, repository: str, number: int, prompt: str,
+        *, replacing: RunId | None,
+    ) -> Continuation:
+        """Start a work order for a pull request that has no run in flight.
+
+        Deliberately without an origin, unlike the Slack concierge's: the
+        commenter is answered on the pull request by the concierge's own fixed
+        reply, and a ``github:`` channel is not somewhere the chat provider can
+        post -- a run carrying one would send every progress update to a Slack
+        channel that does not exist.
+
+        The run claims the pull request as it starts. Provenance is otherwise
+        written by opening one, which a run started here never does -- it
+        pushes to the pull request the comment arrived on -- so without the
+        claim nothing would own it and the next comment would start another
+        work order, leaving several agents on one branch and letting anyone who
+        can comment create runs without limit. Claiming needs somewhere to
+        write, so a deployment whose runtime keeps no provenance starts nothing
+        rather than starting what it cannot find again.
+
+        Starting and claiming cannot be one operation -- the run id to claim
+        with is the engine's answer to starting -- so the claim decides which
+        run keeps the pull request and this cancels the one that did not. Two
+        comments arriving together both find nothing in flight and both start,
+        and a claim that replaced the earlier one would leave the run it
+        displaced alive and unreachable, since every later comment is routed by
+        that row. `replacing` is the finished run this pull request was last
+        taken on by, if it had one, which is the only claim a start may take
+        over: it is what the caller established has stopped working. A claim
+        that cannot be written at all leaves nothing behind either -- the run
+        is cancelled before the failure is raised, so the redelivery that
+        follows starts one run rather than adding one.
+        """
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        if store is None:
+            raise RuntimeError(
+                "could not start a work order: this runtime records no pull requests"
+            )
+        runtime = surface.runtime
+        assert runtime is not None  # only reached with a runtime in hand
+        state = await start_graph_run(
+            runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=prompt, repository=repository,
+            milestone_id=None,
+        )
+        url = f"https://github.com/{repository}/pull/{number}"
+        try:
+            holder = await store.claim_pull_request(
+                PullRequestRecord(
+                    repository=repository.lower(), number=number, run_id=state.run_id,
+                    opened_at=datetime.now(UTC).isoformat(), url=url,
+                ),
+                replacing=replacing,
+            )
+        except Exception:
+            await _github_cancel_unclaimed(state.run_id)
+            raise
+        if holder != state.run_id:
+            # Lost the race: the pull request is someone else's work order, so
+            # the feedback goes there and this run is undone rather than left
+            # working a branch nothing can reach.
+            await _github_cancel_unclaimed(state.run_id)
+            return await github_steer_workorder(holder, prompt)
+        link = run_notifier.work_order_link(state)
+        return Continuation(
+            url=link.url if link else "", run_id=str(state.run_id), started=True,
+        )
+
+    async def _github_cancel_unclaimed(run_id: RunId) -> None:
+        """Stop a run that did not end up owning its pull request.
+
+        Best effort, and deliberately quiet: whatever is being reported when
+        this is called -- the race lost, or the claim write that failed -- is
+        the more useful thing to report, and a cancel that fails leaves a run
+        visible in the list rather than a silent one.
+        """
+        runtime = surface.runtime
+        if runtime is None:
+            return
+        try:
+            await runtime.cancel(run_id)
+        except Exception:
+            log.exception("could not cancel unclaimed work order %s", run_id)
+
+    async def github_steer_workorder(run_id: RunId, prompt: str) -> Continuation:
+        """Deliver feedback to the work order that holds this pull request."""
+        runtime = surface.runtime
+        assert runtime is not None  # only reached with a runtime in hand
+        snapshot = await runtime.snapshot(run_id)
+        if snapshot is None:
+            raise RuntimeError("could not reach the work order for this pull request")
+        await runtime.steer(run_id, prompt, node_id=_reentry_node(runtime, snapshot))
+        state = await session.state_store.load(run_id)
+        link = run_notifier.work_order_link(state) if state is not None else None
+        return Continuation(url=link.url if link else "", run_id=str(run_id))
+
+    async def github_continue_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+        """Steer the work order this pull request already has, or start one.
+
+        Which of the two happens is the host's to decide, not the agent's: it
+        turns on what this process recorded when a run took the pull request
+        on and on what the graph engine says that run is doing now, neither of
+        which a commenter can influence. A pull request nobody is working on --
+        opened by hand, or by a run that has since finished or lost its graph
+        -- has no execution to steer, and steering one would either raise or
+        reach nothing; a comment asking for a change there is a request for
+        work, so it gets a work order.
+        """
         repository = origin.channel.removeprefix("github:")
         number = int(origin.thread_id.partition("/review/")[0])
         runtime = surface.runtime
         if runtime is None:
-            raise RuntimeError("could not identify an existing work order: graph runtime unavailable")
-        # Read through the binding that owns the provenance table rather than
+            raise RuntimeError("could not reach a work order: graph runtime unavailable")
+        # Through the binding that owns the provenance table rather than
         # through the control surface, which is deliberately forge-agnostic and
         # has no business growing a method shaped like a pull request.
-        store = getattr(runtime, "store", None)
+        store: GithubProvenance | None = getattr(runtime, "store", None)
         run_id = (
             None if store is None
             else await store.run_for_pull_request(repository.lower(), number)
         )
-        if run_id is None:
-            raise RuntimeError("could not identify one existing work order for this pull request")
-        try:
-            snapshot = await runtime.snapshot(run_id)
-        except UnknownGraphError:
-            # A saved work order can outlive the graph it was started from.
-            snapshot = None
-        if snapshot is None:
-            raise RuntimeError("could not identify one existing work order for this pull request")
-        await runtime.steer(run_id, prompt, node_id=_reentry_node(runtime, snapshot))
-        state = await session.state_store.load(run_id)
-        link = run_notifier.work_order_link(state) if state is not None else None
-        return link.url if link else "", str(run_id)
+        snapshot = None
+        if run_id is not None:
+            try:
+                snapshot = await runtime.snapshot(run_id)
+            except UnknownGraphError:
+                # A saved work order can outlive the graph it was started from.
+                snapshot = None
+        if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+            return await github_start_workorder(
+                store, repository, number, prompt, replacing=run_id,
+            )
+        return await github_steer_workorder(run_id, prompt)
 
     github_concierge = GithubConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
-        steer_workorder=github_steer_workorder, reply=github_reply,
+        continue_workorder=github_continue_workorder, reply=github_reply,
     )
 
     posting_login: dict[str, str] = {}

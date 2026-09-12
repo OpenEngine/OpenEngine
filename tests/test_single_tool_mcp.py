@@ -166,7 +166,7 @@ def test_the_tool_name_is_forwarded_rather_than_judged_here(monkeypatch):
 def test_the_credential_is_never_passed_on_the_command_line():
     """Anyone on this host can read argv; only this user can read the file."""
     async def scenario():
-        async with github_egress.FeedbackBroker(steer_workorder=_unused) as broker:
+        async with github_egress.FeedbackBroker(continue_workorder=_unused) as broker:
             return broker.config, broker._token
 
     config, token = asyncio.run(scenario())
@@ -185,7 +185,7 @@ async def _unused(_prompt):
 def test_a_broker_that_was_never_started_has_nothing_to_describe():
     """No socket, no descriptor: a CLI pointed at a closed port would only hang."""
     with pytest.raises(RuntimeError, match="has not been started"):
-        github_egress.FeedbackBroker(steer_workorder=_unused).config
+        github_egress.FeedbackBroker(continue_workorder=_unused).config
 
 
 @pytest.mark.parametrize("surface, tool_name", SURFACES)
@@ -194,7 +194,7 @@ def test_two_brokers_do_not_share_a_credential(surface, tool_name):
     brokers = {
         slack_egress.ConciergeBroker(create_workorder=_unused)._token
         if surface is slack_egress
-        else github_egress.FeedbackBroker(steer_workorder=_unused)._token
+        else github_egress.FeedbackBroker(continue_workorder=_unused)._token
         for _ in range(2)
     }
     assert len(brokers) == 2

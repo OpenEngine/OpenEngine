@@ -76,3 +76,30 @@ the comment is forgotten rather than remembered, so redelivering it from the
 delivery log picks the work back up. Events Engine does not read, and the `ping`
 GitHub sends when the webhook is saved, are always acknowledged, so a webhook
 subscribed to more than Engine needs does not accumulate failed deliveries.
+
+## Steering a work order, or starting one
+
+A comment on a pull request reaches at most one work order, and which one is
+the host's decision rather than the answering agent's. Engine looks up the run
+working on the pull request — recorded when that run took it on, not inferred
+from the conversation — and asks the graph engine what it is doing now:
+
+- running, or waiting on a person: the request is steered into that run, and
+  the reply names it.
+- finished, failed, no longer registered, or never recorded at all — a pull
+  request opened by hand has no such run: a work order is started for the
+  repository the comment arrived from, on the workflow named by
+  `work_orders.workflow`, and the reply says a work order was started.
+
+A work order started this way claims the pull request as it starts, so later
+comments steer it rather than starting another: one work order per pull
+request, however many comments arrive. The claim is what settles it when two
+comments arrive together and both start — one of them keeps the pull request,
+and the run that did not is cancelled rather than left working a branch no
+later comment can reach. A work order started here reports nothing back to
+chat: the pull request is where the conversation is, and Engine answers it
+there.
+
+The agent reading the comment decides only whether it is asking for a change at
+all; a comment that asks for nothing reaches no work order. Comments on issues
+are not answered.
