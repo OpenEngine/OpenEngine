@@ -2585,7 +2585,7 @@ def create_app(
             runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            workstream_id=None, milestone_id=None,
+            milestone_id=None,
         )
         url = f"https://github.com/{repository}/pull/{number}"
         try:
