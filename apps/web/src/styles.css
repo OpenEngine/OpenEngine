@@ -1029,6 +1029,18 @@ select:disabled { cursor: default; }
   border-bottom: 1px solid var(--rule);
 }
 .toolbar-end { display: flex; gap: 18px; align-items: center; }
+.toolbar-search {
+  flex: 1 1 200px;
+  max-width: 320px;
+  height: 40px;
+  padding: 0 14px;
+  background: var(--white);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  font-size: 14px;
+}
+.toolbar-search::placeholder { color: var(--faint); }
+.toolbar-search:focus { border-color: var(--ink); outline: 0; }
 .segmented { display: flex; flex-wrap: wrap; }
 .segmented button {
   height: 40px;
