@@ -1108,3 +1108,100 @@ def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted(
     assert "Could not record posted comment 123" in caplog.text
     assert "the store is gone" in caplog.text
     assert "https://github.com/Acme/Renamed/pull/42#issuecomment-123" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "reported, accepted",
+    [
+        ("https://github.com/acme/api/pull/42", True),
+        # The same pull request, spelled differently: other casing, and a
+        # trailing slash.
+        ("https://github.com/Acme/API/pull/42/", True),
+        # A different one the agent read about while working. This is the
+        # failure the guard exists for: CI would wait on it, and the review
+        # would be posted on a diff the findings are not about.
+        ("https://github.com/acme/api/pull/41", False),
+    ],
+)
+def test_a_step_reports_the_pull_request_it_opened(
+    reported: str, accepted: bool
+) -> None:
+    opened = "https://github.com/acme/api/pull/42"
+
+    class OpeningSourceControl:
+        async def request_review(self, *_arguments: object) -> str:
+            return opened
+
+    async def scenario() -> dict[str, object]:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            OpeningSourceControl(),  # type: ignore[arg-type]
+            ("open_pull_request",),
+            WorkspaceId("workspace"),
+        )
+        broker._result = asyncio.get_running_loop().create_future()
+        answer = await broker._submit(
+            _direct_request(
+                broker,
+                "open-1",
+                "open_pull_request",
+                {"branch": "feature", "title": "Add a thing"},
+            )
+        )
+        assert answer["ok"] is True
+        return await broker._submit(
+            _direct_request(
+                broker,
+                "complete-1",
+                "complete_step",
+                {
+                    "outcome": "success",
+                    "summary": "Done.",
+                    "outputs": {"pr_url": reported},
+                },
+            )
+        )
+
+    answer = asyncio.run(scenario())
+    assert answer["ok"] is accepted
+    if not accepted:
+        assert answer["error"] == (
+            f"pr_url must name the pull request this step opened, {opened}, "
+            f"not {reported}"
+        )
+
+
+def test_a_step_that_opened_nothing_reports_the_pull_request_it_was_given() -> None:
+    """The CI-fix turn pushes to the pull request it was sent to, and says so.
+
+    Nothing was opened, so there is no URL of this step's own to hold it to:
+    the one it was asked to work on is the only answer it can give.
+    """
+
+    async def scenario() -> dict[str, object]:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker._result = asyncio.get_running_loop().create_future()
+        return await broker._submit(
+            _direct_request(
+                broker,
+                "complete-1",
+                "complete_step",
+                {
+                    "outcome": "success",
+                    "summary": "Fixed the failing job.",
+                    "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
+                },
+            )
+        )
+
+    assert asyncio.run(scenario())["ok"] is True
