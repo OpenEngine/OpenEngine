@@ -213,6 +213,7 @@ class TerminalMcpBroker:
         self._git_approval: ApprovalHandler | None = None
         self._tool_call_ids: ToolCallLookup | None = None
         self._comments_added = 0
+        self._opened_pull_requests: tuple[str, ...] = ()
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
@@ -430,13 +431,17 @@ class TerminalMcpBroker:
                         "ok": False,
                         "error": "add at least one pull-request comment before completing review",
                     }
-                event: TerminalEvent = step_completed_from_arguments(
+                completed = step_completed_from_arguments(
                     run_id=self._run_id,
                     step=self._step,
                     agent_run_id=self._agent_run_id,
                     arguments=arguments,
                     mcp_request_id=request_id,
                 )
+                misreported = self._misreported_pull_request(completed)
+                if misreported is not None:
+                    return {"ok": False, "error": misreported}
+                event: TerminalEvent = completed
             elif name == "fail_step":
                 event = run_failed_from_arguments(
                     run_id=self._run_id,
@@ -575,8 +580,35 @@ class TerminalMcpBroker:
             )
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
+        self._opened_pull_requests += (url,)
         await self._record_pull_request(url)
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    def _misreported_pull_request(self, event: StepCompleted) -> str | None:
+        """Say so when `pr_url` is not a pull request this step opened.
+
+        That output is what binds every later step to the change: CI waits on
+        it, and the reviewers comment on the diff behind it. Nothing downstream
+        can tell it apart from some other pull request the agent read about
+        along the way -- an already merged one looks just as reviewable, and
+        the review then lands on a diff the findings are not about, or on
+        nothing at all, because the files are not in it. `open_pull_request`
+        answered with the URL, so a step that opened one has it to report
+        rather than to reconstruct, and is told which it is when it reports
+        another.
+        """
+        if not self._opened_pull_requests:
+            return None
+        opened = {_pull_request_identity(url) for url in self._opened_pull_requests}
+        for output in event.outputs:
+            if output.name != "pr_url":
+                continue
+            if _pull_request_identity(output.value) not in opened:
+                return (
+                    "pr_url must name the pull request this step opened, "
+                    f"{self._opened_pull_requests[-1]}, not {output.value}"
+                )
+        return None
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -1037,6 +1069,17 @@ def _comment_arguments(
         if file is not None or line is not None:
             raise ValueError("in_reply_to_id cannot be combined with file or line")
     return pr_url, comment, file, line, in_reply_to_id
+
+
+def _pull_request_identity(pr_url: str) -> tuple[str, int] | str:
+    """Name a pull request the way two spellings of the same one agree on.
+
+    A GitHub URL is named by the repository and number read out of it, so the
+    owner's casing and a trailing slash do not make it a different pull
+    request. Anything else -- a GitLab merge request, say -- has only its URL
+    to be named by, which still tells it from a different one.
+    """
+    return _github_pull_request(pr_url) or pr_url.strip().rstrip("/")
 
 
 def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
