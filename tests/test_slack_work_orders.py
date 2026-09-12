@@ -211,7 +211,7 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None, github_webhook_secret="", github_bot_login=""):
+def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, graph_runtime=None, github_comment_handler=None, github_webhook_secret="", github_bot_login="", approval_policy=None):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -237,6 +237,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         workflow_catalog=(
             catalog if catalog is not None else WorkflowCatalog.from_graphs(())
         ),
+        **({} if approval_policy is None else {"approval_policy": approval_policy}),
         slack_credential_store=slack_store,
         github_login_config=github_login_config,
         public_url="https://engine.example",
@@ -1374,3 +1375,93 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
         assert any(str(runs[0].run_id) in link.url for link in message.links)
         assert any(message.text == "*work* started." for _, message, _ in communications.posts)
     assert any(message.links for _, message, _ in communications.posts)
+
+
+def test_an_auto_approved_request_is_not_announced(tmp_path) -> None:
+    """A question the run answers itself is not reported to the thread.
+
+    One work order asks to run dozens of commands, and with `auto_approve` on
+    every one of them is settled by the run. Announcing each as "needs your
+    approval" would bury the requests that really are somebody's -- the plan
+    below, which is still announced.
+    """
+    from contextlib import asynccontextmanager
+
+    from starlette.testclient import TestClient
+
+    from engine.domain import ApprovalKind
+    from engine.graph_runtime import GraphId, NodeId
+    from engine.runtime import WorkflowCatalog
+    from engine.runtime.config import ApprovalConfig
+    from graph_runtime_fakes import (
+        Ask,
+        AwaitSteering,
+        ScriptedGraph,
+        ScriptedGraphRuntime,
+        ScriptedNode,
+    )
+
+    node = NodeId("implementation")
+    graph = ScriptedGraph(
+        GraphId("implementation-review-v1"),
+        "Implementation review",
+        (
+            ScriptedNode(
+                node,
+                (
+                    # Held here until the preference the app sets after starting
+                    # the run has landed, so this is about what gets announced
+                    # rather than a race with when auto-approve arrives.
+                    AwaitSteering(),
+                    Ask("Run git in the step's bound workspace"),
+                    Ask("Approve the plan", kind=ApprovalKind.PLAN_APPROVAL),
+                ),
+            ),
+        ),
+    )
+    runtime = ScriptedGraphRuntime(graph)
+
+    @asynccontextmanager
+    async def running(_app=None):
+        yield runtime
+
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path,
+        communications,
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1"),
+        WorkflowCatalog.from_graphs((graph,)),
+        provider=FakeACPProvider(create=True),
+        graph_runtime=running(),
+        approval_policy=ApprovalConfig(auto_approve=True),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        run_id = runs[0].run_id
+
+        def said() -> list[str]:
+            return [
+                message.text for _, message, _ in communications.posts
+                if isinstance(message, CommunicationsMessage)
+            ]
+
+        async def reach_the_plan() -> None:
+            async with asyncio.timeout(10):
+                while node not in (await runtime.snapshot(run_id)).auto_approve_nodes:
+                    await asyncio.sleep(0.01)
+                await runtime.steer(run_id, "carry on")
+                while not any("Approve the plan" in text for text in said()):
+                    await asyncio.sleep(0.01)
+
+        client.portal.call(reach_the_plan)
+        announced = said()
+
+    assert "*implementation* needs your approval: Approve the plan" in announced
+    assert not [text for text in announced if "Run git" in text]

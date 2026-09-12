@@ -1059,6 +1059,11 @@ def create_app(
         if event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
         elif event.kind is EventKind.APPROVAL_REQUESTED:
+            if event.payload.get("autoApproved"):
+                # The run answers this one itself, so there is nobody to ask.
+                # A single work order asks to run dozens of commands, and
+                # announcing each would bury the requests that are real.
+                return
             if event.payload.get("toolName") == "human_review":
                 text = "Review complete and ready for your decision."
             else:
