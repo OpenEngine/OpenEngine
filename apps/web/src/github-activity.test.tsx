@@ -26,9 +26,6 @@ function comment(fields: Partial<ApiGithubComment> = {}): ApiGithubComment {
     excerpt: "please address the review",
     status: "replied",
     detail: "",
-    runId: "run-1",
-    dispatchedRunId: "run-1",
-    runUrl: "/runs/run-1",
     startedRun: false,
     reply: "Forwarded to work order `run-1`.",
     seenAt: 1_757_000_000,
@@ -43,9 +40,6 @@ function activity(fields: Partial<ApiGithubActivity> = {}): ApiGithubActivity {
   return {
     repository: "acme/api",
     configured: true,
-    queued: 0,
-    working: false,
-    sessions: 0,
     comments: [],
     ...fields,
   };
@@ -86,16 +80,17 @@ it("tells the whole of what happened to a comment", async () => {
   // Received, picked up, forwarded, replied: the steps, in the order they
   // happened, each with the time it happened at.
   const steps = within(row).getByText(/Received/).textContent ?? "";
-  expect(steps).toMatch(/Received .* · Picked up .* · Forwarded to run-1 .* · Replied /);
+  expect(steps).toMatch(
+    /Received .* · Picked up .* · Steered this WorkOrder .* · Replied /,
+  );
   expect(row.textContent).toContain("Forwarded to work order `run-1`.");
   expect(within(row).getByRole("link", { name: /View comment/ })).toHaveAttribute(
     "href",
     "https://github.com/acme/api/pull/7#issuecomment-1",
   );
-  expect(within(row).getByRole("link", { name: /Open WorkOrder run-1/ })).toHaveAttribute(
-    "href",
-    "/runs/run-1",
-  );
+  // The only link out is to the comment. Every row on this page belongs to the
+  // WorkOrder the page is about, so a link to it would go nowhere.
+  expect(within(row).queryByRole("link", { name: /WorkOrder/ })).toBeNull();
 });
 
 it("asks only for the WorkOrder it was given", async () => {
@@ -123,8 +118,6 @@ it("says why a comment was ignored rather than leaving it out", async () => {
             status: "ignored",
             detail: "stranger cannot write to acme/api",
             reply: "",
-            dispatchedRunId: "",
-            runUrl: "",
             dispatchedAt: 0,
             repliedAt: 0,
           }),
@@ -137,10 +130,8 @@ it("says why a comment was ignored rather than leaving it out", async () => {
   const row = await screen.findByRole("listitem");
   expect(within(row).getByText("Ignored")).toBeInTheDocument();
   expect(row.textContent).toContain("stranger cannot write to acme/api");
-  // Nothing was forwarded, so there is no WorkOrder to offer and no step
-  // claiming one was reached.
-  expect(within(row).queryByRole("link", { name: /Open WorkOrder/ })).toBeNull();
-  expect(within(row).getByText(/Received/).textContent).not.toContain("Forwarded");
+  // Nothing was forwarded, so no step claims a WorkOrder was reached.
+  expect(within(row).getByText(/Received/).textContent).not.toContain("WorkOrder");
 });
 
 it("distinguishes a comment that started work from one that steered it", async () => {
@@ -149,8 +140,8 @@ it("distinguishes a comment that started work from one that steered it", async (
 
   const row = await screen.findByRole("listitem");
   const steps = within(row).getByText(/Received/).textContent ?? "";
-  expect(steps).toContain("Started run-1");
-  expect(steps).not.toContain("Forwarded to");
+  expect(steps).toContain("Started this WorkOrder");
+  expect(steps).not.toContain("Steered");
 });
 
 it("will not put a comment's own URL in an href unless it is one", async () => {
@@ -163,42 +154,33 @@ it("will not put a comment's own URL in an href unless it is one", async () => {
 
   const row = await screen.findByRole("listitem");
   expect(within(row).queryByRole("link", { name: /View comment/ })).toBeNull();
-  expect(
-    within(row).getByRole("link", { name: /Open WorkOrder run-1/ }),
-  ).toHaveAttribute("href", "/runs/run-1");
+  // The row survives without its link rather than vanishing with it.
+  expect(row.textContent).toContain("please address the review");
 });
 
-it("falls back to the WorkOrder path when its URL is not a link", async () => {
-  server(async () =>
-    json(activity({ comments: [comment({ runUrl: "javascript:alert(2)" })] })),
-  );
-  render(<Panel />);
-
-  const row = await screen.findByRole("listitem");
-  expect(
-    within(row).getByRole("link", { name: /Open WorkOrder run-1/ }),
-  ).toHaveAttribute("href", "/runs/run-1");
-});
-
-it("says what the concierge is doing right now", async () => {
+it("counts only this WorkOrder's comments as in flight", async () => {
+  // Never the engine's queue depth or whether the concierge is mid-turn:
+  // those describe whichever comment is in flight, rarely one of these.
   server(async () =>
     json(
       activity({
-        queued: 2,
-        working: true,
-        sessions: 3,
-        comments: [comment({ status: "working", reply: "", repliedAt: 0, dispatchedAt: 0 })],
+        comments: [
+          comment({ status: "working", reply: "", repliedAt: 0, dispatchedAt: 0 }),
+          comment({ commentId: "2", status: "replied" }),
+        ],
       }),
     ),
   );
   render(<Panel />);
 
-  expect(await screen.findByText("Answering a comment")).toBeInTheDocument();
-  expect(screen.getByText("2 queued")).toBeInTheDocument();
-  expect(screen.getByText("3 open sessions")).toBeInTheDocument();
-  expect(
-    screen.getByText("1 comment still moving through the engine."),
-  ).toBeInTheDocument();
+  expect(await screen.findByText("1 still moving")).toBeInTheDocument();
+});
+
+it("says nothing is moving when every comment has settled", async () => {
+  server(async () => json(activity({ comments: [comment()] })));
+  render(<Panel />);
+
+  expect(await screen.findByText("Idle")).toBeInTheDocument();
 });
 
 it("says a webhook has delivered nothing yet rather than looking broken", async () => {

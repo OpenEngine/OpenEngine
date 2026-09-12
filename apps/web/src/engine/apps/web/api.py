@@ -968,6 +968,8 @@ class GithubProvenance(Protocol):
 
     async def run_for_pull_request(self, repository: str, number: int) -> RunId | None: ...
 
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None: ...
+
     async def claim_pull_request(
         self, record: PullRequestRecord, *, replacing: RunId | None = None
     ) -> RunId: ...
@@ -2648,6 +2650,20 @@ def create_app(
         except Exception:
             log.exception("could not cancel unclaimed work order %s", run_id)
 
+    async def github_pull_request_for_run(run_id: str) -> tuple[str, int] | None:
+        """Which pull request this work order opened, if it opened one.
+
+        The same claim `github_run_for_pull_request` reads, asked from the run
+        instead: a page showing one work order's comments wants its pull
+        request once, not the owner of every pull request somebody has
+        commented on.
+        """
+        store = getattr(surface.runtime, "store", None)
+        read = getattr(store, "pull_request_for_run", None)
+        if read is None:
+            return None
+        return await read(RunId(run_id))
+
     async def github_steer_workorder(run_id: RunId, prompt: str) -> Continuation:
         """Deliver feedback to the work order that holds this pull request."""
         runtime = surface.runtime
@@ -2675,9 +2691,7 @@ def create_app(
         except Exception as failure:
             github_activity.dispatch_failed(str(failure) or type(failure).__name__)
             raise
-        github_activity.dispatched(
-            reached.run_id, reached.url, started_run=reached.started,
-        )
+        github_activity.dispatched(reached.run_id, started_run=reached.started)
         return reached
 
     async def _github_reach_workorder(origin: RunOrigin, prompt: str) -> Continuation:
@@ -2825,37 +2839,24 @@ def create_app(
         including comments about work that is none of this WorkOrder's
         business -- off the API entirely.
 
-        The WorkOrder each comment belongs to is resolved here rather than
-        remembered with the comment: a pull request's owner is written down
-        when it is opened, which can be after a comment on it was recorded, so
-        joining at read time is what lets a row reach the right page at all.
+        Which comments those are is resolved here rather than remembered with
+        each one: a pull request's owner is written down when it is opened,
+        which can be after a comment on it was recorded, so joining at read
+        time is what lets a row reach the right page at all. Asked from this
+        run -- one seek, whatever the log holds -- rather than by asking who
+        owns each remembered pull request and discarding every answer naming
+        somebody else.
         """
-        entries = github_activity.recent()
-        owners: dict[tuple[str, int], str] = {}
-        for entry in entries:
-            # Only for a comment nothing was forwarded for. A dispatched row
-            # already names the work order its feedback reached and prefers
-            # it, so asking would be a database seek to build an answer the
-            # wire shape discards -- once per row, on every poll, on the loop
-            # the webhook is answered from.
-            if entry.run_id:
-                continue
-            pull_request = (entry.repository.lower(), entry.number)
-            if pull_request not in owners:
-                owner = await github_run_for_pull_request(*pull_request)
-                owners[pull_request] = str(owner) if owner is not None else ""
+        run_id = request.path_params["run_id"]
         return JSONResponse(activity_json(
-            entries,
-            owners=owners,
+            github_activity.recent(),
+            run_id=run_id,
+            pull_request=await github_pull_request_for_run(run_id),
             repository=github_repository,
             # Both halves, because either one missing is a webhook that will
             # never deliver anything here -- and a panel that stayed empty
             # without saying so is the confusion this is meant to end.
             configured=bool(github_repository and github_webhook_secret()),
-            queued=github_ingress.queued,
-            working=github_concierge.busy,
-            sessions=github_concierge.sessions,
-            run_id=request.path_params["run_id"],
         ))
 
     def _mentioned_workflow() -> GraphWorkflow | None:

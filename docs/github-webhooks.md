@@ -120,14 +120,22 @@ this comment or was already in flight -- and the fixed announcement posted back
 to the pull request, with a link to the comment itself at one end and to the
 WorkOrder at the other. A comment Engine decided not to act on says so and why
 -- "not a pull request", or an author without write access -- which is the
-distinction a delivery log cannot draw. Beside them, the queue depth and
-whether the concierge is answering a comment right now.
+distinction a delivery log cannot draw. Beside them, how many of *these*
+comments are still moving -- read off the rows themselves, not off the one
+ingress queue or the one concierge, whose depth and busy flag describe
+whichever comment is in flight and rarely one of this WorkOrder's.
 
 A comment reaches a WorkOrder's page by the WorkOrder its feedback was
-forwarded to, falling back to whichever WorkOrder opened the pull request it
-was left on. That fallback is what puts an ignored comment -- which forwarded
-nothing to be named by -- in front of the right reader. A comment on a pull
-request no WorkOrder opened has no page, and is not shown.
+forwarded to, falling back to the pull request that WorkOrder opened. That
+fallback is what puts an ignored comment -- which forwarded nothing to be named
+by -- in front of the right reader. A comment on a pull request no WorkOrder
+opened has no page, and is not shown. The pull request is asked for once, from
+the WorkOrder, rather than asking who owns each remembered comment's pull
+request and discarding every answer that named somebody else.
+
+No row names its WorkOrder or links to it: every row on the page belongs to the
+WorkOrder the page is about, so it says whether the comment reached it, and
+whether it started it or steered it, instead.
 
 The record is in memory and bounded, so a restart forgets it. That is
 deliberate: it is a window on what is happening, and GitHub's delivery log and

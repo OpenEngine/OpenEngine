@@ -201,16 +201,6 @@ class GithubConcierge:
     def has_session(self, origin: RunOrigin) -> bool:
         return self._key(origin) in self._threads
 
-    @property
-    def sessions(self) -> int:
-        """How many pull-request conversations are held open right now."""
-        return len(self._threads)
-
-    @property
-    def busy(self) -> bool:
-        """Whether a turn is running. Turns are serialized, so this is one."""
-        return self._lock.locked()
-
     async def _forget(self, key: tuple[str, str, str]) -> None:
         item = self._threads.pop(key, None)
         if item is not None:

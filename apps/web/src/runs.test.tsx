@@ -68,14 +68,7 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
 
 /** A deployment whose GitHub webhook has delivered nothing, which is every
  *  WorkOrder on this page: the panel that reads it draws nothing at all. */
-const noComments = {
-  repository: "",
-  configured: false,
-  queued: 0,
-  working: false,
-  sessions: 0,
-  comments: [],
-};
+const noComments = { repository: "", configured: false, comments: [] };
 
 function json(value: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(value), {

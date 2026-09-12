@@ -56,6 +56,11 @@ def _graph_runtime(
     async def run_for_pull_request(asked_repository, number):
         return claims.get((asked_repository, number))
 
+    async def pull_request_for_run(asked):
+        # The same claims read the other way round, as the real store reads
+        # them: a page gathering one work order's comments holds the run.
+        return next((pr for pr, held in claims.items() if held == asked), None)
+
     async def claim_pull_request(record, *, replacing=None):
         # Conditional, as the real store's is: a pull request is taken on when
         # it is free or still held by the run the caller saw stop, and anyone
@@ -89,6 +94,7 @@ def _graph_runtime(
     runtime = MagicMock()
     runtime.store = MagicMock(
         run_for_pull_request=AsyncMock(side_effect=run_for_pull_request),
+        pull_request_for_run=AsyncMock(side_effect=pull_request_for_run),
         claim_pull_request=AsyncMock(side_effect=claim_pull_request),
     )
     runtime.snapshot = AsyncMock(side_effect=snapshot)

@@ -78,9 +78,10 @@ function steps(comment: ApiGithubComment): string[] {
   if (comment.startedAt) told.push(`Picked up ${at(comment.startedAt)}`);
   if (comment.dispatchedAt) {
     // A comment that created the work it asks about reads very differently
-    // from one that nudged work already running, so the step says which.
-    const verb = comment.startedRun ? "Started" : "Forwarded to";
-    told.push(`${verb} ${comment.dispatchedRunId} ${at(comment.dispatchedAt)}`);
+    // from one that nudged work already running, so the step says which. The
+    // WorkOrder is not named: this is its page.
+    const verb = comment.startedRun ? "Started this WorkOrder" : "Steered this WorkOrder";
+    told.push(`${verb} ${at(comment.dispatchedAt)}`);
   }
   if (comment.repliedAt) told.push(`Replied ${at(comment.repliedAt)}`);
   return told;
@@ -114,19 +115,6 @@ function CommentRow({ comment }: { comment: ApiGithubComment }) {
           it is exactly what the pull request was told. */}
       {comment.reply && <p className="micro gh-comment-reply">Posted back: {comment.reply}</p>}
       {comment.detail && <p className="micro gh-comment-detail">{comment.detail}</p>}
-      {comment.dispatchedRunId && (
-        <p className="micro">
-          <a
-            href={
-              linkable(comment.runUrl)
-                ? comment.runUrl
-                : `/runs/${encodeURIComponent(comment.dispatchedRunId)}`
-            }
-          >
-            Open WorkOrder {comment.dispatchedRunId}
-          </a>
-        </p>
-      )}
     </li>
   );
 }
@@ -191,6 +179,7 @@ export function GithubActivityPanel({ activity, error, visible }: RunGithubComme
   if (!visible || !activity) return null;
 
   const live = activity.comments.filter((comment) => LIVE.has(comment.status)).length;
+
   return (
     <section
       aria-label="GitHub comment activity"
@@ -202,11 +191,13 @@ export function GithubActivityPanel({ activity, error, visible }: RunGithubComme
           <p className="eyebrow">GitHub comments</p>
           <h2>{activity.repository || "Comment activity"}</h2>
         </div>
+        {/* Read off this WorkOrder's own rows. The engine's queue depth and
+            whether the concierge is mid-turn are process-wide facts about
+            whichever comment is in flight -- rarely one of these -- so a
+            panel about one pull request has no business reporting them. */}
         <div className="gh-activity-figures">
-          <span className="micro">{activity.queued} queued</span>
-          <span className="micro">{activity.sessions} open sessions</span>
-          <span className="chip" data-tone={activity.working ? "live" : undefined}>
-            {activity.working ? "Answering a comment" : "Idle"}
+          <span className="chip" data-tone={live > 0 ? "live" : undefined}>
+            {live > 0 ? `${live} still moving` : "Idle"}
           </span>
         </div>
       </div>
@@ -221,11 +212,6 @@ export function GithubActivityPanel({ activity, error, visible }: RunGithubComme
             <CommentRow comment={comment} key={`${comment.event}:${comment.commentId}`} />
           ))}
         </ul>
-      )}
-      {live > 0 && (
-        <p className="micro">
-          {live} comment{live === 1 ? "" : "s"} still moving through the engine.
-        </p>
       )}
     </section>
   );

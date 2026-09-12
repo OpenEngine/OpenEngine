@@ -77,8 +77,9 @@ class CommentActivity:
     detail: str = ""
     #: The work order this comment's feedback reached, as the concierge
     #: reported it -- not the one that happens to own the pull request today.
+    #: Kept to attribute the row, never sent: the page it reaches is that work
+    #: order's own.
     run_id: str = ""
-    run_url: str = ""
     #: Whether that work order was started for this comment rather than
     #: already in flight. A comment that created the work it is asking about
     #: reads very differently from one that nudged work already running.
@@ -139,7 +140,6 @@ class GithubActivityLog:
             excerpt=_excerpt(comment.body),
             status=QUEUED,
             run_id="" if earlier is None else earlier.run_id,
-            run_url="" if earlier is None else earlier.run_url,
             started_run=False if earlier is None else earlier.started_run,
             dispatched_at=0.0 if earlier is None else earlier.dispatched_at,
             seen_at=self._now(),
@@ -162,10 +162,8 @@ class GithubActivityLog:
             self._current = key
         self._update(status=WORKING, started_at=self._now())
 
-    def dispatched(
-        self, run_id: str, run_url: str = "", *, started_run: bool = False
-    ) -> None:
-        self._update(status=DISPATCHED, run_id=run_id, run_url=run_url,
+    def dispatched(self, run_id: str, *, started_run: bool = False) -> None:
+        self._update(status=DISPATCHED, run_id=run_id,
                      started_run=started_run, dispatched_at=self._now())
 
     def replied(self, text: str) -> None:
@@ -224,7 +222,15 @@ class GithubActivityLog:
         return tuple(reversed(self._entries.values()))
 
 
-def _comment_json(entry: CommentActivity, run_id: str) -> dict[str, object]:
+def _comment_json(entry: CommentActivity) -> dict[str, object]:
+    """One row, as the panel reads it.
+
+    The work order is not named. Every row on the page belongs to the work
+    order the page is about, so naming it would be the row repeating the
+    heading -- and a link to it would be a link to where the reader already
+    is. What the row says instead is whether the comment reached that work
+    order at all, and whether it started it or steered it.
+    """
     return {
         "commentId": entry.comment_id,
         "event": entry.event,
@@ -235,12 +241,6 @@ def _comment_json(entry: CommentActivity, run_id: str) -> dict[str, object]:
         "excerpt": entry.excerpt,
         "status": entry.status,
         "detail": entry.detail,
-        # Which work order the comment belongs to: the one its feedback
-        # reached, or -- for a comment ignored or still in flight -- whichever
-        # one opened the pull request.
-        "runId": entry.run_id or run_id,
-        "dispatchedRunId": entry.run_id,
-        "runUrl": entry.run_url,
         "startedRun": entry.started_run,
         "reply": entry.reply,
         "seenAt": entry.seen_at,
@@ -253,39 +253,42 @@ def _comment_json(entry: CommentActivity, run_id: str) -> dict[str, object]:
 def activity_json(
     entries: Sequence[CommentActivity],
     *,
-    owners: Mapping[tuple[str, int], str] | None = None,
+    run_id: str,
+    pull_request: tuple[str, int] | None = None,
     repository: str = "",
     configured: bool = False,
-    queued: int = 0,
-    working: bool = False,
-    sessions: int = 0,
-    run_id: str,
 ) -> dict[str, object]:
     """The wire shape one WorkOrder's comment panel reads.
 
-    ``run_id`` is required and always narrows, because a comment is only ever
-    read beside the work it steered. There is deliberately no way to ask this
-    for every comment at once: the process remembers comments about work that
-    is none of the asking WorkOrder's business, and that listing is not the
-    API's to hand out.
+    Narrowed to one work order, always, because a comment is only ever read
+    beside the work it steered. There is deliberately no way to ask this for
+    every comment at once: the process remembers comments about work that is
+    none of the asking WorkOrder's business, and that listing is not the API's
+    to hand out.
 
-    ``owners`` maps a pull request to the work order that opened it, resolved
-    by the caller rather than remembered here: ownership is written down when a
-    pull request is opened, which can happen after a comment on it was
-    recorded, and a row is more use attributed late than not at all.
+    A comment belongs here if its feedback reached this work order, or -- for
+    one that reached none, having been ignored, failed, or still being in
+    flight -- if it was left on ``pull_request``, the one this work order
+    opened. Passed in rather than looked up here, because ownership is written
+    down when a pull request is opened, which can happen after a comment on it
+    was recorded, and a row is more use attributed late than not at all.
+
+    Nothing process-wide is reported. A queue depth or a "busy" flag read off
+    the one ingress and the one concierge describes whatever comment is in
+    flight, which is rarely this work order's; the rows themselves say which
+    of *these* comments are still moving.
     """
-    owned = owners or {}
-    comments = (
-        _comment_json(entry, owned.get((entry.repository.lower(), entry.number), ""))
-        for entry in entries
-    )
+    owned = None if pull_request is None else (pull_request[0].lower(), pull_request[1])
+
+    def belongs(entry: CommentActivity) -> bool:
+        if entry.run_id:
+            return entry.run_id == run_id
+        return owned is not None and (entry.repository.lower(), entry.number) == owned
+
     return {
         "repository": repository,
         "configured": configured,
-        "queued": queued,
-        "working": working,
-        "sessions": sessions,
-        "comments": [c for c in comments if c["runId"] == run_id],
+        "comments": [_comment_json(e) for e in entries if belongs(e)],
     }
 
 

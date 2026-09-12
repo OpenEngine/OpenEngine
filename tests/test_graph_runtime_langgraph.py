@@ -578,6 +578,13 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
             store = SqliteGraphRuntimeStore(path)
         assert await store.run_for_pull_request("acme/api", 42) == RunId("run-1")
         assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
+        # The same claim read from the run, which is how a page asks: one
+        # question, instead of asking who owns each pull request in turn and
+        # keeping only the answers that named this run.
+        assert await store.pull_request_for_run(RunId("run-1")) == ("acme/api", 42)
+        assert await store.pull_request_for_run(RunId("run-2")) == ("acme/web", 7)
+        # A run that opened nothing, which is most of them.
+        assert await store.pull_request_for_run(RunId("run-9")) is None
         # The repository is part of the question: two forges number their pull
         # requests from counters of their own.
         assert await store.run_for_pull_request("acme/web", 42) is None
@@ -599,6 +606,10 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
         ))
         assert await store.run_for_pull_request("acme/api", 42) == RunId("run-3")
         assert await store.run_for_pull_request("acme/web", 7) == RunId("run-2")
+        # Read from the run it moves the same way: the run that lost the pull
+        # request no longer holds one.
+        assert await store.pull_request_for_run(RunId("run-3")) == ("acme/api", 42)
+        assert await store.pull_request_for_run(RunId("run-1")) is None
         # Claiming is the conditional form, for a caller that needs one run per
         # pull request: a held one stays with its holder, and the claimant is
         # told so rather than displacing it.

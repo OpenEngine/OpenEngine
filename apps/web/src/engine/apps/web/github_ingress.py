@@ -288,11 +288,6 @@ class GithubIngress:
                     self._activity.finished(comment)
                 self._queue.task_done()
 
-    @property
-    def queued(self) -> int:
-        """How many comments are waiting for the one worker behind this route."""
-        return self._queue.qsize()
-
     async def drain(self) -> None:
         await self._queue.join()
 

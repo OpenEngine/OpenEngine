@@ -737,7 +737,10 @@ export function disconnectSlack(): Promise<void> {
  *
  *  `status` is where the comment is on the one path through the engine:
  *  `queued` and `working` are in flight, and `dispatched`, `replied`,
- *  `ignored`, `failed` and `handled` are where a comment comes to rest. */
+ *  `ignored`, `failed` and `handled` are where a comment comes to rest.
+ *
+ *  No WorkOrder is named. Every comment here belongs to the WorkOrder that
+ *  was asked for, so naming it again would be the row repeating the page. */
 export type ApiGithubComment = {
   commentId: string;
   event: string;
@@ -749,14 +752,8 @@ export type ApiGithubComment = {
   status: string;
   /** Why it was ignored, or how the turn failed. Empty otherwise. */
   detail: string;
-  /** The WorkOrder this comment belongs to: the one its feedback reached, or
-   *  the one that opened the pull request it was left on. */
-  runId: string;
-  /** The WorkOrder its feedback actually reached, empty if none did. */
-  dispatchedRunId: string;
-  runUrl: string;
-  /** Whether that WorkOrder was started for this comment rather than already
-   *  in flight when it arrived. */
+  /** Whether this comment started the WorkOrder rather than steering one that
+   *  was already in flight when it arrived. */
   startedRun: boolean;
   reply: string;
   seenAt: number;
@@ -770,9 +767,6 @@ export type ApiGithubActivity = {
   /** Whether a webhook could deliver anything here at all. False means the
    *  panel is empty because nothing is wired, not because nobody commented. */
   configured: boolean;
-  queued: number;
-  working: boolean;
-  sessions: number;
   comments: ApiGithubComment[];
 };
 

@@ -59,13 +59,11 @@ def test_a_comment_that_started_the_work_it_asks_about_says_so() -> None:
     comment = _comment()
     log.seen(comment)
     log.started(comment)
-    log.dispatched("fresh", "http://localhost/runs/fresh", started_run=True)
+    log.dispatched("fresh", started_run=True)
 
     (entry,) = log.recent()
     assert (entry.run_id, entry.started_run) == ("fresh", True)
-    (row,) = activity_json(
-        log.recent(), owners={("acme/api", 7): "fresh"}, run_id="fresh",
-    )["comments"]
+    (row,) = activity_json(log.recent(), run_id="fresh")["comments"]
     assert row["startedRun"] is True
 
 
@@ -74,13 +72,13 @@ def test_a_comment_keeps_one_row_through_the_whole_turn() -> None:
     comment = _comment()
     log.seen(comment)
     log.started(comment)
-    log.dispatched("existing", "http://localhost/runs/existing")
+    log.dispatched("existing")
     log.replied("Forwarded to work order `existing`.")
     log.finished(comment)
 
     (entry,) = log.recent()
     assert entry.status == "replied"
-    assert (entry.run_id, entry.run_url) == ("existing", "http://localhost/runs/existing")
+    assert entry.run_id == "existing"
     # Steered, not started: this comment did not create the work order.
     assert entry.started_run is False
     assert entry.reply == "Forwarded to work order `existing`."
@@ -150,7 +148,7 @@ def test_updates_belong_to_the_comment_being_worked_on() -> None:
     log.ignored("not a pull request")
     log.seen(second)
     log.started(second)
-    log.dispatched("existing", "")
+    log.dispatched("existing")
     log.replied("Forwarded to work order `existing`.")
 
     newest, oldest = log.recent()
@@ -181,7 +179,7 @@ def test_a_redelivered_comment_keeps_the_work_order_it_already_reached() -> None
     comment = _comment()
     log.seen(comment)
     log.started(comment)
-    log.dispatched("existing", "http://localhost/runs/existing", started_run=True)
+    log.dispatched("existing", started_run=True)
     log.failed("the reply could not be posted")
 
     log.seen(comment)
@@ -232,13 +230,16 @@ def test_a_comment_is_attributed_to_whichever_run_opened_its_pull_request() -> N
     log.ignored("someone cannot write to acme/api")
 
     body = activity_json(
-        log.recent(), owners={("acme/api", 7): "existing"}, run_id="existing",
+        log.recent(), run_id="existing", pull_request=("acme/api", 7),
     )
     (row,) = body["comments"]
-    assert (row["runId"], row["dispatchedRunId"]) == ("existing", "")
-    # Without an owner there is nothing to attribute the comment to, so it
-    # belongs to no WorkOrder's page rather than to all of them.
-    assert activity_json(log.recent(), owners={}, run_id="existing")["comments"] == []
+    assert row["status"] == "ignored"
+    # A row never names the work order whose page it is on, nor links to it.
+    assert "runId" not in row and "dispatchedRunId" not in row
+    assert "runUrl" not in row
+    # And a work order that opened no pull request has nothing to attribute
+    # the comment to, so it belongs to no page rather than to all of them.
+    assert activity_json(log.recent(), run_id="existing")["comments"] == []
 
 
 def test_a_comment_is_never_shown_beside_work_it_has_nothing_to_do_with() -> None:
@@ -246,14 +247,15 @@ def test_a_comment_is_never_shown_beside_work_it_has_nothing_to_do_with() -> Non
     comment = _comment()
     log.seen(comment)
     log.started(comment)
-    log.dispatched("existing", "")
+    log.dispatched("existing")
 
-    owners = {("acme/api", 7): "existing"}
-    assert activity_json(log.recent(), owners=owners, run_id="other")["comments"] == []
+    assert activity_json(
+        log.recent(), run_id="other", pull_request=("acme/api", 7),
+    )["comments"] == []
 
 
 def test_the_panel_is_told_a_webhook_will_never_deliver_anything() -> None:
-    empty = activity_json((), repository="", configured=False, run_id="existing")
+    empty = activity_json((), run_id="existing", repository="", configured=False)
     assert (empty["configured"], empty["comments"]) == (False, [])
 
 
@@ -289,12 +291,13 @@ def test_the_route_reports_a_comment_all_the_way_to_its_reply(tmp_path) -> None:
 
         feed = client.get("/api/runs/existing/github-comments").json()
         assert feed["configured"] and feed["repository"] == "acme/api"
-        # Nothing is left in flight once the queue is drained.
-        assert (feed["queued"], feed["working"]) == (0, False)
+        # Nothing process-wide is reported: a queue depth read off the one
+        # ingress describes whichever comment is in flight, rarely this one.
+        assert set(feed) == {"repository", "configured", "comments"}
         (row,) = feed["comments"]
         assert row["status"] == "replied"
         assert (row["author"], row["number"]) == ("someone", 7)
-        assert row["dispatchedRunId"] == "existing"
+        assert row["startedRun"] is False
         assert row["reply"].startswith("Forwarded to work order `existing`.")
         assert row["url"] == "https://github.com/acme/api/issues/7#c"
         assert row["excerpt"] == "new workorder please"
@@ -305,6 +308,51 @@ def test_the_route_reports_a_comment_all_the_way_to_its_reply(tmp_path) -> None:
         assert client.get("/api/github/activity").status_code == 404
 
 
+def test_the_route_shows_an_ignored_comment_on_the_page_that_opened_the_pr(
+    tmp_path,
+) -> None:
+    """A comment that forwarded nothing still reaches the right reader.
+
+    Nothing was dispatched, so the row names no work order of its own. It gets
+    to this page because the page's work order opened the pull request it was
+    left on -- asked of the store once, from the run.
+    """
+    from starlette.testclient import TestClient
+    from test_github_concierge import _graph_runtime
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    _runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    # The commenter cannot write to the repository, so Engine does not act.
+    source_control.can_write_repository = AsyncMock(return_value=False)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "please fix the tests")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+        (row,) = client.get("/api/runs/existing/github-comments").json()["comments"]
+        assert row["status"] == "ignored"
+        assert row["detail"] == "someone cannot write to acme/api"
+        assert row["excerpt"] == "please fix the tests"
+        # And only there: another work order opened a different pull request,
+        # or none, so this comment is none of its business.
+        assert client.get("/api/runs/other/github-comments").json()["comments"] == []
+
+
 def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
     """A repository with no webhook secret is a panel that will stay empty."""
     from starlette.testclient import TestClient
@@ -312,5 +360,4 @@ def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
     app, _capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig())
     with TestClient(app) as client:
         feed = client.get("/api/runs/existing/github-comments").json()
-    assert feed == {"repository": "acme/api", "configured": False, "queued": 0,
-                    "working": False, "sessions": 0, "comments": []}
+    assert feed == {"repository": "acme/api", "configured": False, "comments": []}

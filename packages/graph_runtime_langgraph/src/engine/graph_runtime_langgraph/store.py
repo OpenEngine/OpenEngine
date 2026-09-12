@@ -263,6 +263,18 @@ class GraphRuntimeStore(EventStore, Protocol):
         """
         ...
 
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None:
+        """Which pull request this run opened.
+
+        The same claim read the other way round, for a caller that holds a run
+        and wants its pull request -- a page gathering what was said about this
+        work order. Asked once, rather than asking who owns each of a list of
+        pull requests and discarding every answer that named somebody else.
+
+        ``None`` when this run opened nothing, which is most runs.
+        """
+        ...
+
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         """Settle every open request this run raised, without deciding one.
 
@@ -369,6 +381,12 @@ class InMemoryGraphRuntimeStore:
     async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
         opened = self._pull_requests.get((repository, number))
         return None if opened is None else opened.run_id
+
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None:
+        for (repository, number), record in self._pull_requests.items():
+            if record.run_id == run_id:
+                return (repository, number)
+        return None
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         for approval_id, record in tuple(self._approvals.items()):
@@ -604,6 +622,16 @@ class SqliteGraphRuntimeStore:
             (repository, number),
         ).fetchone()
         return None if row is None else RunId(row["run_id"])
+
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None:
+        # `github_pull_requests_by_run` is what keeps this a seek rather than a
+        # walk of every pull request the deployment has ever opened.
+        row = self._connection.execute(
+            "SELECT repository, number FROM github_pull_requests "
+            "WHERE run_id = ? LIMIT 1",
+            (str(run_id),),
+        ).fetchone()
+        return None if row is None else (row["repository"], int(row["number"]))
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         self._connection.execute(
