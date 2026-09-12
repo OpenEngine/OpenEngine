@@ -460,6 +460,25 @@ describe("RunsPage", () => {
     expect(container.querySelectorAll(".cards .card")).toHaveLength(1);
     expect(screen.getByText("1 of 2 shown")).toBeInTheDocument();
   });
+
+  it("narrows the list by title and says so when nothing matches", async () => {
+    const runs = [run(), run({ runId: "run-2", name: "Second run", phase: "failed" })];
+    const user = userEvent.setup();
+    const { container } = render(<RunsPage runs={runs} error="" />);
+
+    const search = screen.getByRole("searchbox", { name: "Filter WorkOrders by title" });
+    await user.type(search, "second");
+    expect(container.querySelectorAll(".cards .card")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Second run" })).toBeVisible();
+    expect(screen.getByText("1 of 2 shown")).toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "third");
+    expect(
+      screen.getByRole("heading", { name: "No WorkOrders match this filter." }),
+    ).toBeVisible();
+    expect(screen.getByText("0 of 2 shown")).toBeInTheDocument();
+  });
 });
 
 describe("RunDetailPage", () => {

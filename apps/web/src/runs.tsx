@@ -156,6 +156,10 @@ export function useRuns() {
 
 export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error: string }) {
   const [filter, setFilter] = useState<string>("");
+  // What the reader typed to narrow the list by name. Held apart from the
+  // phase buttons so the two narrow together: a title is how a WorkOrder is
+  // recognized, and a long list is quicker to search than to read.
+  const [title, setTitle] = useState("");
 
   // Built from the phases actually present rather than from a fixed list, so a
   // filter is never offered that would empty the page, and a phase the workflow
@@ -165,7 +169,12 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
     for (const run of runs) if (!seen.includes(run.phase)) seen.push(run.phase);
     return seen;
   }, [runs]);
-  const shown = filter ? runs.filter((run) => run.phase === filter) : runs;
+  const search = title.trim().toLowerCase();
+  const shown = runs.filter(
+    (run) =>
+      (!filter || run.phase === filter) &&
+      (!search || run.name.toLowerCase().includes(search)),
+  );
 
   const awaiting = runs.filter((run) => run.phase === "awaiting_human_review").length;
   const failed = runs.filter((run) => run.phase === "failed").length;
@@ -203,6 +212,14 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
               </button>
             ))}
           </div>
+          <input
+            aria-label="Filter WorkOrders by title"
+            className="toolbar-search"
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Filter by title"
+            type="search"
+            value={title}
+          />
           <div className="toolbar-end">
             <span className="micro">
               {shown.length} of {runs.length} shown
@@ -217,6 +234,13 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
         <p className="notice notice-block">
           Could not load WorkOrders: {error}
         </p>
+      ) : runs.length > 0 && shown.length === 0 ? (
+        // Unlike the phase buttons -- built from the phases on screen, so none
+        // of them can empty the page -- a typed title can match nothing, and
+        // that reads as a lost list without something saying otherwise.
+        <div className="empty">
+          <h2>No WorkOrders match this filter.</h2>
+        </div>
       ) : runs.length ? (
         <div className="cards">
           {shown.map((run) => {
