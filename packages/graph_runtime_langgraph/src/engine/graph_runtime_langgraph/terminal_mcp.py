@@ -38,6 +38,7 @@ class TerminalMcpServer:
     )
     source_control: SourceControl | None = None
     workspace_key: str = WORKSPACE_ID
+    workorder_search: bool = False
 
     @asynccontextmanager
     async def __call__(
@@ -69,6 +70,35 @@ class TerminalMcpServer:
             ),
             registry=TerminalResultRegistry(),
         )
+        if self.workorder_search:
+            async def search(query: str, limit: int) -> list[dict[str, str]]:
+                results: list[dict[str, str]] = []
+                needle = query.casefold()
+                # Literal matching: query never becomes SQL, regex, shell, or a prompt.
+                for record in reversed(await execution.runtime.store.runs()):
+                    if record.run_id == execution.run_id:
+                        continue
+                    snapshot = await execution.runtime.snapshot(record.run_id)
+                    if snapshot is None:
+                        continue
+                    fields = {
+                        key: value for key in ("name", "task", "implementation")
+                        if isinstance(value := snapshot.values.get(key), str)
+                    }
+                    if not any(needle in value.casefold() for value in fields.values()):
+                        continue
+                    result = {"run_id": str(record.run_id)}
+                    for key, value in fields.items():
+                        # Include the match even when it is deep in a long task.
+                        index = value.casefold().find(needle)
+                        start = max(0, index - 200)
+                        result[key] = value[start:start + 2000]
+                    results.append(result)
+                    if len(results) == limit:
+                        break
+                return results
+
+            broker.enable_workorder_search(search)
         served = tuple(
             name
             for name in self.repository_tools
