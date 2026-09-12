@@ -325,6 +325,10 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
             "code": -32603, "message": "You've hit your limit",
         }})
         return
+    if prompt_text == os.environ.get("STUB_ACP_CANCEL_PROMPT"):
+        say(session_id, os.environ.get("STUB_ACP_CANCEL_TEXT", ""))
+        respond(message_id, {"stopReason": "cancelled"})
+        return
     if os.environ.get("STUB_ACP_USE_MCP"):
         exercise_mcp(session_id, prompt_text)
         session = load(session_id)
