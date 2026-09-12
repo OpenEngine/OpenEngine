@@ -245,6 +245,16 @@ class GraphRuntimeStore(EventStore, Protocol):
         """
         ...
 
+    async def pull_requests(self, run_id: RunId) -> tuple[PullRequestRecord, ...]:
+        """Which pull requests this run is working on.
+
+        The reverse of `run_for_pull_request`, for a caller holding a run and
+        asking what it may act on -- a step reporting the pull request its
+        work is on, checked against what the run took on rather than taken on
+        the step's word.
+        """
+        ...
+
     async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
         """Which run opened this pull request.
 
@@ -365,6 +375,13 @@ class InMemoryGraphRuntimeStore:
             return held.run_id
         self._pull_requests[(record.repository, record.number)] = record
         return record.run_id
+
+    async def pull_requests(self, run_id: RunId) -> tuple[PullRequestRecord, ...]:
+        return tuple(
+            record
+            for record in self._pull_requests.values()
+            if record.run_id == run_id
+        )
 
     async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
         opened = self._pull_requests.get((repository, number))
@@ -595,6 +612,14 @@ class SqliteGraphRuntimeStore:
         assert held is not None  # just inserted, if it was not already there
         return held
 
+    async def pull_requests(self, run_id: RunId) -> tuple[PullRequestRecord, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM github_pull_requests WHERE run_id = ? "
+            "ORDER BY opened_at, repository, number",
+            (str(run_id),),
+        ).fetchall()
+        return tuple(_pull_request_from(row) for row in rows)
+
     async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
         # One row per pull request, found by its primary key, so this stays a
         # single seek however many runs the deployment has accumulated.
@@ -636,6 +661,17 @@ def _comment_from(row: sqlite3.Row) -> CommentRecord:
         pr_number=row["pr_number"],
         run_id=RunId(row["run_id"]),
         posted_at=row["posted_at"],
+        node_id=NodeId(row["node_id"]) if row["node_id"] else None,
+        url=row["url"] or "",
+    )
+
+
+def _pull_request_from(row: sqlite3.Row) -> PullRequestRecord:
+    return PullRequestRecord(
+        repository=row["repository"],
+        number=row["number"],
+        run_id=RunId(row["run_id"]),
+        opened_at=row["opened_at"],
         node_id=NodeId(row["node_id"]) if row["node_id"] else None,
         url=row["url"] or "",
     )

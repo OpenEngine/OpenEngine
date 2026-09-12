@@ -43,6 +43,7 @@ from engine.graph_runtime import EventLog, GraphId, NodeId, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     LangGraphDefinition,
     LangGraphRuntime,
+    PullRequestRecord,
     SqliteGraphRuntimeStore,
     TerminalMcpServer,
     answer_permission,
@@ -2289,3 +2290,90 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
     assert found[0].node_id == NodeId("reranker")
     assert found[0].url == "https://github.com/acme/api/pull/42#c123"
     assert found[0].posted_at
+
+
+@pytest.mark.parametrize(
+    "reported, accepted",
+    [
+        ("https://github.com/acme/api/pull/42", True),
+        ("https://github.com/acme/api/pull/41", False),
+    ],
+)
+def test_a_ci_fix_step_is_held_to_the_pull_request_the_run_owns(
+    tmp_path: Path, reported: str, accepted: bool
+) -> None:
+    """The retry pass opens nothing, so the store is what binds it.
+
+    Sent back to push to a pull request it was told about, the step has only
+    the prompt to recall the URL from -- and `state['pr_url']` is overwritten
+    with whatever it reports, which is what the reranker then comments on.
+    """
+
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    class Runtime:
+        def __init__(self, store: Any) -> None:
+            self.store = store
+            self.source_control = object()
+
+    class Execution:
+        def __init__(self, store: Any) -> None:
+            self.runtime = Runtime(store)
+            self.run_id = RunId("run-1")
+            self.execution_id = "task-2"
+            self.node_id = IMPLEMENTATION
+
+    async def refuse(_request: Any) -> ApprovalDecision:
+        raise AssertionError("completing a step is not approved through the broker")
+
+    async def scenario() -> dict[str, Any]:
+        store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        await store.remember_pull_request(
+            PullRequestRecord(
+                repository="acme/api",
+                number=42,
+                run_id=RunId("run-1"),
+                opened_at="2026-01-01T00:00:00+00:00",
+                node_id=IMPLEMENTATION,
+                url="https://github.com/acme/api/pull/42",
+            )
+        )
+        server = TerminalMcpServer(
+            step_id="implementation",
+            agent_id=AGENT,
+            required_outputs=("pr_url",),
+            repository_tools=(),
+        )
+        async with server(
+            {"workspaceId": "ws-graph-run"}, Execution(store), refuse  # type: ignore[arg-type]
+        ) as bound:
+            arguments = list(bound.config["args"])
+            answer = await _mcp_response(
+                arguments[arguments.index("--host") + 1],
+                int(arguments[arguments.index("--port") + 1]),
+                arguments[arguments.index("--token") + 1],
+                {
+                    "jsonrpc": "2.0",
+                    "id": "complete-1",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "complete_step",
+                        "arguments": {
+                            "outcome": "success",
+                            "summary": "Fixed the failing job.",
+                            "outputs": {"pr_url": reported},
+                        },
+                    },
+                },
+            )
+        store.close()
+        return answer
+
+    answer = asyncio.run(scenario())
+    result = answer["result"]
+    assert result.get("isError", False) is not accepted
+    if not accepted:
+        assert result["content"][0]["text"] == (
+            "pr_url must name the pull request this run is working on, "
+            f"https://github.com/acme/api/pull/42, not {reported}"
+        )
