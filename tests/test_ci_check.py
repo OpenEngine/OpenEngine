@@ -184,6 +184,12 @@ def test_missing_required_check_times_out(execution):
     [
         "https://github.com/acme/app/pull/12/x/victim/repo/pull/99",
         "https://github.com/acme/app/pull/12/pull/99",
+        # The number, spelled the ways that are a number to `str.isdigit` and
+        # not to CI: arabic-indic digits, a superscript `int` raises on, and
+        # leading zeros.
+        "https://github.com/acme/app/pull/\u0661\u0662",
+        "https://github.com/acme/app/pull/\u00b2",
+        "https://github.com/acme/app/pull/042",
     ],
 )
 def test_no_url_names_one_pull_request_to_the_guard_and_another_to_ci(
@@ -193,10 +199,11 @@ def test_no_url_names_one_pull_request_to_the_guard_and_another_to_ci(
 
     `complete_step` refuses a `pr_url` that is not the run's, and identifies it
     by the repository and number it reads off the front of the path. CI takes
-    the number off the back. Were the two to disagree the guard would be
-    approving one pull request while the run waited on, and reported the
-    verdict of, another -- so a path holding both is refused on both sides
-    rather than resolved differently on each.
+    the number off the back, and by a stricter spelling of what a number is.
+    Were the two to disagree the guard would be approving one pull request
+    while the run waited on, and reported the verdict of, another -- or the
+    guard would accept a URL CI then refuses outright, failing the run at the
+    gate. So every URL the two would read differently is refused by both.
     """
     from engine.runtime.terminal_mcp import _github_pull_request
 

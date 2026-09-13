@@ -103,3 +103,23 @@ def test_gitlab_replies_fail_without_posting_a_flat_comment() -> None:
     with pytest.raises(NotImplementedError, match="replies"):
         asyncio.run(source.add_comment("https://gitlab.com/group/project/-/merge_requests/7", "Reply", in_reply_to_id=123))
     transport.request.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "mr_url",
+    [
+        # `str.isdigit` is true of each, and `int` raises on the second.
+        "https://gitlab.com/group/project/-/merge_requests/١٢",
+        "https://gitlab.com/group/project/-/merge_requests/²",
+        "https://gitlab.com/group/project/-/merge_requests/042",
+    ],
+)
+def test_a_merge_request_number_is_spelled_one_way(mr_url: str) -> None:
+    """The same one spelling the GitHub adapter and the runtime hold to.
+
+    A `pr_url` travels between them, so a number one reads and another does
+    not is how a run's work ends up bound to a change request it never touched.
+    """
+    source = GitLabSourceControl("token", transport=AsyncMock())
+    with pytest.raises(ValueError, match="merge-request URL"):
+        asyncio.run(source.add_comment(mr_url, "Finding."))

@@ -894,6 +894,16 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         # names no one pull request and is refused rather than resolved.
         ("https://github.com/acme/app/pull/12/x/victim/repo/pull/99", None),
         ("https://github.com/acme/app/pull/12/pull/99", None),
+        # A number is spelled one way. Arabic-indic digits are a number to
+        # `str.isdigit` and not to CI, which would read this URL as no pull
+        # request at all while the guard read it as the owned #12.
+        ("https://github.com/acme/api/pull/\u0661\u0662", None),
+        # `int` raises on this one rather than answering, so letting it through
+        # leaves `complete_step` by way of an exception instead of a refusal.
+        ("https://github.com/acme/api/pull/\u00b2", None),
+        # Leading zeros split the two the same way.
+        ("https://github.com/acme/api/pull/042", None),
+        ("https://github.com/acme/api/pull/0", None),
     ],
 )
 def test_a_github_pull_request_is_read_off_the_review_url(

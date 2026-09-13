@@ -762,12 +762,19 @@ def _base_branch(base_ref: str) -> str:
 def _pull_request_parts(pr_url: str) -> tuple[str, str, str]:
     parsed = urlparse(pr_url)
     parts = parsed.path.strip("/").split("/")
+    # A number is spelled one way, in ASCII and without a leading zero. GitHub
+    # writes them that way and `str.isdigit` alone does not say so -- it is
+    # true of `١٢` and of `²` -- so a URL the rest of the engine reads as some
+    # other pull request, or as none, would otherwise be sent to the API here
+    # and come back a 404.
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
         or len(parts) != 4
         or parts[2] != "pull"
+        or not parts[3].isascii()
         or not parts[3].isdigit()
+        or parts[3].startswith("0")
     ):
         raise ValueError("pr_url must be a GitHub pull-request URL")
     return parts[0], parts[1], parts[3]

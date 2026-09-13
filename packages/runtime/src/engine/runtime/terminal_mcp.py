@@ -1128,6 +1128,21 @@ def _pull_request_identity(pr_url: str) -> tuple[str, int] | str:
     return _github_pull_request(pr_url) or pr_url.strip().rstrip("/")
 
 
+def _pull_request_number(segment: str) -> int | None:
+    """Read a change-request number the way every reader of one must.
+
+    `str.isdigit` is true of `١٢` and of `²`, and a leading zero is a number
+    here and not to `CICheck`'s `[1-9][0-9]*`, so each of those spellings is a
+    pull request to one parser and not to the other -- the same disagreement
+    two markers in one path caused, arrived at through the number instead.
+    `²` is worse than a disagreement: `int` raises on it, so a URL spelled that
+    way leaves by way of an exception rather than an answer either way.
+    """
+    if not segment.isascii() or not segment.isdigit() or segment.startswith("0"):
+        return None
+    return int(segment)
+
+
 def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
     """Identify a PR from the comment URL returned by the source control API.
 
@@ -1146,13 +1161,13 @@ def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
     if parsed.scheme not in ("https", "http") or not parsed.hostname:
         return None
     segments = parsed.path.strip("/").split("/")
+    number = _pull_request_number(segments[3]) if len(segments) >= 4 else None
     if (
-        len(segments) < 4
+        number is None
         or "-" in segments
         or "pull" in segments[4:]
         or not all(segments[:2])
         or segments[2] != "pull"
-        or not segments[3].isdigit()
     ):
         return None
     repository = f"{segments[0]}/{segments[1]}".lower()
@@ -1162,7 +1177,7 @@ def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
         host = f"{host}:{port}"
     if host != "github.com":
         repository = f"{host}/{repository}"
-    return repository, int(segments[3])
+    return repository, number
 
 
 async def _forward_call(

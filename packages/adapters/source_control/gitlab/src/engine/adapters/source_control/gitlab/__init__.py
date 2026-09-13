@@ -183,7 +183,9 @@ class GitLabSourceControl:
         if not parsed.hostname or marker not in path: raise ValueError("not a GitLab merge-request URL")
         project, tail = path.lstrip("/").split(marker,1)
         iid, separator, remainder = tail.partition("/")
-        if not project or not iid.isdigit() or separator or remainder:
+        # `isdigit` alone is true of `١٢` and of `²`, and `int` raises on the
+        # second, so the number is held to the one ASCII spelling GitLab writes.
+        if not project or not iid.isascii() or not iid.isdigit() or iid.startswith("0") or separator or remainder:
             raise ValueError("not a GitLab merge-request URL")
         return quote(project,safe=""),int(iid)
 

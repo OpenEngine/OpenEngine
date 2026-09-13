@@ -493,3 +493,32 @@ def test_authenticated_login_refuses_an_unusable_answer(monkeypatch, response):
     monkeypatch.setattr(source, "_api", AsyncMock(return_value=response))
     with pytest.raises(GitHubSourceControlError):
         asyncio.run(source.authenticated_login("https://github.com/acme/api"))
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        # `str.isdigit` is true of all three, so without an ASCII check these
+        # reach the API as a path GitHub has no pull request at, and `²`
+        # does not even survive being read as a number.
+        "https://github.com/acme/api/pull/١٢",
+        "https://github.com/acme/api/pull/²",
+        "https://github.com/acme/api/pull/042",
+    ],
+)
+def test_a_pull_request_number_is_spelled_one_way(
+    monkeypatch: pytest.MonkeyPatch, pr_url: str
+) -> None:
+    """Refused here, as it is by the runtime's guard and by the CI gate.
+
+    A number spelled any other way is read differently by each of the three,
+    which is how one pull request's work ends up bound to another's.
+    """
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock()
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment(pr_url, "Finding."))
+    api.assert_not_awaited()
