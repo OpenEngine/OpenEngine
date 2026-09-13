@@ -883,35 +883,53 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         ("https://GITHUB.COM/Acme/API/pull/42", ("acme/api", 42)),
         ("https://github.example.com:8443/acme/api/pull/42", ("github.example.com:8443/acme/api", 42)),
         ("/acme/api/pull/42", None),
-        # Another forge numbers its notes from its own counter, so it is left
-        # out rather than filed under a GitHub comment's name.
-        ("https://gitlab.com/acme/api/-/merge_requests/7", None),
+        # A repository, or an owner, named `pull`. `wei/pull` is a real and
+        # widely used one, and the marker that names the pull request is the
+        # one after it -- so this is the single pull request it looks like,
+        # and a reader that banned `pull` anywhere in the prefix would leave
+        # every run on such a repository unable to clear CI.
+        ("https://github.com/wei/pull/pull/123", ("wei/pull", 123)),
+        ("https://github.com/pull/repo/pull/7", ("pull/repo", 7)),
+        # Merge requests are read too, and namespaced by the host they live
+        # on: two forges number from counters of their own. Nesting is to any
+        # depth, because a GitLab project is.
+        ("https://gitlab.com/acme/api/-/merge_requests/7", ("gitlab.com/acme/api", 7)),
+        (
+            "https://gitlab.com/group/sub/project/-/merge_requests/5#note_9",
+            ("gitlab.com/group/sub/project", 5),
+        ),
         ("https://gitlab.example.com/x/y/pull/7/-/merge_requests/1#note_123", None),
         ("https://github.com/acme/api/issues/42", None),
         ("https://github.com/acme/api", None),
-        # Two pull requests in one path. Read from the front this is acme/app#12
-        # and read from the back -- which is how CI reads it -- it is #99, so it
-        # names no one pull request and is refused rather than resolved.
+        # Two change requests in one path. Read from the front this is
+        # acme/app#12 and read from the back it is #99, so it names no one of
+        # them and is refused rather than resolved differently by each reader.
         ("https://github.com/acme/app/pull/12/x/victim/repo/pull/99", None),
         ("https://github.com/acme/app/pull/12/pull/99", None),
-        # A number is spelled one way. Arabic-indic digits are a number to
-        # `str.isdigit` and not to CI, which would read this URL as no pull
-        # request at all while the guard read it as the owned #12.
+        ("https://gitlab.com/a/b/-/merge_requests/1/-/merge_requests/2", None),
+        # A number is spelled one way: `str.isdigit` is true of arabic-indic
+        # digits, `int` raises on `\u00b2` rather than answering, and a leading
+        # zero is a number to a reader matching digits and not to one matching
+        # `[1-9][0-9]*`.
         ("https://github.com/acme/api/pull/\u0661\u0662", None),
-        # `int` raises on this one rather than answering, so letting it through
-        # leaves `complete_step` by way of an exception instead of a refusal.
         ("https://github.com/acme/api/pull/\u00b2", None),
-        # Leading zeros split the two the same way.
         ("https://github.com/acme/api/pull/042", None),
         ("https://github.com/acme/api/pull/0", None),
     ],
 )
-def test_a_github_pull_request_is_read_off_the_review_url(
+def test_a_change_request_is_read_off_its_url_one_way(
     pr_url: str, expected: tuple[str, int] | None
 ) -> None:
-    from engine.runtime.terminal_mcp import _github_pull_request
+    """One reading, because every caller of it has to name the same one.
 
-    assert _github_pull_request(pr_url) == expected
+    The guard deciding whether the run may report a URL, the gate waiting on
+    its CI and the store writing down whose work it is all read this string.
+    Two readings is how a run came to wait on #99 while reporting #12.
+    """
+    from engine.runtime.change_requests import change_request
+
+    found = change_request(pr_url)
+    assert (None if found is None else (found.project, found.number)) == expected
 
 
 @pytest.mark.parametrize(
@@ -1324,3 +1342,146 @@ def test_an_unreachable_store_leaves_the_reported_pull_request_standing(
         assert asyncio.run(scenario())["ok"] is True
     assert "Could not read the pull requests this run is working on" in caplog.text
     assert "the store is gone" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "posted_to, accepted",
+    [
+        ("https://github.com/acme/api/pull/42", True),
+        # The review step reads the diff, the pull request body and CI output,
+        # and posts to the `pr_url` it was handed. A number carried in from any
+        # of that text sends the findings to whatever the engine's token can
+        # write, and the "post at least one comment" gate is satisfied by the
+        # misdirected post.
+        ("https://github.com/acme/api/pull/41", False),
+    ],
+)
+def test_a_comment_goes_to_the_pull_request_the_run_is_working_on(
+    posted_to: str, accepted: bool
+) -> None:
+    """The reviewer never reports a `pr_url`, so completing it guards nothing.
+
+    Its only declared output is `findings`. Everything that binds it to a
+    change request happens in `add_comment`, which is also the one act here
+    that cannot be taken back once it is on the wrong diff.
+    """
+    from unittest.mock import AsyncMock
+
+    owns = "https://github.com/acme/api/pull/42"
+
+    async def owned() -> tuple[str, ...]:
+        return (owns,)
+
+    source = AsyncMock()
+    source.add_comment.return_value = CommentResult(123, f"{posted_to}#c123")
+
+    async def scenario() -> dict[str, object]:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("review"), AgentId("reviewer"), ("findings",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_pull_request_ownership(owned)  # type: ignore[arg-type]
+        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"))
+        broker._result = asyncio.get_running_loop().create_future()
+        return await broker._submit(
+            _direct_request(
+                broker,
+                "comment-1",
+                "add_comment",
+                {"pr_url": posted_to, "comment": "A finding."},
+            )
+        )
+
+    answer = asyncio.run(scenario())
+    assert answer["ok"] is accepted
+    if accepted:
+        source.add_comment.assert_awaited_once()
+    else:
+        source.add_comment.assert_not_awaited()
+        assert answer["error"] == (
+            "pr_url must name the pull request this run is working on, "
+            f"{owns}, not {posted_to}"
+        )
+
+
+def test_a_comment_is_posted_freely_when_the_run_is_working_on_nothing() -> None:
+    """The same fail-open rule the report side keeps, for the same reason."""
+    from unittest.mock import AsyncMock
+
+    source = AsyncMock()
+    source.add_comment.return_value = CommentResult(
+        1, "https://github.com/acme/api/pull/42#c1"
+    )
+
+    async def owned() -> tuple[str, ...]:
+        return ()
+
+    async def scenario() -> dict[str, object]:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("review"), AgentId("reviewer"), ("findings",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_pull_request_ownership(owned)  # type: ignore[arg-type]
+        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"))
+        broker._result = asyncio.get_running_loop().create_future()
+        return await broker._submit(
+            _direct_request(
+                broker,
+                "comment-1",
+                "add_comment",
+                {"pr_url": "https://github.com/acme/api/pull/42", "comment": "A."},
+            )
+        )
+
+    assert asyncio.run(scenario())["ok"] is True
+    source.add_comment.assert_awaited_once()
+
+
+def test_an_opened_merge_request_is_written_down_like_a_pull_request() -> None:
+    """Otherwise the cross-step half of the guard is inert on GitLab.
+
+    The store is filled by this recorder alone on a forge with no webhook
+    claim, so a merge request it cannot identify leaves `owned` empty for
+    every later step -- and the deliberate fail-open then accepts any
+    `pr_url` at all on exactly the CI-fix turn this guard exists to hold.
+    """
+    from unittest.mock import AsyncMock
+
+    recorded: list[OpenedPullRequest] = []
+
+    async def record(opened: OpenedPullRequest) -> None:
+        recorded.append(opened)
+
+    url = "https://gitlab.com/group/sub/project/-/merge_requests/7"
+    source = AsyncMock()
+    source.request_review.return_value = url
+
+    async def scenario() -> dict[str, object]:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_pull_request_records(record)
+        broker.enable_repository_tools(
+            source, ("open_pull_request",), WorkspaceId("ws")
+        )
+        broker._result = asyncio.get_running_loop().create_future()
+        return await broker._submit(
+            _direct_request(
+                broker,
+                "open-1",
+                "open_pull_request",
+                {"branch": "feature", "title": "Add a thing"},
+            )
+        )
+
+    assert asyncio.run(scenario())["ok"] is True
+    assert recorded == [
+        OpenedPullRequest("gitlab.com/group/sub/project", 7, url)
+    ]

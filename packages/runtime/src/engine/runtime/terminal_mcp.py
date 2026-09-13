@@ -19,7 +19,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 from engine.domain import (
     AgentRunId,
@@ -38,6 +37,7 @@ from engine.ports import (
     McpServerConfig,
     SourceControl,
 )
+from engine.runtime.change_requests import change_request
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -499,6 +499,9 @@ class TerminalMcpBroker:
         assert self._source_control is not None
         if name == "add_comment":
             pr_url, comment, file, line, in_reply_to_id = _comment_arguments(arguments)
+            misdirected = await self._not_the_runs_pull_request(pr_url)
+            if misdirected is not None:
+                return {"ok": False, "error": misdirected}
             try:
                 result = await self._source_control.add_comment(
                     pr_url, comment, file, line, in_reply_to_id
@@ -623,23 +626,38 @@ class TerminalMcpBroker:
         only the prompt to recall the URL from, which is the recall this guard
         exists to catch going wrong, and the store is what remembers instead.
         """
+        for output in event.outputs:
+            if output.name == "pr_url":
+                refusal = await self._not_the_runs_pull_request(output.value)
+                if refusal is not None:
+                    return refusal
+        return None
+
+    async def _not_the_runs_pull_request(self, url: str) -> str | None:
+        """Say so when `url` is not a pull request this run is working on.
+
+        Asked wherever a step names one: of the `pr_url` it reports, which
+        binds every later step, and of the `pr_url` it posts a comment to,
+        which is where the findings actually land. The report is not a
+        chokepoint in front of the post -- the review step declares only
+        `findings`, so it never reports a pull request at all -- and a comment
+        is the one act here that cannot be taken back once it is on the wrong
+        change request.
+        """
         owned = self._opened_pull_requests + await self._recorded_pull_requests()
         if not owned:
             # Neither source knows of a pull request, so there is nothing to
             # call this one wrong against. A run whose work is written down
-            # nowhere reports freely rather than being unable to finish a step
-            # at all, which is the worse of the two failures to be wrong in.
+            # nowhere goes on working rather than being unable to finish a
+            # step at all, the worse of the two failures to be wrong in.
             return None
-        identities = {_pull_request_identity(url) for url in owned}
-        for output in event.outputs:
-            if output.name != "pr_url":
-                continue
-            if _pull_request_identity(output.value) not in identities:
-                return (
-                    "pr_url must name the pull request this run is working on, "
-                    f"{' or '.join(dict.fromkeys(owned))}, not {output.value}"
-                )
-        return None
+        identities = {_change_request_identity(one) for one in owned}
+        if _change_request_identity(url) in identities:
+            return None
+        return (
+            "pr_url must name the pull request this run is working on, "
+            f"{' or '.join(dict.fromkeys(owned))}, not {url}"
+        )
 
     async def _recorded_pull_requests(self) -> tuple[str, ...]:
         """The run's pull requests according to the store, if one is keeping them.
@@ -667,15 +685,14 @@ class TerminalMcpBroker:
         if self._pull_request_recorder is None:
             return
         try:
-            pull_request = _github_pull_request(url)
-            if pull_request is None:
+            opened = change_request(url)
+            if opened is None:
                 logger.warning(
                     "Could not identify the opened pull request for recording: %s", url
                 )
                 return
-            repository, number = pull_request
             await self._pull_request_recorder(
-                OpenedPullRequest(repository, number, url)
+                OpenedPullRequest(opened.project, opened.number, url)
             )
         except Exception:
             logger.exception("Could not record the opened pull request %s", url)
@@ -692,16 +709,15 @@ class TerminalMcpBroker:
         if self._comment_recorder is None:
             return
         try:
-            pull_request = _github_pull_request(result.url)
-            if pull_request is None:
+            posted = change_request(result.url)
+            if posted is None:
                 logger.warning(
                     "Could not identify posted comment %s for recording: %s",
                     result.id, result.url,
                 )
                 return
-            repository, number = pull_request
             await self._comment_recorder(
-                PostedComment(repository, number, kind, result)
+                PostedComment(posted.project, posted.number, kind, result)
             )
         except Exception:
             logger.exception(
@@ -1117,67 +1133,19 @@ def _comment_arguments(
     return pr_url, comment, file, line, in_reply_to_id
 
 
-def _pull_request_identity(pr_url: str) -> tuple[str, int] | str:
-    """Name a pull request the way two spellings of the same one agree on.
+def _change_request_identity(pr_url: str) -> tuple[str, int] | str:
+    """Name a change request the way two spellings of the same one agree on.
 
-    A GitHub URL is named by the repository and number read out of it, so the
-    owner's casing and a trailing slash do not make it a different pull
-    request. Anything else -- a GitLab merge request, say -- has only its URL
-    to be named by, which still tells it from a different one.
+    A pull request or merge request is named by the project and number read
+    out of its URL, so the owner's casing and a trailing slash do not make it
+    a different one, and the record the store keeps is keyed by the same pair.
+    A URL on a forge nobody has written a reading for has only the URL to be
+    named by, which still tells it from a different one.
     """
-    return _github_pull_request(pr_url) or pr_url.strip().rstrip("/")
-
-
-def _pull_request_number(segment: str) -> int | None:
-    """Read a change-request number the way every reader of one must.
-
-    `str.isdigit` is true of `١٢` and of `²`, and a leading zero is a number
-    here and not to `CICheck`'s `[1-9][0-9]*`, so each of those spellings is a
-    pull request to one parser and not to the other -- the same disagreement
-    two markers in one path caused, arrived at through the number instead.
-    `²` is worse than a disagreement: `int` raises on it, so a URL spelled that
-    way leaves by way of an exception rather than an answer either way.
-    """
-    if not segment.isascii() or not segment.isdigit() or segment.startswith("0"):
-        return None
-    return int(segment)
-
-
-def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
-    """Identify a PR from the comment URL returned by the source control API.
-
-    Preserve github.com's owner/repo keys and namespace Enterprise repositories
-    by authority. Use the returned path to follow renames and normalize casing.
-    GitLab merge-request URLs do not match this path.
-
-    A second change-request marker further down the path is refused rather than
-    read past. This reads the first `pull/<number>` and `CICheck` reads the
-    last, so a path carrying both -- `/acme/app/pull/12/x/victim/repo/pull/99`
-    -- is one pull request to whoever asks whose it is and another to whoever
-    waits on its CI. One URL naming two pull requests is exactly the misbinding
-    the caller is asking about, so it is not a name at all.
-    """
-    parsed = urlsplit(pr_url)
-    if parsed.scheme not in ("https", "http") or not parsed.hostname:
-        return None
-    segments = parsed.path.strip("/").split("/")
-    number = _pull_request_number(segments[3]) if len(segments) >= 4 else None
-    if (
-        number is None
-        or "-" in segments
-        or "pull" in segments[4:]
-        or not all(segments[:2])
-        or segments[2] != "pull"
-    ):
-        return None
-    repository = f"{segments[0]}/{segments[1]}".lower()
-    host = parsed.hostname.lower()
-    port = parsed.port
-    if port is not None and port != (443 if parsed.scheme == "https" else 80):
-        host = f"{host}:{port}"
-    if host != "github.com":
-        repository = f"{host}/{repository}"
-    return repository, number
+    found = change_request(pr_url)
+    if found is None:
+        return pr_url.strip().rstrip("/")
+    return found.project, found.number
 
 
 async def _forward_call(

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 from engine.domain import WorkspaceId
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import SourceControl
+from engine.runtime.change_requests import change_request
 
 
 _TERMINAL = {
@@ -50,28 +49,15 @@ class CICheck:
         if not isinstance(workspace, str) or not workspace.strip():
             raise ValueError("CICheck needs workspaceId from an upstream WorkspaceNode")
         url = state.get("pr_url")
-        parsed = urlsplit(url) if isinstance(url, str) else None
-        # The prefix may not itself hold a change request, so a path naming two
-        # -- `/acme/app/pull/12/x/victim/repo/pull/99` -- resolves to neither
-        # rather than to the last. `complete_step` reads the first when deciding
-        # whether the run may report the URL at all; a run that owns no pull
-        # request for it to check against reports freely and arrives here, and
-        # waiting on the verdict of a pull request nobody touched is the
-        # misbinding both sides exist to prevent.
-        match = (
-            re.fullmatch(
-                r"/(?:(?!/pull/|/-/merge_requests/).)+"
-                r"/(?:pull|-/merge_requests)/([1-9][0-9]*)/?",
-                parsed.path,
-            )
-            if parsed else None
-        )
-        if (
-            not parsed or parsed.scheme not in {"http", "https"}
-            or not parsed.netloc or not match
-        ):
+        # Read the same way `complete_step` reads it when deciding whether the
+        # run may report the URL at all. A reading of its own is how the gate
+        # came to wait on #99 while the guard approved #12 off one string: a
+        # run that owns no pull request to be checked against reports freely
+        # and arrives here, so the two disagreeing is not hypothetical.
+        found = change_request(url) if isinstance(url, str) else None
+        if found is None:
             raise ValueError("CICheck needs a pull request URL in pr_url")
-        number = int(match[1])
+        number = found.number
         await execution.say(f"Waiting for CI on {url}.")
         async with asyncio.timeout(self.timeout):
             while True:

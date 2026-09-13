@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from engine.graph_runtime_langgraph.components import CICheck
+from engine.runtime.change_requests import change_request
 from engine.ports import PipelineStatus, StatusCheck
 from test_graph_workflow_definitions import definition_module, nodes_of
 
@@ -182,32 +183,57 @@ def test_missing_required_check_times_out(execution):
 @pytest.mark.parametrize(
     "pr_url",
     [
+        # Two change requests in one path, the crafted shape: read from the
+        # front this is acme/app#12, read from the back it is #99.
         "https://github.com/acme/app/pull/12/x/victim/repo/pull/99",
         "https://github.com/acme/app/pull/12/pull/99",
-        # The number, spelled the ways that are a number to `str.isdigit` and
-        # not to CI: arabic-indic digits, a superscript `int` raises on, and
-        # leading zeros.
+        "https://gitlab.com/acme/app/pull/12/-/merge_requests/99",
+        # The number, in the spellings a reader of digits and a reader of
+        # `[1-9][0-9]*` disagree about: arabic-indic digits, a superscript
+        # `int` raises on, and a leading zero.
         "https://github.com/acme/app/pull/\u0661\u0662",
         "https://github.com/acme/app/pull/\u00b2",
         "https://github.com/acme/app/pull/042",
     ],
 )
-def test_no_url_names_one_pull_request_to_the_guard_and_another_to_ci(
+def test_a_url_naming_two_change_requests_names_none_to_either_reader(
     execution, pr_url: str
 ) -> None:
-    """A URL CI reads as #99 must not pass as #12 where ownership is decided.
+    """A URL CI would read as #99 must not pass as #12 where ownership is decided.
 
-    `complete_step` refuses a `pr_url` that is not the run's, and identifies it
-    by the repository and number it reads off the front of the path. CI takes
-    the number off the back, and by a stricter spelling of what a number is.
-    Were the two to disagree the guard would be approving one pull request
-    while the run waited on, and reported the verdict of, another -- or the
-    guard would accept a URL CI then refuses outright, failing the run at the
-    gate. So every URL the two would read differently is refused by both.
+    `complete_step` refuses a `pr_url` that is not the run's; CI waits on the
+    verdict of whatever it reads. Were the two to disagree the guard would
+    approve one change request while the run waited on another -- or the guard
+    would accept a URL CI then refuses outright, failing the run at the gate.
+    Both now read through `change_request`, and this holds them to it.
     """
-    from engine.runtime.terminal_mcp import _github_pull_request
-
-    assert _github_pull_request(pr_url) is None
+    assert change_request(pr_url) is None
     execution.runtime.source_control.list_pipeline_status.return_value = status()
     with pytest.raises(ValueError, match="pull request URL"):
         asyncio.run(CICheck()({**STATE, "pr_url": pr_url}))
+
+
+@pytest.mark.parametrize(
+    "pr_url, number",
+    [
+        ("https://github.com/owner/repo/pull/42", 42),
+        ("https://github.com/owner/repo/pull/42/files", 42),
+        # A repository named `pull`. `wei/pull` is a real and widely used one,
+        # and a reader banning `pull` anywhere before the marker left every run
+        # on such a repository unable to clear this gate while the guard
+        # approved the same URL happily.
+        ("https://github.com/wei/pull/pull/123", 123),
+        ("https://gitlab.com/group/sub/project/-/merge_requests/7", 7),
+        # A GitLab group named `pull`, which carries no number after it.
+        ("https://gitlab.com/pull/project/-/merge_requests/3", 3),
+    ],
+)
+def test_ci_waits_on_the_change_request_the_url_names(
+    execution, pr_url: str, number: int
+) -> None:
+    execution.runtime.source_control.list_pipeline_status.return_value = status()
+    asyncio.run(CICheck()({**STATE, "pr_url": pr_url}))
+    assert [
+        call.kwargs["change_request_number"]
+        for call in execution.runtime.source_control.list_pipeline_status.await_args_list
+    ] == [number]
