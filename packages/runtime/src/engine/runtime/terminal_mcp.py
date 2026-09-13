@@ -72,6 +72,13 @@ CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 #: off the comments on the pull request would name whoever commented last.
 PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
 
+#: Say which pull requests this run is working on, by URL. Bound by whoever
+#: owns the durable store, which is where that answer outlives a step: the run
+#: that opened a pull request is still working on it during a later step that
+#: opened nothing of its own, and a run started to carry on somebody else's
+#: pull request is working on that one from the moment it was started.
+RunPullRequests = Callable[[], Awaitable[Sequence[str]]]
+
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
 
@@ -217,6 +224,7 @@ class TerminalMcpBroker:
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
+        self._run_pull_requests: RunPullRequests | None = None
 
     def enable_status_updates(self, report: StatusReporter) -> None:
         """Serve `update_status`, delivering what it is told to `report`.
@@ -246,6 +254,19 @@ class TerminalMcpBroker:
         whichever run last happened to comment there.
         """
         self._pull_request_recorder = record
+
+    def enable_pull_request_ownership(self, owned: RunPullRequests) -> None:
+        """Let `complete_step` ask which pull requests are the run's to report.
+
+        The other half of `enable_pull_request_records`, and bound from the
+        same store: a step reports the pull request the run is working on, and
+        which one that is was written down when the run took it on rather than
+        during the step doing the reporting. Without it the broker can only
+        hold a step to what it opened itself, which the step that opens
+        nothing -- the CI-fix turn, told to push to the pull request it was
+        given -- is not.
+        """
+        self._run_pull_requests = owned
 
     def enable_repository_tools(
         self,
@@ -438,7 +459,7 @@ class TerminalMcpBroker:
                     arguments=arguments,
                     mcp_request_id=request_id,
                 )
-                misreported = self._misreported_pull_request(completed)
+                misreported = await self._misreported_pull_request(completed)
                 if misreported is not None:
                     return {"ok": False, "error": misreported}
                 event: TerminalEvent = completed
@@ -584,31 +605,56 @@ class TerminalMcpBroker:
         await self._record_pull_request(url)
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
 
-    def _misreported_pull_request(self, event: StepCompleted) -> str | None:
-        """Say so when `pr_url` is not a pull request this step opened.
+    async def _misreported_pull_request(self, event: StepCompleted) -> str | None:
+        """Say so when `pr_url` is not a pull request this run is working on.
 
         That output is what binds every later step to the change: CI waits on
         it, and the reviewers comment on the diff behind it. Nothing downstream
         can tell it apart from some other pull request the agent read about
         along the way -- an already merged one looks just as reviewable, and
         the review then lands on a diff the findings are not about, or on
-        nothing at all, because the files are not in it. `open_pull_request`
-        answered with the URL, so a step that opened one has it to report
-        rather than to reconstruct, and is told which it is when it reports
-        another.
+        nothing at all, because the files are not in it.
+
+        Which pull requests are the run's is asked of the step and of the
+        store together, because neither knows on its own. A step that opened
+        one has the URL `open_pull_request` answered with, and holds it
+        whether or not anything recorded it. A step that opened nothing -- the
+        CI-fix turn, sent back to push to the pull request it was given -- has
+        only the prompt to recall the URL from, which is the recall this guard
+        exists to catch going wrong, and the store is what remembers instead.
         """
-        if not self._opened_pull_requests:
+        owned = self._opened_pull_requests + await self._recorded_pull_requests()
+        if not owned:
+            # Neither source knows of a pull request, so there is nothing to
+            # call this one wrong against. A run whose work is written down
+            # nowhere reports freely rather than being unable to finish a step
+            # at all, which is the worse of the two failures to be wrong in.
             return None
-        opened = {_pull_request_identity(url) for url in self._opened_pull_requests}
+        identities = {_pull_request_identity(url) for url in owned}
         for output in event.outputs:
             if output.name != "pr_url":
                 continue
-            if _pull_request_identity(output.value) not in opened:
+            if _pull_request_identity(output.value) not in identities:
                 return (
-                    "pr_url must name the pull request this step opened, "
-                    f"{self._opened_pull_requests[-1]}, not {output.value}"
+                    "pr_url must name the pull request this run is working on, "
+                    f"{' or '.join(dict.fromkeys(owned))}, not {output.value}"
                 )
         return None
+
+    async def _recorded_pull_requests(self) -> tuple[str, ...]:
+        """The run's pull requests according to the store, if one is keeping them.
+
+        A store that cannot be reached says nothing rather than nothing owned:
+        refusing a correct URL would strand a finished step with no answer
+        left to give, and what the step opened itself still speaks for itself.
+        """
+        if self._run_pull_requests is None:
+            return ()
+        try:
+            return tuple(await self._run_pull_requests())
+        except Exception:
+            logger.exception("Could not read the pull requests this run is working on")
+            return ()
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -1320,6 +1366,7 @@ __all__ = [
     "READ_ONLY_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",
     "REPOSITORY_TOOL_NAMES",
+    "RunPullRequests",
     "StatusReporter",
     "TerminalEvent",
     "TerminalMcpBroker",

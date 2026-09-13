@@ -1171,37 +1171,141 @@ def test_a_step_reports_the_pull_request_it_opened(
     assert answer["ok"] is accepted
     if not accepted:
         assert answer["error"] == (
-            f"pr_url must name the pull request this step opened, {opened}, "
-            f"not {reported}"
+            "pr_url must name the pull request this run is working on, "
+            f"{opened}, not {reported}"
         )
 
 
-def test_a_step_that_opened_nothing_reports_the_pull_request_it_was_given() -> None:
-    """The CI-fix turn pushes to the pull request it was sent to, and says so.
+def _completing_broker(
+    owned: object = None, opened: str | None = None
+) -> TerminalMcpBroker:
+    """A broker mid-step, ready to be asked to complete.
 
-    Nothing was opened, so there is no URL of this step's own to hold it to:
-    the one it was asked to work on is the only answer it can give.
+    `owned` stands in for the durable store's account of what the run is
+    working on; `opened` for a pull request this step opened itself.
     """
+    broker = TerminalMcpBroker(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("agent-run-1"),
+        step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+        registry=TerminalResultRegistry(),
+    )
+    if owned is not None:
+        broker.enable_pull_request_ownership(owned)  # type: ignore[arg-type]
+    if opened is not None:
+        broker._opened_pull_requests += (opened,)
+    broker._result = asyncio.get_running_loop().create_future()
+    return broker
+
+
+async def _complete_with(broker: TerminalMcpBroker, pr_url: str) -> dict[str, object]:
+    return await broker._submit(
+        _direct_request(
+            broker,
+            "complete-1",
+            "complete_step",
+            {
+                "outcome": "success",
+                "summary": "Fixed the failing job.",
+                "outputs": {"pr_url": pr_url},
+            },
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "reported, accepted",
+    [
+        # The CI-fix turn is sent back to the pull request the run opened on
+        # an earlier step, so the run is working on it and may report it again.
+        ("https://github.com/acme/api/pull/42", True),
+        # The same turn recalling the wrong number. This is the gap a step's
+        # own memory of what it opened cannot close, because it opened
+        # nothing: only the run's record says which pull request is its work.
+        ("https://github.com/acme/api/pull/41", False),
+    ],
+)
+def test_a_step_that_opened_nothing_reports_the_run_s_pull_request(
+    reported: str, accepted: bool
+) -> None:
+    owns = "https://github.com/acme/api/pull/42"
+
+    async def owned() -> tuple[str, ...]:
+        return (owns,)
 
     async def scenario() -> dict[str, object]:
-        broker = TerminalMcpBroker(
-            run_id=RunId("run-1"),
-            agent_run_id=AgentRunId("agent-run-1"),
-            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
-            registry=TerminalResultRegistry(),
+        return await _complete_with(_completing_broker(owned), reported)
+
+    answer = asyncio.run(scenario())
+    assert answer["ok"] is accepted
+    if not accepted:
+        assert answer["error"] == (
+            "pr_url must name the pull request this run is working on, "
+            f"{owns}, not {reported}"
         )
-        broker._result = asyncio.get_running_loop().create_future()
-        return await broker._submit(
-            _direct_request(
-                broker,
-                "complete-1",
-                "complete_step",
-                {
-                    "outcome": "success",
-                    "summary": "Fixed the failing job.",
-                    "outputs": {"pr_url": "https://github.com/acme/api/pull/42"},
-                },
-            )
+
+
+def test_a_step_reports_what_it_opened_even_when_the_record_has_not_caught_up() -> None:
+    """Opening a pull request is what makes it the run's, not the record of it.
+
+    The record is written after the fact and by whoever happens to be keeping
+    one, so a step holding the URL `open_pull_request` answered with is not
+    made a liar by a store that has not caught up.
+    """
+
+    async def owned() -> tuple[str, ...]:
+        return ()
+
+    async def scenario() -> dict[str, object]:
+        opened = "https://github.com/acme/api/pull/42"
+        return await _complete_with(_completing_broker(owned, opened), opened)
+
+    assert asyncio.run(scenario())["ok"] is True
+
+
+def test_a_run_working_on_no_pull_request_reports_freely() -> None:
+    """With nothing opened and nothing recorded there is nothing to be wrong against.
+
+    A step that cannot finish at all is the worse of the two ways to be
+    wrong here, so an unrecorded run is left to report what it reports.
+    """
+
+    async def owned() -> tuple[str, ...]:
+        return ()
+
+    async def scenario() -> dict[str, object]:
+        return await _complete_with(
+            _completing_broker(owned), "https://github.com/acme/api/pull/42"
         )
 
     assert asyncio.run(scenario())["ok"] is True
+
+
+def test_a_broker_bound_to_no_store_reports_freely() -> None:
+    """Nothing is keeping the run's pull requests, so nothing can contradict one."""
+
+    async def scenario() -> dict[str, object]:
+        return await _complete_with(
+            _completing_broker(), "https://github.com/acme/api/pull/42"
+        )
+
+    assert asyncio.run(scenario())["ok"] is True
+
+
+def test_an_unreachable_store_leaves_the_reported_pull_request_standing(
+    caplog: pytest.LogCaptureFixture
+) -> None:
+    """Refusing here would strand a finished step with nothing left to report."""
+
+    async def owned() -> tuple[str, ...]:
+        raise RuntimeError("the store is gone")
+
+    async def scenario() -> dict[str, object]:
+        return await _complete_with(
+            _completing_broker(owned), "https://github.com/acme/api/pull/42"
+        )
+
+    with caplog.at_level(logging.WARNING):
+        assert asyncio.run(scenario())["ok"] is True
+    assert "Could not read the pull requests this run is working on" in caplog.text
+    assert "the store is gone" in caplog.text

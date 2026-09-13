@@ -82,9 +82,8 @@ class TerminalMcpServer:
             WorkspaceId(workspace),
             approve,
         )
+        store = execution.runtime.store
         if "add_comment" in served:
-            store = execution.runtime.store
-
             async def record(posted: PostedComment) -> None:
                 await store.remember_comment(
                     CommentRecord(
@@ -101,8 +100,6 @@ class TerminalMcpServer:
 
             broker.enable_comment_records(record)
         if "open_pull_request" in served:
-            store = execution.runtime.store
-
             async def claim(opened: OpenedPullRequest) -> None:
                 await store.remember_pull_request(
                     PullRequestRecord(
@@ -116,6 +113,12 @@ class TerminalMcpServer:
                 )
 
             broker.enable_pull_request_records(claim)
+
+        async def owned() -> tuple[str, ...]:
+            records = await store.pull_requests(execution.run_id)
+            return tuple(record.url for record in records if record.url)
+
+        broker.enable_pull_request_ownership(owned)
         async with broker:
             config = broker.config
             yield BoundMcpServer(

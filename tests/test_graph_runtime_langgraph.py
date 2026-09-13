@@ -585,6 +585,13 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
         assert await store.pull_request_for_run(RunId("run-2")) == ("acme/web", 7)
         # A run that opened nothing, which is most of them.
         assert await store.pull_request_for_run(RunId("run-9")) is None
+        # Read from the run in full, which is what a step reporting the pull
+        # request its work is on is held to: the page needs somewhere to link
+        # and asks for the one pull request, the guard needs the URL it was
+        # given back and asks for every record.
+        assert await store.pull_requests(RunId("run-1")) == (opened,)
+        assert await store.pull_requests(RunId("run-2")) == (elsewhere,)
+        assert await store.pull_requests(RunId("run-9")) == ()
         # The repository is part of the question: two forges number their pull
         # requests from counters of their own.
         assert await store.run_for_pull_request("acme/web", 42) is None
