@@ -46,7 +46,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
-from engine.apps.web.github_ingress import GithubComment, GithubIngress, GithubMerge
+from engine.apps.web.github_ingress import GithubApproval, GithubComment, GithubIngress
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -2824,33 +2824,36 @@ def create_app(
             text=comment.body, comment_id=comment.comment_id,
         ))
 
-    async def github_merge_approves_review(merged: GithubMerge) -> None:
-        """Merging a pull request is a person accepting its work order.
+    async def github_review_approves_workorder(approved: GithubApproval) -> None:
+        """Approving a pull request is a person accepting its work order.
 
         The same decision as the Accept button on the WorkOrder page, made
         where the reviewer already is: somebody who has read the diff and
-        pressed merge has reviewed the run, and asking them to say so a second
+        approved it has reviewed the run, and asking them to say so a second
         time in another tab is asking for a click that says nothing new.
+        Rejecting stays the web UI's: a review asking for changes is a note on
+        the work, not a verdict that ends it.
 
-        Authority comes from the merge itself -- GitHub only accepts one from
-        an account with write access -- so nothing is checked here beyond
-        which run owns the pull request.
+        Whether the reviewer may decide anything is settled before this is
+        reached -- `approval_from_payload` refuses a bot's approval and one
+        from an account with no standing in the repository -- so what is left
+        here is which run owns the pull request.
 
-        A merge that decides nothing is not a failure: a pull request opened
-        by hand, one whose work order has finished, and one waiting on an
-        agent's own approval rather than on a person all arrive here, and none
-        of them has a verdict to record. Anything that does go wrong raises,
-        so the delivery can be redelivered rather than silently losing the
-        approval.
+        An approval that decides nothing is not a failure: a pull request
+        opened by hand, one whose work order has finished, and one waiting on
+        an agent's own approval rather than on a person all arrive here, and
+        none of them has a verdict to record. Anything that does go wrong
+        raises, so the delivery can be redelivered rather than silently losing
+        the approval.
         """
         runtime = surface.runtime
         if runtime is None:
             return
-        run_id = await github_run_for_pull_request(merged.repository, merged.number)
+        run_id = await github_run_for_pull_request(approved.repository, approved.number)
         if run_id is None:
             log.info(
-                "%s#%s was merged, but no work order opened it",
-                merged.repository, merged.number,
+                "%s#%s was approved, but no work order opened it",
+                approved.repository, approved.number,
             )
             return
         try:
@@ -2868,8 +2871,8 @@ def create_app(
         )
         if pending is None:
             log.info(
-                "%s#%s was merged, but work order %s is not waiting on a human review",
-                merged.repository, merged.number, run_id,
+                "%s#%s was approved, but work order %s is not waiting on a human review",
+                approved.repository, approved.number, run_id,
             )
             return
         try:
@@ -2878,15 +2881,15 @@ def create_app(
             # Somebody decided it between the snapshot and here -- the web UI,
             # or a cancellation. The verdict is already recorded; a second one
             # is not owed, and raising would only ask GitHub to redeliver a
-            # merge that has nothing left to do.
+            # review that has nothing left to do.
             log.info(
-                "%s#%s was merged, but work order %s had already been decided",
-                merged.repository, merged.number, run_id,
+                "%s#%s was approved, but work order %s had already been decided",
+                approved.repository, approved.number, run_id,
             )
             return
         log.info(
-            "merging %s#%s accepted the human review of work order %s",
-            merged.repository, merged.number, run_id,
+            "%s approving %s#%s accepted the human review of work order %s",
+            approved.reviewer, approved.repository, approved.number, run_id,
         )
 
     github_ingress = GithubIngress(
@@ -2894,7 +2897,7 @@ def create_app(
         repository=github_repository,
         self_login=lambda: github_bot_login,
         handle=github_comment_handler or github_concierge_turn,
-        handle_merge=github_merge_approves_review,
+        handle_approval=github_review_approves_workorder,
         activity=github_activity,
     )
 

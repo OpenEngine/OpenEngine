@@ -7,7 +7,7 @@ arrived late would otherwise be indistinguishable from a second copy of the
 same comment.
 
 Two kinds of delivery are read: a comment, which is somebody asking for
-something, and a merge, which is somebody accepting the work.
+something, and an approving review, which is somebody accepting the work.
 """
 from __future__ import annotations
 
@@ -32,14 +32,12 @@ log = logging.getLogger(__name__)
 #: The delivery kinds a comment arrives as.
 COMMENT_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
 
-#: The delivery kind a merge arrives as. A pull request's whole lifecycle comes
-#: on this event; only ``closed`` with ``merged`` set is read here.
-MERGE_EVENT = "pull_request"
-
-#: The delivery kinds this route acts on. Anything else is acknowledged and
-#: dropped -- a GitHub app subscribed to more events than Engine reads is a
-#: configuration this route tolerates rather than an error it reports.
-HANDLED_EVENTS = COMMENT_EVENTS | {MERGE_EVENT}
+#: The delivery kind a review arrives as. Every review lands on this event --
+#: a comment, a change request, an approval -- and only an approval is read
+#: here. Anything else is acknowledged and dropped, as is any other event: a
+#: GitHub app subscribed to more than Engine reads is a configuration this
+#: route tolerates rather than an error it reports.
+REVIEW_EVENT = "pull_request_review"
 
 #: Initial affiliation filter. These labels do not prove write access; the
 #: concierge checks effective repository permissions before steering a run.
@@ -73,13 +71,14 @@ class GithubComment:
 
 
 @dataclass(frozen=True)
-class GithubMerge:
-    """A pull request that has just been merged, as this process reads it."""
+class GithubApproval:
+    """One approving review of a pull request, as this process reads it."""
 
+    review_id: str
     repository: str
     number: int
-    author: str
-    """Whoever pressed merge, for the log. Empty when GitHub sent no account."""
+    reviewer: str
+    """Whoever approved. A review with no account behind it is not read at all."""
     url: str
 
 
@@ -158,38 +157,71 @@ def comment_from_payload(
     )
 
 
-def merge_from_payload(event: str, payload: Mapping[str, object]) -> GithubMerge | None:
-    """The merge in a delivery, or ``None`` for anything that is not one.
+def approval_from_payload(
+    event: str, payload: Mapping[str, object], *, self_login: str = ""
+) -> GithubApproval | None:
+    """The approving review in a delivery, or ``None`` for anything else.
 
-    A pull request closed without merging decides nothing -- the work was
-    abandoned, not accepted -- so ``merged`` is what is read rather than the
-    action alone.
+    A review that comments or asks for changes decides nothing, and neither
+    does one that is edited or dismissed later: only ``submitted`` with a state
+    of ``approved`` is a person saying the work is good.
 
-    There is no author check here, unlike a comment's. Merging is already the
-    authority to change the repository: GitHub only accepts a merge from
-    somebody with write access, so the merge itself is the proof that the
-    person who made it could have approved the run in the web UI instead.
+    Who approved is checked as strictly as who commented, and for the reason
+    the ``human_review`` gate exists. The gate asks for a person to look at the
+    diff, which is not the same property as write access: a merge queue, an
+    auto-merge waiting on green CI, or Engine's own GitHub App can all hold
+    write access, so a bot's approval is refused here rather than allowed to
+    release a gate nobody read the diff for. ``author_association`` is GitHub's
+    own reading of the reviewer's standing in the repository and travels inside
+    the signed body, so it is trusted the same way a comment's is.
     """
-    if event != MERGE_EVENT or payload.get("action") != "closed":
+    if event != REVIEW_EVENT or payload.get("action") != "submitted":
         return None
+    review = payload.get("review")
     pull_request = payload.get("pull_request")
     repository = payload.get("repository")
-    if not isinstance(pull_request, dict) or not isinstance(repository, dict):
+    if (
+        not isinstance(review, dict)
+        or not isinstance(pull_request, dict)
+        or not isinstance(repository, dict)
+    ):
         return None
-    if pull_request.get("merged") is not True:
+    state = review.get("state")
+    # GitHub sends "approved" on the webhook and "APPROVED" through the REST
+    # API; neither spelling is worth depending on.
+    if not isinstance(state, str) or state.lower() != "approved":
+        return None
+    user = review.get("user")
+    if not isinstance(user, dict) or user.get("type") == "Bot":
+        return None
+    login = user.get("login")
+    if not isinstance(login, str) or not login:
+        return None
+    if self_login and login.lower() == self_login.lower():
+        # A machine account holding a personal access token is an ordinary
+        # `User` to GitHub, so the bot type above does not catch Engine's own.
+        return None
+    association = review.get("author_association")
+    if association not in TRUSTED_ASSOCIATIONS:
+        log.info(
+            "ignored a GitHub approval from %s, whose association with the repository is %s",
+            login, association,
+        )
         return None
     full_name, number = repository.get("full_name"), pull_request.get("number")
+    review_id = review.get("id")
     if not isinstance(full_name, str) or not full_name:
         return None
     if not isinstance(number, int) or isinstance(number, bool):
         return None
-    merged_by = pull_request.get("merged_by")
-    login = merged_by.get("login") if isinstance(merged_by, dict) else None
-    return GithubMerge(
+    if not isinstance(review_id, (int, str)) or isinstance(review_id, bool) or review_id == "":
+        return None
+    return GithubApproval(
+        review_id=str(review_id),
         repository=full_name,
         number=number,
-        author=login if isinstance(login, str) else "",
-        url=str(pull_request.get("html_url") or ""),
+        reviewer=login,
+        url=str(review.get("html_url") or ""),
     )
 
 
@@ -202,7 +234,7 @@ class GithubIngress:
         webhook_secret: Callable[[], str] = lambda: "",
         repository: str = "",
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
-        handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
+        handle_approval: Callable[[GithubApproval], Awaitable[None]] | None = None,
         self_login: Callable[[], str] = lambda: "",
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
@@ -213,14 +245,14 @@ class GithubIngress:
         self._repository = repository
         self._self_login = self_login
         self._handle = handle
-        self._handle_merge = handle_merge
+        self._handle_approval = handle_approval
         self._verify_signature = verify_signature
         self._max_body_bytes = max_body_bytes
         # Where a comment's progress is written down for the web UI. Recording
         # is bookkeeping and never a reason to refuse a delivery, so a missing
         # log is a deployment with no panel rather than a failure here.
         self._activity = activity
-        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubMerge]] = (
+        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubApproval]] = (
             asyncio.Queue(maxsize=capacity)
         )
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
@@ -295,15 +327,15 @@ class GithubIngress:
                 comment, "comment", (comment.event, comment.comment_id),
                 wired=self._handle is not None,
             )
-        merged = merge_from_payload(event, payload)
-        if merged is not None:
-            # By the pull request rather than by a delivery id: what is acted on
-            # is that this pull request is merged, and a second delivery saying
-            # so again asks for nothing new.
+        approval = approval_from_payload(event, payload, self_login=self._self_login())
+        if approval is not None:
+            # By review rather than by pull request: a run sent back for changes
+            # and approved again asks for a second verdict, and only the review
+            # id tells that apart from a redelivery of the first.
             return self._enqueue(
-                merged, "merged pull request",
-                (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}"),
-                wired=self._handle_merge is not None,
+                approval, "approving review",
+                (REVIEW_EVENT, approval.review_id),
+                wired=self._handle_approval is not None,
             )
         # Nothing to do with this delivery, whether or not a handler is
         # wired: settle it, so a webhook subscribed to more events than
@@ -312,7 +344,7 @@ class GithubIngress:
 
     def _enqueue(
         self,
-        delivery: GithubComment | GithubMerge,
+        delivery: GithubComment | GithubApproval,
         subject: str,
         identity: tuple[str, str],
         *,
@@ -351,8 +383,8 @@ class GithubIngress:
     async def _run(self) -> None:
         while True:
             identity, delivery = await self._queue.get()
-            # Only a comment has a row on the panel; a merge is a decision this
-            # process makes, not a conversation somebody is following.
+            # Only a comment has a row on the panel; an approval is a verdict
+            # this process acts on, not a conversation somebody is following.
             comment = delivery if isinstance(delivery, GithubComment) else None
             try:
                 if isinstance(delivery, GithubComment):
@@ -361,8 +393,8 @@ class GithubIngress:
                         self._activity.started(delivery)
                     await self._handle(delivery)
                 else:
-                    assert self._handle_merge is not None
-                    await self._handle_merge(delivery)
+                    assert self._handle_approval is not None
+                    await self._handle_approval(delivery)
             except Exception as failure:
                 if comment is not None and self._activity is not None:
                     self._activity.failed(str(failure) or type(failure).__name__)

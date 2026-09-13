@@ -1,15 +1,15 @@
 # GitHub webhooks
 
 Engine reads two things from GitHub over a signed webhook: comments, which are
-somebody asking for something, and merges, which are somebody accepting the
-work. The route only exists once something is wired to act on a delivery, so
-configure the webhook after that is in place: an endpoint that accepted
-deliveries it could never act on would collect failures until GitHub disabled
-the hook.
+somebody asking for something, and approving reviews, which are somebody
+accepting the work. The route only exists once something is wired to act on a
+delivery, so configure the webhook after that is in place: an endpoint that
+accepted deliveries it could never act on would collect failures until GitHub
+disabled the hook.
 
 Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, subscribe it to the
-`issue_comment`, `pull_request_review_comment`, and `pull_request` events, and
-give it a secret.
+`issue_comment`, `pull_request_review_comment`, and `pull_request_review`
+events, and give it a secret.
 
 ## Naming the repository
 
@@ -107,26 +107,31 @@ The agent reading the comment decides only whether it is asking for a change at
 all; a comment that asks for nothing reaches no work order. Comments on issues
 are not answered.
 
-## Merging as the human review
+## Approving as the human review
 
 A work order stops before it finishes and waits for a person to accept or
-reject what it did. Merging its pull request is that acceptance: the run's
+reject what it did. Approving its pull request is that acceptance: the run's
 human review is approved, exactly as pressing Accept on the WorkOrder page
 would have done, and the run carries on. Somebody who has read the diff and
-merged it has reviewed the run, and being asked to say so again in another tab
-is being asked for a click that says nothing new. Rejecting is still the web
-UI's: closing a pull request without merging says the work was abandoned, not
-that it was judged.
+approved it has reviewed the run, and being asked to say so again in another
+tab is being asked for a click that says nothing new. Rejecting is still the
+web UI's: a review asking for changes is a note on the work, not a verdict
+that ends it.
 
-The merge is its own authority -- GitHub only accepts one from an account with
-write access, which is the same permission the comment path checks for -- so
-nothing further is asked of the person who pressed it.
+Only a person's approval counts. A bot's is ignored, because the gate exists
+to make somebody look at the diff and write access is not that property: a
+merge queue, an auto-merge that fires when CI turns green, and Engine's own
+GitHub App all hold write access and none of them has read anything. Merging
+is ignored for the same reason. The reviewer also needs standing in the
+repository — GitHub's `author_association` of `OWNER`, `MEMBER`, or
+`COLLABORATOR`, the same bar a comment has to clear — since anybody at all may
+approve a public repository's pull request.
 
-A merge that has no verdict to record is acknowledged and ignored: a pull
+An approval with no verdict to record is acknowledged and ignored: a pull
 request opened by hand, one whose work order has already finished, and one
-whose run is working rather than waiting on a person. So is a pull request
-closed without merging, and so is a review already decided in the web UI a
-moment earlier.
+whose run is working rather than waiting on a person. So is a review already
+decided in the web UI a moment earlier. A run sent back for changes and
+approved again is a second verdict, not a duplicate of the first.
 
 ## Watching what arrives
 

@@ -833,7 +833,7 @@ def test_github_asks_who_it_posts_as_only_once(tmp_path):
         assert len(provider.clients) == 1
 
 
-# --- merging as the human review's verdict -----------------------------------
+# --- approving as the human review's verdict ---------------------------------
 
 
 def _human_review(approval_id="approval-1", tool_name="human_review"):
@@ -848,19 +848,19 @@ def _human_review(approval_id="approval-1", tool_name="human_review"):
     )
 
 
-def _merged(client, number=7, repository="acme/api"):
-    from test_github_ingress import _merged_pull_request, _signed as github_signed
+def _approved(client, review_id=5, number=7, repository="acme/api", **review):
+    from test_github_ingress import _approving_review, _signed as github_signed
 
-    payload = _merged_pull_request(number)
+    payload = _approving_review(review_id, number, **review)
     payload["repository"]["full_name"] = repository
     body = json.dumps(payload).encode()
     return client.post("/api/github/events", content=body, headers=dict(
-        github_signed(body), **{"x-github-event": "pull_request"}))
+        github_signed(body), **{"x-github-event": "pull_request_review"}))
 
 
-def test_merging_a_pull_request_approves_its_work_orders_review(tmp_path):
-    """The merge is the reviewer's verdict: the run is released without anybody
-    going back to the web UI to press Accept a second time."""
+def test_approving_a_pull_request_approves_its_work_orders_review(tmp_path):
+    """The approval is the reviewer's verdict: the run is released without
+    anybody going back to the web UI to press Accept a second time."""
     from starlette.testclient import TestClient
 
     from engine.domain import ApprovalDecision, ApprovalId
@@ -873,7 +873,7 @@ def test_merging_a_pull_request_approves_its_work_orders_review(tmp_path):
     )
 
     with TestClient(app) as client:
-        assert _merged(client).status_code == 200
+        assert _approved(client).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
 
     runtime.decide.assert_awaited_once_with(
@@ -881,7 +881,7 @@ def test_merging_a_pull_request_approves_its_work_orders_review(tmp_path):
     )
 
 
-def test_a_merge_is_acted_on_once_however_often_it_is_delivered(tmp_path):
+def test_an_approval_is_acted_on_once_however_often_it_is_delivered(tmp_path):
     from starlette.testclient import TestClient
 
     runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
@@ -892,11 +892,70 @@ def test_a_merge_is_acted_on_once_however_often_it_is_delivered(tmp_path):
     )
 
     with TestClient(app) as client:
-        assert _merged(client).status_code == 200
-        assert _merged(client).status_code == 200
+        assert _approved(client).status_code == 200
+        assert _approved(client).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
 
     assert runtime.decide.await_count == 1
+
+
+@pytest.mark.parametrize(
+    ("review", "why"),
+    [
+        # The gate exists to make a person read the diff, and a bot with write
+        # access -- a merge queue, an auto-merge, Engine's own App -- has read
+        # nothing. Releasing it on their approval would defeat the gate.
+        ({"user": {"login": "engine[bot]", "type": "Bot"}}, "a bot approved"),
+        # Anybody may approve a public repository's pull request.
+        ({"author_association": "NONE"}, "a stranger approved"),
+        # A review asking for changes is a note on the work, not a verdict.
+        ({"state": "changes_requested"}, "changes were requested"),
+        ({"state": "commented"}, "the review only commented"),
+    ],
+)
+def test_an_approval_that_decides_nothing_leaves_the_review_waiting(tmp_path, review, why):
+    from starlette.testclient import TestClient
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app, _capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(workflow="implementation-review-v1", runner="default"),
+        _workflow_catalog(), github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+
+    with TestClient(app) as client:
+        # Settled rather than refused: there is nothing for GitHub to redeliver.
+        assert _approved(client, **review).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 0, why
+
+
+def test_merging_a_pull_request_decides_nothing(tmp_path):
+    """Only a person approving releases the gate. A merge can come from a merge
+    queue or an auto-merge that never read the diff, so it is not a verdict."""
+    from starlette.testclient import TestClient
+
+    from test_github_ingress import _signed as github_signed
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app, _capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(workflow="implementation-review-v1", runner="default"),
+        _workflow_catalog(), github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+
+    body = json.dumps({
+        "action": "closed",
+        "pull_request": {"number": 7, "merged": True, "merged_by": {"login": "maintainer"}},
+        "repository": {"full_name": "acme/api"},
+    }).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "pull_request"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 0
 
 
 @pytest.mark.parametrize(
@@ -904,8 +963,8 @@ def test_a_merge_is_acted_on_once_however_often_it_is_delivered(tmp_path):
     [
         # Nothing is waiting on a person: the run is working, or it is over.
         ({}, "no pending approval"),
-        # An agent asking to run a command is not the review's verdict, and a
-        # merge must not answer a question nobody was shown.
+        # An agent asking to run a command is not the review's verdict, and an
+        # approval must not answer a question nobody was shown.
         ({"pending_approvals": (_human_review(tool_name="bash"),)}, "another approval"),
         # A pull request opened by hand belongs to no work order.
         ({"pr_number": 99}, "no work order owns it"),
@@ -913,7 +972,7 @@ def test_a_merge_is_acted_on_once_however_often_it_is_delivered(tmp_path):
         ({"pending_approvals": (_human_review(),), "known_graph": False}, "graph is gone"),
     ],
 )
-def test_a_merge_with_no_review_waiting_decides_nothing(tmp_path, kwargs, why):
+def test_an_approval_with_no_review_waiting_decides_nothing(tmp_path, kwargs, why):
     from starlette.testclient import TestClient
 
     runtime, opened = _graph_runtime(**kwargs)
@@ -925,14 +984,14 @@ def test_a_merge_with_no_review_waiting_decides_nothing(tmp_path, kwargs, why):
 
     with TestClient(app) as client:
         # Settled rather than refused: there is nothing for GitHub to redeliver.
-        assert _merged(client).status_code == 200
+        assert _approved(client).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
 
     assert runtime.decide.await_count == 0, why
 
 
-def test_a_merge_decided_by_somebody_else_first_is_not_redelivered(tmp_path):
-    """The web UI and the merge button are two ways to the same verdict, and
+def test_an_approval_decided_by_somebody_else_first_is_not_redelivered(tmp_path):
+    """The web UI and the Approve button are two ways to the same verdict, and
     both can be used at once. The one that arrives second has nothing to do."""
     from starlette.testclient import TestClient
 
@@ -947,11 +1006,11 @@ def test_a_merge_decided_by_somebody_else_first_is_not_redelivered(tmp_path):
     )
 
     with TestClient(app) as client:
-        assert _merged(client).status_code == 200
+        assert _approved(client).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         # Handled rather than failed, so a second delivery is deduplicated away
         # instead of asking the graph engine the same settled question again.
-        assert _merged(client).status_code == 200
+        assert _approved(client).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
 
     assert runtime.decide.await_count == 1

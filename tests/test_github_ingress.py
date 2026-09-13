@@ -14,8 +14,8 @@ import pytest
 
 from engine.apps.web.github_ingress import (
     GithubIngress,
+    approval_from_payload,
     comment_from_payload,
-    merge_from_payload,
     verify_signature,
 )
 
@@ -43,14 +43,17 @@ def _issue_comment(comment_id: int = 1, body: str = "please fix it", **comment) 
     }
 
 
-def _merged_pull_request(number: int = 7, **pull_request) -> dict:
+def _approving_review(review_id: int = 5, number: int = 7, **review) -> dict:
     return {
-        "action": "closed",
-        "pull_request": dict(
-            {"number": number, "merged": True, "merged_by": {"login": "maintainer"},
-             "html_url": "https://github.com/acme/api/pull/7"},
-            **pull_request,
+        "action": "submitted",
+        "review": dict(
+            {"id": review_id, "state": "approved",
+             "user": {"login": "maintainer", "type": "User"},
+             "author_association": "COLLABORATOR",
+             "html_url": "https://github.com/acme/api/pull/7#pullrequestreview-5"},
+            **review,
         ),
+        "pull_request": {"number": number},
         "repository": {"full_name": "acme/api"},
     }
 
@@ -132,40 +135,70 @@ def test_a_github_app_is_still_recognised_by_its_user_type() -> None:
     assert comment_from_payload("issue_comment", payload, self_login="") is None
 
 
-def test_a_merged_pull_request_is_read() -> None:
-    merged = merge_from_payload("pull_request", _merged_pull_request())
-    assert merged is not None
-    assert (merged.repository, merged.number, merged.author) == ("acme/api", 7, "maintainer")
-    assert merged.url == "https://github.com/acme/api/pull/7"
+def test_an_approving_review_is_read() -> None:
+    approved = approval_from_payload("pull_request_review", _approving_review())
+    assert approved is not None
+    assert (approved.repository, approved.number) == ("acme/api", 7)
+    assert (approved.reviewer, approved.review_id) == ("maintainer", "5")
+    assert approved.url == "https://github.com/acme/api/pull/7#pullrequestreview-5"
 
 
-def test_a_merge_is_read_even_when_github_names_nobody() -> None:
-    merged = merge_from_payload("pull_request", _merged_pull_request(merged_by=None))
-    assert merged is not None and merged.author == ""
+def test_the_rest_api_spelling_of_approved_is_read_too() -> None:
+    approved = approval_from_payload("pull_request_review", _approving_review(state="APPROVED"))
+    assert approved is not None and approved.reviewer == "maintainer"
 
 
 @pytest.mark.parametrize(
     ("event", "payload"),
     [
-        # Closed without merging: the work was abandoned, not accepted.
-        ("pull_request", _merged_pull_request(merged=False)),
-        ("pull_request", _merged_pull_request(merged=None)),
-        ("pull_request", dict(_merged_pull_request(), action="opened")),
-        ("pull_request", dict(_merged_pull_request(), action="synchronize")),
-        ("pull_request", dict(_merged_pull_request(), repository={})),
-        ("pull_request", _merged_pull_request(number="7")),
+        # A review that comments or asks for changes is a note on the work,
+        # not a verdict that releases it.
+        ("pull_request_review", _approving_review(state="commented")),
+        ("pull_request_review", _approving_review(state="changes_requested")),
+        ("pull_request_review", _approving_review(state=None)),
+        # Editing or dismissing an approval is not somebody approving.
+        ("pull_request_review", dict(_approving_review(), action="edited")),
+        ("pull_request_review", dict(_approving_review(), action="dismissed")),
+        ("pull_request_review", dict(_approving_review(), repository={})),
+        ("pull_request_review", dict(_approving_review(), pull_request={"number": "7"})),
+        ("pull_request_review", _approving_review(id=None)),
         ("issue_comment", _issue_comment()),
-        ("pull_request_review", dict(_merged_pull_request(), action="closed")),
+        # A merge is not read at all: only a person approving is.
+        ("pull_request", {"action": "closed", "pull_request": {"number": 7, "merged": True},
+                          "repository": {"full_name": "acme/api"}}),
     ],
 )
-def test_deliveries_that_are_not_a_merge(event, payload) -> None:
-    assert merge_from_payload(event, payload) is None
+def test_deliveries_that_are_not_an_approval(event, payload) -> None:
+    assert approval_from_payload(event, payload) is None
 
 
-def test_a_comment_and_a_merge_are_told_apart() -> None:
+@pytest.mark.parametrize(
+    "review",
+    [
+        # The gate asks for a person to read the diff, and write access is not
+        # that property: a merge queue, an auto-merge on green CI, or Engine's
+        # own App all hold it, and none of them has read anything.
+        {"user": {"login": "engine[bot]", "type": "Bot"}},
+        {"user": {"login": "openengine-bot", "type": "User"}},
+        # Anybody may approve a public repository's pull request; standing in
+        # the repository is what says the approval decides something.
+        {"author_association": "CONTRIBUTOR"},
+        {"author_association": "NONE"},
+        {"author_association": None},
+        {"user": {"type": "User"}},
+    ],
+)
+def test_an_approval_from_somebody_who_may_not_decide_is_ignored(review) -> None:
+    payload = _approving_review(**review)
+    assert approval_from_payload(
+        "pull_request_review", payload, self_login="OpenEngine-Bot"
+    ) is None
+
+
+def test_a_comment_and_an_approval_are_told_apart() -> None:
     """One reader per kind: neither payload is the other's shape."""
-    assert comment_from_payload("pull_request", _merged_pull_request()) is None
-    assert merge_from_payload("issue_comment", _issue_comment()) is None
+    assert comment_from_payload("pull_request_review", _approving_review()) is None
+    assert approval_from_payload("issue_comment", _issue_comment()) is None
 
 
 def test_only_our_secret_signs_a_delivery() -> None:
@@ -279,74 +312,77 @@ def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
     asyncio.run(scenario())
 
 
-def test_a_merge_is_handled_once_however_often_it_is_delivered() -> None:
+def test_an_approval_is_handled_once_however_often_it_is_delivered() -> None:
     async def scenario():
-        merges = []
+        approvals = []
         ingress = GithubIngress(
             repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
-            handle=_record([]), handle_merge=_record(merges),
+            handle=_record([]), handle_approval=_record(approvals),
         )
-        assert ingress.accept("pull_request", _merged_pull_request(number=7))
-        assert ingress.accept("pull_request", _merged_pull_request(number=7))
-        assert ingress.accept("pull_request", _merged_pull_request(number=8))
+        assert ingress.accept("pull_request_review", _approving_review(review_id=5))
+        assert ingress.accept("pull_request_review", _approving_review(review_id=5))
+        # A run sent back for changes and approved again is a second verdict on
+        # the same pull request, so the review rather than the pull request is
+        # what a redelivery is told apart by.
+        assert ingress.accept("pull_request_review", _approving_review(review_id=6))
         await ingress.drain()
-        assert [m.number for m in merges] == [7, 8]
+        assert [a.review_id for a in approvals] == ["5", "6"]
         await ingress.close()
 
     asyncio.run(scenario())
 
 
-def test_a_merge_is_refused_while_nothing_is_wired_to_act_on_it() -> None:
+def test_an_approval_is_refused_while_nothing_is_wired_to_act_on_it() -> None:
     ingress = GithubIngress(
         repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=_record([]),
     )
-    assert not ingress.accept("pull_request", _merged_pull_request())
-    # A pull request closed without merging is settled either way.
-    assert ingress.accept("pull_request", _merged_pull_request(merged=False))
+    assert not ingress.accept("pull_request_review", _approving_review())
+    # A review that decides nothing is settled either way.
+    assert ingress.accept("pull_request_review", _approving_review(state="commented"))
 
 
-def test_a_merge_from_another_repository_is_ignored() -> None:
-    merges = []
+def test_an_approval_from_another_repository_is_ignored() -> None:
+    approvals = []
     ingress = GithubIngress(
         repository="other/api", webhook_secret=lambda: WEBHOOK_SECRET,
-        handle=_record([]), handle_merge=_record(merges),
+        handle=_record([]), handle_approval=_record(approvals),
     )
-    assert ingress.accept("pull_request", _merged_pull_request())
-    assert merges == []
+    assert ingress.accept("pull_request_review", _approving_review())
+    assert approvals == []
 
 
-def test_a_failed_merge_can_be_redelivered() -> None:
-    """The verdict a merge carries is not something to drop on one failure."""
+def test_a_failed_approval_can_be_redelivered() -> None:
+    """The verdict an approval carries is not something to drop on one failure."""
 
     async def scenario():
         attempts = []
 
-        async def handle_merge(merged):
-            attempts.append(merged.number)
+        async def handle_approval(approved):
+            attempts.append(approved.review_id)
             if len(attempts) == 1:
                 raise RuntimeError("the graph engine is down")
 
         ingress = GithubIngress(
             repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
-            handle=_record([]), handle_merge=handle_merge,
+            handle=_record([]), handle_approval=handle_approval,
         )
-        assert ingress.accept("pull_request", _merged_pull_request())
+        assert ingress.accept("pull_request_review", _approving_review())
         await ingress.drain()
-        assert ingress.accept("pull_request", _merged_pull_request())
+        assert ingress.accept("pull_request_review", _approving_review())
         await ingress.drain()
-        assert attempts == [7, 7]
+        assert attempts == ["5", "5"]
         # Once it succeeds it is remembered again, so a third copy is dropped.
-        assert ingress.accept("pull_request", _merged_pull_request())
+        assert ingress.accept("pull_request_review", _approving_review())
         await ingress.drain()
-        assert attempts == [7, 7]
+        assert attempts == ["5", "5"]
         await ingress.close()
 
     asyncio.run(scenario())
 
 
-def test_a_merge_does_not_take_a_row_on_the_comment_panel() -> None:
+def test_an_approval_does_not_take_a_row_on_the_comment_panel() -> None:
     """The panel is a window on comments somebody is waiting for an answer to;
-    a merge is a decision this process acts on, not a conversation."""
+    an approval is a verdict this process acts on, not a conversation."""
 
     async def scenario():
         from engine.apps.web.github_activity import GithubActivityLog
@@ -354,9 +390,9 @@ def test_a_merge_does_not_take_a_row_on_the_comment_panel() -> None:
         activity = GithubActivityLog()
         ingress = GithubIngress(
             repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
-            handle=_record([]), handle_merge=_record([]), activity=activity,
+            handle=_record([]), handle_approval=_record([]), activity=activity,
         )
-        assert ingress.accept("pull_request", _merged_pull_request())
+        assert ingress.accept("pull_request_review", _approving_review())
         await ingress.drain()
         assert activity.recent() == ()
         await ingress.close()
