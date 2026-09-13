@@ -55,6 +55,13 @@ class EventKind(Enum):
     TOOL_RESULT = "tool.result"
     """What that call returned: `callId`, `result`."""
     APPROVAL_REQUESTED = "approval.requested"
+    """A decision was asked for: `approvalId`, `kind`, `reason`, `command`,
+    `toolName`, `toolCallId`, `autoApproved`.
+
+    `autoApproved` is what separates a question from a formality: a run with
+    auto-approve on raises the same request and answers it itself, so a reader
+    that pages a person reads this before deciding to.
+    """
     APPROVAL_RESOLVED = "approval.resolved"
     STEERING_RECEIVED = "steering.received"
     """A message was routed to an execution that was already running."""
