@@ -5,6 +5,9 @@ seconds and retries a delivery that took longer, so the route authenticates,
 enqueues, and acknowledges rather than waiting for the work: a reply that
 arrived late would otherwise be indistinguishable from a second copy of the
 same comment.
+
+Two kinds of delivery are read: a comment, which is somebody asking for
+something, and a merge, which is somebody accepting the work.
 """
 from __future__ import annotations
 
@@ -26,10 +29,17 @@ if TYPE_CHECKING:  # pragma: no cover - imported for the type alone
 
 log = logging.getLogger(__name__)
 
+#: The delivery kinds a comment arrives as.
+COMMENT_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
+
+#: The delivery kind a merge arrives as. A pull request's whole lifecycle comes
+#: on this event; only ``closed`` with ``merged`` set is read here.
+MERGE_EVENT = "pull_request"
+
 #: The delivery kinds this route acts on. Anything else is acknowledged and
 #: dropped -- a GitHub app subscribed to more events than Engine reads is a
 #: configuration this route tolerates rather than an error it reports.
-HANDLED_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
+HANDLED_EVENTS = COMMENT_EVENTS | {MERGE_EVENT}
 
 #: Initial affiliation filter. These labels do not prove write access; the
 #: concierge checks effective repository permissions before steering a run.
@@ -42,7 +52,7 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: than this limit.
 MAX_BODY_BYTES = 2 * 1024 * 1024
 
-#: How many comment identities are remembered for deduplication.
+#: How many delivery identities are remembered for deduplication.
 _SEEN_LIMIT = 4096
 
 
@@ -60,6 +70,17 @@ class GithubComment:
     is_pull_request: bool = False
     #: The review comment this one answers, for a reply inside a review thread.
     in_reply_to_id: str = ""
+
+
+@dataclass(frozen=True)
+class GithubMerge:
+    """A pull request that has just been merged, as this process reads it."""
+
+    repository: str
+    number: int
+    author: str
+    """Whoever pressed merge, for the log. Empty when GitHub sent no account."""
+    url: str
 
 
 def verify_signature(webhook_secret: str, signature: str, body: bytes) -> bool:
@@ -89,7 +110,7 @@ def comment_from_payload(
     an ordinary ``User`` and typically a collaborator, so it would pass every
     other check here and Engine would answer itself forever.
     """
-    if event not in HANDLED_EVENTS or payload.get("action") != "created":
+    if event not in COMMENT_EVENTS or payload.get("action") != "created":
         return None
     comment = payload.get("comment")
     repository = payload.get("repository")
@@ -137,8 +158,43 @@ def comment_from_payload(
     )
 
 
+def merge_from_payload(event: str, payload: Mapping[str, object]) -> GithubMerge | None:
+    """The merge in a delivery, or ``None`` for anything that is not one.
+
+    A pull request closed without merging decides nothing -- the work was
+    abandoned, not accepted -- so ``merged`` is what is read rather than the
+    action alone.
+
+    There is no author check here, unlike a comment's. Merging is already the
+    authority to change the repository: GitHub only accepts a merge from
+    somebody with write access, so the merge itself is the proof that the
+    person who made it could have approved the run in the web UI instead.
+    """
+    if event != MERGE_EVENT or payload.get("action") != "closed":
+        return None
+    pull_request = payload.get("pull_request")
+    repository = payload.get("repository")
+    if not isinstance(pull_request, dict) or not isinstance(repository, dict):
+        return None
+    if pull_request.get("merged") is not True:
+        return None
+    full_name, number = repository.get("full_name"), pull_request.get("number")
+    if not isinstance(full_name, str) or not full_name:
+        return None
+    if not isinstance(number, int) or isinstance(number, bool):
+        return None
+    merged_by = pull_request.get("merged_by")
+    login = merged_by.get("login") if isinstance(merged_by, dict) else None
+    return GithubMerge(
+        repository=full_name,
+        number=number,
+        author=login if isinstance(login, str) else "",
+        url=str(pull_request.get("html_url") or ""),
+    )
+
+
 class GithubIngress:
-    """Bounded background queue, deduplicated by comment identity."""
+    """Bounded background queue, deduplicated by delivery identity."""
 
     def __init__(
         self,
@@ -146,6 +202,7 @@ class GithubIngress:
         webhook_secret: Callable[[], str] = lambda: "",
         repository: str = "",
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
+        handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         self_login: Callable[[], str] = lambda: "",
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
@@ -156,13 +213,16 @@ class GithubIngress:
         self._repository = repository
         self._self_login = self_login
         self._handle = handle
+        self._handle_merge = handle_merge
         self._verify_signature = verify_signature
         self._max_body_bytes = max_body_bytes
         # Where a comment's progress is written down for the web UI. Recording
         # is bookkeeping and never a reason to refuse a delivery, so a missing
         # log is a deployment with no panel rather than a failure here.
         self._activity = activity
-        self._queue: asyncio.Queue[GithubComment] = asyncio.Queue(maxsize=capacity)
+        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubMerge]] = (
+            asyncio.Queue(maxsize=capacity)
+        )
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._worker: asyncio.Task[None] | None = None
 
@@ -230,32 +290,57 @@ class GithubIngress:
         delivery GitHub can redeliver beats a 200 that loses the comment.
         """
         comment = comment_from_payload(event, payload, self_login=self._self_login())
-        if comment is None:
-            # Nothing to do with this delivery, whether or not a handler is
-            # wired: settle it, so a webhook subscribed to more events than
-            # Engine reads does not retry every one of them forever.
-            return True
+        if comment is not None:
+            return self._enqueue(
+                comment, "comment", (comment.event, comment.comment_id),
+                wired=self._handle is not None,
+            )
+        merged = merge_from_payload(event, payload)
+        if merged is not None:
+            # By the pull request rather than by a delivery id: what is acted on
+            # is that this pull request is merged, and a second delivery saying
+            # so again asks for nothing new.
+            return self._enqueue(
+                merged, "merged pull request",
+                (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}"),
+                wired=self._handle_merge is not None,
+            )
+        # Nothing to do with this delivery, whether or not a handler is
+        # wired: settle it, so a webhook subscribed to more events than
+        # Engine reads does not retry every one of them forever.
+        return True
+
+    def _enqueue(
+        self,
+        delivery: GithubComment | GithubMerge,
+        subject: str,
+        identity: tuple[str, str],
+        *,
+        wired: bool,
+    ) -> bool:
+        """Queue one read delivery, or say why it is being refused."""
         if not self._repository:
-            log.warning("a GitHub comment was delivered but no target repository is configured")
-            return False
-        if comment.repository.lower() != self._repository.lower():
-            # A shared App secret authenticates deliveries from other repos too.
-            # Ignore them before queueing or remembering their comment identities.
-            return True
-        if self._handle is None:
             log.warning(
-                "a GitHub comment was delivered but nothing is wired to answer it; "
-                "refusing the delivery rather than acknowledging and dropping it"
+                "a GitHub %s was delivered but no target repository is configured", subject
             )
             return False
-        identity = (comment.event, comment.comment_id)
+        if delivery.repository.lower() != self._repository.lower():
+            # A shared App secret authenticates deliveries from other repos too.
+            # Ignore them before queueing or remembering their identities.
+            return True
+        if not wired:
+            log.warning(
+                "a GitHub %s was delivered but nothing is wired to answer it; "
+                "refusing the delivery rather than acknowledging and dropping it", subject,
+            )
+            return False
         if identity in self._seen:
             return True
         if self._queue.full():
             return False
-        self._queue.put_nowait(comment)
-        if self._activity is not None:
-            self._activity.seen(comment)
+        self._queue.put_nowait((identity, delivery))
+        if self._activity is not None and isinstance(delivery, GithubComment):
+            self._activity.seen(delivery)
         self._seen[identity] = None
         while len(self._seen) > _SEEN_LIMIT:
             self._seen.popitem(last=False)
@@ -265,26 +350,33 @@ class GithubIngress:
 
     async def _run(self) -> None:
         while True:
-            comment = await self._queue.get()
+            identity, delivery = await self._queue.get()
+            # Only a comment has a row on the panel; a merge is a decision this
+            # process makes, not a conversation somebody is following.
+            comment = delivery if isinstance(delivery, GithubComment) else None
             try:
-                assert self._handle is not None  # nothing is queued without one
-                if self._activity is not None:
-                    self._activity.started(comment)
-                await self._handle(comment)
+                if isinstance(delivery, GithubComment):
+                    assert self._handle is not None  # nothing is queued without one
+                    if self._activity is not None:
+                        self._activity.started(delivery)
+                    await self._handle(delivery)
+                else:
+                    assert self._handle_merge is not None
+                    await self._handle_merge(delivery)
             except Exception as failure:
-                if self._activity is not None:
+                if comment is not None and self._activity is not None:
                     self._activity.failed(str(failure) or type(failure).__name__)
                 # The delivery was acknowledged, so GitHub will not retry on its
-                # own; forgetting the comment is what makes a redelivery -- by
-                # hand from the delivery log, or by a later duplicate -- able to
-                # pick the work back up instead of being deduplicated away.
-                self._seen.pop((comment.event, comment.comment_id), None)
+                # own; forgetting it is what makes a redelivery -- by hand from
+                # the delivery log, or by a later duplicate -- able to pick the
+                # work back up instead of being deduplicated away.
+                self._seen.pop(identity, None)
                 log.exception(
-                    "GitHub comment handling failed; %s on %s#%s can be redelivered",
-                    comment.comment_id, comment.repository, comment.number,
+                    "GitHub delivery handling failed; %s on %s#%s can be redelivered",
+                    identity[1], delivery.repository, delivery.number,
                 )
             finally:
-                if self._activity is not None:
+                if comment is not None and self._activity is not None:
                     self._activity.finished(comment)
                 self._queue.task_done()
 

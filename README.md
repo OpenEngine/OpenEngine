@@ -153,7 +153,7 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 ```
 
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
-To receive comments from GitHub, see the
+To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
 
 To diagnose interactive runner protocol incompatibilities, set
