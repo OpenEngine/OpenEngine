@@ -889,6 +889,11 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         ("https://gitlab.example.com/x/y/pull/7/-/merge_requests/1#note_123", None),
         ("https://github.com/acme/api/issues/42", None),
         ("https://github.com/acme/api", None),
+        # Two pull requests in one path. Read from the front this is acme/app#12
+        # and read from the back -- which is how CI reads it -- it is #99, so it
+        # names no one pull request and is refused rather than resolved.
+        ("https://github.com/acme/app/pull/12/x/victim/repo/pull/99", None),
+        ("https://github.com/acme/app/pull/12/pull/99", None),
     ],
 )
 def test_a_github_pull_request_is_read_off_the_review_url(

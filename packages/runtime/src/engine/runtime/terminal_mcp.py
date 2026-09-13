@@ -1134,6 +1134,13 @@ def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
     Preserve github.com's owner/repo keys and namespace Enterprise repositories
     by authority. Use the returned path to follow renames and normalize casing.
     GitLab merge-request URLs do not match this path.
+
+    A second change-request marker further down the path is refused rather than
+    read past. This reads the first `pull/<number>` and `CICheck` reads the
+    last, so a path carrying both -- `/acme/app/pull/12/x/victim/repo/pull/99`
+    -- is one pull request to whoever asks whose it is and another to whoever
+    waits on its CI. One URL naming two pull requests is exactly the misbinding
+    the caller is asking about, so it is not a name at all.
     """
     parsed = urlsplit(pr_url)
     if parsed.scheme not in ("https", "http") or not parsed.hostname:
@@ -1142,6 +1149,7 @@ def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
     if (
         len(segments) < 4
         or "-" in segments
+        or "pull" in segments[4:]
         or not all(segments[:2])
         or segments[2] != "pull"
         or not segments[3].isdigit()

@@ -177,3 +177,30 @@ def test_missing_required_check_times_out(execution):
     )
     with pytest.raises(TimeoutError):
         asyncio.run(CICheck(poll_interval=0, timeout=0.01)(STATE))
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        "https://github.com/acme/app/pull/12/x/victim/repo/pull/99",
+        "https://github.com/acme/app/pull/12/pull/99",
+    ],
+)
+def test_no_url_names_one_pull_request_to_the_guard_and_another_to_ci(
+    execution, pr_url: str
+) -> None:
+    """A URL CI reads as #99 must not pass as #12 where ownership is decided.
+
+    `complete_step` refuses a `pr_url` that is not the run's, and identifies it
+    by the repository and number it reads off the front of the path. CI takes
+    the number off the back. Were the two to disagree the guard would be
+    approving one pull request while the run waited on, and reported the
+    verdict of, another -- so a path holding both is refused on both sides
+    rather than resolved differently on each.
+    """
+    from engine.runtime.terminal_mcp import _github_pull_request
+
+    assert _github_pull_request(pr_url) is None
+    execution.runtime.source_control.list_pipeline_status.return_value = status()
+    with pytest.raises(ValueError, match="pull request URL"):
+        asyncio.run(CICheck()({**STATE, "pr_url": pr_url}))

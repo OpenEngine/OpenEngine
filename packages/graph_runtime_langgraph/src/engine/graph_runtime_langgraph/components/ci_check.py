@@ -51,8 +51,19 @@ class CICheck:
             raise ValueError("CICheck needs workspaceId from an upstream WorkspaceNode")
         url = state.get("pr_url")
         parsed = urlsplit(url) if isinstance(url, str) else None
+        # The prefix may not itself hold a change request, so a path naming two
+        # -- `/acme/app/pull/12/x/victim/repo/pull/99` -- resolves to neither
+        # rather than to the last. `complete_step` reads the first when deciding
+        # whether the run may report the URL at all; a run that owns no pull
+        # request for it to check against reports freely and arrives here, and
+        # waiting on the verdict of a pull request nobody touched is the
+        # misbinding both sides exist to prevent.
         match = (
-            re.fullmatch(r"/.+/(?:pull|-/merge_requests)/([1-9][0-9]*)/?", parsed.path)
+            re.fullmatch(
+                r"/(?:(?!/pull/|/-/merge_requests/).)+"
+                r"/(?:pull|-/merge_requests)/([1-9][0-9]*)/?",
+                parsed.path,
+            )
             if parsed else None
         )
         if (
