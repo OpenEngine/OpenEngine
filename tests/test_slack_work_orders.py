@@ -1278,7 +1278,8 @@ def test_checked_in_slack_repository_is_current_checkout():
 
 @pytest.mark.parametrize("ending", ("finished", "human_review", "failed"))
 @pytest.mark.parametrize("before_row", (False, True))
-def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, before_row):
+@pytest.mark.parametrize("pr_url", ("https://github.com/example/repo/pull/42", None))
+def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, before_row, pr_url):
     from starlette.testclient import TestClient
     from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
     from engine.graph_runtime_langgraph.workflows import sqlite_runtime
@@ -1290,7 +1291,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     configured = load_engine_config(Path(__file__).resolve().parents[1] / "engine.toml")
     assert configured.config.work_orders.workflow == "implementation-review-rerank"
     builder = StateGraph(State)
-    builder.add_node("work", lambda state: {"received": state["inputs"]})
+    builder.add_node("work", lambda state: {"received": state["inputs"], "pr_url": pr_url})
     builder.add_edge(START, "work")
     if ending == "human_review":
         from engine.graph_runtime_langgraph.components import HumanReviewNode
@@ -1372,5 +1373,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
         assert (channel, thread) == ("C", "1")
         assert message.mention == ("" if ending == "finished" else "U")
         assert any(str(runs[0].run_id) in link.url for link in message.links)
+        pr_links = [link.url for link in message.links if link.label == "View pull request"]
+        assert pr_links == ([pr_url] if ending == "human_review" and pr_url else [])
         assert any(message.text == "*work* started." for _, message, _ in communications.posts)
     assert any(message.links for _, message, _ in communications.posts)
