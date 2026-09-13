@@ -90,6 +90,8 @@ PATIENCE = 30.0
 def registry(
     tmp_path: Path,
     *,
+    cancel_prompt: str = "",
+    cancel_text: str = "",
     asks: bool = False,
     asks_every: bool = False,
     response: str = DONE,
@@ -112,6 +114,8 @@ def registry(
                 name=AGENT,
                 command=[sys.executable, str(STUB)],
                 env={
+                    "STUB_ACP_CANCEL_PROMPT": cancel_prompt,
+                    "STUB_ACP_CANCEL_TEXT": cancel_text,
                     "STUB_ACP_STATE": str(tmp_path),
                     "STUB_ACP_LOG": str(tmp_path / "agent.log"),
                     "STUB_ACP_RESPONSE": response,
@@ -1223,7 +1227,10 @@ def test_steering_does_not_send_a_terminal_correction(tmp_path: Path) -> None:
     async def scenario() -> tuple[list[RuntimeEvent], Any]:
         async with runtime_over(
             tmp_path,
-            registry(tmp_path, response="", waits_for_cancel=True),
+            # Model the provider cancellation explicitly. An empty end_turn
+            # is still a completed turn and must obey the terminal contract.
+            registry(tmp_path, response="", waits_for_cancel=True,
+                     cancel_prompt="Use the fast suite."),
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
@@ -2289,3 +2296,158 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
     assert found[0].node_id == NodeId("reranker")
     assert found[0].url == "https://github.com/acme/api/pull/42#c123"
     assert found[0].posted_at
+
+
+@pytest.mark.parametrize("partial", ["", "I started looking at the change."])
+@pytest.mark.parametrize("terminal", ["complete_step", "fail_step"])
+def test_cancelled_reopening_waits_for_input_without_harness_correction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, partial: str, terminal: str,
+) -> None:
+    from engine.graph_runtime_langgraph.executions import NodeExecution
+
+    async def scenario() -> list[RuntimeEvent]:
+        waiting = asyncio.Event()
+        correction = asyncio.Event()
+        next_message = NodeExecution.next_message
+        say = NodeExecution.say
+        waits = 0
+
+        async def observe_wait(self: NodeExecution) -> str:
+            nonlocal waits
+            waits += 1
+            if waits == 2:
+                waiting.set()
+            return await next_message(self)
+
+        async def observe_say(self: NodeExecution, text: str, role: str = "assistant") -> None:
+            if text == INVALID_COMPLETION_ERROR:
+                correction.set()
+            await say(self, text, role)
+
+        monkeypatch.setattr(NodeExecution, "next_message", observe_wait)
+        monkeypatch.setattr(NodeExecution, "say", observe_say)
+        async with runtime_over(
+            tmp_path,
+            registry(tmp_path, uses_mcp=True, mcp_clarify=True,
+                     mcp_terminal=terminal, cancel_prompt=REOPEN, cancel_text=partial),
+            pipeline_with_run_bound_mcp, RecordingSourceControl(),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            await until(log, run.run_id, "transcript", count=2)
+            await runtime.snapshot(run.run_id)
+            await runtime.steer(run.run_id, REOPEN)
+            tasks = [asyncio.create_task(event.wait()) for event in (waiting, correction)]
+            try:
+                async with asyncio.timeout(PATIENCE):
+                    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                assert waiting.is_set(), "cancelled steering triggered a harness correction"
+                assert not correction.is_set()
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            await runtime.steer(run.run_id, "Continue after cancellation.")
+            return await until(log, run.run_id,
+                               "run.finished" if terminal == "complete_step" else "run.failed")
+
+    events = asyncio.run(scenario())
+    assert prompts(tmp_path) == [PROMPT, REOPEN, "Continue after cancellation."]
+    assert INVALID_COMPLETION_ERROR not in [text for _, text in transcript(events)]
+
+
+@pytest.mark.parametrize("partial", ["", "Working on it."])
+def test_steering_waits_for_provider_cancellation_acknowledgement(partial: str) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from engine.graph_runtime_langgraph.acp import _Turn
+    from engine.graph_runtime_langgraph.executions import NodeExecution
+    from engine.graph_runtime import ExecutionId
+    from langgraph_acp import ACPEvent, ACPEventType
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+        acknowledge = asyncio.Event()
+        closed = asyncio.Event()
+
+        class Session:
+            async def prompt(self, prompt: Any) -> AsyncIterator[ACPEvent]:
+                started.set()
+                try:
+                    yield ACPEvent(agent=AGENT, type=ACPEventType.MESSAGE_DELTA,
+                                   data={"content": {"type": "text", "text": partial}})
+                    await acknowledge.wait()
+                    yield ACPEvent(agent=AGENT, type=ACPEventType.PROMPT_COMPLETED,
+                                   data={"stopReason": "cancelled"})
+                finally:
+                    closed.set()
+
+            async def cancel(self) -> None:
+                cancelled.set()
+
+        execution = NodeExecution(SimpleNamespace(publish=AsyncMock()), RunId("run"),
+                                  ExecutionId("execution"), IMPLEMENTATION)
+        node = ACPNode(agent=AGENT, cwd="/tmp", prompt=PROMPT)
+        task = asyncio.create_task(node._speak(_Turn(node, execution, "session"), Session(), PROMPT))
+        observer = asyncio.create_task(cancelled.wait())
+        try:
+            await started.wait()
+            await execution.steer(REOPEN)
+            async with asyncio.timeout(PATIENCE):
+                await asyncio.wait((task, observer), return_when=asyncio.FIRST_COMPLETED)
+            assert cancelled.is_set(), "steering abandoned the reader instead of cancelling the provider"
+            assert not task.done(), "replacement can start before the old prompt acknowledges cancellation"
+            assert not closed.is_set()
+            acknowledge.set()
+            await task
+            assert closed.is_set()
+            assert execution.pending_messages() == (REOPEN,)
+        finally:
+            task.cancel()
+            observer.cancel()
+            await asyncio.gather(task, observer, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("follow_up", [False, True])
+def test_cancelled_turn_accepts_late_terminal_result_and_simultaneous_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, follow_up: bool,
+) -> None:
+    from engine.graph_runtime_langgraph.acp import BoundMcpServer
+    from engine.graph_runtime_langgraph.executions import NodeExecution
+
+    async def scenario() -> Any:
+        waiting = asyncio.Event()
+        terminal: asyncio.Future[RunFailed] = asyncio.get_running_loop().create_future()
+        next_message = NodeExecution.next_message
+
+        async def observe_wait(self: NodeExecution) -> str:
+            waiting.set()
+            return await next_message(self)
+
+        monkeypatch.setattr(NodeExecution, "next_message", observe_wait)
+
+        async def result() -> RunFailed:
+            return await terminal
+
+        @asynccontextmanager
+        async def binding(*args: Any) -> AsyncIterator[BoundMcpServer]:
+            yield BoundMcpServer(config=WORKFLOW_MCP_SERVER, result=result)
+
+        def graph(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
+            return pipeline(saver, agents, where, mcp_server_bindings=(binding,))
+
+        async with runtime_over(tmp_path, registry(tmp_path, cancel_prompt=PROMPT), graph) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            async with asyncio.timeout(PATIENCE):
+                await waiting.wait()
+            if follow_up:
+                await runtime.steer(run.run_id, REOPEN)
+            terminal.set_result(RunFailed(run_id=run.run_id, reason="Accepted after cancellation."))
+            await until(log, run.run_id, "run.failed")
+            return await runtime.snapshot(run.run_id)
+
+    final = asyncio.run(scenario())
+    assert final.error == "Accepted after cancellation."
+    assert prompts(tmp_path) == [PROMPT, *([REOPEN] if follow_up else [])]

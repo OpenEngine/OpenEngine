@@ -114,6 +114,14 @@ class BoundMcpServer:
     clarification: Callable[[], Awaitable[None]] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _TurnResult:
+    """Text is transcript content, never evidence that a turn completed."""
+
+    text: str
+    cancelled: bool = False
+
+
 class _Clarified:
     """An accepted request to pause this node without committing its state."""
 
@@ -694,7 +702,6 @@ class ACPNode:
                 corrections = 0
                 said = ""
                 terminal_result: TerminalEvent | None = None
-                steering_replaced_empty_turn = False
                 while True:
                     result = await self._speak_or_terminal(
                         turn, session, asked,
@@ -705,7 +712,7 @@ class ACPNode:
                         # Keep the accepted result while queued steering runs.
                         # Racing its completed task again would cancel those turns.
                         terminal_result = result
-                        result = ""
+                        result = _TurnResult("")
                     if result is _CLARIFIED:
                         # Do not return from the LangGraph node: that would commit
                         # this superstep and follow its outgoing edge. The live
@@ -718,47 +725,34 @@ class ACPNode:
                             if pending_prompts
                             else await execution.next_message()
                         )
-                        steering_replaced_empty_turn = False
                         await execution.say(asked, role="user")
                         continue
 
-                    said = result
+                    said = result.text
                     pending_prompts.extend(execution.pending_messages())
                     if pending_prompts:
                         # Steering that arrived while the agent worked is a further
                         # turn in this same conversation. Process one at a time; the
                         # next loop drains anything queued during the reply.
                         asked = pending_prompts.popleft()
-                        steering_replaced_empty_turn = not said
                         await execution.say(asked, role="user")
                         continue
                     if terminal_result is not None:
                         return self._terminal_update(terminal_result)
-                    if not terminal_tasks:
-                        return {self.output_key or str(execution.node_id): said}
-                    if steering_replaced_empty_turn and not said:
-                        # Some providers finish the replacement turn with the
-                        # cancellation that interrupted its predecessor. That
-                        # empty turn is not an attempt to finish the work order:
-                        # keep the conversation open instead of following the
-                        # person's steering with an internal correction.
-                        done, _ = await asyncio.wait(terminal_tasks, timeout=1.0)
-                        completed = next(
-                            (task for task in terminal_tasks if task in done), None
+                    if result.cancelled:
+                        # Cancellation is not an attempted completion, even if
+                        # the provider emitted text first. Wait on real input or
+                        # an accepted result; never manufacture a correction.
+                        asked, terminal_result = await self._message_or_terminal(
+                            execution, terminal_tasks
                         )
-                        if completed is not None:
-                            terminal_result = completed.result()
-                        pending_prompts.extend(execution.pending_messages())
-                        if terminal_result is not None and not pending_prompts:
+                        if asked is None:
+                            assert terminal_result is not None
                             return self._terminal_update(terminal_result)
-                        asked = (
-                            pending_prompts.popleft()
-                            if pending_prompts
-                            else await execution.next_message()
-                        )
-                        steering_replaced_empty_turn = False
                         await execution.say(asked, role="user")
                         continue
+                    if not terminal_tasks:
+                        return {self.output_key or str(execution.node_id): said}
                     if corrections >= INVALID_COMPLETION_CORRECTIONS:
                         raise RuntimeError(
                             f"the {execution.node_id} agent ended "
@@ -877,7 +871,7 @@ class ACPNode:
         prompt: ACPPrompt,
         terminal_tasks: list[asyncio.Task[TerminalEvent]],
         clarifications: list[Callable[[], Awaitable[None]]],
-    ) -> str | TerminalEvent | _Clarified:
+    ) -> _TurnResult | TerminalEvent | _Clarified:
         """Wait for a turn and its accepted broker result, preferring results."""
         if not terminal_tasks and not clarifications:
             return await self._speak(turn, session, prompt)
@@ -940,10 +934,29 @@ class ACPNode:
                         return completed.result()
                 raise
         finally:
+            if not speaking.done():
+                speaking.cancel()
+            await asyncio.gather(speaking, return_exceptions=True)
             for task in clarification_tasks:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*clarification_tasks, return_exceptions=True)
+
+    async def _message_or_terminal(
+        self, execution: NodeExecution, terminal_tasks: list[asyncio.Task[TerminalEvent]],
+    ) -> tuple[str | None, TerminalEvent | None]:
+        # Retain both when they arrive together. Racing a completed terminal
+        # task again would cancel the turn carrying this very message.
+        message = asyncio.create_task(execution.next_message())
+        try:
+            await asyncio.wait(
+                (message, *terminal_tasks), return_when=asyncio.FIRST_COMPLETED
+            )
+            terminal = next((task.result() for task in terminal_tasks if task.done()), None)
+            return message.result() if message.done() else None, terminal
+        finally:
+            message.cancel()
+            await asyncio.gather(message, return_exceptions=True)
 
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         """Turn the broker's terminal result into graph state or a run failure."""
@@ -955,7 +968,9 @@ class ACPNode:
         update.update({output.name: output.value for output in event.outputs})
         return update
 
-    async def _speak(self, turn: _Turn, session: ACPSession, prompt: ACPPrompt) -> str:
+    async def _speak(
+        self, turn: _Turn, session: ACPSession, prompt: ACPPrompt,
+    ) -> _TurnResult:
         """One ACP turn, with what happens in it republished as runtime events.
 
         Steering cancels a turn that is doing ordinary work so the instruction
@@ -980,6 +995,7 @@ class ACPNode:
         """
         execution = turn.execution
         said: list[str] = []
+        cancelled = False
         pending: list[str] = []
 
         async def flush() -> None:
@@ -995,7 +1011,10 @@ class ACPNode:
         turn.approval_requested = False
 
         async def consume() -> None:
+            nonlocal cancelled
             async for event in session.prompt(prompt):
+                if event.type == ACPEventType.PROMPT_COMPLETED:
+                    cancelled = event.data.get("stopReason") == "cancelled"
                 if event.type in _INTERRUPTS_THE_NARRATION:
                     await flush()
                 await self._republish(execution, event)
@@ -1015,12 +1034,13 @@ class ACPNode:
             done, _ = await asyncio.wait(
                 (speaking, steering), return_when=asyncio.FIRST_COMPLETED
             )
-            if steering in done and not turn.approval_requested:
-                speaking.cancel()
-                await asyncio.gather(speaking, return_exceptions=True)
-                await flush()
-            else:
-                await speaking
+            if steering in done and not speaking.done() and not turn.approval_requested:
+                # session/cancel is a notification, not an acknowledgement.
+                # Keep reading the OLD prompt until its response arrives before
+                # opening another turn on this session. Abandoning this reader
+                # lets old updates and cancellation spill into the next prompt.
+                await session.cancel()
+            await speaking
         finally:
             if not speaking.done():
                 speaking.cancel()
@@ -1034,7 +1054,7 @@ class ACPNode:
             turn.narrating = None
         # The node's durable output is still the whole turn: what the graph
         # carries forward does not change with where the words were published.
-        return "".join(said)
+        return _TurnResult("".join(said), cancelled=cancelled)
 
     async def _republish(self, execution: NodeExecution, event: Any) -> None:
         if event.type == ACPEventType.TOOL_STARTED:
