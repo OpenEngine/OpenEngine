@@ -1263,8 +1263,8 @@ def test_a_step_that_opened_nothing_reports_the_run_s_pull_request(
 ) -> None:
     owns = "https://github.com/acme/api/pull/42"
 
-    async def owned() -> tuple[str, ...]:
-        return (owns,)
+    async def owned() -> tuple[OpenedPullRequest, ...]:
+        return (OpenedPullRequest("acme/api", 42, owns),)
 
     async def scenario() -> dict[str, object]:
         return await _complete_with(_completing_broker(owned), reported)
@@ -1286,7 +1286,7 @@ def test_a_step_reports_what_it_opened_even_when_the_record_has_not_caught_up() 
     made a liar by a store that has not caught up.
     """
 
-    async def owned() -> tuple[str, ...]:
+    async def owned() -> tuple[OpenedPullRequest, ...]:
         return ()
 
     async def scenario() -> dict[str, object]:
@@ -1303,7 +1303,7 @@ def test_a_run_working_on_no_pull_request_reports_freely() -> None:
     wrong here, so an unrecorded run is left to report what it reports.
     """
 
-    async def owned() -> tuple[str, ...]:
+    async def owned() -> tuple[OpenedPullRequest, ...]:
         return ()
 
     async def scenario() -> dict[str, object]:
@@ -1330,7 +1330,7 @@ def test_an_unreachable_store_leaves_the_reported_pull_request_standing(
 ) -> None:
     """Refusing here would strand a finished step with nothing left to report."""
 
-    async def owned() -> tuple[str, ...]:
+    async def owned() -> tuple[OpenedPullRequest, ...]:
         raise RuntimeError("the store is gone")
 
     async def scenario() -> dict[str, object]:
@@ -1369,8 +1369,8 @@ def test_a_comment_goes_to_the_pull_request_the_run_is_working_on(
 
     owns = "https://github.com/acme/api/pull/42"
 
-    async def owned() -> tuple[str, ...]:
-        return (owns,)
+    async def owned() -> tuple[OpenedPullRequest, ...]:
+        return (OpenedPullRequest("acme/api", 42, owns),)
 
     source = AsyncMock()
     source.add_comment.return_value = CommentResult(123, f"{posted_to}#c123")
@@ -1415,7 +1415,7 @@ def test_a_comment_is_posted_freely_when_the_run_is_working_on_nothing() -> None
         1, "https://github.com/acme/api/pull/42#c1"
     )
 
-    async def owned() -> tuple[str, ...]:
+    async def owned() -> tuple[OpenedPullRequest, ...]:
         return ()
 
     async def scenario() -> dict[str, object]:
@@ -1485,3 +1485,39 @@ def test_an_opened_merge_request_is_written_down_like_a_pull_request() -> None:
     assert recorded == [
         OpenedPullRequest("gitlab.com/group/sub/project", 7, url)
     ]
+
+
+@pytest.mark.parametrize(
+    "reported, accepted",
+    [
+        ("https://github.com/acme/api/pull/42", True),
+        ("https://github.com/acme/api/pull/41", False),
+    ],
+)
+def test_a_record_that_kept_no_url_still_says_which_pull_request_is_the_run_s(
+    reported: str, accepted: bool
+) -> None:
+    """`url` is the one nullable column of the three the record carries.
+
+    The repository and number are its primary key. Were ownership read off
+    the URL, a row with none would contribute nothing -- and a run whose only
+    row is that one owns nothing, which is the state the guard fails open in,
+    so it would accept every `pr_url` there is on exactly the step it was
+    added to hold. The other half is as bad: a blank-url row for the right
+    pull request would refuse the correct URL and strand the step.
+    """
+
+    async def owned() -> tuple[OpenedPullRequest, ...]:
+        return (OpenedPullRequest("acme/api", 42, ""),)
+
+    async def scenario() -> dict[str, object]:
+        return await _complete_with(_completing_broker(owned), reported)
+
+    answer = asyncio.run(scenario())
+    assert answer["ok"] is accepted
+    if not accepted:
+        # Named the way a person writes it, since there is no URL to quote.
+        assert answer["error"] == (
+            "pr_url must name the pull request this run is working on, "
+            f"acme/api#42, not {reported}"
+        )

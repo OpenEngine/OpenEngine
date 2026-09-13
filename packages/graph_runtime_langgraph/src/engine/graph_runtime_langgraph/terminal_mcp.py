@@ -114,9 +114,18 @@ class TerminalMcpServer:
 
             broker.enable_pull_request_records(claim)
 
-        async def owned() -> tuple[str, ...]:
+        async def owned() -> tuple[OpenedPullRequest, ...]:
+            # Carried across as the repository and number the row is keyed by.
+            # Those are what the guard compares and what the record is certain
+            # of; `url` is nullable and decorative, so filtering on it would
+            # drop a row that says exactly which pull request the run took on
+            # -- and an ownership check that silently owns nothing accepts
+            # every `pr_url` there is.
             records = await store.pull_requests(execution.run_id)
-            return tuple(record.url for record in records if record.url)
+            return tuple(
+                OpenedPullRequest(record.repository, record.number, record.url)
+                for record in records
+            )
 
         broker.enable_pull_request_ownership(owned)
         async with broker:

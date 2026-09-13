@@ -72,12 +72,18 @@ CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 #: off the comments on the pull request would name whoever commented last.
 PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
 
-#: Say which pull requests this run is working on, by URL. Bound by whoever
-#: owns the durable store, which is where that answer outlives a step: the run
-#: that opened a pull request is still working on it during a later step that
-#: opened nothing of its own, and a run started to carry on somebody else's
-#: pull request is working on that one from the moment it was started.
-RunPullRequests = Callable[[], Awaitable[Sequence[str]]]
+#: Say which change requests this run is working on. Bound by whoever owns the
+#: durable store, which is where that answer outlives a step: the run that
+#: opened one is still working on it during a later step that opened nothing
+#: of its own, and a run started to carry on somebody else's is working on
+#: that one from the moment it was started.
+#:
+#: Answered as `OpenedPullRequest`, project and number and URL, rather than as
+#: URLs alone. The project and number are what a record is keyed by and what
+#: two spellings of one change request agree on; the URL is how a record says
+#: which it is in an error an agent has to read, and it is the one of the
+#: three a store may not have.
+RunPullRequests = Callable[[], Awaitable[Sequence["OpenedPullRequest"]]]
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -644,23 +650,28 @@ class TerminalMcpBroker:
         is the one act here that cannot be taken back once it is on the wrong
         change request.
         """
-        owned = self._opened_pull_requests + await self._recorded_pull_requests()
+        owned = dict(
+            [(_change_request_identity(one), one) for one in self._opened_pull_requests]
+            + [
+                ((record.repository, record.number), record.url)
+                for record in await self._recorded_pull_requests()
+            ]
+        )
         if not owned:
-            # Neither source knows of a pull request, so there is nothing to
+            # Neither source knows of a change request, so there is nothing to
             # call this one wrong against. A run whose work is written down
             # nowhere goes on working rather than being unable to finish a
             # step at all, the worse of the two failures to be wrong in.
             return None
-        identities = {_change_request_identity(one) for one in owned}
-        if _change_request_identity(url) in identities:
+        if _change_request_identity(url) in owned:
             return None
         return (
             "pr_url must name the pull request this run is working on, "
-            f"{' or '.join(dict.fromkeys(owned))}, not {url}"
+            f"{' or '.join(_named(one) for one in owned.items())}, not {url}"
         )
 
-    async def _recorded_pull_requests(self) -> tuple[str, ...]:
-        """The run's pull requests according to the store, if one is keeping them.
+    async def _recorded_pull_requests(self) -> tuple[OpenedPullRequest, ...]:
+        """The run's change requests according to the store, if one keeps them.
 
         A store that cannot be reached says nothing rather than nothing owned:
         refusing a correct URL would strand a finished step with no answer
@@ -1131,6 +1142,24 @@ def _comment_arguments(
         if file is not None or line is not None:
             raise ValueError("in_reply_to_id cannot be combined with file or line")
     return pr_url, comment, file, line, in_reply_to_id
+
+
+def _named(owned: tuple[tuple[str, int] | str, str]) -> str:
+    """How to call a change request the run owns, in an error a step will read.
+
+    Its URL, which is what the step has to report back, when the record that
+    named it kept one. A record need not: `url` is the one nullable column of
+    the three, so a row that says exactly which change request the run took on
+    still has to be able to say so, and `project#number` is that same claim
+    written the way a person writes it.
+    """
+    identity, url = owned
+    if url:
+        return url
+    if isinstance(identity, str):
+        return identity
+    project, number = identity
+    return f"{project}#{number}"
 
 
 def _change_request_identity(pr_url: str) -> tuple[str, int] | str:
