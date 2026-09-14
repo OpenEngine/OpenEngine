@@ -195,3 +195,32 @@ def test_a_nested_project_is_still_read() -> None:
     assert source._merge_request(
         "https://gitlab.com/group/sub.one/project/-/merge_requests/7"
     ) == ("group%2Fsub.one%2Fproject", 7)
+
+
+def test_a_url_the_shared_reader_refuses_is_not_sent_to_gitlab() -> None:
+    """The adapter reads through the same reader as the guard and the gate.
+
+    It used to parse the URL itself, and read `x/y/pull/7/-/merge_requests/1`
+    as project `x/y/pull/7` -- a URL the reader refuses because it names a
+    pull request and a merge request at once.
+    """
+    from engine.runtime.change_requests import change_request
+
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    for mr_url in (
+        "https://gitlab.com/x/y/pull/7/-/merge_requests/1",
+        "https://gitlab.com/x/y/pull/7",
+    ):
+        with pytest.raises(ValueError, match="merge-request URL"):
+            asyncio.run(source.add_comment(mr_url, "Finding."))
+    assert change_request("https://gitlab.com/x/y/pull/7/-/merge_requests/1") is None
+    transport.request.assert_not_awaited()
+
+
+def test_a_project_path_is_sent_as_the_url_wrote_it() -> None:
+    """The reader's identity is lowercased; the path the API is asked about is not."""
+    source = GitLabSourceControl("token", transport=AsyncMock())
+    assert source._merge_request(
+        "https://gitlab.com/Group/Sub/Project/-/merge_requests/7#note_1"
+    ) == ("Group%2FSub%2FProject", 7)

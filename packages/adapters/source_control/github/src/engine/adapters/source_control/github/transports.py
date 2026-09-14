@@ -173,12 +173,16 @@ class GitHubCliTransport:
 
     @property
     def host(self) -> str:
-        """Where `gh` is logged in, which is not this process's to choose.
+        """The GitHub every `gh api` call from here is pinned to.
 
-        `gh` resolves its host from `GH_HOST` or from its own stored login, so
-        an Enterprise install sends there whatever `api_url` the adapter was
-        constructed with. Read from the same environment variable `gh` reads,
-        and nameable outright for a login this cannot see.
+        Left to itself `gh` sends to its own stored default login, which this
+        process cannot see and a developer can switch at any time -- so a host
+        read from anywhere else would be a guess, and a wrong guess checks
+        URLs against github.com while writing to Enterprise. Every call passes
+        `--hostname` instead, which makes this the host requests reach rather
+        than a description of it: taken from `GH_HOST` as `gh` would, or named
+        outright, and github.com otherwise. A `gh` not logged in there fails
+        loudly rather than writing somewhere else.
         """
         return self._host
 
@@ -186,6 +190,8 @@ class GitHubCliTransport:
         arguments = [
             "api",
             path,
+            "--hostname",
+            self._host,
             "--method",
             method,
             "--header",
@@ -211,7 +217,9 @@ class GitHubCliTransport:
             raise GitHubTransportError("gh returned a non-JSON API response") from error
 
     async def download(self, path: str) -> bytes:
-        return await self._run("api", path, "--method", "GET")
+        return await self._run(
+            "api", path, "--hostname", self._host, "--method", "GET"
+        )
 
     async def _run(self, *arguments: str, input_bytes: bytes | None = None) -> bytes:
         try:

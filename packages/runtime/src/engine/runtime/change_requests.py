@@ -13,7 +13,8 @@ string a guard approved and the request that goes out cannot come apart.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 from urllib.parse import urlsplit
 
 
@@ -28,10 +29,22 @@ class ChangeRequest:
     counters cannot collide: github.com keeps its bare `owner/repo` keys, which
     is what every record written so far is keyed by, and everything else is
     prefixed by the authority it lives on.
+
+    The rest is what an adapter needs to address the change request, and is
+    carried here so that the adapter sending a request does not read the URL a
+    second time to recover it: `project` is lowercased and namespaced, so it
+    names the change request but cannot be pasted into an API path. None of it
+    takes part in equality -- two spellings of one change request are one.
     """
 
     project: str
     number: int
+    kind: Literal["pull", "merge_request"] = field(default="pull", compare=False)
+    #: The host the URL named, lowercased and without a port.
+    host: str = field(default="", compare=False)
+    #: The project path as the URL wrote it: `owner/repo` for a pull request,
+    #: the whole nested path for a merge request.
+    path: str = field(default="", compare=False)
 
 
 def change_request(url: str) -> ChangeRequest | None:
@@ -46,17 +59,18 @@ def change_request(url: str) -> ChangeRequest | None:
     parsed = urlsplit(url)
     if parsed.scheme not in ("https", "http") or not parsed.hostname:
         return None
-    host = parsed.hostname.lower()
+    hostname = parsed.hostname.lower()
+    authority = hostname
     port = parsed.port
     if port is not None and port != (443 if parsed.scheme == "https" else 80):
-        host = f"{host}:{port}"
+        authority = f"{hostname}:{port}"
     path = parsed.path
     if _MERGE_REQUESTS in path:
-        return _merge_request(host, path)
-    return _pull_request(host, path)
+        return _merge_request(authority, hostname, path)
+    return _pull_request(authority, hostname, path)
 
 
-def _pull_request(host: str, path: str) -> ChangeRequest | None:
+def _pull_request(authority: str, hostname: str, path: str) -> ChangeRequest | None:
     """Read `owner/repo/pull/<number>`, following renames and normalising case.
 
     Segments past the number are the forge's own views of the one pull request
@@ -75,13 +89,14 @@ def _pull_request(host: str, path: str) -> ChangeRequest | None:
         or segments[2] != "pull"
     ):
         return None
-    project = f"{segments[0]}/{segments[1]}".lower()
-    if host != "github.com":
-        project = f"{host}/{project}"
-    return ChangeRequest(project, number)
+    written = f"{segments[0]}/{segments[1]}"
+    project = written.lower()
+    if authority != "github.com":
+        project = f"{authority}/{project}"
+    return ChangeRequest(project, number, "pull", hostname, written)
 
 
-def _merge_request(host: str, path: str) -> ChangeRequest | None:
+def _merge_request(authority: str, hostname: str, path: str) -> ChangeRequest | None:
     """Read `<project path>/-/merge_requests/<iid>`.
 
     A GitLab project is nested to any depth, so the project is whatever stands
@@ -105,7 +120,10 @@ def _merge_request(host: str, path: str) -> ChangeRequest | None:
     named = bool(segments) and all(names_a_project_step(one) for one in segments)
     if not named or number is None or separator or remainder or doubled:
         return None
-    return ChangeRequest(f"{host}/{'/'.join(segments).lower()}", number)
+    written = "/".join(segments)
+    return ChangeRequest(
+        f"{authority}/{written.lower()}", number, "merge_request", hostname, written
+    )
 
 
 def names_a_project_step(segment: str) -> bool:

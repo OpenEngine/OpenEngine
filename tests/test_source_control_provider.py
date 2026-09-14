@@ -96,6 +96,45 @@ def test_cli_transport_encodes_json_on_stdin_not_in_arguments(
     assert seen["input"] == b'{"title": "quote \' and newline\\\\n"}'
 
 
+@pytest.mark.parametrize(
+    "gh_host, named, pinned",
+    [
+        (None, "", "github.com"),
+        ("GHE.acme.com", "", "ghe.acme.com"),
+        ("ghe.acme.com", "other.acme.com", "other.acme.com"),
+    ],
+)
+def test_cli_transport_sends_every_call_to_the_host_it_reports(
+    monkeypatch: pytest.MonkeyPatch, gh_host: str | None, named: str, pinned: str
+) -> None:
+    """The host the adapter checks URLs against is the host `gh` is told to use.
+
+    Without `--hostname`, `gh api` goes to its stored default login, which this
+    process cannot see: a developer logged in to github.com and an Enterprise
+    install, defaulted to Enterprise, had URLs checked against github.com and
+    written to Enterprise -- a planted `github.com/victim/repo/pull/1` became a
+    comment on Enterprise's victim/repo#1 with this deployment's token.
+    """
+    if gh_host is None:
+        monkeypatch.delenv("GH_HOST", raising=False)
+    else:
+        monkeypatch.setenv("GH_HOST", gh_host)
+    transport = GitHubCliTransport(host=named)
+    calls: list[tuple[str, ...]] = []
+
+    async def run(*arguments: str, input_bytes: bytes | None = None) -> bytes:
+        calls.append(arguments)
+        return b"{}"
+
+    monkeypatch.setattr(transport, "_run", run)
+    asyncio.run(transport.request("POST", "/repos/acme/api/issues/1/comments"))
+    asyncio.run(transport.download("/repos/acme/api/actions/jobs/1/logs"))
+
+    assert transport.host == pinned
+    for arguments in calls:
+        assert arguments[arguments.index("--hostname") + 1] == pinned
+
+
 def test_cli_transport_turns_missing_binary_into_actionable_error() -> None:
     transport = GitHubCliTransport("definitely-not-a-gh-binary")
 

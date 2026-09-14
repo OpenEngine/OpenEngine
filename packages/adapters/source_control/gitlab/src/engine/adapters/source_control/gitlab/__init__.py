@@ -11,7 +11,7 @@ from engine.adapters.source_control.gitlab.transports import GitLabOAuthTranspor
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.change_requests import change_request_number, names_a_project_step
+from engine.runtime.change_requests import change_request
 
 _MAX_LOG_CHARACTERS = 48_000
 
@@ -189,28 +189,19 @@ class GitLabSourceControl:
         is a note on victim/project!1 written by this deployment's own token,
         from a URL an agent read out of a diff or an issue.
         """
-        parsed=urlparse(url); marker="/-/merge_requests/"; path=parsed.path
+        # Read by the reader the ownership guard and the CI gate use, so a URL
+        # one of them approved is a URL this can send, and one they refuse --
+        # `x/y/pull/7/-/merge_requests/1`, a `..` step -- is refused here too.
+        # Every step of the project is a name and not a move: quoting escapes
+        # the separators between steps but leaves a `.` alone, so a bare `..`
+        # would survive into `/projects/../merge_requests/...` and be resolved
+        # away by httpx.
+        found = change_request(url)
         origin = self._origin() if callable(self._origin) else self._origin
         expected = (urlparse(origin).hostname or "").lower()
-        if not parsed.hostname or parsed.hostname.lower() != expected or marker not in path:
+        if found is None or found.kind != "merge_request" or found.host != expected:
             raise ValueError("not a GitLab merge-request URL")
-        project, tail = path.lstrip("/").split(marker,1)
-        iid, separator, remainder = tail.partition("/")
-        # Every step of the project is a name and not a move. Quoting escapes
-        # the separators between them but leaves a `.` alone, so a bare `..`
-        # would survive into `/projects/../merge_requests/...` and be resolved
-        # away by httpx -- a note sent to an address of a different shape than
-        # the one the line building it reads as.
-        steps = project.split("/")
-        if (
-            not project
-            or not all(names_a_project_step(step) for step in steps)
-            or change_request_number(iid) is None
-            or separator
-            or remainder
-        ):
-            raise ValueError("not a GitLab merge-request URL")
-        return quote(project,safe=""),int(iid)
+        return quote(found.path,safe=""),found.number
 
 
 __all__ = ["GitLabSourceControl", "GitLabSourceControlError"]

@@ -776,3 +776,30 @@ def test_naming_a_host_adds_to_the_one_requests_already_reach(
     assert api.await_count == 2
     with pytest.raises(ValueError, match="pull-request URL"):
         asyncio.run(source.add_comment("https://evil.example/v/r/pull/1", "A."))
+
+
+@pytest.mark.parametrize(
+    "pr_url, parts",
+    [
+        # The reader's identity is lowercased, and the owner and repository
+        # sent to the API are not: they are what the URL wrote.
+        ("https://github.com/Acme/API/pull/42/files", ("Acme", "API", "42")),
+        # A port is not part of the host this is checked against, as before.
+        ("https://github.com:443/acme/api/pull/42", ("acme", "api", "42")),
+    ],
+)
+def test_the_parts_sent_are_the_ones_the_shared_reader_read(
+    pr_url: str, parts: tuple[str, str, str]
+) -> None:
+    from engine.adapters.source_control.github import _pull_request_parts
+
+    assert _pull_request_parts(pr_url, frozenset({"github.com"})) == parts
+
+
+def test_a_merge_request_url_is_not_a_github_pull_request() -> None:
+    from engine.adapters.source_control.github import _pull_request_parts
+
+    with pytest.raises(ValueError, match="pull-request URL"):
+        _pull_request_parts(
+            "https://github.com/acme/api/-/merge_requests/1", frozenset({"github.com"})
+        )

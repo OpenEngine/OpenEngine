@@ -779,24 +779,18 @@ def _pull_request_parts(pr_url: str, hosts: frozenset[str]) -> tuple[str, str, s
     evil.example -- it is a comment on victim/repo#1 written by this
     deployment's own token, from a URL an agent read out of a diff or an issue.
     """
-    # Read by the same reader the ownership guard and the CI gate use, so a
-    # URL one of them approved is a URL this can send. Reading it again here
-    # is what let `.../pull/42/files` -- the tab a reviewer is looking at when
-    # it copies the address -- pass as the run's own pull request everywhere
-    # else and then fail outright on the one step that posts the findings.
+    # Read once, by the same reader the ownership guard and the CI gate use,
+    # so a URL one of them approved is a URL this can send. A second parse
+    # here is what let `.../pull/42/files` -- the tab a reviewer is looking at
+    # when it copies the address -- pass as the run's own pull request
+    # everywhere else and then fail outright on the step that posts findings.
     found = change_request(pr_url)
-    parsed = urlparse(pr_url)
-    parts = parsed.path.strip("/").split("/")
-    if (
-        found is None
-        or (parsed.hostname or "").lower() not in hosts
-        or len(parts) < 4
-        or parts[2] != "pull"
-        or not _is_repository_name(parts[0])
-        or not _is_repository_name(parts[1])
-    ):
+    if found is None or found.kind != "pull" or found.host not in hosts:
         raise ValueError("pr_url must be a GitHub pull-request URL")
-    return parts[0], parts[1], str(found.number)
+    owner, repo = found.path.split("/")
+    if not _is_repository_name(owner) or not _is_repository_name(repo):
+        raise ValueError("pr_url must be a GitHub pull-request URL")
+    return owner, repo, str(found.number)
 
 
 def _is_repository_name(segment: str) -> bool:
