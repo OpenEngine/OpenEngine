@@ -102,18 +102,23 @@ class GitHubConfig:
     """
 
     hosts: tuple[str, ...] = ()
-    """Which hosts a pull-request URL may name, or empty for the API's own.
+    """Further hosts a pull-request URL may name, beyond the one talked to.
 
     A `pr_url` arrives as text -- reported by a step, or read by a reviewer
     out of a diff or an issue -- and the adapter takes the owner and repository
-    out of its path and sends them to the API it is configured for. The host
+    out of its path and sends them to the GitHub it is connected to. The host
     in between is never travelled to, so left unchecked it is not a
     destination but a disguise: `https://evil.example/victim/repo/pull/1` is a
     comment posted to `victim/repo#1` by this deployment's own token.
 
-    Empty means the host the adapter already talks to, which is the right
-    answer for github.com and for an Enterprise install alike. Name hosts here
-    only when the web UI a URL is written against is not the API's own host.
+    The host requests already reach is always allowed and is not named here:
+    the adapter asks its transport, which covers github.com, an Enterprise
+    install, and a `gh` logged in somewhere else alike. These are added to it,
+    for the install whose web UI answers on a host of its own. Adding rather
+    than replacing, because a setting about which *other* hosts are legible
+    must not be able to take away the one every request goes to -- that would
+    refuse the deployment's own pull requests, which is a setting that turns
+    the forge off rather than one that widens it.
     """
 
 

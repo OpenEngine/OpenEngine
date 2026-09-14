@@ -953,3 +953,53 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
     assert Delivery(attempted=True).announcement() == UNDELIVERED
     # Never asked for: a comment that wanted no change.
     assert Delivery().announcement() == NOT_FORWARDED
+
+
+@pytest.mark.parametrize(
+    "comment_url, authorized_against",
+    [
+        (
+            "https://github.com/acme/api/issues/7#c",
+            "https://github.com/acme/api/pull/7",
+        ),
+        # An Enterprise install signs its own deliveries, and the adapter now
+        # holds a `pr_url` to the host it talks to. A hardcoded github.com
+        # would fail this check for every comment such a deployment receives
+        # -- closed rather than open, but closed on all of them, and
+        # redelivered forever.
+        (
+            "https://ghe.acme.com/acme/api/issues/7#c",
+            "https://ghe.acme.com/acme/api/pull/7",
+        ),
+    ],
+)
+def test_write_access_is_asked_about_the_github_the_delivery_came_from(
+    tmp_path, comment_url, authorized_against
+):
+    """The host is read from what GitHub wrote, not assumed to be github.com."""
+    from starlette.testclient import TestClient
+
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications, WorkOrdersConfig(), provider=provider,
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    source_control.can_write_repository = AsyncMock(return_value=False)
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(1, "new workorder please", html_url=comment_url)
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        source_control.can_write_repository.assert_awaited_once_with(
+            authorized_against, "someone")

@@ -670,3 +670,109 @@ def test_a_remote_url_is_held_to_the_same_names() -> None:
     assert _parse_repo_coords("git@github.com:acme/api.git") == ("acme", "api")
     with pytest.raises(GitHubSourceControlError, match="cannot determine owner/repo"):
         _parse_repo_coords("https://github.com/../x.git")
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        # The tab a reviewer is looking at when it copies the address. The
+        # ownership guard and the CI gate both read past these, so a URL that
+        # was this run's own pull request everywhere else used to fail here --
+        # on the one step that posts the findings.
+        "https://github.com/acme/api/pull/42/files",
+        "https://github.com/acme/api/pull/42/commits",
+        "https://github.com/acme/api/pull/42/files#diff-abc",
+        "https://github.com/acme/api/pull/42/",
+    ],
+)
+def test_a_tab_on_a_pull_request_is_the_same_pull_request(
+    monkeypatch: pytest.MonkeyPatch, pr_url: str
+) -> None:
+    """One reading, all the way to the request that goes out.
+
+    This adapter had a parse of its own, which is exactly the split the shared
+    reader was added to remove -- the string a guard approved has to be a
+    string this can send.
+    """
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock(return_value={"id": 1, "html_url": f"{pr_url}#c1"})
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    asyncio.run(source.add_comment(pr_url, "Finding."))
+    assert "/repos/acme/api/issues/42/comments" in api.await_args.args[1]
+
+
+def test_a_url_the_shared_reader_refuses_is_refused_here_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The parity runs both ways, or the two have simply split differently."""
+    from unittest.mock import AsyncMock
+
+    from engine.runtime.change_requests import change_request
+
+    api = AsyncMock()
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    for pr_url in (
+        "https://github.com/acme/api/pull/42/x/victim/repo/pull/99",
+        "https://github.com/acme/api/pull/042",
+        "https://github.com/../x/pull/1",
+    ):
+        assert change_request(pr_url) is None
+        with pytest.raises(ValueError, match="pull-request URL"):
+            asyncio.run(source.add_comment(pr_url, "Finding."))
+    api.assert_not_awaited()
+
+
+def test_the_host_checked_is_the_host_the_transport_actually_reaches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`api_url` is a suggestion a transport is free to ignore.
+
+    `gh` sends wherever it is logged in, so an adapter that guessed from
+    `api_url` was allowing github.com while its requests went to an Enterprise
+    host -- accepting attacker-spelled github.com URLs and replaying their
+    owner and repository against the Enterprise token, which is the disguise
+    the host check exists to stop, and refusing the real pull requests.
+    """
+    from engine.adapters.source_control.github.transports import GitHubCliTransport
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("GH_HOST", "ghe.acme.com")
+    source = GitHubSourceControl("", transport=GitHubCliTransport())
+    api = AsyncMock(return_value={"id": 1, "html_url": "x"})
+    monkeypatch.setattr(source, "_api", api)
+
+    asyncio.run(
+        source.add_comment("https://ghe.acme.com/acme/api/pull/42", "Finding.")
+    )
+    api.assert_awaited_once()
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment("https://github.com/acme/api/pull/42", "A."))
+
+
+def test_naming_a_host_adds_to_the_one_requests_already_reach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Otherwise the setting turns the deployment's own forge off.
+
+    A caller that spells a URL on the host it talks to -- the concierge's
+    write-access check among them -- would be refused by a key that only ever
+    meant to make one *more* host legible.
+    """
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock(return_value={"id": 1, "html_url": "x"})
+    source = GitHubSourceControl("", hosts=("git.acme.com",))
+    monkeypatch.setattr(source, "_api", api)
+
+    for pr_url in (
+        "https://git.acme.com/acme/api/pull/42",
+        "https://github.com/acme/api/pull/42",
+    ):
+        asyncio.run(source.add_comment(pr_url, "Finding."))
+    assert api.await_count == 2
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment("https://evil.example/v/r/pull/1", "A."))

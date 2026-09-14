@@ -7,10 +7,10 @@ public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 # server-local `.env` beside it. See docs/github-webhooks.md.
 [github]
 repository = "OpenEngine/OpenEngine"
-# Which hosts a `pr_url` may name before the adapter sends its owner and
-# repository to the API. Omitted, that is the host behind the API itself --
-# github.com here, an Enterprise install's own host there -- so this is written
-# only where the web host a URL is spelled against is not the API's.
+# Further hosts a `pr_url` may name, beyond the one this deployment already
+# talks to. That host -- github.com here, an Enterprise install's own host
+# there, or wherever `gh` is logged in -- is always allowed and is not named,
+# so this is written only where the web UI answers on a host of its own.
 # hosts = ["git.acme.com"]
 
 [communications]

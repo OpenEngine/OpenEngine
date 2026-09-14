@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import Protocol
 
 import httpx
+from urllib.parse import urlparse
 
 
 #: How long a `gh` that has been asked to stop is given before it is killed.
@@ -25,6 +27,18 @@ class GitHubTransportError(RuntimeError):
 
 
 class GitHubApiTransport(Protocol):
+    @property
+    def host(self) -> str:
+        """The GitHub whose pull requests this transport's requests reach.
+
+        Asked rather than guessed, because only the transport knows. The
+        adapter is handed an `api_url` that a transport is free to ignore --
+        `gh` sends wherever it is logged in -- so a deployment's idea of which
+        pull requests are its own has to come from whatever actually sends the
+        request, or it is a check against a forge nobody talks to.
+        """
+        ...
+
     async def request(self, method: str, path: str, **kwargs: object) -> object: ...
 
     async def download(self, path: str) -> bytes: ...
@@ -42,6 +56,17 @@ class GitHubOAuthTransport:
         self._token_source = token
         self._api_url = api_url.rstrip("/")
         self._on_token_unauthorized = on_token_unauthorized
+
+    @property
+    def host(self) -> str:
+        """The web host behind the API address this was given.
+
+        `https://api.github.com` answers for github.com, and an Enterprise
+        install's `https://ghe.acme.com/api/v3` answers for ghe.acme.com, so
+        the one setting an operator already fills in says which pull requests
+        are this deployment's to write to.
+        """
+        return (urlparse(self._api_url).hostname or "").lower().removeprefix("api.")
 
     @property
     def _token(self) -> str:
@@ -137,10 +162,25 @@ class GitHubCliTransport:
     """GitHub REST transport delegated to the user's authenticated ``gh`` CLI."""
 
     def __init__(
-        self, binary_path: str = "gh", timeout_seconds: float = CLI_TIMEOUT_SECONDS
+        self,
+        binary_path: str = "gh",
+        timeout_seconds: float = CLI_TIMEOUT_SECONDS,
+        host: str = "",
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
+        self._host = (host or os.environ.get("GH_HOST") or "github.com").lower()
+
+    @property
+    def host(self) -> str:
+        """Where `gh` is logged in, which is not this process's to choose.
+
+        `gh` resolves its host from `GH_HOST` or from its own stored login, so
+        an Enterprise install sends there whatever `api_url` the adapter was
+        constructed with. Read from the same environment variable `gh` reads,
+        and nameable outright for a login this cannot see.
+        """
+        return self._host
 
     async def request(self, method: str, path: str, **kwargs: object) -> object:
         arguments = [

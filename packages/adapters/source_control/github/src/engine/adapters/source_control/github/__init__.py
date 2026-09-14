@@ -39,10 +39,7 @@ from engine.ports.source_control import (
     WorkItem,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.change_requests import (
-    change_request_number,
-    names_a_project_step,
-)
+from engine.runtime.change_requests import change_request, names_a_project_step
 
 #: The branch prefix `GitWorktreeWorkspaceProvider` gives every workspace. It
 #: is Engine's bookkeeping, not anybody's proposed change, and a remote branch
@@ -123,7 +120,14 @@ class GitHubSourceControl:
         self._transport = transport or GitHubOAuthTransport(token, api_url)
         self._workspace_provider = workspace_provider
         self._git_binary_path = git_binary_path
-        self._hosts = frozenset(hosts) or _hosts_behind(api_url)
+        # The host requests actually reach, plus any the operator named. Asked
+        # of the transport rather than read off `api_url`, which a transport is
+        # free to ignore -- `gh` sends wherever it is logged in -- so a
+        # deployment that never named a host is not checking URLs against a
+        # forge it does not talk to. Added to rather than replaced, so naming
+        # the web host of an install whose API answers elsewhere cannot take
+        # away the host every request already goes to.
+        self._hosts = frozenset(hosts) | {self._transport.host}
 
     async def run_git(
         self, workspace_id: WorkspaceId, arguments: Sequence[str]
@@ -765,19 +769,6 @@ def _base_branch(base_ref: str) -> str:
     return base_ref.removeprefix("origin/")
 
 
-def _hosts_behind(api_url: str) -> frozenset[str]:
-    """Which host a deployment that named none is nonetheless talking to.
-
-    The API it was pointed at. `https://api.github.com` serves github.com and
-    an Enterprise install's `https://ghe.acme.com/api/v3` serves ghe.acme.com,
-    so the one setting an operator already fills in says which pull requests
-    are this deployment's to write to. A deployment whose web host is neither
-    -- an API on its own subdomain -- says so in `[github] hosts`.
-    """
-    host = (urlparse(api_url).hostname or "").lower()
-    return frozenset({host.removeprefix("api.")} - {""})
-
-
 def _pull_request_parts(pr_url: str, hosts: frozenset[str]) -> tuple[str, str, str]:
     """Read `owner`, `repo` and the number out of a pull-request URL.
 
@@ -788,21 +779,24 @@ def _pull_request_parts(pr_url: str, hosts: frozenset[str]) -> tuple[str, str, s
     evil.example -- it is a comment on victim/repo#1 written by this
     deployment's own token, from a URL an agent read out of a diff or an issue.
     """
+    # Read by the same reader the ownership guard and the CI gate use, so a
+    # URL one of them approved is a URL this can send. Reading it again here
+    # is what let `.../pull/42/files` -- the tab a reviewer is looking at when
+    # it copies the address -- pass as the run's own pull request everywhere
+    # else and then fail outright on the one step that posts the findings.
+    found = change_request(pr_url)
     parsed = urlparse(pr_url)
     parts = parsed.path.strip("/").split("/")
-    # The number is read the way every other reader of one reads it, so a URL
-    # the guard approved is a URL this can send.
     if (
-        parsed.scheme not in {"http", "https"}
+        found is None
         or (parsed.hostname or "").lower() not in hosts
-        or len(parts) != 4
+        or len(parts) < 4
         or parts[2] != "pull"
-        or change_request_number(parts[3]) is None
         or not _is_repository_name(parts[0])
         or not _is_repository_name(parts[1])
     ):
         raise ValueError("pr_url must be a GitHub pull-request URL")
-    return parts[0], parts[1], parts[3]
+    return parts[0], parts[1], str(found.number)
 
 
 def _is_repository_name(segment: str) -> bool:

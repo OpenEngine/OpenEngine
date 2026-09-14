@@ -2779,6 +2779,17 @@ def create_app(
             )
         return posting_login[repository]
 
+    def _github_host(comment_url: str) -> str:
+        """The GitHub a delivery came from, as GitHub itself spelled it.
+
+        A comment's `html_url` is written by the forge that signed the
+        delivery, so it names the Enterprise install on a deployment that has
+        one and github.com on a deployment that does not. Falling back to
+        github.com keeps a delivery whose payload carried no URL behaving as
+        it did before, which is the overwhelmingly common case.
+        """
+        return urlsplit(comment_url).hostname or "github.com"
+
     async def github_concierge_turn(comment: GithubComment) -> None:
         # Issue-driven work orders are not supported. PR conversation comments
         # and inline review replies both belong to an existing work order.
@@ -2807,8 +2818,15 @@ def create_app(
             # would still have run the turn. Write access is the line: it is
             # already the authority to change this repository, so it is no
             # escalation to reach the agent working on it.
+            # Spelled on the host GitHub itself wrote in the delivery, not on
+            # github.com by assumption. An Enterprise install signs its own
+            # host, and the adapter now holds a URL to the host it talks to,
+            # so a hardcoded github.com would fail this check for every
+            # comment such a deployment receives -- closed, but closed on all
+            # of them, and redelivered forever.
             may_write = await session.capabilities.source_control.can_write_repository(
-                f"https://github.com/{comment.repository}/pull/{comment.number}",
+                f"https://{_github_host(comment.url)}"
+                f"/{comment.repository}/pull/{comment.number}",
                 comment.author,
             )
         if not may_write:
