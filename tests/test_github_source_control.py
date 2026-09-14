@@ -602,3 +602,71 @@ def test_a_named_host_is_accepted_where_the_api_is_on_another(
     api.assert_awaited_once()
     with pytest.raises(ValueError, match="pull-request URL"):
         asyncio.run(source.add_comment("https://github.com/acme/api/pull/42", "A."))
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        # `..` is not a repository name, it is an instruction about the path it
+        # sits in. `/repos/../x/issues/1/comments` is resolved by httpx before
+        # it leaves, so the POST goes to `/x/issues/1/comments` -- an endpoint
+        # of a different shape than the line building it reads as.
+        "https://github.com/../x/pull/1",
+        "https://github.com/a/../pull/1",
+        "https://github.com/./x/pull/1",
+        # Nothing GitHub would not write in a name, either.
+        "https://github.com/acme/api%2F../pull/1",
+        "https://github.com/ac me/api/pull/1",
+    ],
+)
+def test_an_owner_and_repository_are_names_and_not_moves(
+    monkeypatch: pytest.MonkeyPatch, pr_url: str
+) -> None:
+    """The request the code reads has to be the request that is sent.
+
+    The host check settles which forge is spoken to; this settles that the
+    path asked of it is the one written down. Both are needed, because a
+    traversal sits on an allowed host by construction.
+    """
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock()
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment(pr_url, "Finding."))
+    api.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "pr_url, owner, repo",
+    [
+        ("https://github.com/acme/api/pull/42", "acme", "api"),
+        # A dot inside a name is ordinary; only a whole dot segment moves.
+        ("https://github.com/a.b/c.d/pull/7", "a.b", "c.d"),
+        ("https://github.com/wei/pull/pull/123", "wei", "pull"),
+        ("https://github.com/my-org/my_repo/pull/1", "my-org", "my_repo"),
+    ],
+)
+def test_the_names_github_does_write_are_still_read(
+    pr_url: str, owner: str, repo: str
+) -> None:
+    from engine.adapters.source_control.github import _pull_request_parts
+
+    assert _pull_request_parts(pr_url, frozenset({"github.com"}))[:2] == (owner, repo)
+
+
+def test_a_remote_url_is_held_to_the_same_names() -> None:
+    """It is interpolated into an API address the same way a `pr_url` is.
+
+    A remote is set by whoever prepared the workspace rather than read out of
+    a diff, which makes this the less likely way in and not a different one.
+    """
+    from engine.adapters.source_control.github import (
+        GitHubSourceControlError,
+        _parse_repo_coords,
+    )
+
+    assert _parse_repo_coords("git@github.com:acme/api.git") == ("acme", "api")
+    with pytest.raises(GitHubSourceControlError, match="cannot determine owner/repo"):
+        _parse_repo_coords("https://github.com/../x.git")

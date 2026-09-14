@@ -11,6 +11,7 @@ from engine.adapters.source_control.gitlab.transports import GitLabOAuthTranspor
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.change_requests import change_request_number, names_a_project_step
 
 _MAX_LOG_CHARACTERS = 48_000
 
@@ -195,9 +196,19 @@ class GitLabSourceControl:
             raise ValueError("not a GitLab merge-request URL")
         project, tail = path.lstrip("/").split(marker,1)
         iid, separator, remainder = tail.partition("/")
-        # `isdigit` alone is true of `١٢` and of `²`, and `int` raises on the
-        # second, so the number is held to the one ASCII spelling GitLab writes.
-        if not project or not iid.isascii() or not iid.isdigit() or iid.startswith("0") or separator or remainder:
+        # Every step of the project is a name and not a move. Quoting escapes
+        # the separators between them but leaves a `.` alone, so a bare `..`
+        # would survive into `/projects/../merge_requests/...` and be resolved
+        # away by httpx -- a note sent to an address of a different shape than
+        # the one the line building it reads as.
+        steps = project.split("/")
+        if (
+            not project
+            or not all(names_a_project_step(step) for step in steps)
+            or change_request_number(iid) is None
+            or separator
+            or remainder
+        ):
             raise ValueError("not a GitLab merge-request URL")
         return quote(project,safe=""),int(iid)
 

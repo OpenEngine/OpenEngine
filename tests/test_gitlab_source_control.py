@@ -164,3 +164,34 @@ def test_a_self_hosted_gitlab_is_named_by_the_origin_it_was_given() -> None:
                 "https://gitlab.com/group/project/-/merge_requests/7", "Finding."
             )
         )
+
+
+@pytest.mark.parametrize(
+    "mr_url",
+    [
+        # Quoting escapes the separators between project steps but leaves a
+        # `.` alone, so a bare `..` survives into `/projects/../merge_requests`
+        # and is resolved away before the request leaves.
+        "https://gitlab.com/../-/merge_requests/1",
+        "https://gitlab.com/../x/-/merge_requests/1",
+        "https://gitlab.com/a/../../x/-/merge_requests/1",
+        "https://gitlab.com/./x/-/merge_requests/1",
+    ],
+)
+def test_a_project_path_is_names_and_not_moves(mr_url: str) -> None:
+    """The same defect the GitHub adapter had, closed by the same rule."""
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(ValueError, match="merge-request URL"):
+        asyncio.run(source.add_comment(mr_url, "Finding."))
+    transport.request.assert_not_awaited()
+
+
+def test_a_nested_project_is_still_read() -> None:
+    """A GitLab project nests to any depth, and a dot inside a step is a name."""
+    from engine.adapters.source_control.gitlab import GitLabSourceControl as GL
+
+    source = GL("token", transport=AsyncMock())
+    assert source._merge_request(
+        "https://gitlab.com/group/sub.one/project/-/merge_requests/7"
+    ) == ("group%2Fsub.one%2Fproject", 7)

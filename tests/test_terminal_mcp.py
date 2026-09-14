@@ -915,6 +915,15 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         ("https://github.com/acme/api/pull/\u00b2", None),
         ("https://github.com/acme/api/pull/042", None),
         ("https://github.com/acme/api/pull/0", None),
+        # A dot segment is not a name but a move, and the adapters refuse one
+        # because they paste these into an API address. Refused here too, so a
+        # project nobody can address is not a project this calls the run's work.
+        ("https://github.com/../x/pull/1", None),
+        ("https://github.com/a/../pull/1", None),
+        ("https://gitlab.com/../-/merge_requests/1", None),
+        ("https://gitlab.com/a/../../x/-/merge_requests/1", None),
+        # A dot inside a step is ordinary; only a whole segment moves.
+        ("https://github.com/a.b/c.d/pull/7", ("a.b/c.d", 7)),
     ],
 )
 def test_a_change_request_is_read_off_its_url_one_way(

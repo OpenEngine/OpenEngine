@@ -6,7 +6,9 @@ writes down whose work it is. Each of those has to name the same pull request
 from the same string, and when two of them read it differently the run waits on
 one change request while reporting the verdict of another. They have disagreed
 twice -- once over a path carrying two markers, once over what spells a number
--- so there is one reading here rather than one per caller.
+-- so there is one reading here rather than one per caller. The adapters that
+send these projects and numbers to a forge API read them from here too, so the
+string a guard approved and the request that goes out cannot come apart.
 """
 
 from __future__ import annotations
@@ -64,12 +66,12 @@ def _pull_request(host: str, path: str) -> ChangeRequest | None:
     one pull request it looks like.
     """
     segments = path.strip("/").split("/")
-    number = _number(segments[3]) if len(segments) >= 4 else None
+    number = change_request_number(segments[3]) if len(segments) >= 4 else None
     if (
         number is None
         or "-" in segments
         or "pull" in segments[4:]
-        or not all(segments[:2])
+        or not all(names_a_project_step(one) for one in segments[:2])
         or segments[2] != "pull"
     ):
         return None
@@ -94,18 +96,35 @@ def _merge_request(host: str, path: str) -> ChangeRequest | None:
     """
     project, _, tail = path.partition(_MERGE_REQUESTS)
     iid, separator, remainder = tail.partition("/")
-    number = _number(iid)
+    number = change_request_number(iid)
     segments = project.strip("/").split("/")
     doubled = any(
-        one == "pull" and _number(following) is not None
+        one == "pull" and change_request_number(following) is not None
         for one, following in zip(segments, segments[1:])
     )
-    if not project.strip("/") or number is None or separator or remainder or doubled:
+    named = bool(segments) and all(names_a_project_step(one) for one in segments)
+    if not named or number is None or separator or remainder or doubled:
         return None
     return ChangeRequest(f"{host}/{'/'.join(segments).lower()}", number)
 
 
-def _number(segment: str) -> int | None:
+def names_a_project_step(segment: str) -> bool:
+    """Whether a path segment names one step of a project, rather than moves.
+
+    `.` and `..` are not names. They are instructions about the path they sit
+    in, and every reader that carries them out reads a different path than the
+    one written down -- including `httpx`, which normalises them when a step is
+    pasted into an API address. `https://github.com/../x/pull/1` then leaves as
+    a request to `/x/issues/1/comments`, which is not a repository endpoint at
+    all, so the request the code reads is not the request that is sent.
+
+    Refused here and not only where a URL is built, so that a project nobody
+    can address is not a project any reader calls the run's work either.
+    """
+    return bool(segment) and segment not in (".", "..")
+
+
+def change_request_number(segment: str) -> int | None:
     """Read a change-request number the way every reader of one must.
 
     `str.isdigit` is true of `١٢` and of `²`, and a leading zero is a number to
