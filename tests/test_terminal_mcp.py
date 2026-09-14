@@ -1617,3 +1617,44 @@ def test_a_record_that_kept_no_url_still_says_which_pull_request_is_the_run_s(
             "pr_url must name the pull request this run is working on, "
             f"acme/api#42, not {reported}"
         )
+
+
+def test_an_accepted_pr_url_report_is_written_down_as_the_run_s_pull_request() -> None:
+    """So the review step, which opens nothing, has something to be held to.
+
+    A pull request opened some other way than `open_pull_request` is otherwise
+    on record nowhere, and the reviewer's post is then refused for a run that
+    reported exactly the pull request it is posting to.
+    """
+    recorded: list[OpenedPullRequest] = []
+
+    async def record(reported: OpenedPullRequest) -> None:
+        recorded.append(reported)
+
+    async def scenario() -> dict[str, object]:
+        broker = _completing_broker()
+        broker.enable_reported_pull_request_records(record)
+        return await _complete_with(broker, "https://github.com/Acme/API/pull/42/files")
+
+    assert asyncio.run(scenario())["ok"] is True
+    assert recorded == [
+        OpenedPullRequest("acme/api", 42, "https://github.com/Acme/API/pull/42/files")
+    ]
+
+
+def test_a_refused_pr_url_report_is_not_written_down() -> None:
+    recorded: list[OpenedPullRequest] = []
+
+    async def record(reported: OpenedPullRequest) -> None:
+        recorded.append(reported)
+
+    async def owned() -> tuple[OpenedPullRequest, ...]:
+        return (OpenedPullRequest("acme/api", 42, "https://github.com/acme/api/pull/42"),)
+
+    async def scenario() -> dict[str, object]:
+        broker = _completing_broker(owned)
+        broker.enable_reported_pull_request_records(record)
+        return await _complete_with(broker, "https://github.com/acme/api/pull/41")
+
+    assert asyncio.run(scenario())["ok"] is False
+    assert recorded == []

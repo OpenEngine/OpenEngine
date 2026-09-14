@@ -2551,3 +2551,80 @@ def test_a_ci_fix_step_is_held_to_the_pull_request_the_run_owns(
             "pr_url must name the pull request this run is working on, "
             f"https://github.com/acme/api/pull/42, not {reported}"
         )
+
+
+def test_the_pull_request_a_step_reports_is_what_the_review_is_held_to(
+    tmp_path: Path,
+) -> None:
+    """A report is written down, so the reviewer's post has a record to match.
+
+    An implementer that opened its pull request some way other than
+    `open_pull_request` leaves nothing on record, and the review step -- which
+    opens nothing either -- then had every comment refused. The report is
+    taken on conditionally: a pull request another run holds stays that run's.
+    """
+
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    class Runtime:
+        def __init__(self, store: Any) -> None:
+            self.store = store
+            self.source_control = object()
+
+    class Execution:
+        def __init__(self, store: Any, run_id: str) -> None:
+            self.runtime = Runtime(store)
+            self.run_id = RunId(run_id)
+            self.execution_id = "task-1"
+            self.node_id = IMPLEMENTATION
+
+    async def refuse(_request: Any) -> ApprovalDecision:
+        raise AssertionError("completing a step is not approved through the broker")
+
+    async def report(store: Any, run_id: str, pr_url: str) -> None:
+        server = TerminalMcpServer(
+            step_id="implementation",
+            agent_id=AGENT,
+            required_outputs=("pr_url",),
+            repository_tools=(),
+        )
+        execution = Execution(store, run_id)
+        async with server(
+            {"workspaceId": "ws-graph-run"}, execution, refuse  # type: ignore[arg-type]
+        ) as bound:
+            arguments = list(bound.config["args"])
+            answer = await _mcp_response(
+                arguments[arguments.index("--host") + 1],
+                int(arguments[arguments.index("--port") + 1]),
+                arguments[arguments.index("--token") + 1],
+                {
+                    "jsonrpc": "2.0",
+                    "id": "complete-1",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "complete_step",
+                        "arguments": {
+                            "outcome": "success",
+                            "summary": "Wrote the change.",
+                            "outputs": {"pr_url": pr_url},
+                        },
+                    },
+                },
+            )
+        assert answer["result"].get("isError", False) is False
+
+    async def scenario() -> tuple[Any, Any]:
+        store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        await report(store, "run-1", "https://github.com/acme/api/pull/42")
+        # Another run reporting the same pull request does not take it over.
+        await report(store, "run-2", "https://github.com/acme/api/pull/42")
+        mine = await store.pull_requests(RunId("run-1"))
+        theirs = await store.pull_requests(RunId("run-2"))
+        store.close()
+        return mine, theirs
+
+    mine, theirs = asyncio.run(scenario())
+    assert [(one.repository, one.number, one.url) for one in mine] == [
+        ("acme/api", 42, "https://github.com/acme/api/pull/42")
+    ]
+    assert theirs == ()

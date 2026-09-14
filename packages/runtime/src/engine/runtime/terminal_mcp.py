@@ -230,6 +230,7 @@ class TerminalMcpBroker:
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
+        self._reported_pull_request_recorder: PullRequestRecorder | None = None
         self._run_pull_requests: RunPullRequests | None = None
 
     def enable_status_updates(self, report: StatusReporter) -> None:
@@ -260,6 +261,19 @@ class TerminalMcpBroker:
         whichever run last happened to comment there.
         """
         self._pull_request_recorder = record
+
+    def enable_reported_pull_request_records(self, record: PullRequestRecorder) -> None:
+        """Record the `pr_url` a step reports, once `complete_step` accepts it.
+
+        The report is what binds every later step, so it is also what a later
+        step that opens nothing -- the review, posting its findings -- is held
+        to. A pull request opened some other way than `open_pull_request`, a
+        `gh pr create` in the shell, say, is otherwise on record nowhere, and
+        the review could then post to nothing at all. Bound separately from
+        `enable_pull_request_records` because a report is not an opening: the
+        store should take it on only if no other run already holds it.
+        """
+        self._reported_pull_request_recorder = record
 
     def enable_pull_request_ownership(self, owned: RunPullRequests) -> None:
         """Let `complete_step` ask which pull requests are the run's to report.
@@ -481,6 +495,10 @@ class TerminalMcpBroker:
             await self._registry.accept(
                 self._agent_run_id, event, self._deliver
             )
+            if isinstance(event, StepCompleted):
+                for output in event.outputs:
+                    if output.name == "pr_url":
+                        await self._record_reported_pull_request(output.value)
         except (
             InvalidStepResultError,
             TerminalResultAlreadySubmittedError,
@@ -728,6 +746,25 @@ class TerminalMcpBroker:
             )
         except Exception:
             logger.exception("Could not record the opened pull request %s", url)
+
+    async def _record_reported_pull_request(self, url: str) -> None:
+        """Write down the pull request a step reported, if anyone is keeping it.
+
+        Logged rather than raised, like `_record_pull_request`: the step is
+        already accepted by now, and it has no other answer to give.
+        """
+        if self._reported_pull_request_recorder is None:
+            return
+        try:
+            reported = change_request(url)
+            if reported is None:
+                logger.warning("Could not identify the reported pull request: %s", url)
+                return
+            await self._reported_pull_request_recorder(
+                OpenedPullRequest(reported.project, reported.number, url)
+            )
+        except Exception:
+            logger.exception("Could not record the reported pull request %s", url)
 
     async def _record_comment(
         self, kind: Literal["issue", "review"], result: CommentResult

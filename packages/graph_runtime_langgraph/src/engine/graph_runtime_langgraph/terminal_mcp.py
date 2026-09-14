@@ -113,6 +113,23 @@ class TerminalMcpServer:
                 )
 
             broker.enable_pull_request_records(claim)
+        if "pr_url" in self.required_outputs:
+            async def take_on(reported: OpenedPullRequest) -> None:
+                # Conditional, unlike an opening: a report may name a pull
+                # request the run did not open, and routing another run's
+                # feedback here would strand that run.
+                await store.claim_pull_request(
+                    PullRequestRecord(
+                        repository=reported.repository,
+                        number=reported.number,
+                        run_id=execution.run_id,
+                        opened_at=datetime.now(UTC).isoformat(),
+                        node_id=execution.node_id,
+                        url=reported.url,
+                    )
+                )
+
+            broker.enable_reported_pull_request_records(take_on)
 
         async def owned() -> tuple[OpenedPullRequest, ...]:
             # Carried across as the repository and number the row is keyed by.
