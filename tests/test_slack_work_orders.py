@@ -1016,6 +1016,12 @@ async def call_mcp(
     calls=None,
 ):
     """Real stdio child -> TCP broker -> injected host callback."""
+    # The GitHub concierge exposes its single continuation tool; Slack's
+    # default is create_workorder.  This shared fake provider starts either
+    # conversation with its default action.
+    if (tool_name == "create_workorder"
+            and "engine.github_concierge.github_egress" in config["args"]):
+        tool_name = "continue_workorder"
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -1043,7 +1049,12 @@ async def call_mcp(
     responses = [json.loads(line) for line in stdout.splitlines()]
     assert len(responses) == 2 + call_count
     assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert responses[1]["result"]["tools"][0]["name"] == "create_workorder"
+    primary_tool = (
+        "continue_workorder"
+        if "engine.github_concierge.github_egress" in config["args"]
+        else "create_workorder"
+    )
+    assert responses[1]["result"]["tools"][0]["name"] == primary_tool
     if tool_name in (
         "steer_workorder", "resume_workorder", "answer_workorder_question",
         "decide_workorder_review",
