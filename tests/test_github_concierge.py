@@ -1003,3 +1003,48 @@ def test_write_access_is_asked_about_the_github_the_delivery_came_from(
         client.portal.call(app.state.github_ingress.drain)
         source_control.can_write_repository.assert_awaited_once_with(
             authorized_against, "someone")
+
+
+def test_a_work_order_started_from_enterprise_is_keyed_and_answered_there(tmp_path):
+    """The delivery's host travels with the comment, all the way to the claim.
+
+    Keyed as the runtime keys what a step opens or reports -- host-prefixed
+    off github.com -- so the ownership guard reads the claim as this pull
+    request and not as github.com's namesake, and answered on the host it came
+    from rather than on a github.com the adapter refuses.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime(pr_number=99)
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+    )
+    source_control = MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    payload = _issue_comment(
+        1, "new workorder please", html_url="https://ghe.acme.com/acme/api/issues/7#c"
+    )
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert runtime.start.await_args.args[1] == {
+            "task": "Implement it", "repository": "acme/api"}
+        claimed = runtime.store.claim_pull_request.await_args.args[0]
+        assert (claimed.repository, claimed.number) == ("ghe.acme.com/acme/api", 7)
+        assert claimed.url == "https://ghe.acme.com/acme/api/pull/7"
+    assert source_control.add_comment.await_args.args[0] == (
+        "https://ghe.acme.com/acme/api/pull/7"
+    )

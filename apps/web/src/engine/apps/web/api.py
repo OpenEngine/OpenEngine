@@ -2552,10 +2552,27 @@ def create_app(
     # process did rather than what it was about to try.
     github_activity = GithubActivityLog()
 
+    def _github_pull_request_url(repository: str, number: int | str) -> str:
+        """The pull request a `github:` channel's repository names, on its own host.
+
+        The channel carries a repository the way the runtime keys one: bare on
+        github.com, and prefixed by its host anywhere else. Spelled back on
+        that host, so an Enterprise deployment answers on Enterprise rather
+        than on a github.com its adapter now refuses.
+        """
+        host, _, rest = repository.partition("/")
+        if "/" in rest:
+            return f"https://{host}/{rest}/pull/{number}"
+        return f"https://github.com/{repository}/pull/{number}"
+
+    def _github_owner_repo(repository: str) -> str:
+        """`owner/repo` out of a channel's repository, without any host prefix."""
+        return "/".join(repository.split("/")[-2:])
+
     async def github_reply(origin: RunOrigin, text: str) -> None:
         number, _, review_id = origin.thread_id.partition("/review/")
         await session.capabilities.source_control.add_comment(
-            f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}",
+            _github_pull_request_url(origin.channel.removeprefix("github:"), number),
             text,
             in_reply_to_id=int(review_id) if review_id else None,
         )
@@ -2621,10 +2638,13 @@ def create_app(
         state = await start_graph_run(
             runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
-            prompt=prompt, repository=repository,
+            prompt=prompt, repository=_github_owner_repo(repository),
             milestone_id=None,
         )
-        url = f"https://github.com/{repository}/pull/{number}"
+        # Keyed as the runtime keys what it opens and what a step reports --
+        # host-prefixed off github.com -- so the ownership guard reads this
+        # claim as the pull request it is, and not as github.com's namesake.
+        url = _github_pull_request_url(repository, number)
         try:
             holder = await store.claim_pull_request(
                 PullRequestRecord(
@@ -2844,9 +2864,17 @@ def create_app(
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":
             thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
+        # The repository as the runtime keys it: bare on github.com, prefixed
+        # by its host elsewhere. Everything downstream -- the reply, the
+        # provenance lookup, the claim a new work order takes -- reads it from
+        # here, so none of it has to assume which GitHub the comment was on.
+        host = _github_host(comment.url).lower()
+        repository = (
+            comment.repository if host == "github.com" else f"{host}/{comment.repository}"
+        )
         await github_concierge.handle(FeedbackRequest(
             origin=RunOrigin(
-                channel=f"github:{comment.repository}", thread_id=thread_id,
+                channel=f"github:{repository}", thread_id=thread_id,
                 author=comment.author,
             ),
             text=comment.body, comment_id=comment.comment_id,
