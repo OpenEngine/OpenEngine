@@ -123,3 +123,44 @@ def test_a_merge_request_number_is_spelled_one_way(mr_url: str) -> None:
     source = GitLabSourceControl("token", transport=AsyncMock())
     with pytest.raises(ValueError, match="merge-request URL"):
         asyncio.run(source.add_comment(mr_url, "Finding."))
+
+
+@pytest.mark.parametrize(
+    "mr_url",
+    [
+        # The project comes out of the path and goes to the configured GitLab,
+        # so an unchecked host is a disguise, not a destination: this is a note
+        # on victim/project!1 written by this deployment's own token.
+        "https://evil.example/victim/project/-/merge_requests/1",
+        "https://gitlab.com.evil.example/victim/project/-/merge_requests/1",
+        "https://github.com/victim/project/-/merge_requests/1",
+    ],
+)
+def test_a_note_goes_only_to_the_gitlab_this_deployment_talks_to(mr_url: str) -> None:
+    """The same hole the GitHub adapter had, closed the same way.
+
+    There is no separate allowlist here because the origin an operator already
+    configured is the answer: this adapter talks to one GitLab.
+    """
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(ValueError, match="merge-request URL"):
+        asyncio.run(source.add_comment(mr_url, "Finding."))
+    transport.request.assert_not_awaited()
+
+
+def test_a_self_hosted_gitlab_is_named_by_the_origin_it_was_given() -> None:
+    """Including when the origin is resolved per request, as the web app does."""
+    transport = AsyncMock()
+    transport.request.return_value = {"id": 1}
+    origin = "https://gitlab.acme.com"
+    source = GitLabSourceControl("token", origin=lambda: origin, transport=transport)
+    url = "https://gitlab.acme.com/group/project/-/merge_requests/7"
+    asyncio.run(source.add_comment(url, "Finding."))
+    transport.request.assert_awaited_once()
+    with pytest.raises(ValueError, match="merge-request URL"):
+        asyncio.run(
+            source.add_comment(
+                "https://gitlab.com/group/project/-/merge_requests/7", "Finding."
+            )
+        )

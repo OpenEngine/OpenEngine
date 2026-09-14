@@ -522,3 +522,83 @@ def test_a_pull_request_number_is_spelled_one_way(
     with pytest.raises(ValueError, match="pull-request URL"):
         asyncio.run(source.add_comment(pr_url, "Finding."))
     api.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        # The host is the one part of the URL never travelled to: the owner
+        # and repository come out of the path and go to the configured API,
+        # so an unchecked host is a disguise rather than a destination. This
+        # is a comment on github.com/victim/repo#1 by the engine's own token.
+        "https://evil.example/victim/repo/pull/1",
+        # Neither a suffix nor a userinfo prefix is github.com.
+        "https://github.com.evil.example/victim/repo/pull/1",
+        "https://github.com@evil.example/victim/repo/pull/1",
+        "https://gitlab.com/victim/repo/pull/1",
+    ],
+)
+def test_a_comment_goes_only_to_a_host_this_deployment_talks_to(
+    monkeypatch: pytest.MonkeyPatch, pr_url: str
+) -> None:
+    """The last check standing, so it cannot be the one that is missing.
+
+    The runtime's ownership guard would refuse these too -- their identity is
+    `evil.example/victim/repo#1`, which is nobody's work -- but that guard
+    deliberately fails open for a run with no change request on file, which
+    is the state a deployment keeping no store is always in.
+    """
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock()
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment(pr_url, "Finding."))
+    api.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "api_url, pr_url",
+    [
+        # github.com is what `https://api.github.com` serves.
+        ("https://api.github.com", "https://github.com/acme/api/pull/42"),
+        # A host is a host however it is cased, and a port is not part of one:
+        # the request goes to the configured API either way.
+        ("https://api.github.com", "https://GitHub.com/acme/api/pull/42"),
+        # An Enterprise install serves its own host, and needs no `[github]
+        # hosts` to say so -- the API an operator already pointed it at does.
+        ("https://ghe.acme.com/api/v3", "https://ghe.acme.com/acme/api/pull/42"),
+    ],
+)
+def test_the_api_a_deployment_talks_to_says_whose_pull_requests_are_its_own(
+    monkeypatch: pytest.MonkeyPatch, api_url: str, pr_url: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock(return_value={"id": 1, "html_url": f"{pr_url}#c1"})
+    source = GitHubSourceControl("", api_url=api_url)
+    monkeypatch.setattr(source, "_api", api)
+    asyncio.run(source.add_comment(pr_url, "Finding."))
+    api.assert_awaited_once()
+
+
+def test_a_named_host_is_accepted_where_the_api_is_on_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`[github] hosts` is for the install whose web host is not its API's.
+
+    Naming hosts replaces the API's own rather than adding to it: a deployment
+    that has said which hosts its pull requests live on has said all of them.
+    """
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock(return_value={"id": 1, "html_url": "x"})
+    source = GitHubSourceControl(
+        "", api_url="https://git-api.acme.com", hosts=("git.acme.com",)
+    )
+    monkeypatch.setattr(source, "_api", api)
+    asyncio.run(source.add_comment("https://git.acme.com/acme/api/pull/42", "A."))
+    api.assert_awaited_once()
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment("https://github.com/acme/api/pull/42", "A."))

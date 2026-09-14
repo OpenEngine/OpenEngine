@@ -25,6 +25,7 @@ class GitLabSourceControl:
     def __init__(self, token: str | Callable[[], str | None], origin: str | Callable[[], str] = "https://gitlab.com", workspace_provider: WorkspaceProvider | None = None, transport: GitLabOAuthTransport | None = None) -> None:
         self._transport = transport or GitLabOAuthTransport(token, origin)
         self._workspace_provider = workspace_provider
+        self._origin = origin
 
     async def run_git(self, workspace_id: WorkspaceId, arguments: Sequence[str]) -> GitResult:
         arguments = tuple(str(argument) for argument in arguments)
@@ -68,7 +69,7 @@ class GitLabSourceControl:
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")
-        project, iid = self._mr_url(pr_url)
+        project, iid = self._merge_request(pr_url)
         if not comment.strip():
             raise ValueError("comment must not be empty")
         if (file is None) != (line is None):
@@ -177,10 +178,21 @@ class GitLabSourceControl:
     @staticmethod
     def _public(branch: str) -> None:
         if not branch.strip() or branch.startswith("engine/"): raise ValueError("branch must be a non-internal branch")
-    @staticmethod
-    def _mr_url(url: str) -> tuple[str,int]:
+    def _merge_request(self, url: str) -> tuple[str,int]:
+        """Read the project and iid out of a merge-request URL on this GitLab.
+
+        The host is checked against the configured origin because it is the
+        one part of the URL that is not used afterwards: the project is sent
+        to the API this adapter was pointed at, whatever host the text it came
+        out of named. Unchecked, `https://evil.example/victim/project/-/merge_requests/1`
+        is a note on victim/project!1 written by this deployment's own token,
+        from a URL an agent read out of a diff or an issue.
+        """
         parsed=urlparse(url); marker="/-/merge_requests/"; path=parsed.path
-        if not parsed.hostname or marker not in path: raise ValueError("not a GitLab merge-request URL")
+        origin = self._origin() if callable(self._origin) else self._origin
+        expected = (urlparse(origin).hostname or "").lower()
+        if not parsed.hostname or parsed.hostname.lower() != expected or marker not in path:
+            raise ValueError("not a GitLab merge-request URL")
         project, tail = path.lstrip("/").split(marker,1)
         iid, separator, remainder = tail.partition("/")
         # `isdigit` alone is true of `١٢` and of `²`, and `int` raises on the

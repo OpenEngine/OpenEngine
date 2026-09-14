@@ -101,6 +101,21 @@ class GitHubConfig:
     that never named a repository has nothing to compare a delivery against.
     """
 
+    hosts: tuple[str, ...] = ()
+    """Which hosts a pull-request URL may name, or empty for the API's own.
+
+    A `pr_url` arrives as text -- reported by a step, or read by a reviewer
+    out of a diff or an issue -- and the adapter takes the owner and repository
+    out of its path and sends them to the API it is configured for. The host
+    in between is never travelled to, so left unchecked it is not a
+    destination but a disguise: `https://evil.example/victim/repo/pull/1` is a
+    comment posted to `victim/repo#1` by this deployment's own token.
+
+    Empty means the host the adapter already talks to, which is the right
+    answer for github.com and for an Enterprise install alike. Name hosts here
+    only when the web UI a URL is written against is not the API's own host.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class WorkOrdersConfig:
@@ -245,9 +260,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository"}, "github")
+    _reject_unknown(github, {"hosts", "repository"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
+    )
+    github_hosts = (
+        _hosts(github["hosts"], "github.hosts") if "hosts" in github else ()
     )
 
     communications = _table(document.get("communications", {}), "communications")
@@ -342,7 +360,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
-        github=GitHubConfig(repository=github_repository),
+        github=GitHubConfig(repository=github_repository, hosts=github_hosts),
         communications=CommunicationsConfig(
             provider=communications_provider,
             channel=communications_channel,
@@ -379,6 +397,35 @@ def _optional_nonblank_string(value: object, name: str) -> str:
     if value and not value.strip():
         raise EngineConfigError(f"{name} must not be blank")
     return value.strip()
+
+
+def _hosts(value: object, name: str) -> tuple[str, ...]:
+    """An allowlist of hosts, spelled the one way a host comparison can use.
+
+    Lowercased, because `GitHub.com` and `github.com` are the same host and a
+    deployment that wrote the first would otherwise have allowed nothing. A
+    scheme or a path is refused rather than trimmed: `https://github.com/` is
+    a URL, and silently reading a host out of it invites an entry like
+    `https://github.com/acme` that reads as a repository and is not one.
+
+    An empty array is refused too. It would be an allowlist that permits
+    nothing -- every pull request refused, on a setting whose omission means
+    the opposite -- and a deployment meaning "just the API's host" writes no
+    key at all.
+    """
+
+    hosts = _strings(value, name)
+    if not hosts:
+        raise EngineConfigError(f"{name} must name at least one host, or be omitted")
+    for host in hosts:
+        if not host.strip() or host.strip() != host:
+            raise EngineConfigError(f"{name} must not contain blank hosts")
+        if any(character in host for character in "/:@ ") or host != host.lower():
+            raise EngineConfigError(
+                f"{name} must contain bare lowercase hosts such as "
+                f'"github.com": {host!r}'
+            )
+    return hosts
 
 
 def _repository_slug(value: object, name: str) -> str:

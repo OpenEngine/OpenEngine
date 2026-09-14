@@ -311,6 +311,7 @@ def build_capabilities(
         transport=GitHubOAuthTransport(
             _token, on_token_unauthorized=_refresh_after_unauthorized
         ),
+        hosts=settings.engine_config.github.hosts,
     )
 
     def _gitlab_origin() -> str:
@@ -381,6 +382,7 @@ def build_capabilities(
                 _token,
                 workspace_provider=workspace_provider,
                 transport=GitHubCliTransport(),
+                hosts=settings.engine_config.github.hosts,
             ),
             oauth,
             gitlab,

@@ -114,10 +114,12 @@ class GitHubSourceControl:
         workspace_provider: WorkspaceProvider | None = None,
         git_binary_path: str = "git",
         transport: GitHubApiTransport | None = None,
+        hosts: Sequence[str] = (),
     ) -> None:
         self._transport = transport or GitHubOAuthTransport(token, api_url)
         self._workspace_provider = workspace_provider
         self._git_binary_path = git_binary_path
+        self._hosts = frozenset(hosts) or _hosts_behind(api_url)
 
     async def run_git(
         self, workspace_id: WorkspaceId, arguments: Sequence[str]
@@ -189,7 +191,7 @@ class GitHubSourceControl:
 
     async def can_write_repository(self, pr_url: str, username: str) -> bool:
         """Check effective access, including team and organization grants."""
-        owner, repo, _ = _pull_request_parts(pr_url)
+        owner, repo, _ = _pull_request_parts(pr_url, self._hosts)
         response = await self._api(
             "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
         )
@@ -238,7 +240,7 @@ class GitHubSourceControl:
             if file is not None or line is not None:
                 raise ValueError("in_reply_to_id cannot be combined with file or line")
 
-        owner, repo, number = _pull_request_parts(pr_url)
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts)
 
         if in_reply_to_id is not None:
             response = await self._api(
@@ -759,7 +761,29 @@ def _base_branch(base_ref: str) -> str:
     return base_ref.removeprefix("origin/")
 
 
-def _pull_request_parts(pr_url: str) -> tuple[str, str, str]:
+def _hosts_behind(api_url: str) -> frozenset[str]:
+    """Which host a deployment that named none is nonetheless talking to.
+
+    The API it was pointed at. `https://api.github.com` serves github.com and
+    an Enterprise install's `https://ghe.acme.com/api/v3` serves ghe.acme.com,
+    so the one setting an operator already fills in says which pull requests
+    are this deployment's to write to. A deployment whose web host is neither
+    -- an API on its own subdomain -- says so in `[github] hosts`.
+    """
+    host = (urlparse(api_url).hostname or "").lower()
+    return frozenset({host.removeprefix("api.")} - {""})
+
+
+def _pull_request_parts(pr_url: str, hosts: frozenset[str]) -> tuple[str, str, str]:
+    """Read `owner`, `repo` and the number out of a pull-request URL.
+
+    The host is checked because it is the one part of the URL that is not used
+    afterwards: the owner and repository are sent to the API this adapter was
+    configured for, whatever host the text they came out of named. Unchecked,
+    `https://evil.example/victim/repo/pull/1` is not a request to
+    evil.example -- it is a comment on victim/repo#1 written by this
+    deployment's own token, from a URL an agent read out of a diff or an issue.
+    """
     parsed = urlparse(pr_url)
     parts = parsed.path.strip("/").split("/")
     # A number is spelled one way, in ASCII and without a leading zero. GitHub
@@ -769,7 +793,7 @@ def _pull_request_parts(pr_url: str) -> tuple[str, str, str]:
     # and come back a 404.
     if (
         parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
+        or (parsed.hostname or "").lower() not in hosts
         or len(parts) != 4
         or parts[2] != "pull"
         or not parts[3].isascii()

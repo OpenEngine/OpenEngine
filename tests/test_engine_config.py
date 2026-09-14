@@ -146,6 +146,29 @@ def test_loads_the_repository_webhook_deliveries_are_accepted_from(
     assert loaded.config.github.repository == "owner/name"
 
 
+def test_loads_the_hosts_a_pull_request_url_may_name(tmp_path: Path) -> None:
+    """For the install whose web host is not the one its API answers on.
+
+    Omitted, the adapter holds a `pr_url` to the host behind the API it was
+    pointed at, which already covers github.com and an Enterprise install.
+    """
+    path = tmp_path / "engine.toml"
+    path.write_text('[github]\nhosts = ["git.acme.com", "ghe.acme.com"]\n')
+
+    loaded = load_engine_config(path, environ={}, cwd=tmp_path)
+
+    assert loaded.config.github.hosts == ("git.acme.com", "ghe.acme.com")
+
+
+def test_naming_no_hosts_leaves_the_api_to_say_which_are_this_deployment_s(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text('[github]\nrepository = "owner/name"\n')
+
+    assert load_engine_config(path, environ={}, cwd=tmp_path).config.github.hosts == ()
+
+
 def test_loads_github_deployment_credentials(tmp_path: Path) -> None:
     path = tmp_path / "engine.toml"
     path.write_text(
@@ -209,6 +232,33 @@ def test_selection_is_explicit_then_environment_then_working_directory(
             'github.repository must be "owner/name"',
         ),
         ({"github": {"repository": " "}}, "github.repository must not be blank"),
+        # An allowlist permitting nothing refuses every pull request, on a key
+        # whose omission means the opposite. Said plainly at load rather than
+        # discovered when the first review cannot post.
+        ({"github": {"hosts": []}}, "github.hosts must name at least one host"),
+        (
+            {"github": {"hosts": "github.com"}},
+            "github.hosts must be an array of strings",
+        ),
+        # A host is not a URL and not a repository. Read leniently, an entry
+        # like "https://github.com/acme" would look like it scoped the
+        # allowlist to one owner, and would not.
+        (
+            {"github": {"hosts": ["https://github.com"]}},
+            "github.hosts must contain bare lowercase hosts",
+        ),
+        (
+            {"github": {"hosts": ["github.com/acme"]}},
+            "github.hosts must contain bare lowercase hosts",
+        ),
+        # `GitHub.com` and `github.com` are one host, and a comparison cannot
+        # see that unless one spelling is settled on here.
+        (
+            {"github": {"hosts": ["GitHub.com"]}},
+            "github.hosts must contain bare lowercase hosts",
+        ),
+        ({"github": {"hosts": [" github.com"]}}, "github.hosts must not contain blank hosts"),
+        ({"github": {"hosts": ["a.com", "a.com"]}}, "github.hosts must not contain duplicates"),
         ({"orchestrator": {"host": ""}}, "orchestrator.host must not be blank"),
         (
             {"orchestrator": {"health_check_interval": 0}},
