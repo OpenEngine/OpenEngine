@@ -1619,13 +1619,94 @@ def test_a_record_that_kept_no_url_still_says_which_pull_request_is_the_run_s(
         )
 
 
-def test_an_accepted_pr_url_report_is_written_down_as_the_run_s_pull_request() -> None:
+def _workspace_forge(
+    *,
+    branch: str | None = "agent/ws",
+    head: str = "abc123",
+    shown_url: str = "https://github.com/acme/api/pull/42",
+    shown_ref: str = "agent/ws",
+    shown_sha: str = "abc123",
+):
+    """A source control whose forge shows #42 as `shown_*`, and a workspace on `branch`."""
+    from unittest.mock import AsyncMock
+
+    from engine.ports.source_control import ChangeRequest as ShownChangeRequest
+    from engine.ports.source_control import GitResult
+
+    async def run_git(_workspace: object, arguments: tuple[str, ...]) -> GitResult:
+        if arguments[0] == "symbolic-ref":
+            return GitResult(1, "", "") if branch is None else GitResult(0, f"{branch}\n", "")
+        return GitResult(0, f"{head}\n", "")
+
+    source = AsyncMock()
+    source.run_git.side_effect = run_git
+    source.view_change_request.return_value = ShownChangeRequest(
+        number=42, title="", state="open", body="", author="", url=shown_url,
+        head_ref=shown_ref, head_sha=shown_sha, base_ref="main",
+    )
+    return source
+
+
+async def _report_to(
+    source: object, pr_url: str, owned: object = None
+) -> tuple[dict[str, object], list[OpenedPullRequest]]:
+    recorded: list[OpenedPullRequest] = []
+
+    async def record(reported: OpenedPullRequest) -> None:
+        recorded.append(reported)
+
+    broker = _completing_broker(owned)
+    broker.enable_repository_tools(source, (), WorkspaceId("ws"))  # type: ignore[arg-type]
+    broker.enable_reported_pull_request_records(record)
+    return await _complete_with(broker, pr_url), recorded
+
+
+def test_a_report_the_forge_shows_on_this_workspace_is_the_run_s_pull_request() -> None:
     """So the review step, which opens nothing, has something to be held to.
 
-    A pull request opened some other way than `open_pull_request` is otherwise
-    on record nowhere, and the reviewer's post is then refused for a run that
-    reported exactly the pull request it is posting to.
+    A pull request opened some other way than `open_pull_request` -- a `gh pr
+    create` in the shell -- is otherwise on record nowhere, and the reviewer's
+    post is then refused for a run that reported exactly what it is posting to.
     """
+    answer, recorded = asyncio.run(
+        _report_to(_workspace_forge(), "https://github.com/Acme/API/pull/42/files")
+    )
+    assert answer["ok"] is True
+    assert recorded == [
+        OpenedPullRequest("acme/api", 42, "https://github.com/Acme/API/pull/42/files")
+    ]
+
+
+@pytest.mark.parametrize(
+    "forge",
+    [
+        # A person's pull request, on a branch this workspace never pushed:
+        # naming it must not make it the run's, or the review posts there with
+        # the deployment's token and its webhook comments drive this run.
+        {"shown_ref": "someone/feature"},
+        # The same branch name at a commit this workspace does not have -- a
+        # fork's pull request, say.
+        {"shown_sha": "fff999"},
+        # The workspace's repository has a #42 on this branch, but the report
+        # names #42 in another repository.
+        {"shown_url": "https://github.com/acme/other/pull/42"},
+        # A detached head has pushed no branch for any pull request to be on.
+        {"branch": None},
+    ],
+)
+def test_a_report_the_forge_does_not_show_on_this_workspace_is_not_taken_on(
+    forge: dict[str, object],
+) -> None:
+    """The report still completes the step; it just is not written down."""
+    source = _workspace_forge(**forge)  # type: ignore[arg-type]
+    answer, recorded = asyncio.run(
+        _report_to(source, "https://github.com/acme/api/pull/42")
+    )
+    assert answer["ok"] is True
+    assert recorded == []
+
+
+def test_a_report_with_no_workspace_to_check_is_not_taken_on() -> None:
     recorded: list[OpenedPullRequest] = []
 
     async def record(reported: OpenedPullRequest) -> None:
@@ -1634,27 +1715,20 @@ def test_an_accepted_pr_url_report_is_written_down_as_the_run_s_pull_request() -
     async def scenario() -> dict[str, object]:
         broker = _completing_broker()
         broker.enable_reported_pull_request_records(record)
-        return await _complete_with(broker, "https://github.com/Acme/API/pull/42/files")
+        return await _complete_with(broker, "https://github.com/acme/api/pull/42")
 
     assert asyncio.run(scenario())["ok"] is True
-    assert recorded == [
-        OpenedPullRequest("acme/api", 42, "https://github.com/Acme/API/pull/42/files")
-    ]
+    assert recorded == []
 
 
 def test_a_refused_pr_url_report_is_not_written_down() -> None:
-    recorded: list[OpenedPullRequest] = []
-
-    async def record(reported: OpenedPullRequest) -> None:
-        recorded.append(reported)
-
     async def owned() -> tuple[OpenedPullRequest, ...]:
         return (OpenedPullRequest("acme/api", 42, "https://github.com/acme/api/pull/42"),)
 
-    async def scenario() -> dict[str, object]:
-        broker = _completing_broker(owned)
-        broker.enable_reported_pull_request_records(record)
-        return await _complete_with(broker, "https://github.com/acme/api/pull/41")
-
-    assert asyncio.run(scenario())["ok"] is False
+    source = _workspace_forge()
+    answer, recorded = asyncio.run(
+        _report_to(source, "https://github.com/acme/api/pull/41", owned)
+    )
+    assert answer["ok"] is False
     assert recorded == []
+    source.view_change_request.assert_not_awaited()

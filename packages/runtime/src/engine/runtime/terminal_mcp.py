@@ -270,8 +270,10 @@ class TerminalMcpBroker:
         to. A pull request opened some other way than `open_pull_request`, a
         `gh pr create` in the shell, say, is otherwise on record nowhere, and
         the review could then post to nothing at all. Bound separately from
-        `enable_pull_request_records` because a report is not an opening: the
-        store should take it on only if no other run already holds it.
+        `enable_pull_request_records` because a report is not an opening: it
+        is recorded only once the forge shows it on this workspace's branch and
+        commit, and the store should take it on only if no other run already
+        holds it.
         """
         self._reported_pull_request_recorder = record
 
@@ -760,11 +762,59 @@ class TerminalMcpBroker:
             if reported is None:
                 logger.warning("Could not identify the reported pull request: %s", url)
                 return
+            identity = _change_request_identity(url)
+            if any(_change_request_identity(one) == identity for one in self._opened_pull_requests):
+                # Opened by this step, and recorded as the run's when it was.
+                return
+            if not await self._is_this_workspace_s(url, reported.number):
+                logger.warning(
+                    "Not taking on %s: the forge does not show it on the branch "
+                    "and commit this workspace has checked out",
+                    url,
+                )
+                return
             await self._reported_pull_request_recorder(
                 OpenedPullRequest(reported.project, reported.number, url)
             )
         except Exception:
             logger.exception("Could not record the reported pull request %s", url)
+
+    async def _is_this_workspace_s(self, url: str, number: int) -> bool:
+        """Whether the forge says this pull request is the work in this workspace.
+
+        A report is only text, so it is not taken at its word: accepted, it
+        makes the pull request the run's, and the review then posts there with
+        the deployment's token and webhook comments on it drive this run. An
+        implementer that misremembers a number, or is steered by an issue or a
+        diff, could otherwise hand the run a person's pull request just by
+        naming it. So the forge is asked about the workspace's own repository
+        at that number, and the answer has to be the pull request the URL
+        names, headed by the branch this workspace has checked out at the
+        commit it has checked out. A workspace on a detached head, or one that
+        has moved past what it pushed, has shown nothing yet and is not taken
+        on; its review has no pull request to post to until one is.
+        """
+        if self._source_control is None or self._workspace_id is None:
+            return False
+        # The forge first: a URL naming another repository is refused on its
+        # answer alone, without reading the checkout at all.
+        shown = await self._source_control.view_change_request(
+            self._workspace_id, number
+        )
+        if change_request(shown.url) != change_request(url):
+            return False
+        branch = await self._source_control.run_git(
+            self._workspace_id, ("symbolic-ref", "--quiet", "--short", "HEAD")
+        )
+        head = await self._source_control.run_git(
+            self._workspace_id, ("rev-parse", "HEAD")
+        )
+        return (
+            branch.ok
+            and head.ok
+            and shown.head_ref == branch.stdout.strip()
+            and shown.head_sha == head.stdout.strip()
+        )
 
     async def _record_comment(
         self, kind: Literal["issue", "review"], result: CommentResult

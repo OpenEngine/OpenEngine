@@ -44,7 +44,10 @@ const SCRIPT: Script = {
         {
           type: "tool",
           name: "add_comment",
-          arguments: { pr_url: "https://github.com/acme/api/pull/7", comment: "No issues found." },
+          arguments: {
+            pr_url: "https://github.com/acme/repository/pull/7",
+            comment: "No issues found.",
+          },
         },
         {
           type: "tool",
@@ -67,7 +70,7 @@ const SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "Added the greeting.",
-            outputs: { pr_url: "https://github.com/acme/api/pull/7" },
+            outputs: { pr_url: "https://github.com/acme/repository/pull/7" },
           },
         },
       ],

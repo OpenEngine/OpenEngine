@@ -66,7 +66,7 @@ async function verifyPersistedNavigation({
   await shot(page, testInfo, "5 seeded standalone chat history");
 
   // New graph runs can start alongside the existing WorkOrder rows.
-  const pullRequest = "https://github.com/acme/engine/pull/42";
+  const pullRequest = "https://github.com/acme/repository/pull/42";
   const workflowScript: Script = {
     title: FRESH_TITLE,
     scenarios: [

@@ -181,7 +181,34 @@ def main(argv: list[str] | None = None) -> int:
             }
         return {}
 
+    async def _fake_view_change_request(
+        self: GitHubSourceControl, workspace_id: object, number: int
+    ) -> object:
+        # The fake forge has one repository, github.com/acme/repository, and
+        # every pull request on it is headed by whatever the asking workspace
+        # has checked out -- what a real forge would show for a pull request
+        # the implementer opened from its own branch. A reported `pr_url` is
+        # only taken on for the run once the forge shows it that way.
+        from engine.ports.source_control import ChangeRequest
+
+        branch = await self.run_git(workspace_id, ("symbolic-ref", "--short", "HEAD"))
+        head = await self.run_git(workspace_id, ("rev-parse", "HEAD"))
+        return ChangeRequest(
+            number=number,
+            title="",
+            state="open",
+            body="",
+            author="",
+            url=f"https://github.com/acme/repository/pull/{number}",
+            head_ref=branch.stdout.strip(),
+            head_sha=head.stdout.strip(),
+            base_ref="main",
+        )
+
     GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]
+    GitHubSourceControl.view_change_request = (  # type: ignore[method-assign]
+        _fake_view_change_request  # type: ignore[assignment]
+    )
 
     print(describe_loaded_config(loaded), flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")

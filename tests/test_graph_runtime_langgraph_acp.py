@@ -2561,15 +2561,32 @@ def test_the_pull_request_a_step_reports_is_what_the_review_is_held_to(
     An implementer that opened its pull request some way other than
     `open_pull_request` leaves nothing on record, and the review step -- which
     opens nothing either -- then had every comment refused. The report is
-    taken on conditionally: a pull request another run holds stays that run's.
+    taken on only once the forge shows it on the workspace's branch and commit,
+    and conditionally: a pull request another run holds stays that run's.
     """
 
+    from engine.ports.source_control import ChangeRequest as ShownChangeRequest
+    from engine.ports.source_control import GitResult
     from engine.runtime.terminal_mcp import _mcp_response
+
+    class Forge:
+        async def run_git(self, _workspace: object, arguments: Any) -> GitResult:
+            shown = "agent/ws" if arguments[0] == "symbolic-ref" else "abc123"
+            return GitResult(0, f"{shown}\n", "")
+
+        async def view_change_request(
+            self, _workspace: object, number: int
+        ) -> ShownChangeRequest:
+            return ShownChangeRequest(
+                number=number, title="", state="open", body="", author="",
+                url=f"https://github.com/acme/api/pull/{number}",
+                head_ref="agent/ws", head_sha="abc123", base_ref="main",
+            )
 
     class Runtime:
         def __init__(self, store: Any) -> None:
             self.store = store
-            self.source_control = object()
+            self.source_control = Forge()
 
     class Execution:
         def __init__(self, store: Any, run_id: str) -> None:
