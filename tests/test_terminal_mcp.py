@@ -1415,38 +1415,112 @@ def test_a_comment_goes_to_the_pull_request_the_run_is_working_on(
         )
 
 
-def test_a_comment_is_posted_freely_when_the_run_is_working_on_nothing() -> None:
-    """The same fail-open rule the report side keeps, for the same reason."""
+def _posting_broker(owned, source):
+    broker = TerminalMcpBroker(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("agent-run-1"),
+        step=StepSpec(StepId("review"), AgentId("reviewer"), ("findings",)),
+        registry=TerminalResultRegistry(),
+    )
+    if owned is not None:
+        broker.enable_pull_request_ownership(owned)
+    broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"))
+    return broker
+
+
+async def _post_with(broker: TerminalMcpBroker, pr_url: str) -> dict[str, object]:
+    broker._result = asyncio.get_running_loop().create_future()
+    return await broker._submit(
+        _direct_request(
+            broker, "comment-1", "add_comment", {"pr_url": pr_url, "comment": "A."}
+        )
+    )
+
+
+async def _owns_nothing() -> tuple[OpenedPullRequest, ...]:
+    return ()
+
+
+async def _store_is_gone() -> tuple[OpenedPullRequest, ...]:
+    raise RuntimeError("the store is gone")
+
+
+@pytest.mark.parametrize(
+    "owned, error",
+    [
+        # A review step opens nothing, so the store is all it can be held to.
+        # Nothing on record -- a claim that failed and was logged, say -- is
+        # not permission to write to whatever the token reaches.
+        (
+            _owns_nothing,
+            "this run has no pull request on record to comment on, so no "
+            "comment was posted to https://github.com/acme/api/pull/42",
+        ),
+        (
+            _store_is_gone,
+            "could not read which pull request this run is working on, so no "
+            "comment was posted to https://github.com/acme/api/pull/42; try "
+            "again, or fail the step",
+        ),
+    ],
+)
+def test_a_comment_is_not_posted_when_the_run_s_pull_request_cannot_be_known(
+    owned, error: str
+) -> None:
+    """The report side fails open; the post fails closed.
+
+    A comment is the one act here that cannot be taken back, so where the
+    report is let through to keep a finished step finishable, the post is
+    held until the run can say which pull request it is working on.
+    """
+    from unittest.mock import AsyncMock
+
+    source = AsyncMock()
+    answer = asyncio.run(
+        _post_with(_posting_broker(owned, source), "https://github.com/acme/api/pull/42")
+    )
+    assert answer == {"ok": False, "error": error}
+    source.add_comment.assert_not_awaited()
+
+
+def test_a_comment_on_what_the_step_opened_needs_no_store() -> None:
+    """What the step opened speaks for itself when the store cannot be read."""
+    from unittest.mock import AsyncMock
+
+    url = "https://github.com/acme/api/pull/42"
+    source = AsyncMock()
+    source.request_review.return_value = url
+    source.add_comment.return_value = CommentResult(1, f"{url}#c1")
+
+    async def scenario() -> dict[str, object]:
+        broker = _posting_broker(_store_is_gone, source)
+        broker.enable_repository_tools(
+            source, ("add_comment", "open_pull_request"), WorkspaceId("ws")
+        )
+        broker._result = asyncio.get_running_loop().create_future()
+        await broker._submit(
+            _direct_request(
+                broker, "open-1", "open_pull_request", {"branch": "b", "title": "t"}
+            )
+        )
+        return await _post_with(broker, url)
+
+    assert asyncio.run(scenario())["ok"] is True
+    source.add_comment.assert_awaited_once()
+
+
+def test_a_broker_bound_to_no_store_posts_freely() -> None:
+    """A composition that keeps no store was not asked to hold posts to one."""
     from unittest.mock import AsyncMock
 
     source = AsyncMock()
     source.add_comment.return_value = CommentResult(
         1, "https://github.com/acme/api/pull/42#c1"
     )
-
-    async def owned() -> tuple[OpenedPullRequest, ...]:
-        return ()
-
-    async def scenario() -> dict[str, object]:
-        broker = TerminalMcpBroker(
-            run_id=RunId("run-1"),
-            agent_run_id=AgentRunId("agent-run-1"),
-            step=StepSpec(StepId("review"), AgentId("reviewer"), ("findings",)),
-            registry=TerminalResultRegistry(),
-        )
-        broker.enable_pull_request_ownership(owned)  # type: ignore[arg-type]
-        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"))
-        broker._result = asyncio.get_running_loop().create_future()
-        return await broker._submit(
-            _direct_request(
-                broker,
-                "comment-1",
-                "add_comment",
-                {"pr_url": "https://github.com/acme/api/pull/42", "comment": "A."},
-            )
-        )
-
-    assert asyncio.run(scenario())["ok"] is True
+    answer = asyncio.run(
+        _post_with(_posting_broker(None, source), "https://github.com/acme/api/pull/42")
+    )
+    assert answer["ok"] is True
     source.add_comment.assert_awaited_once()
 
 

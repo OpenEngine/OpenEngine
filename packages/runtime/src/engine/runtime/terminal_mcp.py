@@ -505,7 +505,7 @@ class TerminalMcpBroker:
         assert self._source_control is not None
         if name == "add_comment":
             pr_url, comment, file, line, in_reply_to_id = _comment_arguments(arguments)
-            misdirected = await self._not_the_runs_pull_request(pr_url)
+            misdirected = await self._not_the_runs_pull_request(pr_url, posting=True)
             if misdirected is not None:
                 return {"ok": False, "error": misdirected}
             try:
@@ -639,7 +639,9 @@ class TerminalMcpBroker:
                     return refusal
         return None
 
-    async def _not_the_runs_pull_request(self, url: str) -> str | None:
+    async def _not_the_runs_pull_request(
+        self, url: str, *, posting: bool = False
+    ) -> str | None:
         """Say so when `url` is not a pull request this run is working on.
 
         Asked wherever a step names one: of the `pr_url` it reports, which
@@ -649,33 +651,52 @@ class TerminalMcpBroker:
         `findings`, so it never reports a pull request at all -- and a comment
         is the one act here that cannot be taken back once it is on the wrong
         change request.
+
+        The two differ in which way they fail when the run's pull requests
+        cannot be known. A report is let through: refusing it strands a
+        finished step with nothing left to give, and the gate downstream still
+        reads what it names. A post is refused, because it is the step that
+        acts. A review step opens nothing of its own, so it has only the
+        store to be held to -- and a store that could not be read, or that a
+        swallowed recording failure left empty, would otherwise let the
+        deployment's token write to any pull request it can reach.
         """
+        recorded = await self._recorded_pull_requests()
         owned = dict(
             [(_change_request_identity(one), one) for one in self._opened_pull_requests]
             + [
                 ((record.repository, record.number), record.url)
-                for record in await self._recorded_pull_requests()
+                for record in recorded or ()
             ]
         )
-        if not owned:
-            # Neither source knows of a change request, so there is nothing to
-            # call this one wrong against. A run whose work is written down
-            # nowhere goes on working rather than being unable to finish a
-            # step at all, the worse of the two failures to be wrong in.
-            return None
         if _change_request_identity(url) in owned:
             return None
+        if owned:
+            return (
+                "pr_url must name the pull request this run is working on, "
+                f"{' or '.join(_named(one) for one in owned.items())}, not {url}"
+            )
+        if not posting or self._run_pull_requests is None:
+            # Nothing to call this one wrong against: a report goes on rather
+            # than leaving the step unable to finish, and a broker nobody gave
+            # a store to was composed not to hold posts to one.
+            return None
+        if recorded is None:
+            return (
+                "could not read which pull request this run is working on, so "
+                f"no comment was posted to {url}; try again, or fail the step"
+            )
         return (
-            "pr_url must name the pull request this run is working on, "
-            f"{' or '.join(_named(one) for one in owned.items())}, not {url}"
+            "this run has no pull request on record to comment on, so no "
+            f"comment was posted to {url}"
         )
 
-    async def _recorded_pull_requests(self) -> tuple[OpenedPullRequest, ...]:
+    async def _recorded_pull_requests(self) -> tuple[OpenedPullRequest, ...] | None:
         """The run's change requests according to the store, if one keeps them.
 
-        A store that cannot be reached says nothing rather than nothing owned:
-        refusing a correct URL would strand a finished step with no answer
-        left to give, and what the step opened itself still speaks for itself.
+        Empty when no store is bound. `None` when one is and could not be
+        read, which is not the same answer as owning nothing: a report may go
+        on without it, and a post may not.
         """
         if self._run_pull_requests is None:
             return ()
@@ -683,7 +704,7 @@ class TerminalMcpBroker:
             return tuple(await self._run_pull_requests())
         except Exception:
             logger.exception("Could not read the pull requests this run is working on")
-            return ()
+            return None
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.

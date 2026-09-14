@@ -2253,6 +2253,18 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 
     async def scenario() -> tuple[Any, ...]:
         store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        # The run took this pull request on earlier; a post to one it has no
+        # record of is refused rather than sent.
+        await store.remember_pull_request(
+            PullRequestRecord(
+                repository="acme/api",
+                number=42,
+                run_id=RunId("run-1"),
+                opened_at="2026-01-01T00:00:00+00:00",
+                node_id=NodeId("implementation"),
+                url="https://github.com/acme/api/pull/42",
+            )
+        )
         server = TerminalMcpServer(
             step_id="reranker",
             agent_id=AGENT,
