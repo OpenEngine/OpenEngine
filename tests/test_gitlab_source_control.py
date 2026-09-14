@@ -224,3 +224,11 @@ def test_a_project_path_is_sent_as_the_url_wrote_it() -> None:
     assert source._merge_request(
         "https://gitlab.com/Group/Sub/Project/-/merge_requests/7#note_1"
     ) == ("Group%2FSub%2FProject", 7)
+
+
+def test_a_merge_request_copied_off_its_changes_tab_is_the_same_merge_request() -> None:
+    """The ownership guard and the CI gate read past `/diffs`, so this does too."""
+    source = GitLabSourceControl("token", transport=AsyncMock())
+    assert source._merge_request(
+        "https://gitlab.com/group/project/-/merge_requests/7/diffs"
+    ) == ("group%2Fproject", 7)

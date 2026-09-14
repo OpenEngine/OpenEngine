@@ -100,8 +100,11 @@ def _merge_request(authority: str, hostname: str, path: str) -> ChangeRequest | 
     """Read `<project path>/-/merge_requests/<iid>`.
 
     A GitLab project is nested to any depth, so the project is whatever stands
-    before the first marker and the number must be the whole of what follows:
-    a second marker leaves a remainder, and is refused by that alone.
+    before the first marker. Segments past the number are GitLab's own views of
+    the one merge request -- `/diffs`, `/commits`, `/pipelines` -- and are read
+    past, as `/files` is on a pull request: a URL copied off the Changes tab
+    names the merge request it is on. A second marker among them, or a
+    `pull`, would be a second change request, and is refused.
 
     A `pull/<number>` inside the project path is refused for the same reason a
     second marker is -- `/x/y/pull/7/-/merge_requests/1` is one change request
@@ -110,15 +113,17 @@ def _merge_request(authority: str, hostname: str, path: str) -> ChangeRequest | 
     the merge request it looks like.
     """
     project, _, tail = path.partition(_MERGE_REQUESTS)
-    iid, separator, remainder = tail.partition("/")
+    iid, _, remainder = tail.partition("/")
     number = change_request_number(iid)
+    trailing = remainder.split("/")
     segments = project.strip("/").split("/")
     doubled = any(
         one == "pull" and change_request_number(following) is not None
         for one, following in zip(segments, segments[1:])
     )
     named = bool(segments) and all(names_a_project_step(one) for one in segments)
-    if not named or number is None or separator or remainder or doubled:
+    second = any(one in ("-", "merge_requests", "pull") for one in trailing)
+    if not named or number is None or doubled or second:
         return None
     written = "/".join(segments)
     return ChangeRequest(

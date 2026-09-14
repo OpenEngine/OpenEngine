@@ -899,6 +899,19 @@ def test_comment_provenance_reaches_mcp_client() -> None:
             ("gitlab.com/group/sub/project", 5),
         ),
         ("https://gitlab.example.com/x/y/pull/7/-/merge_requests/1#note_123", None),
+        # GitLab's views of one merge request, read past as `/files` is on a
+        # pull request: the Changes tab is where a reviewer copies the URL.
+        ("https://gitlab.com/acme/api/-/merge_requests/7/diffs", ("gitlab.com/acme/api", 7)),
+        ("https://gitlab.com/acme/api/-/merge_requests/7/commits", ("gitlab.com/acme/api", 7)),
+        (
+            "https://gitlab.com/acme/api/-/merge_requests/7/diffs#note_1",
+            ("gitlab.com/acme/api", 7),
+        ),
+        ("https://gitlab.com/acme/api/-/merge_requests/7/", ("gitlab.com/acme/api", 7)),
+        # A second change request after the first is still no change request.
+        ("https://gitlab.com/a/b/-/merge_requests/1/x/-/merge_requests/2", None),
+        ("https://gitlab.com/a/b/-/merge_requests/1/merge_requests/2", None),
+        ("https://gitlab.com/a/b/-/merge_requests/1/x/y/pull/9", None),
         ("https://github.com/acme/api/issues/42", None),
         ("https://github.com/acme/api", None),
         # Two change requests in one path. Read from the front this is
