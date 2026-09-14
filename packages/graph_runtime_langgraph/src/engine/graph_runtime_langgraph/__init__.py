@@ -61,6 +61,7 @@ from engine.graph_runtime_langgraph.store import (
     CommentRecord,
     GraphRuntimeStore,
     InMemoryGraphRuntimeStore,
+    PullRequestRecord,
     RunRecord,
     SqliteGraphRuntimeStore,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "NoExecutionError",
     "NoWorkingDirectoryError",
     "NodeExecution",
+    "PullRequestRecord",
     "RunRecord",
     "SqliteGraphRuntimeStore",
     "State",

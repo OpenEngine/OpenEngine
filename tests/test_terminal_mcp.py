@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 
 import pytest
 
@@ -22,6 +23,7 @@ from engine.domain import (
 from engine.ports import ApprovalRequest, GitResult
 from engine.runtime.terminal_mcp import (
     DEFAULT_BASE_REF,
+    OpenedPullRequest,
     PostedComment,
     TerminalMcpBroker,
     TerminalResultRegistry,
@@ -946,6 +948,108 @@ def test_posted_comments_are_recorded_against_the_change_request(
             repository, 42, "issue", CommentResult(123, comment_url)
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "url, repository, number",
+    [
+        ("https://github.com/Acme/Renamed/pull/42", "acme/renamed", 42),
+        ("https://github.com/acme/api/pull/7", "acme/api", 7),
+    ],
+)
+def test_an_opened_pull_request_is_claimed_by_the_run_that_opened_it(
+    url: str, repository: str, number: int,
+) -> None:
+    """Opening is the act that makes a run the pull request's owner.
+
+    Recorded here rather than read back off the comments on the pull request,
+    because commenting is something any run may do to one it does not own: a
+    review run's note would otherwise make it the owner of somebody else's work.
+    """
+
+    class OpeningSourceControl:
+        async def request_review(self, *_arguments: object) -> str:
+            return url
+
+    async def scenario() -> list[OpenedPullRequest]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(opened: OpenedPullRequest) -> None:
+            claimed.append(opened)
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            OpeningSourceControl(),  # type: ignore[arg-type]
+            ("open_pull_request",),
+            WorkspaceId("workspace"),
+        )
+        broker.enable_pull_request_records(claim)
+        answer = await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "open-1",
+                "name": "open_pull_request",
+                "arguments": {"branch": "feature", "title": "Add a thing"},
+            }
+        )
+        assert answer["ok"] is True
+        assert answer["output"] == url
+        return claimed
+
+    assert asyncio.run(scenario()) == [OpenedPullRequest(repository, number, url)]
+
+
+@pytest.mark.parametrize("failure", ["unrecordable", "unrecognisable"])
+def test_a_pull_request_that_cannot_be_claimed_is_still_reported_as_opened(
+    caplog: pytest.LogCaptureFixture, failure: str,
+) -> None:
+    """It is open on the forge by now; retrying would open a second one."""
+    url = (
+        "https://gitlab.example/acme/api/-/merge_requests/42"
+        if failure == "unrecognisable"
+        else "https://github.com/acme/api/pull/42"
+    )
+
+    class OpeningSourceControl:
+        async def request_review(self, *_arguments: object) -> str:
+            return url
+
+    async def scenario() -> dict[str, object]:
+        async def claim(_opened: OpenedPullRequest) -> None:
+            raise RuntimeError("the store is gone")
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            OpeningSourceControl(),  # type: ignore[arg-type]
+            ("open_pull_request",),
+            WorkspaceId("workspace"),
+        )
+        broker.enable_pull_request_records(claim)
+        return await broker._submit(
+            {
+                "token": broker._token,
+                "request_id": "open-1",
+                "name": "open_pull_request",
+                "arguments": {"branch": "feature", "title": "Add a thing"},
+            }
+        )
+
+    with caplog.at_level(logging.WARNING):
+        answer = asyncio.run(scenario())
+
+    assert answer["ok"] is True
+    assert answer["output"] == url
+    assert caplog.text
 
 
 def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted(

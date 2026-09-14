@@ -154,9 +154,20 @@ def main(argv: list[str] | None = None) -> int:
     # Comment POSTs are recorded to gh.jsonl so tests can assert on them.
     gh_log = state / "gh.jsonl"
 
-    async def _fake_api(self, method: str, path: str, **kwargs: object) -> dict:
+    async def _fake_api(self, method: str, path: str, **kwargs: object) -> object:
         if method == "GET" and "/pulls/" in path:
-            return {"head": {"sha": "abc1234"}}
+            return {"head": {"sha": "abc1234"}, "base": {"ref": "main"}}
+        if method == "GET" and "/rules/branches/" in path:
+            return []
+        if method == "GET" and "/branches/" in path:
+            return {"protected": True, "protection": {
+                "required_status_checks": {"contexts": ["tests"]},
+            }}
+        if method == "GET" and path.endswith("/check-runs"):
+            return {"check_runs": [{
+                "name": "tests", "status": "completed", "conclusion": "success",
+                "details_url": "https://github.com/test/repo/actions/runs/1",
+            }]}
         if method == "POST" and "/comments" in path:
             import json as _json
             body = (kwargs.get("json") or {}).get("body", "")

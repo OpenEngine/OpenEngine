@@ -163,6 +163,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "workspace",
         "naming",
         "implementation",
+        "ci-check",
         "review-security",
         "review-bugs",
         "review-performance",
@@ -174,6 +175,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Workspace",
         "Naming",
         "Implementation",
+        "CI check",
         "Review (Security)",
         "Review (Bugs & task adherence)",
         "Review (Performance)",
@@ -182,6 +184,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Human review",
     ]
     assert [node.group for node in codex.nodes] == [
+        "",
         "",
         "",
         "",
@@ -198,6 +201,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "workspace",
         "agent",
         "agent",
+        "tool",
         "agent",
         "agent",
         "agent",
@@ -212,6 +216,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         False,
         False,
         True,
+        False,
         True,
         True,
         True,
@@ -294,7 +299,9 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     implementation = nodes[module.IMPLEMENTATION]
     assert len(implementation.mcp_server_bindings) == 1
     impl_binding = implementation.mcp_server_bindings[0]
-    assert impl_binding.repository_tools == ("git_subcommand", "open_pull_request")
+    assert impl_binding.repository_tools == (
+        "git_subcommand", "open_pull_request", "list_pipeline_status", "get_job_logs",
+    )
     assert impl_binding.required_outputs == ("pr_url",)
 
     # Each review facet gets read-only repository tools (no add_comment).

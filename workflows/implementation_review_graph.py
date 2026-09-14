@@ -1,6 +1,6 @@
 """Implementation and review, run as a graph.
 
-    workspace -> naming -> implementation -> [review facets] -> reranker -> human-review
+    workspace -> naming -> implementation -> ci-check -> [review facets] -> reranker -> human-review
 
 The review stage fans out to four parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
@@ -27,6 +27,7 @@ from engine.graph_runtime_langgraph import (
 )
 from engine.graph_runtime_langgraph.components import (
     ACPNode,
+    CICheck,
     REVIEW_FACETS,
     HumanReviewNode,
     NameNode,
@@ -52,6 +53,7 @@ BASE_REF = "origin/main"
 WORKSPACE = "workspace"
 NAMING = "naming"
 IMPLEMENTATION = "implementation"
+CI_CHECK = "ci-check"
 REVIEW = "review"
 RERANKER = "reranker"
 HUMAN_REVIEW = "human-review"
@@ -193,6 +195,26 @@ def _review_node_name(facet_id: str) -> str:
     return f"review-{facet_id}"
 
 
+def _implementation_prompt(state: Mapping[str, object]) -> str:
+    ci = state.get("ci_check")
+    if isinstance(ci, dict) and ci.get("passed") is False:
+        return (
+            f"Fix the CI failures on the existing pull request {state.get('pr_url')}. "
+            "Read the failed job logs and relevant code, make the smallest fix, "
+            "test it, commit and push to the same PR branch using git_subcommand. "
+            "Do not open another pull request. Finish with complete_step and the "
+            "same pr_url output. Use fail_step if the failures cannot be fixed.\n\n"
+            f"{ci.get('summary', '')}\n\nOriginal task:\n{state.get('task', '')}"
+        )
+    return IMPLEMENTATION_PROMPT.format(task=state.get("task", ""))
+
+
+def _after_ci(state: dict[str, Any]) -> str | list[Send]:
+    if not state["ci_check"]["passed"]:
+        return IMPLEMENTATION
+    return _fan_out_reviews(state)
+
+
 def _fan_out_reviews(state: dict[str, Any]) -> list[Send]:
     """Dispatch the implementation to all four review facets in parallel."""
     return [Send(_review_node_name(facet.id), state) for facet in REVIEW_FACETS]
@@ -238,15 +260,17 @@ def pipeline(
         InputImplementationNode(
             agent=runner,
             registry=agents,
-            prompt=lambda state: IMPLEMENTATION_PROMPT.format(
-                task=state.get("task", "")
-            ),
+            prompt=_implementation_prompt,
             cwd=checkout,
             mcp_server_bindings=(
                 TerminalMcpServer(
                     step_id=IMPLEMENTATION,
                     agent_id=runner,
                     required_outputs=("pr_url",),
+                    repository_tools=(
+                        "git_subcommand", "open_pull_request",
+                        "list_pipeline_status", "get_job_logs",
+                    ),
                 ),
             ),
             output_key=IMPLEMENTATION,
@@ -256,6 +280,8 @@ def pipeline(
             session_config=session_config,
         ),
     )
+
+    builder.add_node(CI_CHECK, CICheck())
 
     # ---- review fan-out: one node per facet, run in parallel ----------------
 
@@ -353,8 +379,11 @@ def pipeline(
     builder.add_edge(WORKSPACE, NAMING)
     builder.add_edge(NAMING, IMPLEMENTATION)
 
-    # Fan-out: implementation dispatches to all review facets in parallel.
-    builder.add_conditional_edges(IMPLEMENTATION, _fan_out_reviews)
+    builder.add_edge(IMPLEMENTATION, CI_CHECK)
+    builder.add_conditional_edges(
+        CI_CHECK, _after_ci,
+        [IMPLEMENTATION, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
+    )
 
     # Fan-in: every facet converges on the reranker.
     for facet in REVIEW_FACETS:

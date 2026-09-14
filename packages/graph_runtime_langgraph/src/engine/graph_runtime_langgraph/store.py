@@ -148,6 +148,34 @@ class CommentRecord:
     url: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class PullRequestRecord:
+    """The run working on one GitHub pull request.
+
+    Ownership of a pull request is created by taking it on -- usually by
+    opening it, or by being started to work on one that nobody is -- so it is
+    written down when that happens rather than inferred afterwards. Inferring
+    it from the comments on the pull request cannot work: every run that
+    comments is recorded there, so a review, a status update, or any later
+    follow-up would displace the run that actually did the work.
+
+    One row per pull request, replaced when another run takes it on -- a
+    re-opened pull request belongs to whoever opened it last, and one whose
+    work order has finished belongs to whoever was started to carry it on,
+    which is still an act of taking it on rather than of commenting.
+    """
+
+    repository: str
+    """Canonical lowercase owner/repo; prefixed with the host outside github.com."""
+    number: int
+    run_id: RunId
+    opened_at: str
+    """When it was taken on, ISO 8601, as the caller that did so saw the clock."""
+    node_id: NodeId | None = None
+    """Which node took it on. `None` outside a graph."""
+    url: str = ""
+
+
 @runtime_checkable
 class GraphRuntimeStore(EventStore, Protocol):
     """The durable half of the runtime, including the event history."""
@@ -196,6 +224,57 @@ class GraphRuntimeStore(EventStore, Protocol):
         """Every comment this run posted, oldest first."""
         ...
 
+    async def remember_pull_request(self, record: PullRequestRecord) -> None:
+        """Record which run opened a pull request, replacing any earlier claim."""
+        ...
+
+    async def claim_pull_request(
+        self, record: PullRequestRecord, *, replacing: RunId | None = None
+    ) -> RunId:
+        """Take a pull request on if it is free, and say who ended up with it.
+
+        The conditional twin of `remember_pull_request`, for a caller that
+        needs one run per pull request rather than the newest one: free means
+        unclaimed, or still claimed by `replacing` -- the run the caller
+        already established has stopped working, which is what makes taking it
+        over legitimate. Everyone else is told the current holder's id instead
+        of displacing it, so two callers racing to take the same pull request
+        on agree on the winner, and the loser can undo what it started.
+        Replacing unconditionally would leave that run alive and unreachable,
+        since every later comment is routed by this row.
+        """
+        ...
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
+        """Which run opened this pull request.
+
+        A caller holding a pull request -- a webhook answering a comment on it
+        -- needs the run without knowing a run id, and the alternative is
+        reading every run's state to find the one that matches.
+
+        Answered from what was written when the pull request was opened, not
+        from the comments on it. Commenting is something any run may do to a
+        pull request it does not own, so the newest commenter is not the owner:
+        a review or a follow-up run would otherwise inherit the feedback meant
+        for the work order that opened it.
+
+        ``None`` when no run opened it, which is the honest answer for a pull
+        request opened by hand or before this was recorded.
+        """
+        ...
+
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None:
+        """Which pull request this run opened.
+
+        The same claim read the other way round, for a caller that holds a run
+        and wants its pull request -- a page gathering what was said about this
+        work order. Asked once, rather than asking who owns each of a list of
+        pull requests and discarding every answer that named somebody else.
+
+        ``None`` when this run opened nothing, which is most runs.
+        """
+        ...
+
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         """Settle every open request this run raised, without deciding one.
 
@@ -226,6 +305,7 @@ class InMemoryGraphRuntimeStore:
         self._sessions: dict[tuple[RunId, str], ACPContinuation] = {}
         self._approvals: dict[ApprovalId, ApprovalRecord] = {}
         self._comments: dict[tuple[str, str, int], CommentRecord] = {}
+        self._pull_requests: dict[tuple[str, int], PullRequestRecord] = {}
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
         events = self._events.setdefault(event.run_id, [])
@@ -285,6 +365,28 @@ class InMemoryGraphRuntimeStore:
         return tuple(
             record for record in self._comments.values() if record.run_id == run_id
         )
+
+    async def remember_pull_request(self, record: PullRequestRecord) -> None:
+        self._pull_requests[(record.repository, record.number)] = record
+
+    async def claim_pull_request(
+        self, record: PullRequestRecord, *, replacing: RunId | None = None
+    ) -> RunId:
+        held = self._pull_requests.get((record.repository, record.number))
+        if held is not None and held.run_id != replacing:
+            return held.run_id
+        self._pull_requests[(record.repository, record.number)] = record
+        return record.run_id
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
+        opened = self._pull_requests.get((repository, number))
+        return None if opened is None else opened.run_id
+
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None:
+        for (repository, number), record in self._pull_requests.items():
+            if record.run_id == run_id:
+                return (repository, number)
+        return None
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         for approval_id, record in tuple(self._approvals.items()):
@@ -460,6 +562,76 @@ class SqliteGraphRuntimeStore:
             (str(run_id),),
         ).fetchall()
         return tuple(_comment_from(row) for row in rows)
+
+    async def remember_pull_request(self, record: PullRequestRecord) -> None:
+        self._connection.execute(
+            "INSERT INTO github_pull_requests "
+            "(repository, number, run_id, node_id, opened_at, url) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (repository, number) DO UPDATE SET "
+            "run_id = excluded.run_id, node_id = excluded.node_id, "
+            "opened_at = excluded.opened_at, url = excluded.url",
+            (
+                record.repository,
+                record.number,
+                str(record.run_id),
+                None if record.node_id is None else str(record.node_id),
+                record.opened_at,
+                record.url,
+            ),
+        )
+
+    async def claim_pull_request(
+        self, record: PullRequestRecord, *, replacing: RunId | None = None
+    ) -> RunId:
+        # The write is the claim, and the database decides it: the insert takes
+        # a free pull request, and the conditional update takes one still held
+        # by the run the caller saw stop. Anyone racing this loses at the same
+        # point, whatever else happened in between, and the read afterwards is
+        # of committed state, so the loser is told who won rather than left
+        # thinking it did. `replacing` of `None` matches no row, because a
+        # claimed pull request always names a run.
+        self._connection.execute(
+            "INSERT INTO github_pull_requests "
+            "(repository, number, run_id, node_id, opened_at, url) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (repository, number) DO UPDATE SET "
+            "run_id = excluded.run_id, node_id = excluded.node_id, "
+            "opened_at = excluded.opened_at, url = excluded.url "
+            "WHERE github_pull_requests.run_id = ?",
+            (
+                record.repository,
+                record.number,
+                str(record.run_id),
+                None if record.node_id is None else str(record.node_id),
+                record.opened_at,
+                record.url,
+                None if replacing is None else str(replacing),
+            ),
+        )
+        held = await self.run_for_pull_request(record.repository, record.number)
+        assert held is not None  # just inserted, if it was not already there
+        return held
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
+        # One row per pull request, found by its primary key, so this stays a
+        # single seek however many runs the deployment has accumulated.
+        row = self._connection.execute(
+            "SELECT run_id FROM github_pull_requests "
+            "WHERE repository = ? AND number = ?",
+            (repository, number),
+        ).fetchone()
+        return None if row is None else RunId(row["run_id"])
+
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None:
+        # `github_pull_requests_by_run` is what keeps this a seek rather than a
+        # walk of every pull request the deployment has ever opened.
+        row = self._connection.execute(
+            "SELECT repository, number FROM github_pull_requests "
+            "WHERE run_id = ? LIMIT 1",
+            (str(run_id),),
+        ).fetchone()
+        return None if row is None else (row["repository"], int(row["number"]))
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         self._connection.execute(

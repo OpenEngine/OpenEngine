@@ -66,6 +66,12 @@ StatusReporter = Callable[[str], Awaitable[None]]
 #: one still posts comments, it just keeps no record of them.
 CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 
+#: Given a pull request this run has just opened, write down that it owns it.
+#: Bound by whoever owns the durable store, like `CommentRecorder`. Ownership
+#: is recorded here because opening is the act that creates it; reading it back
+#: off the comments on the pull request would name whoever commented last.
+PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
+
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
 
@@ -107,6 +113,20 @@ READ_ONLY_REPOSITORY_TOOLS: frozenset[str] = frozenset(
 
 #: What `open_pull_request` proposes against when the agent names no base.
 DEFAULT_BASE_REF = "main"
+
+
+@dataclass(frozen=True, slots=True)
+class OpenedPullRequest:
+    """A pull request this run has just opened, named the way a webhook has it.
+
+    `repository` and `number` together are the name, because that is all a
+    comment delivered by a webhook carries about what it is a comment on.
+    """
+
+    repository: str
+    """Canonical lowercase owner/repo; prefixed with the host outside github.com."""
+    number: int
+    url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +215,7 @@ class TerminalMcpBroker:
         self._comments_added = 0
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
+        self._pull_request_recorder: PullRequestRecorder | None = None
 
     def enable_status_updates(self, report: StatusReporter) -> None:
         """Serve `update_status`, delivering what it is told to `report`.
@@ -214,6 +235,16 @@ class TerminalMcpBroker:
         able to find the comments an earlier one left.
         """
         self._comment_recorder = record
+
+    def enable_pull_request_records(self, record: PullRequestRecorder) -> None:
+        """Record this run as the owner of every pull request it opens.
+
+        Only bound when the run has a store to keep the record in, like
+        `enable_comment_records`. What it enables is feedback arriving on the
+        pull request later reaching the work order that opened it, rather than
+        whichever run last happened to comment there.
+        """
+        self._pull_request_recorder = record
 
     def enable_repository_tools(
         self,
@@ -544,7 +575,32 @@ class TerminalMcpBroker:
             )
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
+        await self._record_pull_request(url)
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _record_pull_request(self, url: str) -> None:
+        """Claim the pull request that is already open, if anyone is keeping it.
+
+        Failures are logged without failing the tool, for the reason
+        `_record_comment` gives: the pull request exists on the forge by now,
+        and the only thing the agent could do with the bad news is open a
+        second one.
+        """
+        if self._pull_request_recorder is None:
+            return
+        try:
+            pull_request = _github_pull_request(url)
+            if pull_request is None:
+                logger.warning(
+                    "Could not identify the opened pull request for recording: %s", url
+                )
+                return
+            repository, number = pull_request
+            await self._pull_request_recorder(
+                OpenedPullRequest(repository, number, url)
+            )
+        except Exception:
+            logger.exception("Could not record the opened pull request %s", url)
 
     async def _record_comment(
         self, kind: Literal["issue", "review"], result: CommentResult
@@ -1215,7 +1271,9 @@ def main() -> None:
 __all__ = [
     "CommentRecorder",
     "DEFAULT_BASE_REF",
+    "OpenedPullRequest",
     "PostedComment",
+    "PullRequestRecorder",
     "READ_ONLY_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",
     "REPOSITORY_TOOL_NAMES",

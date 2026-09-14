@@ -9,6 +9,7 @@ import pytest
 from engine.adapters.source_control.github import (
     GitGlobalOptionError,
     GitHubSourceControl,
+    GitHubSourceControlError,
     GitOutsideWorkspaceError,
     InternalBranchPublicationError,
 )
@@ -446,3 +447,49 @@ def test_invalid_reply_is_rejected_before_api_call(monkeypatch: pytest.MonkeyPat
     with pytest.raises(ValueError):
         asyncio.run(source.add_comment("https://github.com/acme/api/pull/42", "Fixed.", **arguments))
     api.assert_not_awaited()
+
+
+@pytest.mark.parametrize("permission, allowed", [
+    ("write", True), ("admin", True), ("read", False), ("none", False),
+    (None, False), ("unexpected", False),
+])
+def test_effective_repository_write_permission(monkeypatch, permission, allowed):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    api = AsyncMock(return_value={"permission": permission, "role_name": "custom-role"})
+    monkeypatch.setattr(source, "_api", api)
+    assert asyncio.run(source.can_write_repository(
+        "https://github.com/acme/api/pull/42", "someone")) is allowed
+    api.assert_awaited_once_with("GET", "/repos/acme/api/collaborators/someone/permission")
+
+
+def test_repository_permission_lookup_failure_propagates(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", AsyncMock(side_effect=RuntimeError("HTTP 403")))
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        asyncio.run(source.can_write_repository("https://github.com/acme/api/pull/42", "someone"))
+
+
+def test_authenticated_login_identifies_the_posting_account(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    api = AsyncMock(return_value={"login": "OpenEngine-worker", "type": "User"})
+    monkeypatch.setattr(source, "_api", api)
+    assert asyncio.run(
+        source.authenticated_login("https://github.com/acme/api")
+    ) == "OpenEngine-worker"
+    api.assert_awaited_once_with("GET", "/user")
+
+
+@pytest.mark.parametrize("response", [{}, {"login": ""}, {"login": 7}, []])
+def test_authenticated_login_refuses_an_unusable_answer(monkeypatch, response):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", AsyncMock(return_value=response))
+    with pytest.raises(GitHubSourceControlError):
+        asyncio.run(source.authenticated_login("https://github.com/acme/api"))

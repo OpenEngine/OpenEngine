@@ -23,6 +23,11 @@ import {
   type RunView,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
+import {
+  GITHUB_COMMENTS_ANCHOR,
+  GithubActivityPanel,
+  useRunGithubComments,
+} from "./github-activity";
 import { useProjectMilestones } from "./milestone-timeline";
 import { WorkspaceControl } from "./workspace";
 
@@ -156,6 +161,10 @@ export function useRuns() {
 
 export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error: string }) {
   const [filter, setFilter] = useState<string>("");
+  // What the reader typed to narrow the list by name. Held apart from the
+  // phase buttons so the two narrow together: a title is how a WorkOrder is
+  // recognized, and a long list is quicker to search than to read.
+  const [title, setTitle] = useState("");
 
   // Built from the phases actually present rather than from a fixed list, so a
   // filter is never offered that would empty the page, and a phase the workflow
@@ -165,7 +174,12 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
     for (const run of runs) if (!seen.includes(run.phase)) seen.push(run.phase);
     return seen;
   }, [runs]);
-  const shown = filter ? runs.filter((run) => run.phase === filter) : runs;
+  const search = title.trim().toLowerCase();
+  const shown = runs.filter(
+    (run) =>
+      (!filter || run.phase === filter) &&
+      (!search || run.name.toLowerCase().includes(search)),
+  );
 
   const awaiting = runs.filter((run) => run.phase === "awaiting_human_review").length;
   const failed = runs.filter((run) => run.phase === "failed").length;
@@ -203,6 +217,14 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
               </button>
             ))}
           </div>
+          <input
+            aria-label="Filter WorkOrders by title"
+            className="toolbar-search"
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Filter by title"
+            type="search"
+            value={title}
+          />
           <div className="toolbar-end">
             <span className="micro">
               {shown.length} of {runs.length} shown
@@ -217,6 +239,13 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
         <p className="notice notice-block">
           Could not load WorkOrders: {error}
         </p>
+      ) : runs.length > 0 && shown.length === 0 ? (
+        // Unlike the phase buttons -- built from the phases on screen, so none
+        // of them can empty the page -- a typed title can match nothing, and
+        // that reads as a lost list without something saying otherwise.
+        <div className="empty">
+          <h2>No WorkOrders match this filter.</h2>
+        </div>
       ) : runs.length ? (
         <div className="cards">
           {shown.map((run) => {
@@ -272,7 +301,6 @@ export function NewWorkflowPage({
   );
   const [repository, setRepository] = useState(".");
   const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
-  const [workstreamId, setWorkstreamId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
@@ -297,9 +325,7 @@ export function NewWorkflowPage({
           inputs: Object.fromEntries((selected?.inputs ?? []).map((input) => [
             input.name, inputValues[input.name] ?? input.default,
           ])),
-          ...(milestone
-            ? { milestoneId: milestone.milestoneId, workstreamId: workstreamId || undefined }
-            : {}),
+          ...(milestone ? { milestoneId: milestone.milestoneId } : {}),
         }),
       });
       // The run now owns this prompt, so the draft has nothing left to keep.
@@ -320,7 +346,7 @@ export function NewWorkflowPage({
         <h1>{milestone ? "Create a task" : "Create a WorkOrder"}</h1>
         <p className="lede">
           {milestone
-            ? "Start work for this milestone, optionally under one of its workstreams."
+            ? "Start work for this milestone."
             : "Create one WorkOrder that keeps its stages, agent conversations, outputs, and final human decision together."}
         </p>
       </header>
@@ -342,22 +368,6 @@ export function NewWorkflowPage({
             ))}
           </select>
         </label>
-        {milestone && (
-          <label>
-            <span>Workstream (optional)</span>
-            <select
-              value={workstreamId}
-              onChange={(event) => setWorkstreamId(event.target.value)}
-            >
-              <option value="">No workstream — milestone task</option>
-              {milestone.workstreams.map((workstream) => (
-                <option key={workstream.workstreamId} value={workstream.workstreamId}>
-                  {workstream.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <label>
           <span>Repository</span>
           <input
@@ -723,6 +733,10 @@ async function ifPresent<T>(read: Promise<T>): Promise<T | undefined> {
 }
 
 export function RunDetailPage({ runId }: { runId: string }) {
+  // Read here rather than inside the panel so the strip's link and the panel
+  // it scrolls to are two views of one answer: the link is only offered when
+  // there is something under it.
+  const comments = useRunGithubComments(runId);
   const [baseRun, setRun] = useState<ApiWorkflowRun>();
   const [graph, setGraph] = useState<ApiGraphRun>();
   const [topology, setTopology] = useState<ApiGraphTopology>();
@@ -858,6 +872,21 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Repository" value={run.repository} />
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
+            {/* Where the comments are. Steering by comment happens entirely
+                off screen -- the webhook answers GitHub in milliseconds and
+                the work lands minutes later -- so without something in the
+                strip saying they exist, the panel below is only found by
+                scrolling past everything else on the page. */}
+            {comments.visible && (
+              <Stat
+                label="GitHub comments"
+                value={
+                  <a href={`#${GITHUB_COMMENTS_ANCHOR}`}>
+                    {comments.activity?.comments.length ?? 0} ↓
+                  </a>
+                }
+              />
+            )}
           </StatStrip>
           {graph && typeof graph.values.workspaceId === "string" && (
             <section className="run-workspace" aria-label="WorkOrder checkout">
@@ -914,6 +943,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
               {run.failureReason}
             </p>
           )}
+          {/* What the pull request this WorkOrder opened has been asked for,
+              and what the engine did about it. */}
+          <GithubActivityPanel {...comments} />
           <section className="timeline" aria-label="WorkOrder steps">
             {collapseStepGroups(run.steps).map((entry) =>
               entry.grouped ? (

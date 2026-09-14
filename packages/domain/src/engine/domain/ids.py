@@ -24,9 +24,6 @@ ProjectId = NewType("ProjectId", str)
 MilestoneId = NewType("MilestoneId", str)
 """A delivery goal within a project."""
 
-WorkstreamId = NewType("WorkstreamId", str)
-"""A body of workflow-run work within a milestone."""
-
 WorkOrderId = NewType("WorkOrderId", str)
 """A scoped unit of work needed to satisfy a milestone."""
 
@@ -86,7 +83,6 @@ __all__ = [
     "StepId",
     "TaskId",
     "WorkflowId",
-    "WorkstreamId",
     "WorkOrderId",
     "WorkspaceId",
 ]

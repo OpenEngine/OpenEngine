@@ -411,7 +411,7 @@ function App() {
             project or WorkOrder in the rail. */}
         {sidebar()}
         {route.kind === "runs" ? (
-          <RunsPage runs={runs} error={runsError} />
+          <RunsPage runs={runs.filter((run) => run.phase !== "scheduled")} error={runsError} />
         ) : route.kind === "new-run" ? (
           <NewWorkflowPage config={config} />
         ) : route.kind === "new-task" ? (
@@ -437,8 +437,8 @@ function App() {
             projectId={route.projectId}
             milestoneId={route.milestoneId}
             // The list the shell already follows for the rail and the runs
-            // page: a task is a run started in a workstream, so this page reads
-            // the same poll rather than opening one of its own.
+            // page: a task is a run started under a milestone, so this page
+            // reads the same poll rather than opening one of its own.
             runs={runs}
             runsError={runsError}
             runsLoaded={runsLoaded}

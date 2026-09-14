@@ -7,7 +7,7 @@ test("WorkOrder filters stay in the viewport with Projects expanded", async ({ p
   await page.route("**/api/runs", (route) => route.fulfill({ json: {
     runs: options.map((name) => ({
       runId: name, name, workflowId: "work", workflowName: "Work",
-      taskId: name, workstreamId: null, milestoneId: null, repository: ".",
+      taskId: name, milestoneId: null, repository: ".",
       repositoryContext: { repository: "." }, terminalOutcome: null,
       phase: ["failed", "succeeded"].includes(name) ? name : "running_agent",
       graphProgress: { activeNodeIds: [name], waitingNodeIds: [], nextNodeIds: [] },

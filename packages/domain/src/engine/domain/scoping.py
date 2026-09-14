@@ -9,6 +9,7 @@ from engine.domain.ids import MilestoneId, WorkOrderId
 class WorkOrderStatus(Enum):
     """Completion state visible to the scoper."""
 
+    SCHEDULED = "scheduled"
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETE = "complete"

@@ -46,9 +46,6 @@ const milestone: ApiMilestone = {
   name: "Foundation",
   description: "Build the shared model.",
   dependencies: [],
-  workstreams: [
-    { workstreamId: "workstream-data", name: "Data model", scope: "Persist it." },
-  ],
 };
 
 function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
@@ -58,7 +55,6 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
     workflowId: "work-v1",
     workflowName: "Work",
     taskId: "task-1",
-    workstreamId: null,
     milestoneId: null,
     taskPrompt: "Do the work",
     repository: ".",
@@ -69,6 +65,10 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
     ...overrides,
   };
 }
+
+/** A deployment whose GitHub webhook has delivered nothing, which is every
+ *  WorkOrder on this page: the panel that reads it draws nothing at all. */
+const noComments = { repository: "", configured: false, comments: [] };
 
 function json(value: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(value), {
@@ -239,20 +239,13 @@ describe("NewWorkflowPage", () => {
     );
   });
 
-  it("creates a milestone task with an optional workstream", async () => {
+  it("creates a task under the milestone it was opened from", async () => {
     const fetch = stubPageApi();
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const user = userEvent.setup();
     render(<NewWorkflowPage config={config} project={project} milestone={milestone} />);
 
-    expect(
-      screen.getByRole("option", { name: "No workstream — milestone task" }),
-    ).toHaveValue("");
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Workstream (optional)" }),
-      "workstream-data",
-    );
     await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Persist it");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -260,7 +253,6 @@ describe("NewWorkflowPage", () => {
     const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
     expect(JSON.parse(String(request.body))).toMatchObject({
       milestoneId: "milestone-foundation",
-      workstreamId: "workstream-data",
     });
   });
 });
@@ -472,6 +464,25 @@ describe("RunsPage", () => {
     expect(container.querySelectorAll(".cards .card")).toHaveLength(1);
     expect(screen.getByText("1 of 2 shown")).toBeInTheDocument();
   });
+
+  it("narrows the list by title and says so when nothing matches", async () => {
+    const runs = [run(), run({ runId: "run-2", name: "Second run", phase: "failed" })];
+    const user = userEvent.setup();
+    const { container } = render(<RunsPage runs={runs} error="" />);
+
+    const search = screen.getByRole("searchbox", { name: "Filter WorkOrders by title" });
+    await user.type(search, "second");
+    expect(container.querySelectorAll(".cards .card")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Second run" })).toBeVisible();
+    expect(screen.getByText("1 of 2 shown")).toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "third");
+    expect(
+      screen.getByRole("heading", { name: "No WorkOrders match this filter." }),
+    ).toBeVisible();
+    expect(screen.getByText("0 of 2 shown")).toBeInTheDocument();
+  });
 });
 
 describe("RunDetailPage", () => {
@@ -491,6 +502,8 @@ describe("RunDetailPage", () => {
       if (path === "/api/runs/run-1") return json(run());
       if (path === "/graph/api/runs/run-1") return json(awaiting);
       if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
+      // The page reads GitHub comment activity for this WorkOrder too.
+      if (path.includes("/github-comments")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);
@@ -512,6 +525,8 @@ describe("RunDetailPage", () => {
         pendingApprovals: [{ approvalId: "approval-1", nodeId: "review", reason: "Review the release", allowedDecisions: ["accept", "cancel"] }],
       });
       if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [{ nodeId: "review", name: "Release review", kind: "human" }] });
+      // The page reads GitHub comment activity for this WorkOrder too.
+      if (path.includes("/github-comments")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);
@@ -775,6 +790,8 @@ describe("RunDetailPage", () => {
           workspaceRoot: attached ? "/worktrees/ws-1" : null,
         });
       }
+      // The page reads GitHub comment activity for this WorkOrder too.
+      if (path.includes("/github-comments")) return json(noComments);
       return json({ events: [] });
     });
     vi.stubGlobal("fetch", fetch);

@@ -14,13 +14,13 @@ from engine.domain.ids import (
     RunId,
     TaskId,
     WorkflowId,
-    WorkstreamId,
 )
 
 
 class RunPhase(Enum):
     """Coarse lifecycle position of a run."""
 
+    SCHEDULED = "scheduled"
     PENDING = "pending"
     RUNNING_AGENT = "running_agent"
     SUCCEEDED = "succeeded"
@@ -53,7 +53,6 @@ class RunState:
     run_id: RunId
     task_id: TaskId
     workflow_id: WorkflowId
-    workstream_id: WorkstreamId | None = None
     milestone_id: MilestoneId | None = None
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""

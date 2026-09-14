@@ -21,6 +21,7 @@ members = [
     "engine-adapter-workspace-provider-git-worktree",
     "engine-control-server",
     "engine-domain",
+    "engine-github-concierge",
     "engine-graph-runtime",
     "engine-graph-runtime-langgraph",
     "engine-migrations",
@@ -28,6 +29,7 @@ members = [
     "engine-ports",
     "engine-runtime",
     "engine-scoper",
+    "engine-single-tool-mcp",
     "engine-slack-concierge",
     "engine-web",
     "engine-worker",
@@ -560,6 +562,25 @@ version = "0.0.0"
 source = { editable = "packages/domain" }
 
 [[package]]
+name = "engine-github-concierge"
+version = "0.0.0"
+source = { editable = "packages/github-concierge" }
+dependencies = [
+    { name = "engine-domain" },
+    { name = "engine-single-tool-mcp" },
+    { name = "langgraph" },
+    { name = "langgraph-acp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "engine-domain", editable = "packages/domain" },
+    { name = "engine-single-tool-mcp", editable = "packages/single-tool-mcp" },
+    { name = "langgraph", specifier = ">=1.0" },
+    { name = "langgraph-acp", editable = "langgraph-acp" },
+]
+
+[[package]]
 name = "engine-graph-runtime"
 version = "0.0.0"
 source = { editable = "packages/graph_runtime" }
@@ -697,11 +718,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "engine-single-tool-mcp"
+version = "0.0.0"
+source = { editable = "packages/single-tool-mcp" }
+
+[[package]]
 name = "engine-slack-concierge"
 version = "0.0.0"
 source = { editable = "packages/slack-concierge" }
 dependencies = [
     { name = "engine-domain" },
+    { name = "engine-single-tool-mcp" },
     { name = "langgraph" },
     { name = "langgraph-acp" },
     { name = "starlette" },
@@ -710,6 +737,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "engine-domain", editable = "packages/domain" },
+    { name = "engine-single-tool-mcp", editable = "packages/single-tool-mcp" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-acp", editable = "langgraph-acp" },
     { name = "starlette", specifier = ">=0.52" },
@@ -729,6 +757,7 @@ dependencies = [
     { name = "engine-adapter-state-store-sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree" },
+    { name = "engine-github-concierge" },
     { name = "engine-graph-runtime" },
     { name = "engine-graph-runtime-langgraph" },
     { name = "engine-runtime" },
@@ -753,6 +782,7 @@ requires-dist = [
     { name = "engine-adapter-state-store-sqlite", editable = "packages/adapters/state_store/sqlite" },
     { name = "engine-adapter-workflow-runtime-temporal", editable = "packages/adapters/workflow_runtime/temporal" },
     { name = "engine-adapter-workspace-provider-git-worktree", editable = "packages/adapters/workspace_provider/git_worktree" },
+    { name = "engine-github-concierge", editable = "packages/github-concierge" },
     { name = "engine-graph-runtime", editable = "packages/graph_runtime" },
     { name = "engine-graph-runtime-langgraph", editable = "packages/graph_runtime_langgraph" },
     { name = "engine-runtime", editable = "packages/runtime" },

@@ -123,6 +123,9 @@ class PipelineStatus:
     ref: str
     checks: tuple[StatusCheck, ...]
     pipelines: tuple[Pipeline, ...]
+    # None means requirements are unknown; () confirms no configured gates.
+    # Missing required checks are represented as pending by the provider.
+    required_checks: tuple[StatusCheck, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +187,14 @@ class SourceControl(Protocol):
         to name it separately would be a caller that could name a different
         one.
         """
+        ...
+
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        """Whether the user has effective write access to this request's repository."""
+        ...
+
+    async def authenticated_login(self, repository_url: str) -> str:
+        """The account name these credentials act as on this repository's forge."""
         ...
 
     async def add_comment(

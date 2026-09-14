@@ -9,6 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
     "engine-runtime",
     "engine-scoper",
+    "engine-github-concierge",
     "engine-slack-concierge",
     # The engine that runs the graph workflows, and the contract it
     # implements. Startup reads every file in the workflow directory and a
@@ -56,6 +57,7 @@ packages = ["src/engine"]
 [tool.uv.sources]
 engine-runtime = { workspace = true }
 engine-scoper = { workspace = true }
+engine-github-concierge = { workspace = true }
 engine-slack-concierge = { workspace = true }
 engine-graph-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }

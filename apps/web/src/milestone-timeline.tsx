@@ -13,19 +13,10 @@ const MIN_GRAPH_WIDTH = 640;
 // viewport. A proportional inset leaves the visible start of a long plan blank.
 const MAP_SIDE_PADDING = 152;
 const NODE_Y = 96;
-// A node is out of flow, so the map cannot measure the stack inside it. These
-// mirror `.milestone-node` in styles.css so the map can be told how far the
-// deepest one reaches; without it a milestone's bullets hang past the map's
-// floor and only the viewport's scrollbar admits they are there.
-const NODE_TOP = 83;
-const NODE_HEAD = 66; // dot 26 + gap 9 + one line of name 31
-const NODE_ROW_GAP = 9;
-const WORKSTREAM_LINE = 15; // 11px over 1.35, rounded up
-const WORKSTREAM_GAP = 4;
-const MAP_FLOOR = 180;
-// Slack under the last bullet, which also absorbs a name that wraps to a
-// second line -- the one part of the stack that cannot be counted from here.
-const MAP_FOOT = 28;
+// A node is out of flow, so the map cannot measure it. This clears the deepest
+// one -- 83px down to the dot, the dot and the name under it, and slack for a
+// name that wraps to a second line.
+const MAP_MIN_HEIGHT = 180;
 // The gap a tooltip holds above what it describes, and the one it keeps from
 // the window's edges -- the same 12px the graph's own side padding reserves.
 const TOOLTIP_GAP = 8;
@@ -34,13 +25,6 @@ const POLL_MS = 1000;
 // One failed poll is a blip and is kept quiet; a run of them is an outage, and
 // a timeline that has stopped following the plan has to say so.
 const STALE_AFTER_FAILURES = 3;
-
-/** How tall the map has to be for the deepest milestone to sit inside it. */
-export function mapMinHeight(milestones: ApiMilestone[]): number {
-  const rows = Math.max(0, ...milestones.map((milestone) => milestone.workstreams.length));
-  const list = rows ? NODE_ROW_GAP + rows * WORKSTREAM_LINE + (rows - 1) * WORKSTREAM_GAP : 0;
-  return Math.max(MAP_FLOOR, NODE_TOP + NODE_HEAD + list + MAP_FOOT);
-}
 
 /** Place a tooltip above the thing it describes, in the window's coordinates.
  *
@@ -133,7 +117,7 @@ export function MilestoneTimelineVisual({
     return <p className="milestone-empty">No milestones have been added to this project yet.</p>;
 
   return (
-    <div className="milestone-map" style={{ minWidth, minHeight: mapMinHeight(ordered) }}>
+    <div className="milestone-map" style={{ minWidth, minHeight: MAP_MIN_HEIGHT }}>
       <svg
         className="milestone-lines"
         aria-hidden="true"
@@ -176,7 +160,6 @@ export function MilestoneTimelineVisual({
       </svg>
       {ordered.map((milestone) => {
         const tooltipId = `milestone-description-${milestone.milestoneId}`;
-        const nameId = `milestone-name-${milestone.milestoneId}`;
         return (
           <div
             key={milestone.milestoneId}
@@ -196,37 +179,8 @@ export function MilestoneTimelineVisual({
               aria-describedby={milestone.description ? tooltipId : undefined}
             >
               <span className="milestone-dot" aria-hidden="true" />
-              <span className="milestone-name" id={nameId}>
-                {milestone.name}
-              </span>
+              <span className="milestone-name">{milestone.name}</span>
             </a>
-            {milestone.workstreams.length > 0 && (
-              // Named off the milestone rather than by a string of its own:
-              // two projects may hold two milestones called "Launch", and the
-              // list belongs to the one written above it.
-              <ul className="milestone-workstreams" aria-labelledby={nameId}>
-                {milestone.workstreams.map((workstream) => {
-                  const scopeId = `milestone-scope-${workstream.workstreamId}`;
-                  return (
-                    <li
-                      key={workstream.workstreamId}
-                      className="milestone-workstream"
-                      tabIndex={workstream.scope ? 0 : undefined}
-                      aria-describedby={workstream.scope ? scopeId : undefined}
-                      onMouseEnter={pinTooltip}
-                      onFocus={pinTooltip}
-                    >
-                      <span>{workstream.name}</span>
-                      {workstream.scope && (
-                        <span className="milestone-tooltip" id={scopeId} role="tooltip">
-                          {workstream.scope}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
           </div>
         );
       })}

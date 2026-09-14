@@ -360,6 +360,7 @@ test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) =
     "Workspace",
     "Naming",
     "Implementation",
+    "CI check",
     "Review",
     "Reranker",
     "Human review",
@@ -556,11 +557,12 @@ test("a graph run waiting on a person says so, and can be answered", async ({
     "Workspace",
     "Naming",
     "Implementation",
+    "CI check",
     "Review",
     "Reranker",
     "Human review",
   ]);
-  for (const index of [0, 1, 2, 3, 4, 5])
+  for (const index of [0, 1, 2, 3, 4, 5, 6])
     await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
   await expect(page.locator(".callout-action")).toHaveCount(0);
 });

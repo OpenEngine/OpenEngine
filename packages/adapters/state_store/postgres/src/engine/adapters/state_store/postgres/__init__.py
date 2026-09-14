@@ -19,10 +19,9 @@ from engine.domain.ids import (
     ProjectId,
     RunId,
     TaskId,
-    WorkstreamId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project, Workstream
+from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunState
 
 
@@ -44,7 +43,7 @@ class PostgresStateStore:
         raise NotImplementedError("Postgres writes land with the state-store ticket")
 
     async def list_runs(
-        self, workstream_id: WorkstreamId | None = None
+        self, milestone_id: MilestoneId | None = None
     ) -> Sequence[RunState]:
         raise NotImplementedError("Postgres reads land with the state-store ticket")
 
@@ -76,20 +75,6 @@ class PostgresStateStore:
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
         raise NotImplementedError("Milestone writes land with the state-store ticket")
-
-    async def save_workstream(self, workstream: Workstream) -> None:
-        raise NotImplementedError("Workstream writes land with the state-store ticket")
-
-    async def load_workstream(self, workstream_id: WorkstreamId) -> Workstream | None:
-        raise NotImplementedError("Workstream reads land with the state-store ticket")
-
-    async def list_workstreams(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[Workstream]:
-        raise NotImplementedError("Workstream reads land with the state-store ticket")
-
-    async def delete_workstream(self, workstream_id: WorkstreamId) -> bool:
-        raise NotImplementedError("Workstream writes land with the state-store ticket")
 
     async def create_instance(
         self,

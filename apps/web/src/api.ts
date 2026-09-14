@@ -78,7 +78,7 @@ export function projectMilestonesUrl(projectId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/milestones`;
 }
 
-/** One milestone's own page: the workstreams under it and the tasks in each.
+/** One milestone's own page: the tasks started under it.
  *
  *  Nested under the plan it belongs to rather than named by its id alone: the
  *  page is read as part of a project, and the way back out is the plan. */
@@ -103,19 +103,11 @@ export function milestoneScopeUrl(
   return `${milestoneDetailsUrl(projectId, milestoneId)}/scope`;
 }
 
-export type ApiWorkstream = {
-  workstreamId: string;
-  name: string;
-  /** The part of the milestone this workstream covers. */
-  scope: string;
-};
-
 export type ApiMilestone = {
   milestoneId: string;
   name: string;
   description: string;
   dependencies: string[];
-  workstreams: ApiWorkstream[];
 };
 
 export type ApiProjectMilestones = {
@@ -214,7 +206,6 @@ export type ApiWorkflowRunListing = {
   workflowId: string;
   workflowName: string;
   taskId: string;
-  workstreamId: string | null;
   milestoneId: string | null;
   repository: string;
   repositoryContext: { repository: string };
@@ -416,6 +407,10 @@ export function decideGraphApproval(
     `/graph/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
     { method: "POST", body: JSON.stringify({ decision }) },
   );
+}
+
+export function startScheduledRun(runId: string): Promise<ApiWorkflowRun> {
+  return api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}/start`, { method: "POST" });
 }
 
 /** Throw a WorkOrder away for good.
@@ -738,6 +733,55 @@ export function disconnectSlack(): Promise<void> {
 }
 
 /** Where the utilization page lives, which the rail's graph icon opens. */
+/** One GitHub comment the webhook delivered, and what became of it.
+ *
+ *  `status` is where the comment is on the one path through the engine:
+ *  `queued` and `working` are in flight, and `dispatched`, `replied`,
+ *  `ignored`, `failed` and `handled` are where a comment comes to rest.
+ *
+ *  No WorkOrder is named. Every comment here belongs to the WorkOrder that
+ *  was asked for, so naming it again would be the row repeating the page. */
+export type ApiGithubComment = {
+  commentId: string;
+  event: string;
+  repository: string;
+  number: number;
+  author: string;
+  url: string;
+  excerpt: string;
+  status: string;
+  /** Why it was ignored, or how the turn failed. Empty otherwise. */
+  detail: string;
+  /** Whether this comment started the WorkOrder rather than steering one that
+   *  was already in flight when it arrived. */
+  startedRun: boolean;
+  reply: string;
+  seenAt: number;
+  startedAt: number;
+  dispatchedAt: number;
+  repliedAt: number;
+};
+
+export type ApiGithubActivity = {
+  repository: string;
+  /** Whether a webhook could deliver anything here at all. False means the
+   *  panel is empty because nothing is wired, not because nobody commented. */
+  configured: boolean;
+  comments: ApiGithubComment[];
+};
+
+/** The GitHub comments left on one WorkOrder's pull request. There is no
+ *  unscoped form: a comment is only ever read beside the work it steered. */
+export function getRunGithubComments(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ApiGithubActivity> {
+  return api<ApiGithubActivity>(
+    `/api/runs/${encodeURIComponent(runId)}/github-comments`,
+    { signal },
+  );
+}
+
 export const UTILIZATION_URL = "/utilization";
 
 /** One limit a provider meters a subscription against.

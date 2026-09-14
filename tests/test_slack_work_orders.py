@@ -211,7 +211,21 @@ class _FakeMcpRunner:
         pass
 
 
-def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, provider=None, github_login_config=None, runner=None, workspaces=None, graph_runtime=None, github_comment_handler=None):
+def _app(
+    tmp_path,
+    communications,
+    work_orders: WorkOrdersConfig,
+    catalog=None,
+    provider=None,
+    github_login_config=None,
+    runner=None,
+    workspaces=None,
+    graph_runtime=None,
+    github_comment_handler=None,
+    github_webhook_secret="",
+    github_bot_login="",
+    approval_policy=None,
+):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
 
@@ -237,6 +251,7 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         workflow_catalog=(
             catalog if catalog is not None else WorkflowCatalog.from_graphs(())
         ),
+        **({} if approval_policy is None else {"approval_policy": approval_policy}),
         slack_credential_store=slack_store,
         github_login_config=github_login_config,
         public_url="https://engine.example",
@@ -245,6 +260,9 @@ def _app(tmp_path, communications, work_orders: WorkOrdersConfig, catalog=None, 
         concierge_provider=provider or FakeACPProvider(),
         graph_runtime=graph_runtime,
         github_comment_handler=github_comment_handler,
+        github_webhook_secret=lambda: github_webhook_secret,
+        github_repository="acme/api",
+        github_bot_login=github_bot_login,
     ), capabilities, slack_store
 
 def _mention_graph():
@@ -259,30 +277,6 @@ def _mention_graph():
     return graph_workflow(
         builder, id="implementation-review-v1", name="Implementation review"
     )
-
-def _github_event_route(app) -> bool:
-    return any(getattr(r, "path", None) == "/api/github/events" for r in app.routes)
-
-
-def test_the_github_webhook_route_is_absent_until_something_answers_it(tmp_path):
-    """An endpoint that accepts a delivery it can never act on is a trap: a
-    webhook pointed at it collects failed deliveries until GitHub disables it."""
-    app, _capabilities, _slack_store = _app(
-        tmp_path, RecordingCommunications(), WorkOrdersConfig()
-    )
-    assert not _github_event_route(app)
-
-
-def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
-    async def handle(_comment):
-        pass
-
-    app, _capabilities, _slack_store = _app(
-        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
-        github_comment_handler=handle,
-    )
-    assert _github_event_route(app)
-
 
 def _workflow_catalog():
     """A catalog holding the workflow these mentions name."""
@@ -883,73 +877,81 @@ def test_concierge_broker_rejects_unknown_tool() -> None:
 
 
 # --- concierge MCP protocol --------------------------------------------------
+#
+# What a Slack agent's CLI sees when it connects. The transport answering these
+# is shared and tested once in `test_single_tool_mcp.py`; kept here as well
+# because the answers are this surface's, and a shared implementation is
+# exactly where a change made for the other surface could quietly alter them.
+
+
+def _slack_mcp_answer(request: object) -> dict[str, object] | None:
+    from engine.single_tool_mcp import mcp_response
+    from engine.slack_concierge import slack_egress
+
+    async def scenario() -> dict[str, object] | None:
+        # Port 0 connects to nothing: none of these reach the host, which is
+        # part of what they assert.
+        return await mcp_response(
+            "127.0.0.1", 0, "tok", request,
+            tool_spec=slack_egress._TOOL_SPEC,
+            server_info_name=slack_egress._SERVER_INFO_NAME,
+        )
+
+    return asyncio.run(scenario())
 
 
 def test_mcp_initialize_returns_server_protocol_version() -> None:
     """The server always returns its own version, not the client's."""
-    from engine.slack_concierge.slack_egress import _mcp_response, _PROTOCOL_VERSION
+    from engine.single_tool_mcp import PROTOCOL_VERSION
 
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-                "protocolVersion": "1999-01-01",
-                "clientInfo": {"name": "test", "version": "1"},
-            }},
-        )
-        assert result is not None
-        assert result["result"]["protocolVersion"] == _PROTOCOL_VERSION
-
-    asyncio.run(scenario())
+    result = _slack_mcp_answer(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "1999-01-01",
+            "clientInfo": {"name": "test", "version": "1"},
+        }},
+    )
+    assert result is not None
+    assert result["result"]["protocolVersion"] == PROTOCOL_VERSION
 
 
 def test_mcp_tools_list_returns_create_workorder() -> None:
-    from engine.slack_concierge.slack_egress import _mcp_response
-
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        )
-        assert result is not None
-        tools = result["result"]["tools"]
-        assert len(tools) == 1
-        assert tools[0]["name"] == "create_workorder"
-
-    asyncio.run(scenario())
+    result = _slack_mcp_answer({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    assert result is not None
+    tools = result["result"]["tools"]
+    assert len(tools) == 1
+    assert tools[0]["name"] == "create_workorder"
 
 
 def test_mcp_notifications_are_swallowed() -> None:
-    from engine.slack_concierge.slack_egress import _mcp_response
-
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        )
-        assert result is None
-
-    asyncio.run(scenario())
+    assert _slack_mcp_answer(
+        {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    ) is None
 
 
 def test_mcp_unknown_method_returns_error() -> None:
-    from engine.slack_concierge.slack_egress import _mcp_response
+    result = _slack_mcp_answer(
+        {"jsonrpc": "2.0", "id": 3, "method": "resources/list"}
+    )
+    assert result is not None
+    assert result["error"]["code"] == -32601
 
-    async def scenario() -> None:
-        result = await _mcp_response(
-            "127.0.0.1", 0, "tok",
-            {"jsonrpc": "2.0", "id": 3, "method": "resources/list"},
-        )
-        assert result is not None
-        assert result["error"]["code"] == -32601
-
-    asyncio.run(scenario())
 
 
 class FakeACPProvider:
     name = "fake"
 
-    def __init__(self, text="Hi, how can I help?", fail=False, create=False, fail_after_create=False, steer=False, resume=False, answer=False, review=False):
+    def __init__(
+        self,
+        text="Hi, how can I help?",
+        fail=False,
+        create=False,
+        fail_after_create=False,
+        steer=False,
+        resume=False,
+        answer=False,
+        review=False,
+        calls=1,
+    ):
         self.text, self.fail, self.create = text, fail, create
         self.clients = []
         self.fail_after_create = fail_after_create
@@ -957,6 +959,7 @@ class FakeACPProvider:
         self.resume = resume
         self.answer = answer
         self.review = review
+        self.calls = calls
 
     async def connect(self):
         provider = self
@@ -974,7 +977,8 @@ class FakeACPProvider:
                     provider.fail = False
                     raise RuntimeError("transient")
                 if provider.create and "new workorder" in prompt:
-                    self.result = await call_mcp(self.config)
+                    self.results = await call_mcp(self.config, calls=provider.calls)
+                    self.result = self.results[-1]
                     if provider.fail_after_create:
                         raise RuntimeError("failed after accepting work")
                 if provider.steer and "follow the system theme" in prompt:
@@ -1003,22 +1007,41 @@ class FakeACPProvider:
         return client
 
 
-async def call_mcp(config, tool_name="create_workorder", prompt="Implement it", arguments=None):
+async def call_mcp(
+    config,
+    tool_name="create_workorder",
+    prompt="Implement it",
+    arguments=None,
+    *,
+    calls=None,
+):
     """Real stdio child -> TCP broker -> injected host callback."""
     process = await asyncio.create_subprocess_exec(
         config["command"], *config["args"], stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
+    call_count = 1 if calls is None else calls
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "unsupported"}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool_name, "arguments": arguments if arguments is not None else {"prompt": prompt}}},
+        *[
+            {
+                "jsonrpc": "2.0",
+                "id": 3 + index,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments if arguments is not None else {"prompt": prompt},
+                },
+            }
+            for index in range(call_count)
+        ],
     ]
     stdout, stderr = await process.communicate("".join(json.dumps(r) + "\n" for r in requests).encode())
     assert process.returncode == 0, stderr.decode()
     responses = [json.loads(line) for line in stdout.splitlines()]
-    assert len(responses) == 3
+    assert len(responses) == 2 + call_count
     assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
     assert responses[1]["result"]["tools"][0]["name"] == "create_workorder"
     if tool_name in (
@@ -1026,7 +1049,8 @@ async def call_mcp(config, tool_name="create_workorder", prompt="Implement it", 
         "decide_workorder_review",
     ):
         assert tool_name in [tool["name"] for tool in responses[1]["result"]["tools"]]
-    return responses[2]["result"]
+    results = [response["result"] for response in responses[2:]]
+    return results if calls is not None else results[0]
 
 
 def test_review_decision_is_available_over_the_real_concierge_mcp_server():
@@ -1402,7 +1426,8 @@ def test_checked_in_slack_repository_is_current_checkout():
 
 @pytest.mark.parametrize("ending", ("finished", "human_review", "failed"))
 @pytest.mark.parametrize("before_row", (False, True))
-def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, before_row):
+@pytest.mark.parametrize("pr_url", ("https://github.com/example/repo/pull/42", None))
+def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, before_row, pr_url):
     from starlette.testclient import TestClient
     from engine.graph_runtime_langgraph import State, WorkflowInput, graph_workflow
     from engine.graph_runtime_langgraph.workflows import sqlite_runtime
@@ -1414,7 +1439,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     configured = load_engine_config(Path(__file__).resolve().parents[1] / "engine.toml")
     assert configured.config.work_orders.workflow == "implementation-review-rerank"
     builder = StateGraph(State)
-    builder.add_node("work", lambda state: {"received": state["inputs"]})
+    builder.add_node("work", lambda state: {"received": state["inputs"], "pr_url": pr_url})
     builder.add_edge(START, "work")
     if ending == "human_review":
         from engine.graph_runtime_langgraph.components import HumanReviewNode
@@ -1496,5 +1521,97 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
         assert (channel, thread) == ("C", "1")
         assert message.mention == ("" if ending == "finished" else "U")
         assert any(str(runs[0].run_id) in link.url for link in message.links)
+        pr_links = [link.url for link in message.links if link.label == "View pull request"]
+        assert pr_links == ([pr_url] if ending == "human_review" and pr_url else [])
         assert any(message.text == "*work* started." for _, message, _ in communications.posts)
     assert any(message.links for _, message, _ in communications.posts)
+
+
+def test_an_auto_approved_request_is_not_announced(tmp_path) -> None:
+    """A question the run answers itself is not reported to the thread.
+
+    One work order asks to run dozens of commands, and with `auto_approve` on
+    every one of them is settled by the run. Announcing each as "needs your
+    approval" would bury the requests that really are somebody's -- the plan
+    below, which is still announced.
+    """
+    from contextlib import asynccontextmanager
+
+    from starlette.testclient import TestClient
+
+    from engine.domain import ApprovalKind
+    from engine.graph_runtime import GraphId, NodeId
+    from engine.runtime import WorkflowCatalog
+    from engine.runtime.config import ApprovalConfig
+    from graph_runtime_fakes import (
+        Ask,
+        AwaitSteering,
+        ScriptedGraph,
+        ScriptedGraphRuntime,
+        ScriptedNode,
+    )
+
+    node = NodeId("implementation")
+    graph = ScriptedGraph(
+        GraphId("implementation-review-v1"),
+        "Implementation review",
+        (
+            ScriptedNode(
+                node,
+                (
+                    # Held here until the preference the app sets after starting
+                    # the run has landed, so this is about what gets announced
+                    # rather than a race with when auto-approve arrives.
+                    AwaitSteering(),
+                    Ask("Run git in the step's bound workspace"),
+                    Ask("Approve the plan", kind=ApprovalKind.PLAN_APPROVAL),
+                ),
+            ),
+        ),
+    )
+    runtime = ScriptedGraphRuntime(graph)
+
+    @asynccontextmanager
+    async def running(_app=None):
+        yield runtime
+
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path,
+        communications,
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1"),
+        WorkflowCatalog.from_graphs((graph,)),
+        provider=FakeACPProvider(create=True),
+        graph_runtime=running(),
+        approval_policy=ApprovalConfig(auto_approve=True),
+    )
+    body = json.dumps({"type": "event_callback", "event": {
+        "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+        "text": "<@BOT> new workorder please",
+    }}).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        run_id = runs[0].run_id
+
+        def said() -> list[str]:
+            return [
+                message.text for _, message, _ in communications.posts
+                if isinstance(message, CommunicationsMessage)
+            ]
+
+        async def reach_the_plan() -> None:
+            async with asyncio.timeout(10):
+                while node not in (await runtime.snapshot(run_id)).auto_approve_nodes:
+                    await asyncio.sleep(0.01)
+                await runtime.steer(run_id, "carry on")
+                while not any("Approve the plan" in text for text in said()):
+                    await asyncio.sleep(0.01)
+
+        client.portal.call(reach_the_plan)
+        announced = said()
+
+    assert "*implementation* needs your approval: Approve the plan" in announced
+    assert not [text for text in announced if "Run git" in text]

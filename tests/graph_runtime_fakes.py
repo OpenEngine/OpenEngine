@@ -345,6 +345,9 @@ class _Execution:
         )
         self._waiting[approval.approval_id] = waiting
         self._run.pending[approval.approval_id] = approval
+        automatic = self.node_id in self._run.auto_approve_nodes and beat.kind in (
+            ApprovalKind.COMMAND_EXECUTION, ApprovalKind.FILE_CHANGE, ApprovalKind.TOOL_USE
+        )
         await self._runtime.emit(
             self._run,
             EventKind.APPROVAL_REQUESTED,
@@ -354,14 +357,13 @@ class _Execution:
                 "reason": approval.reason,
                 "command": approval.command,
                 "toolName": approval.tool_name,
+                "autoApproved": automatic,
             },
             node_id=self.node_id,
             execution_id=self.execution_id,
         )
         try:
-            if self.node_id in self._run.auto_approve_nodes and beat.kind in (
-                ApprovalKind.COMMAND_EXECUTION, ApprovalKind.FILE_CHANGE, ApprovalKind.TOOL_USE
-            ):
+            if automatic:
                 await self._runtime.decide(self._run.run_id, approval.approval_id, ApprovalDecision.ACCEPT)
             decision = await waiting
         finally:
@@ -430,12 +432,15 @@ class ScriptedGraphRuntime:
         return graph.topology() if graph is not None else None
 
     async def start(
-        self, graph_id: GraphId, values: Mapping[str, object]
+        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None
     ) -> RunSnapshot:
         graph = self._graphs.get(graph_id)
         if graph is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
-        run = _Run(RunId(f"run-{next(self.ids)}"), graph)
+        run_id = run_id or RunId(f"run-{next(self.ids)}")
+        if run_id in self._runs:
+            raise ValueError(f"run already exists: {run_id}")
+        run = _Run(run_id, graph)
         run.values.update(values)
         self._runs[run.run_id] = run
         await self.emit(run, EventKind.RUN_STARTED, {"values": dict(run.values)})

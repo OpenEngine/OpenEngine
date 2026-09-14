@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.github.transports import (
     GitHubApiTransport,
@@ -186,6 +187,29 @@ class GitHubSourceControl:
             raise GitHubSourceControlError("GitHub API returned no pull-request URL")
         return url
 
+    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+        """Check effective access, including team and organization grants."""
+        owner, repo, _ = _pull_request_parts(pr_url)
+        response = await self._api(
+            "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
+        )
+        # GitHub maps maintain to write and triage to read, including custom
+        # roles' base permissions. Unknown/missing permissions never grant access.
+        return response.get("permission") in ("write", "admin")
+
+    async def authenticated_login(self, repository_url: str) -> str:
+        """Who this token posts as, so Engine can recognise its own comments.
+
+        A GitHub app is recognisable from a comment's ``Bot`` user type, but a
+        personal access token belonging to a machine user is not: asking the
+        API who is calling is the only way to tell Engine's own replies apart
+        from everybody else's.
+        """
+        login = _string(_object(await self._api("GET", "/user")), "login")
+        if not login:
+            raise GitHubSourceControlError("GitHub API returned no authenticated login")
+        return login
+
     async def add_comment(
         self,
         pr_url: str,
@@ -314,12 +338,50 @@ class GitHubSourceControl:
         change_request_number: int | None = None,
     ) -> PipelineStatus:
         owner, repo = await self._workspace_repo(workspace_id)
-        ref = await self._status_ref(owner, repo, ref, change_request_number)
+        requirements = None
+        if change_request_number is not None:
+            if ref is not None:
+                raise ValueError("provide exactly one of ref or change_request_number")
+            number = _positive_number(change_request_number, "change_request_number")
+            pull = _object(await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}"))
+            ref = _nested_string(pull, "head", "sha")
+            base = _nested_string(pull, "base", "ref")
+            if not ref or not base:
+                raise GitHubSourceControlError("GitHub returned an empty PR head or base")
+            requirements = await self._required_checks(owner, repo, base)
+        else:
+            ref = await self._status_ref(owner, repo, ref, change_request_number)
         checks = await self._paginated_field(f"/repos/{owner}/{repo}/commits/{ref}/check-runs", "check_runs")
         runs = await self._paginated_field(f"/repos/{owner}/{repo}/actions/runs", "workflow_runs", {"head_sha": ref})
+        # Combined status returns the latest value for each legacy context.
+        statuses = await self._paginated_field(
+            f"/repos/{owner}/{repo}/commits/{ref}/status", "statuses"
+        )
+        legacy = tuple(
+            StatusCheck(_string(item, "context"), _string(item, "state"), None,
+                        _string(item, "target_url"))
+            for item in statuses
+        )
+        required = None
+        if requirements is not None:
+            required = []
+            for name, app_id in requirements:
+                matches = [
+                    StatusCheck(name, _string(check, "status"),
+                                _optional_string(check, "conclusion"),
+                                _string(check, "details_url"))
+                    for check in checks
+                    if check.get("name") == name and (
+                        app_id is None or _object(check.get("app", {})).get("id") == app_id
+                    )
+                ]
+                if app_id is None:
+                    matches.extend(item for item in legacy if item.name == name)
+                required.extend(matches or [StatusCheck(name, "pending", None, "")])
         return PipelineStatus(
             ref=ref,
-            checks=tuple(
+            required_checks=tuple(required) if required is not None else None,
+            checks=legacy + tuple(
                 StatusCheck(
                     name=_string(check, "name"),
                     status=_string(check, "status"),
@@ -339,6 +401,41 @@ class GitHubSourceControl:
                 for run in runs
             ),
         )
+
+    async def _required_checks(
+        self, owner: str, repo: str, base: str,
+    ) -> tuple[tuple[str, int | None], ...]:
+        """Combine classic branch protection and all active branch rulesets.
+
+        Errors propagate: an unreadable policy is not an empty policy.
+        Keep app identities so an unrelated check cannot satisfy a gate.
+        """
+        branch = quote(base, safe="")
+        data = _object(await self._api("GET", f"/repos/{owner}/{repo}/branches/{branch}"))
+        protection = data.get("protection")
+        if not isinstance(protection, dict) and data.get("protected") is not False:
+            raise GitHubSourceControlError("GitHub did not report branch protection")
+        policy = _object((protection or {}).get("required_status_checks") or {})
+        requirements: set[tuple[str, int | None]] = set()
+        checks = _objects(policy.get("checks", []))
+        for check in checks:
+            app_id = check.get("app_id")
+            requirements.add((_string(check, "context"), app_id if app_id != -1 else None))
+        for context in policy.get("contexts", []):
+            if not any(name == context for name, _ in requirements):
+                requirements.add((context, None))
+        rules = await self._paginated_objects(f"/repos/{owner}/{repo}/rules/branches/{branch}")
+        for rule in rules:
+            if rule.get("type") == "workflows":
+                logging.getLogger(__name__).warning(
+                    "Unsupported required workflows ruleset for %s/%s:%s; "
+                    "skipping workflow verification and failing open for this rule",
+                    owner, repo, base,
+                )
+            if rule.get("type") == "required_status_checks":
+                for check in _objects(_object(rule.get("parameters", {})).get("required_status_checks", [])):
+                    requirements.add((_string(check, "context"), check.get("integration_id")))
+        return tuple(sorted(requirements, key=lambda item: (item[0], item[1] or -1)))
 
     async def get_job_logs(
         self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None

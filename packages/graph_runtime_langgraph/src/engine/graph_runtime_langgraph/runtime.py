@@ -180,12 +180,14 @@ class LangGraphRuntime:
         return definition.topology if definition is not None else None
 
     async def start(
-        self, graph_id: GraphId, values: Mapping[str, object]
+        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None
     ) -> RunSnapshot:
         definition = self._definitions.get(graph_id)
         if definition is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
-        run_id = RunId(f"run-{uuid4().hex[:12]}")
+        run_id = run_id or RunId(f"run-{uuid4().hex[:12]}")
+        if await self._store.run(run_id) is not None:
+            raise ValueError(f"run already exists: {run_id}")
         await self._store.remember_run(RunRecord(
             run_id, graph_id,
             runner_overrides=definition.initial_runner_overrides(values),
@@ -566,6 +568,12 @@ class LangGraphRuntime:
         which is the same id the `tool.call` event carries -- so a client can
         show the two together without matching on wording. Empty for a request
         that is about no call at all, such as a person's verdict on a run.
+
+        `autoApproved` says whether the run answers this one itself, so a
+        reader that pages a person -- Slack, a mobile notification -- can tell a
+        question from a formality. Both are published, because the conversation
+        shows the request beside the call it is about either way, and only one of
+        them is somebody's to answer.
         """
         chosen = approval_id or ApprovalId(f"approval-{uuid4().hex[:12]}")
         record = ApprovalRecord(
@@ -584,23 +592,27 @@ class LangGraphRuntime:
         )
         await self._store.remember_approval(record)
         waiting = execution.expect(chosen)
-        await self.publish(
-            execution.run_id,
-            EventKind.APPROVAL_REQUESTED,
-            {
-                "approvalId": str(chosen),
-                "kind": kind.value,
-                "reason": reason,
-                "command": command,
-                "toolName": tool_name,
-                "toolCallId": tool_call_id,
-            },
-            execution.node_id,
-            execution.execution_id,
-        )
         try:
             run = await self._require(execution.run_id)
-            if execution.node_id in run.auto_approve_nodes and _auto_approvable(kind):
+            automatic = (
+                execution.node_id in run.auto_approve_nodes and _auto_approvable(kind)
+            )
+            await self.publish(
+                execution.run_id,
+                EventKind.APPROVAL_REQUESTED,
+                {
+                    "approvalId": str(chosen),
+                    "kind": kind.value,
+                    "reason": reason,
+                    "command": command,
+                    "toolName": tool_name,
+                    "toolCallId": tool_call_id,
+                    "autoApproved": automatic,
+                },
+                execution.node_id,
+                execution.execution_id,
+            )
+            if automatic:
                 current = await self._store.approval(chosen)
                 if current is not None and current.pending:
                     await self.decide(execution.run_id, chosen, ApprovalDecision.ACCEPT)

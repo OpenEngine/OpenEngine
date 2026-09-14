@@ -57,8 +57,6 @@ from engine.domain import (
     TaskId,
     ToolCall,
     WorkflowId,
-    Workstream,
-    WorkstreamId,
     WorkOrderId,
     WorkOrderSpec,
     WorkOrderStatus,
@@ -420,9 +418,6 @@ def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> Non
         "list_milestones",
         "update_milestone",
         "delete_milestone",
-        "add_workstream",
-        "update_workstream",
-        "delete_workstream",
     )
     assert runner.direct_turns == 1
     assert planner_profile.capabilities == ()
@@ -881,7 +876,7 @@ def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
             "workflowId": "implementation-review-v1",
             "prompt": "Task",
             "repository": ".",
-            "workstreamId": "unknown",
+            "milestoneId": "unknown",
         },
     ],
 )
@@ -900,18 +895,14 @@ def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> N
     assert asyncio.run(store.list_runs()) == ()
 
 
-def test_create_workflow_run_uses_workstream_or_milestone_relationship() -> None:
+def test_create_workflow_run_records_its_milestone() -> None:
     store = InMemoryStateStore()
     project = Project(ProjectId("project-engine"), "Engine")
     milestone = Milestone(
         MilestoneId("milestone-foundation"), project.project_id, "Foundation"
     )
-    workstream = Workstream(
-        WorkstreamId("workstream-data"), milestone.milestone_id, "Data model"
-    )
     asyncio.run(store.save_project(project))
     asyncio.run(store.save_milestone(milestone))
-    asyncio.run(store.save_workstream(workstream))
     app, _runtime = _graph_app(store, _review_graph())
 
     async def scenario():
@@ -920,7 +911,7 @@ def test_create_workflow_run_uses_workstream_or_milestone_relationship() -> None
             transport=transport, base_url="http://test"
         ) as client:
             async with app.router.lifespan_context(app):
-                direct = await client.post(
+                return await client.post(
                     "/api/runs",
                     json={
                         "workflowId": "implementation-review-codex",
@@ -929,29 +920,11 @@ def test_create_workflow_run_uses_workstream_or_milestone_relationship() -> None
                         "milestoneId": milestone.milestone_id,
                     },
                 )
-                scoped = await client.post(
-                    "/api/runs",
-                    json={
-                        "workflowId": "implementation-review-codex",
-                        "prompt": "Persist the model.",
-                        "repository": ".",
-                        "milestoneId": milestone.milestone_id,
-                        "workstreamId": workstream.workstream_id,
-                    },
-                )
-                return direct, scoped
 
-    direct, scoped = asyncio.run(scenario())
+    created = asyncio.run(scenario())
 
-    assert (direct.status_code, scoped.status_code) == (201, 201)
-    assert (direct.json()["milestoneId"], direct.json()["workstreamId"]) == (
-        milestone.milestone_id,
-        None,
-    )
-    assert (scoped.json()["milestoneId"], scoped.json()["workstreamId"]) == (
-        None,
-        workstream.workstream_id,
-    )
+    assert created.status_code == 201
+    assert created.json()["milestoneId"] == milestone.milestone_id
 
 
 #: The dev server's proxy table. TypeScript because Vite is what reads it, so
@@ -1041,8 +1014,8 @@ def test_milestone_frontend_routes_serve_the_application(tmp_path) -> None:
     """A plan's pages are reached by URL as well as by click.
 
     Both are deep links the client routes itself: the plan, and one goal off it
-    opened from a workstream on the timeline. Without a route apiece, a refresh
-    or a pasted link falls through to the static mount and 404s.
+    opened from the timeline. Without a route apiece, a refresh or a pasted
+    link falls through to the static mount and 404s.
     """
     static = tmp_path / "dist"
     static.mkdir()
@@ -1606,18 +1579,11 @@ def test_project_milestones_api_lists_the_active_projects_dependency_data() -> N
         "Put the project in users' hands.",
         (foundation.milestone_id,),
     )
-    data_model = Workstream(
-        WorkstreamId("workstream-data"),
-        foundation.milestone_id,
-        "Data model",
-        "The store, its ports, and its migrations.",
-    )
 
     async def scenario():
         await session.state_store.save_project(project)
         await session.state_store.save_milestone(foundation)
         await session.state_store.save_milestone(launch)
-        await session.state_store.save_workstream(data_model)
         app = create_app(session, {"test": runner})
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -1643,20 +1609,12 @@ def test_project_milestones_api_lists_the_active_projects_dependency_data() -> N
                 "name": "Launch",
                 "description": "Put the project in users' hands.",
                 "dependencies": ["milestone-foundation"],
-                "workstreams": [],
             },
             {
                 "milestoneId": "milestone-foundation",
                 "name": "Foundation",
                 "description": "Build the shared planning model.",
                 "dependencies": [],
-                "workstreams": [
-                    {
-                        "workstreamId": "workstream-data",
-                        "name": "Data model",
-                        "scope": "The store, its ports, and its migrations.",
-                    }
-                ],
             },
         ],
     }
@@ -1771,6 +1729,11 @@ def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_w
         "supersede": [],
         "reasons": ["The milestone needs a dedicated scoping view."],
     }
+    scheduled = [run for run in asyncio.run(store.list_runs()) if run.run_id != existing.run_id]
+    assert len(scheduled) == 1
+    assert scheduled[0].phase is RunPhase.SCHEDULED
+    assert scheduled[0].name == "Render the plan"
+    assert scheduled[0].milestone_id == milestone.milestone_id
     assert scoper.request["milestone"].name == "Milestone scoping"
     assert scoper.request["milestone"].requirements == (
         "Break milestone requirements into reviewable work orders.",
@@ -1878,17 +1841,17 @@ def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() 
 
     A read per milestone would make each poll cost the length of the plan, and
     the SQLite store serializes every query behind one connection, so the plan
-    is read whole and grouped in the handler instead.
+    is read whole instead.
     """
 
     class CountingStore(InMemoryStateStore):
         def __init__(self) -> None:
             super().__init__()
-            self.workstream_reads = 0
+            self.milestone_reads = 0
 
-        async def list_workstreams(self, milestone_id=None):
-            self.workstream_reads += 1
-            return await super().list_workstreams(milestone_id)
+        async def list_milestones(self, project_id=None):
+            self.milestone_reads += 1
+            return await super().list_milestones(project_id)
 
     runner = ConcurrentRunner()
     store = CountingStore()
@@ -1902,15 +1865,7 @@ def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() 
                 MilestoneId(f"milestone-{index}"), project.project_id, f"Goal {index}"
             )
             await store.save_milestone(milestone)
-            await store.save_workstream(
-                Workstream(
-                    WorkstreamId(f"workstream-{index}"),
-                    milestone.milestone_id,
-                    f"Work {index}",
-                    "One workstream per goal.",
-                )
-            )
-        store.workstream_reads = 0
+        store.milestone_reads = 0
         app = create_app(session, {"test": runner})
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -1920,11 +1875,10 @@ def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() 
 
     listed = asyncio.run(scenario())
 
-    assert store.workstream_reads == 1
+    assert store.milestone_reads == 1
     milestones = listed.json()["milestones"]
-    assert len(milestones) == 12
-    assert [milestone["workstreams"][0]["name"] for milestone in milestones] == [
-        f"Work {index}" for index in reversed(range(12))
+    assert [milestone["name"] for milestone in milestones] == [
+        f"Goal {index}" for index in reversed(range(12))
     ]
 
 
@@ -3332,4 +3286,36 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, st
                 else:
                     assert (await client.get("/api/runs")).json()["runs"] == []
 
+    asyncio.run(scenario())
+
+
+def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        graph = ScriptedGraph(GraphId("scheduled-graph"), "Scheduled graph", (
+            ScriptedNode(NodeId("work"), "Work", (AwaitSteering(),)),
+        ))
+        state = RunState(
+            run_id=RunId("run-scheduled-graph"), task_id=TaskId("task-scheduled"),
+            workflow_id=WorkflowId(str(graph.graph_id)), phase=RunPhase.SCHEDULED,
+            name="Scheduled graph work", prompt="Do the work", repository=".",
+        )
+        await store.save(state)
+        app, runtime = _graph_app(store, graph)
+        async with app.router.lifespan_context(app):
+            assert (await store.load(state.run_id)).phase is RunPhase.SCHEDULED
+            assert await runtime.snapshot(state.run_id) is None
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                first, second = await asyncio.gather(
+                    client.post("/api/runs/run-scheduled-graph/start"),
+                    client.post("/api/runs/run-scheduled-graph/start"),
+                )
+                assert sorted([first.status_code, second.status_code]) == [200, 409]
+                response = first if first.status_code == 200 else second
+                assert (await client.post("/api/runs/missing/start")).status_code == 404
+                assert len(await store.list_runs()) == 1
+                assert response.json()["runId"] == state.run_id
+                assert response.json()["phase"] != "scheduled"
+                assert await runtime.snapshot(state.run_id) is not None
+                assert (await client.post("/api/runs/run-scheduled-graph/start")).status_code == 409
     asyncio.run(scenario())

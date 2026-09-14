@@ -15,6 +15,8 @@ later transitions without polling the transcript.
 
 from __future__ import annotations
 
+from engine.github_concierge import Continuation, FeedbackRequest, GithubConcierge
+from engine.github_concierge.github_egress import tool_permission as github_tool_permission
 from engine.slack_concierge import SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
 from langgraph_acp.agent import ACPAgentProvider
@@ -36,12 +38,14 @@ from collections.abc import (
 )
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
+from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_ingress import GithubComment, GithubIngress
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -103,15 +107,12 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkspaceId,
-    Workstream,
-    WorkstreamId,
     WorkOrder,
     WorkOrderId,
     WorkOrderSpec,
     WorkOrderStatus,
     instance_id_for_project,
     project_id_for_instance,
-    workstreams_by_milestone,
 )
 from engine.graph_runtime.inputs import resolve_inputs
 from engine.graph_runtime import (
@@ -122,16 +123,20 @@ from engine.graph_runtime import (
     GraphRuntime,
     GraphRuntimeError,
     GraphWorkflow,
+    NodeId,
+    RunSnapshot,
     RunStatus,
     RuntimeEvent,
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime_langgraph.store import PullRequestRecord
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
     InteractiveAgentRunner,
     Message as CommunicationsMessage,
+    MessageLink,
     StateStore,
     UserInputAnswer,
     WorkspaceState,
@@ -911,6 +916,13 @@ def _graph_workorder_name(values: object) -> str:
 #: would read them is not in the room when a server starts.
 log = logging.getLogger(__name__)
 
+#: How long the forge lookups that authorize a GitHub comment may take before
+#: the comment is abandoned. The ingress behind them has one worker, so this is
+#: not only that comment's latency: whatever it waits, every comment queued
+#: after it waits too. Long enough to cover a slow-but-working forge, short
+#: enough that a hung one costs a redelivery rather than the queue.
+GITHUB_AUTHORIZATION_TIMEOUT_SECONDS = 45
+
 
 @dataclass(slots=True)
 class _GraphSurface:
@@ -943,6 +955,50 @@ class MilestoneScoping(Protocol):
         milestone: MilestoneScope,
         policy: ScopingPolicy,
     ) -> ScopingPlan: ...
+
+
+class GithubProvenance(Protocol):
+    """The half of the runtime's store that says who owns a pull request.
+
+    Named as the pair it is used as: a comment is routed by reading the claim,
+    and a work order started for a comment is findable only if it writes one.
+    Stated as a protocol because this module reaches the store by duck-typing
+    -- the control surface is deliberately forge-agnostic -- and a runtime that
+    keeps no provenance answers ``None`` here rather than growing a method
+    shaped like a pull request.
+    """
+
+    async def run_for_pull_request(self, repository: str, number: int) -> RunId | None: ...
+
+    async def pull_request_for_run(self, run_id: RunId) -> tuple[str, int] | None: ...
+
+    async def claim_pull_request(
+        self, record: PullRequestRecord, *, replacing: RunId | None = None
+    ) -> RunId: ...
+
+
+#: The statuses a run can still be steered in. A completed or failed run has
+#: no execution listening, so feedback for the pull request it opened is a new
+#: request rather than a continuation of that one.
+STEERABLE_RUN_STATUSES = frozenset({RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL})
+
+
+def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None:
+    """Where feedback re-enters this run, or ``None`` to steer whatever runs.
+
+    Untargeted steering reaches the execution in flight, and there is none once
+    a run is parked at human review -- which is exactly when review feedback
+    arrives. An always-open node is the graph's own statement of where it may
+    be sent back to, so naming it is what makes the ordinary post-pull-request
+    case work instead of raising.
+
+    ``None`` when the graph names no such node, or names more than one: a graph
+    that has not said where to re-enter has not asked to be reset, and guessing
+    between two candidates would reset it somewhere arbitrary.
+    """
+    topology = runtime.topology(snapshot.graph_id)
+    open_nodes = [node for node in topology.nodes if node.always_open] if topology else []
+    return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
 def create_app(
@@ -1022,6 +1078,7 @@ def create_app(
     async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
         """Report lifecycle events without making delivery failure fail the graph."""
         text = ""
+        links: list[MessageLink] = []
         mention = False
         if state.origin is None:
             return
@@ -1034,8 +1091,17 @@ def create_app(
         if event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
         elif event.kind is EventKind.APPROVAL_REQUESTED:
+            if event.payload.get("autoApproved"):
+                # The run answers this one itself, so there is nobody to ask.
+                # A single work order asks to run dozens of commands, and
+                # announcing each would bury the requests that are real.
+                return
             if event.payload.get("toolName") == "human_review":
                 text = "Review complete and ready for your decision."
+                snapshot = await surface.runtime.snapshot(state.run_id) if surface.runtime else None
+                pr_url = snapshot.values.get("pr_url") if snapshot else None
+                if isinstance(pr_url, str) and pr_url.strip():
+                    links.append(MessageLink("View pull request", pr_url))
             else:
                 text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
             mention = True
@@ -1046,8 +1112,10 @@ def create_app(
             text = "Work order finished."
         if text:
             link = run_notifier.work_order_link(state)
+            if link:
+                links.append(link)
             await run_notifier.announce(
-                state, text, links=(link,) if link else (), mention=mention,
+                state, text, links=links, mention=mention,
             )
 
     async def graph_notifications(event: RuntimeEvent) -> None:
@@ -1130,7 +1198,7 @@ def create_app(
         forever, so it is failed saying which workflow went missing.
         """
         for state in await session.state_store.list_runs():
-            if state.is_terminal:
+            if state.is_terminal or state.phase is RunPhase.SCHEDULED:
                 continue
             try:
                 try:
@@ -1190,6 +1258,7 @@ def create_app(
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         async with AsyncExitStack() as opened:
             opened.push_async_callback(slack_ingress.close)
+            opened.push_async_callback(github_concierge.close)
             opened.push_async_callback(github_ingress.close)
             if graph_runtime is not None:
                 # Opening the graph engine is what makes a graph WorkOrder
@@ -1486,7 +1555,7 @@ def create_app(
             # Carry only the live frontier and approval owners, not the
             # snapshot's potentially large values.
             if (
-                run.phase not in {"succeeded", "failed"}
+                run.phase not in {"scheduled", "succeeded", "failed"}
                 and surface.runtime is not None
             ):
                 # A row of a workflow this deployment no longer has cannot
@@ -1594,24 +1663,12 @@ def create_app(
         if project is None:
             return _error("project not found", 404)
         milestones = await session.state_store.list_milestones(project_id)
-        # Read every workstream once and group here rather than asking per
-        # milestone: the timeline polls this route every second per open
-        # project, and a query per milestone makes that cost grow with the plan
-        # while holding the store's lock.
-        by_milestone = workstreams_by_milestone(
-            await session.state_store.list_workstreams()
-        )
         return JSONResponse(
             {
                 # Linked to its plan like any other row: the milestones page
                 # this answers is where the way back to the conversation is.
                 "project": _project_json(project, await open_conversations()),
-                "milestones": [
-                    _milestone_json(
-                        milestone, by_milestone.get(milestone.milestone_id, ())
-                    )
-                    for milestone in milestones
-                ],
+                "milestones": [_milestone_json(milestone) for milestone in milestones],
             }
         )
 
@@ -1631,14 +1688,9 @@ def create_app(
         except ValueError as error:
             return _error(str(error), 400)
 
-        workstreams = {
-            item.workstream_id
-            for item in await session.state_store.list_workstreams(milestone_id)
-        }
         current = tuple(
             _workorder_for_run(run, milestone_id)
-            for run in await session.state_store.list_runs()
-            if run.milestone_id == milestone_id or run.workstream_id in workstreams
+            for run in await session.state_store.list_runs(milestone_id)
         )
         if milestone_scoper is None:
             return _error("milestone scoping is not configured", 503)
@@ -1652,6 +1704,30 @@ def create_app(
             ),
             policy=ScopingPolicy(rules=(message,)),
         )
+        # Scope proposals become durable work, but dispatch is an explicit action.
+        definition = _mentioned_workflow()
+        workflow_id = WorkflowId(
+            work_orders.workflow or (str(definition.graph_id) if definition else "")
+        )
+        for spec in plan.create:
+            if spec.milestone_id != milestone_id:
+                return _error("scoper proposed work for another milestone", 400)
+        for spec in plan.create:
+            prompt = spec.objective
+            if spec.evidence_requirements:
+                prompt += "\n\nEvidence requirements:\n" + "\n".join(spec.evidence_requirements)
+            if spec.dependencies:
+                prompt += "\n\nDepends on: " + ", ".join(spec.dependencies)
+            await session.state_store.save(RunState(
+                run_id=RunId(f"run-{uuid4().hex[:12]}"),
+                task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+                workflow_id=workflow_id,
+                milestone_id=milestone_id,
+                phase=RunPhase.SCHEDULED,
+                name=spec.name,
+                prompt=prompt,
+                repository=work_orders.repository,
+            ))
         return JSONResponse(_scoping_plan_json(plan))
 
     async def start_graph_run(
@@ -1661,9 +1737,9 @@ def create_app(
         inputs: dict[str, str],
         prompt: str,
         repository: str,
-        workstream_id: WorkstreamId | None,
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
+        scheduled: RunState | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1693,6 +1769,7 @@ def create_app(
                 "repository": repository,
                 **({"inputs": inputs} if inputs else {}),
             },
+            run_id=scheduled.run_id if scheduled else None,
         )
         if approval_policy.auto_approve:
             topology = runtime.topology(GraphId(str(graph.graph_id)))
@@ -1701,9 +1778,9 @@ def create_app(
                     await runtime.set_auto_approve(snapshot.run_id, node.node_id, True)
         state = RunState(
             run_id=snapshot.run_id,
-            task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+            task_id=scheduled.task_id if scheduled else TaskId(f"task-{uuid4().hex[:12]}"),
+            name=scheduled.name if scheduled else "",
             workflow_id=WorkflowId(str(graph.graph_id)),
-            workstream_id=workstream_id,
             milestone_id=milestone_id,
             # Working, as the engine has just reported it. `graph_event` above
             # moves this when the run ends.
@@ -1738,6 +1815,36 @@ def create_app(
             await session.state_store.save(state)
         return state
 
+    scheduled_start_lock = asyncio.Lock()
+
+    async def start_scheduled_run(request: Request) -> JSONResponse:
+        async with scheduled_start_lock:
+            state = await session.state_store.load(RunId(request.path_params["run_id"]))
+            if state is None:
+                return _error("run not found", 404)
+            if state.phase is not RunPhase.SCHEDULED:
+                return _error("workorder is already started", 409)
+            workflow_id = state.workflow_id or WorkflowId(work_orders.workflow)
+            graph = offered_graphs().get(str(workflow_id)) if workflow_id else _mentioned_workflow()
+            if graph is None:
+                return _error("configure work_orders.workflow before starting this workorder", 400)
+            repository = state.repository or work_orders.repository
+            if not repository:
+                return _error("configure work_orders.repository before starting this workorder", 400)
+            assert surface.runtime is not None
+            try:
+                inputs = resolve_inputs(getattr(graph, "inputs", ()), {})
+            except ValueError as error:
+                return _error(str(error), 400)
+            state = await start_graph_run(
+                surface.runtime, graph, inputs=inputs, prompt=state.prompt,
+                repository=repository, milestone_id=state.milestone_id,
+                scheduled=state,
+            )
+            run = await run_reader.get(state.run_id)
+            assert run is not None
+            return JSONResponse(_run_json(run))
+
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
         body = await _json_body(request)
@@ -1745,39 +1852,19 @@ def create_app(
             prompt = _required_string(body, "prompt")
             repository = _required_string(body, "repository")
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
-            workstream_value = _optional_string(body, "workstreamId")
             milestone_value = _optional_string(body, "milestoneId")
         except ValueError as error:
             return _error(str(error), 400)
         graph = offered_graphs().get(str(workflow_id))
         if graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
-        workstream_id = (
-            WorkstreamId(workstream_value) if workstream_value is not None else None
-        )
         milestone_id = (
             MilestoneId(milestone_value) if milestone_value is not None else None
         )
-        workstream = (
-            await session.state_store.load_workstream(workstream_id)
-            if workstream_id is not None
-            else None
-        )
-        if workstream_id is not None and workstream is None:
-            return _error(f"unknown workstream: {workstream_id}", 400)
         if milestone_id is not None:
             milestone = await session.state_store.load_milestone(milestone_id)
             if milestone is None:
                 return _error(f"unknown milestone: {milestone_id}", 400)
-            if workstream is not None and workstream.milestone_id != milestone_id:
-                return _error(
-                    f"workstream {workstream_id} does not belong to milestone {milestone_id}",
-                    400,
-                )
-
-        # A selected workstream is the more specific relationship. The
-        # milestone is retained only for a task created without one.
-        direct_milestone_id = milestone_id if workstream_id is None else None
 
         # `offered_graphs` only answers with a graph while the engine is
         # running, so this cannot be `None` here.
@@ -1794,8 +1881,7 @@ def create_app(
             inputs=inputs,
             prompt=prompt,
             repository=repository,
-            workstream_id=workstream_id,
-            milestone_id=direct_milestone_id,
+            milestone_id=milestone_id,
         )
         run = await run_reader.get(state.run_id)
         assert run is not None
@@ -1822,7 +1908,8 @@ def create_app(
         state = await session.state_store.load(run_id)
         if state is None:
             return _error("run not found", 404)
-        await cancel_graph_run(run_id)
+        if state.phase is not RunPhase.SCHEDULED:
+            await cancel_graph_run(run_id)
         await session.state_store.delete_run(run_id)
         return Response(status_code=204)
 
@@ -2661,7 +2748,7 @@ def create_app(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            workstream_id=None, milestone_id=None, origin=origin,
+            milestone_id=None, origin=origin,
         )
         link = run_notifier.work_order_link(state)
         _pending_announcements.append((
@@ -2822,16 +2909,331 @@ def create_app(
         verify_signature=verify_slack_signature, connected=lambda: bool(_slack_store.token()),
         react=_slack_comms.add_reaction,
     )
-    # GitHub comments arrive on their own signed route, answered by whatever is
-    # passed in. The route is only mounted when something is: an endpoint that
-    # could accept a delivery but never act on it is a trap, because a webhook
-    # pointed at it collects failed deliveries until GitHub disables the hook.
+    # What each delivered comment has led to, for the panel that shows it. The
+    # steps are recorded where they happen -- the ingress queues and picks up,
+    # the callbacks below forward and answer -- so the panel says what this
+    # process did rather than what it was about to try.
+    github_activity = GithubActivityLog()
+
+    async def github_reply(origin: RunOrigin, text: str) -> None:
+        number, _, review_id = origin.thread_id.partition("/review/")
+        await session.capabilities.source_control.add_comment(
+            f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}",
+            text,
+            in_reply_to_id=int(review_id) if review_id else None,
+        )
+        # After the comment lands, so a row reading "replied" means a reader
+        # will find the reply on the pull request.
+        github_activity.replied(text)
+
+    async def github_run_for_pull_request(repository: str, number: int) -> RunId | None:
+        """Which work order opened this pull request, if anything recorded one.
+
+        Read through the binding that owns the provenance table rather than
+        through the control surface, which is deliberately forge-agnostic and
+        has no business growing a method shaped like a pull request.
+        """
+        store = getattr(surface.runtime, "store", None)
+        if store is None:
+            return None
+        return await store.run_for_pull_request(repository.lower(), number)
+
+    async def github_start_workorder(
+        store: GithubProvenance | None, repository: str, number: int, prompt: str,
+        *, replacing: RunId | None,
+    ) -> Continuation:
+        """Start a work order for a pull request that has no run in flight.
+
+        Deliberately without an origin, unlike the Slack concierge's: the
+        commenter is answered on the pull request by the concierge's own fixed
+        reply, and a ``github:`` channel is not somewhere the chat provider can
+        post -- a run carrying one would send every progress update to a Slack
+        channel that does not exist.
+
+        The run claims the pull request as it starts. Provenance is otherwise
+        written by opening one, which a run started here never does -- it
+        pushes to the pull request the comment arrived on -- so without the
+        claim nothing would own it and the next comment would start another
+        work order, leaving several agents on one branch and letting anyone who
+        can comment create runs without limit. Claiming needs somewhere to
+        write, so a deployment whose runtime keeps no provenance starts nothing
+        rather than starting what it cannot find again.
+
+        Starting and claiming cannot be one operation -- the run id to claim
+        with is the engine's answer to starting -- so the claim decides which
+        run keeps the pull request and this cancels the one that did not. Two
+        comments arriving together both find nothing in flight and both start,
+        and a claim that replaced the earlier one would leave the run it
+        displaced alive and unreachable, since every later comment is routed by
+        that row. `replacing` is the finished run this pull request was last
+        taken on by, if it had one, which is the only claim a start may take
+        over: it is what the caller established has stopped working. A claim
+        that cannot be written at all leaves nothing behind either -- the run
+        is cancelled before the failure is raised, so the redelivery that
+        follows starts one run rather than adding one.
+        """
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        if store is None:
+            raise RuntimeError(
+                "could not start a work order: this runtime records no pull requests"
+            )
+        runtime = surface.runtime
+        assert runtime is not None  # only reached with a runtime in hand
+        state = await start_graph_run(
+            runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=prompt, repository=repository,
+            milestone_id=None,
+        )
+        url = f"https://github.com/{repository}/pull/{number}"
+        try:
+            holder = await store.claim_pull_request(
+                PullRequestRecord(
+                    repository=repository.lower(), number=number, run_id=state.run_id,
+                    opened_at=datetime.now(UTC).isoformat(), url=url,
+                ),
+                replacing=replacing,
+            )
+        except Exception:
+            await _github_cancel_unclaimed(state.run_id)
+            raise
+        if holder != state.run_id:
+            # Lost the race: the pull request is someone else's work order, so
+            # the feedback goes there and this run is undone rather than left
+            # working a branch nothing can reach.
+            await _github_cancel_unclaimed(state.run_id)
+            return await github_steer_workorder(holder, prompt)
+        link = run_notifier.work_order_link(state)
+        return Continuation(
+            url=link.url if link else "", run_id=str(state.run_id), started=True,
+        )
+
+    async def _github_cancel_unclaimed(run_id: RunId) -> None:
+        """Stop a run that did not end up owning its pull request.
+
+        Best effort, and deliberately quiet: whatever is being reported when
+        this is called -- the race lost, or the claim write that failed -- is
+        the more useful thing to report, and a cancel that fails leaves a run
+        visible in the list rather than a silent one.
+        """
+        runtime = surface.runtime
+        if runtime is None:
+            return
+        try:
+            await runtime.cancel(run_id)
+        except Exception:
+            log.exception("could not cancel unclaimed work order %s", run_id)
+
+    async def github_pull_request_for_run(run_id: str) -> tuple[str, int] | None:
+        """Which pull request this work order opened, if it opened one.
+
+        The same claim `github_run_for_pull_request` reads, asked from the run
+        instead: a page showing one work order's comments wants its pull
+        request once, not the owner of every pull request somebody has
+        commented on.
+        """
+        store = getattr(surface.runtime, "store", None)
+        read = getattr(store, "pull_request_for_run", None)
+        if read is None:
+            return None
+        return await read(RunId(run_id))
+
+    async def github_steer_workorder(run_id: RunId, prompt: str) -> Continuation:
+        """Deliver feedback to the work order that holds this pull request."""
+        runtime = surface.runtime
+        assert runtime is not None  # only reached with a runtime in hand
+        snapshot = await runtime.snapshot(run_id)
+        if snapshot is None:
+            raise RuntimeError("could not reach the work order for this pull request")
+        await runtime.steer(run_id, prompt, node_id=_reentry_node(runtime, snapshot))
+        state = await session.state_store.load(run_id)
+        link = run_notifier.work_order_link(state) if state is not None else None
+        return Continuation(url=link.url if link else "", run_id=str(run_id))
+
+    async def github_continue_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+        """Reach this pull request's work order, and write down what happened.
+
+        The recording is here rather than inside the two branches below
+        because this is the boundary the concierge calls: past it the broker
+        answers the agent instead of raising, so a dispatch that failed would
+        otherwise reach nothing that could record it, and the row would settle
+        at "replied" -- carrying the undelivered notice, with no reason and no
+        sign anything went wrong.
+        """
+        try:
+            reached = await _github_reach_workorder(origin, prompt)
+        except Exception as failure:
+            github_activity.dispatch_failed(str(failure) or type(failure).__name__)
+            raise
+        github_activity.dispatched(reached.run_id, started_run=reached.started)
+        return reached
+
+    async def _github_reach_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+        """Steer the work order this pull request already has, or start one.
+
+        Which of the two happens is the host's to decide, not the agent's: it
+        turns on what this process recorded when a run took the pull request
+        on and on what the graph engine says that run is doing now, neither of
+        which a commenter can influence. A pull request nobody is working on --
+        opened by hand, or by a run that has since finished or lost its graph
+        -- has no execution to steer, and steering one would either raise or
+        reach nothing; a comment asking for a change there is a request for
+        work, so it gets a work order.
+        """
+        repository = origin.channel.removeprefix("github:")
+        number = int(origin.thread_id.partition("/review/")[0])
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("could not reach a work order: graph runtime unavailable")
+        # Through the binding that owns the provenance table rather than
+        # through the control surface, which is deliberately forge-agnostic and
+        # has no business growing a method shaped like a pull request.
+        store: GithubProvenance | None = getattr(runtime, "store", None)
+        run_id = (
+            None if store is None
+            else await store.run_for_pull_request(repository.lower(), number)
+        )
+        snapshot = None
+        if run_id is not None:
+            try:
+                snapshot = await runtime.snapshot(run_id)
+            except UnknownGraphError:
+                # A saved work order can outlive the graph it was started from.
+                snapshot = None
+        if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+            reached = await github_start_workorder(
+                store, repository, number, prompt, replacing=run_id,
+            )
+        else:
+            reached = await github_steer_workorder(run_id, prompt)
+        return reached
+
+    github_concierge = GithubConcierge(
+        provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
+        continue_workorder=github_continue_workorder, reply=github_reply,
+    )
+
+    posting_login: dict[str, str] = {}
+
+    async def github_posting_login(repository: str) -> str:
+        """The account Engine replies as, asked once per repository.
+
+        Keyed rather than global: a deployment answers one repository today,
+        but a resolved login is a property of the credentials *on that forge
+        repository*, and an unkeyed cache would quietly hand the first
+        repository's answer to the second one's comments.
+
+        ``GITHUB_BOT_LOGIN`` is optional and usually unset, and a token held by
+        a machine user posts comments that look like anybody else's: without
+        knowing who this process posts as, the concierge answers its own reply
+        and then answers that, forever. The credentials themselves are the
+        authority on this, so they are asked rather than configured. A failure
+        to answer propagates: the turn is retried on redelivery instead of
+        replying into a loop this process cannot recognise.
+        """
+        if repository not in posting_login:
+            posting_login[repository] = (
+                github_bot_login
+                or await session.capabilities.source_control.authenticated_login(
+                    f"https://github.com/{repository}"
+                )
+            )
+        return posting_login[repository]
+
+    async def github_concierge_turn(comment: GithubComment) -> None:
+        # Issue-driven work orders are not supported. PR conversation comments
+        # and inline review replies both belong to an existing work order.
+        if not comment.is_pull_request:
+            github_activity.ignored("not a pull request")
+            return
+        # Both lookups reach the forge, and the queue behind this has one
+        # worker: a comment that waits here is every later comment waiting too,
+        # so they are bounded together rather than left to whatever the
+        # configured transport happens to bound. Timing out raises, which the
+        # ingress treats like any other failure -- the comment is forgotten and
+        # can be redelivered -- so a slow forge costs a retry, not the queue.
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            if comment.author.lower() == (
+                await github_posting_login(comment.repository)
+            ).lower():
+                # GitHub logins are case-insensitive, so the comparison is too.
+                github_activity.ignored("posted by Engine itself")
+                return
+            # Before the comment becomes a prompt, not after the model has
+            # acted on one. A comment is untrusted text and the agent that
+            # reads it can read the host it runs on, so whoever writes one is
+            # choosing what this process reads and what it says back in public.
+            # `author_association` does not bound that -- a COLLABORATOR may
+            # hold read access alone -- and gating the outbound tool alone
+            # would still have run the turn. Write access is the line: it is
+            # already the authority to change this repository, so it is no
+            # escalation to reach the agent working on it.
+            may_write = await session.capabilities.source_control.can_write_repository(
+                f"https://github.com/{comment.repository}/pull/{comment.number}",
+                comment.author,
+            )
+        if not may_write:
+            # Ignored rather than answered, like the association filter above:
+            # a refusal posted back is both noise on the pull request and a way
+            # to make this process talk to somebody it will not act for.
+            log.info(
+                "ignored a GitHub comment from %s, who cannot write to %s",
+                comment.author, comment.repository,
+            )
+            github_activity.ignored(
+                f"{comment.author} cannot write to {comment.repository}"
+            )
+            return
+        thread_id = str(comment.number)
+        if comment.event == "pull_request_review_comment":
+            thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
+        await github_concierge.handle(FeedbackRequest(
+            origin=RunOrigin(
+                channel=f"github:{comment.repository}", thread_id=thread_id,
+                author=comment.author,
+            ),
+            text=comment.body, comment_id=comment.comment_id,
+        ))
+
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         self_login=lambda: github_bot_login,
-        handle=github_comment_handler,
+        handle=github_comment_handler or github_concierge_turn,
+        activity=github_activity,
     )
+
+    async def run_github_comments(request: Request) -> JSONResponse:
+        """The GitHub comments left on this WorkOrder's pull request.
+
+        Scoped by path rather than filtered by query because a comment only
+        means anything next to the work it steered: read on its own it is a
+        line from a conversation with no subject. Hanging it under the run
+        also keeps the one listing of every comment this process ever saw --
+        including comments about work that is none of this WorkOrder's
+        business -- off the API entirely.
+
+        Which comments those are is resolved here rather than remembered with
+        each one: a pull request's owner is written down when it is opened,
+        which can be after a comment on it was recorded, so joining at read
+        time is what lets a row reach the right page at all. Asked from this
+        run -- one seek, whatever the log holds -- rather than by asking who
+        owns each remembered pull request and discarding every answer naming
+        somebody else.
+        """
+        run_id = request.path_params["run_id"]
+        return JSONResponse(activity_json(
+            github_activity.recent(),
+            run_id=run_id,
+            pull_request=await github_pull_request_for_run(run_id),
+            repository=github_repository,
+            # Both halves, because either one missing is a webhook that will
+            # never deliver anything here -- and a panel that stayed empty
+            # without saying so is the confusion this is meant to end.
+            configured=bool(github_repository and github_webhook_secret()),
+        ))
 
     def _mentioned_workflow() -> GraphWorkflow | None:
         """Which workflow a mention runs: the configured one, or the only one.
@@ -2923,8 +3325,10 @@ def create_app(
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
+        Route("/api/runs/{run_id}/start", start_scheduled_run, methods=["POST"]),
         Route("/api/runs/{run_id}", delete_run, methods=["DELETE"]),
         Route("/api/runs/{run_id}/graph-events", graph_run_events),
+        Route("/api/runs/{run_id}/github-comments", run_github_comments),
         # The graph half of the runs above, served by the engine that runs
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),
@@ -2967,10 +3371,7 @@ def create_app(
             methods=["POST"],
         ),
     ]
-    if github_comment_handler is not None:
-        routes.append(
-            Route("/api/github/events", github_ingress.webhook, methods=["POST"])
-        )
+    routes.append(Route("/api/github/events", github_ingress.webhook, methods=["POST"]))
     if static_directory is not None and (static_directory / "index.html").is_file():
 
         async def spa_page(_request: Request) -> Response:
@@ -3070,21 +3471,20 @@ def _project_json(
     return result
 
 
-def _milestone_json(
-    milestone: Milestone, workstreams: Sequence[Workstream]
-) -> dict[str, object]:
+def _milestone_json(milestone: Milestone) -> dict[str, object]:
     return {
         "milestoneId": str(milestone.milestone_id),
         "name": milestone.name,
         "description": milestone.description,
         "dependencies": [str(dependency) for dependency in milestone.dependencies],
-        "workstreams": [_workstream_json(workstream) for workstream in workstreams],
     }
 
 
 def _workorder_for_run(run: RunState, milestone_id: MilestoneId) -> WorkOrder:
-    """Present work already started under a milestone to the scoper."""
-    if run.phase is RunPhase.SUCCEEDED:
+    """Present scheduled and active milestone work to the scoper."""
+    if run.phase is RunPhase.SCHEDULED:
+        status = WorkOrderStatus.SCHEDULED
+    elif run.phase is RunPhase.SUCCEEDED:
         status = WorkOrderStatus.COMPLETE
     elif run.phase is RunPhase.FAILED:
         status = WorkOrderStatus.CANCELLED
@@ -3131,14 +3531,6 @@ def _scoping_plan_json(plan: ScopingPlan) -> dict[str, object]:
     }
 
 
-def _workstream_json(workstream: Workstream) -> dict[str, object]:
-    return {
-        "workstreamId": str(workstream.workstream_id),
-        "name": workstream.name,
-        "scope": workstream.scope,
-    }
-
-
 def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, object]:
     """One WorkOrder, as a client is shown it.
 
@@ -3154,7 +3546,6 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "workflowId": run.workflow_id,
         "workflowName": run.workflow_name,
         "taskId": run.task_id,
-        "workstreamId": str(run.workstream_id) if run.workstream_id else None,
         "milestoneId": str(run.milestone_id) if run.milestone_id else None,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},

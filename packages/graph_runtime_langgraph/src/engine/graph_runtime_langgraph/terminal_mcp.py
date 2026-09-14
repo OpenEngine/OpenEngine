@@ -12,6 +12,7 @@ from engine.domain.ids import WorkspaceId
 from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.terminal_mcp import (
     REPOSITORY_TOOL_METHODS,
+    OpenedPullRequest,
     PostedComment,
     TerminalMcpBroker,
     TerminalResultRegistry,
@@ -19,7 +20,7 @@ from engine.runtime.terminal_mcp import (
 
 from engine.graph_runtime_langgraph.acp import BoundMcpServer
 from engine.graph_runtime_langgraph.executions import NodeExecution
-from engine.graph_runtime_langgraph.store import CommentRecord
+from engine.graph_runtime_langgraph.store import CommentRecord, PullRequestRecord
 
 WORKSPACE_ID = "workspaceId"
 
@@ -99,6 +100,22 @@ class TerminalMcpServer:
                 )
 
             broker.enable_comment_records(record)
+        if "open_pull_request" in served:
+            store = execution.runtime.store
+
+            async def claim(opened: OpenedPullRequest) -> None:
+                await store.remember_pull_request(
+                    PullRequestRecord(
+                        repository=opened.repository,
+                        number=opened.number,
+                        run_id=execution.run_id,
+                        opened_at=datetime.now(UTC).isoformat(),
+                        node_id=execution.node_id,
+                        url=opened.url,
+                    )
+                )
+
+            broker.enable_pull_request_records(claim)
         async with broker:
             config = broker.config
             yield BoundMcpServer(

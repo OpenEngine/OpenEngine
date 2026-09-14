@@ -1,8 +1,13 @@
 # OpenEngine
 
-OpenEngine is your SDLC engine.
-Changes -> Pool of Reviewers -> Reranking -> Impact Radius Analysis -> System Diagram -> Safe change 
+OpenEngine is a graph execution engine that meets you where you work.
 
+![](docs/images/oe_land.png)
+
+We give you an out-of-the-box configuration to get you up and running. The out-of-the-box graph lives [here](./workflows/implementation_review_graph.py) and looks like this:
+```
+Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change 
+```
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
@@ -24,16 +29,14 @@ uv run \
   --all-packages \
   engine-web
 ```
-
-`engine-web` serves the client built into `apps/web/dist` and reads its
-configuration once, so a source edit needs a rebuild, a Ctrl-C, or both. While
-working on OpenEngine itself, run the development server instead:
-
+While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev
 ```
 
-## Engine.toml
+Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
+
+## engine.toml
 The main configuration file for OpenEngine. It's defined [here](./engine.toml).
 While we use sensible defaults, if you need to configure engine, point it at a new 
 `engine.toml` file.
@@ -56,7 +59,7 @@ DATABASE_URL=sqlite:///conversations.sqlite3 uv run engine-migrate ## you should
 
 ## GitHub connection
 
-OpenEngine connects to GitHub to open pull requests and post review comments.
+OpenEngine connects to GitHub to open pull requests and post review comments. The easiest method is to use the gh cli. 
 The connection is set up once per machine through the Settings panel (gear icon
 at the bottom of the sidebar).
 
@@ -174,21 +177,4 @@ The key concepts are:
 
 Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine uses claude and codex CLI under the hood. 
 
-## Shape of the system
-
-```
-                   Workflow DSL
-                  zero-dep Python
-                       │
-                       ▼
-               ┌──────────────┐
-Event + State →│    Engine    │→ Commands
-               └──────────────┘
-                       │
-                       ▼
-                    Runtime
-                       │
-             ┌─────────┼─────────┐
-             ▼         ▼         ▼
-          Temporal   Agents    Git/Buzz
-```
+![sdlc](docs/images/oe_sdlc.png)

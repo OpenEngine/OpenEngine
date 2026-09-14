@@ -2,6 +2,12 @@
 
 The host binds the Slack origin and posts status and links through its notifier.
 The agent supplies only a repository and task; it cannot redirect those replies.
+
+What an agent may ask for here, and what it gets back, is this surface's own --
+the pull-request concierge grants different authority through a broker of its
+own. Only the transport beneath the two is shared, from
+`engine.single_tool_mcp`, because carrying a call decides nothing about who may
+make it.
 """
 
 from __future__ import annotations
@@ -12,13 +18,14 @@ import json
 import secrets
 import sys
 import tempfile
-from pathlib import Path
-from typing import TextIO
-from langgraph_acp.permissions import ACPPermissionRequest, ACPPermissionOutcome
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from pathlib import Path
+from typing import TextIO
 
-
+from engine.single_tool_mcp import McpRequestId, PROTOCOL_VERSION as _PROTOCOL_VERSION
+from engine.single_tool_mcp import SingleToolBroker
+from langgraph_acp.permissions import ACPPermissionOutcome, ACPPermissionRequest
 
 #: Given (repository, prompt) create a work order and return (url, run_id).
 CreateWorkorder = Callable[[str, str], Awaitable[tuple[str, str]]]
@@ -26,9 +33,8 @@ SteerWorkorder = Callable[[str], Awaitable[tuple[str, str]]]
 AnswerQuestion = Callable[[str, dict[str, list[str]]], Awaitable[tuple[str, str]]]
 DecideReview = Callable[[bool, str], Awaitable[tuple[str, str]]]
 
-McpRequestId = str | int
-_PROTOCOL_VERSION = "2025-06-18"
 _SERVER_NAME = "concierge"
+_SERVER_INFO_NAME = "engine-concierge"
 
 CONCIERGE_TOOL_NAME = "create_workorder"
 
@@ -115,7 +121,7 @@ _REVIEW_TOOL_SPEC = {
 }
 
 
-class ConciergeBroker:
+class ConciergeBroker(SingleToolBroker):
     """Expose ``create_workorder`` to a provider CLI over a local MCP server.
 
     The factory that creates it binds the callback that actually starts the
@@ -123,6 +129,9 @@ class ConciergeBroker:
     or repositories -- it validates the call, forwards it, and returns the
     answer.
     """
+
+    entry_point = "engine.slack_concierge.slack_egress"
+    server_name = _SERVER_NAME
 
     def __init__(
         self,
@@ -134,6 +143,7 @@ class ConciergeBroker:
         answer_question: AnswerQuestion | None = None,
         decide_review: DecideReview | None = None,
     ) -> None:
+        super().__init__()
         self._create_workorder = create_workorder
         self._steer_workorder = steer_workorder
         self._resume_workorder = resume_workorder
@@ -433,6 +443,13 @@ async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome
             if option.kind == "allow_once":
                 return ACPPermissionOutcome.selected(option.option_id)
     return ACPPermissionOutcome.cancelled()
+
+
+__all__ = [
+    "CONCIERGE_TOOL_NAME",
+    "ConciergeBroker",
+    "tool_permission",
+]
 
 
 if __name__ == "__main__":

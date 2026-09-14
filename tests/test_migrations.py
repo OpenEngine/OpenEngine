@@ -1,5 +1,6 @@
 """Alembic selects and applies the database-specific migration history."""
 
+import json
 from pathlib import Path
 import sqlite3
 
@@ -52,7 +53,7 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0007",)
+    assert revision == ("sqlite_0008",)
 
 
 def test_sqlite_upgrade_removes_runs_with_retired_human_review_phase(
@@ -187,14 +188,14 @@ def test_project_archive_migration_leaves_existing_projects_listed(
     assert row == ("OpenEngine", 0)
 
 
-def test_workstream_scope_migration_leaves_existing_workstreams_named(
+def test_removing_workstreams_rehomes_their_runs_on_the_milestone(
     tmp_path: Path,
 ) -> None:
-    """Scope is new, so what was recorded without one reads back unscoped."""
+    """A run outlives the heading it hung from, under the goal that heading served."""
 
     database = tmp_path / "state.sqlite3"
     url = f"sqlite:///{database}"
-    upgrade(url, "sqlite_0003")
+    upgrade(url, "sqlite_0007")
     with sqlite3.connect(database) as connection:
         connection.execute(
             "INSERT INTO projects (project_id, name) VALUES (?, ?)",
@@ -209,21 +210,58 @@ def test_workstream_scope_migration_leaves_existing_workstreams_named(
         )
         connection.execute(
             """
-            INSERT INTO workstreams (workstream_id, milestone_id, name)
-            VALUES (?, ?, ?)
+            INSERT INTO workstreams (workstream_id, milestone_id, name, scope)
+            VALUES (?, ?, ?, ?)
             """,
-            ("workstream-data", "milestone-foundation", "Data model"),
+            ("workstream-data", "milestone-foundation", "Data model", ""),
+        )
+        connection.executemany(
+            """
+            INSERT INTO run_states (run_id, state_json, workstream_id, milestone_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                (
+                    "run-scoped",
+                    '{"run_id":"run-scoped","workstream_id":"workstream-data",'
+                    '"milestone_id":null}',
+                    "workstream-data",
+                    None,
+                ),
+                (
+                    "run-loose",
+                    '{"run_id":"run-loose","workstream_id":null,"milestone_id":null}',
+                    None,
+                    None,
+                ),
+            ),
         )
         connection.commit()
 
     upgrade(url)
 
     with sqlite3.connect(database) as connection:
-        row = connection.execute(
-            "SELECT name, scope FROM workstreams WHERE workstream_id = ?",
-            ("workstream-data",),
-        ).fetchone()
-    assert row == ("Data model", "")
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        rows = dict(
+            connection.execute("SELECT run_id, milestone_id FROM run_states")
+        )
+        states = dict(connection.execute("SELECT run_id, state_json FROM run_states"))
+
+    assert "workstreams" not in tables
+    assert rows == {"run-scoped": "milestone-foundation", "run-loose": None}
+    assert json.loads(states["run-scoped"]) == {
+        "run_id": "run-scoped",
+        "milestone_id": "milestone-foundation",
+    }
+    assert json.loads(states["run-loose"]) == {
+        "run_id": "run-loose",
+        "milestone_id": None,
+    }
 
 
 def test_postgres_history_is_a_placeholder(capsys) -> None:
@@ -246,8 +284,8 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
-        assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("b41d9c0f5a3e",)
+        assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "github_pull_requests", "sqlite_sequence", "alembic_version"}
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("d3f81a6c2e90",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -316,7 +354,7 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("b41d9c0f5a3e",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("d3f81a6c2e90",)
 
 
 def test_github_comments_migration_preserves_graph_data_and_downgrades(
@@ -395,6 +433,95 @@ def test_github_comments_migration_preserves_graph_data_and_downgrades(
     upgrade(url, store="graph")
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM github_comments").fetchone() == (0,)
+
+
+def test_github_pull_requests_migration_names_one_owner_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    """Ownership is keyed by the pull request, so it has exactly one holder."""
+    database = tmp_path / "graph.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "b41d9c0f5a3e", store="graph")
+    with sqlite3.connect(database) as connection:
+        connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
+        connection.execute(
+            """
+            INSERT INTO github_comments (comment_id, repository, kind, pr_number, run_id, posted_at)
+            VALUES (12345, 'acme/api', 'issue', 42, 'run', '2026-09-10T18:00:00Z')
+            """
+        )
+        comments = connection.execute("SELECT * FROM github_comments").fetchall()
+
+    upgrade(url, store="graph")
+    upgrade(url, store="graph")
+
+    with sqlite3.connect(database) as connection:
+        # Nothing is backfilled: the comment table cannot say who opened what.
+        assert connection.execute(
+            "SELECT COUNT(*) FROM github_pull_requests"
+        ).fetchone() == (0,)
+        assert connection.execute("SELECT * FROM github_comments").fetchall() == comments
+        connection.execute(
+            """
+            INSERT INTO github_pull_requests
+                (repository, number, run_id, node_id, opened_at, url)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("acme/api", 42, "run", "coder", "2026-09-10T17:00:00Z", "https://example.com/pull/42"),
+        )
+        connection.execute(
+            """
+            INSERT INTO github_pull_requests (repository, number, run_id, opened_at)
+            VALUES ('acme/web', 42, 'run', '2026-09-10T17:01:00Z')
+            """
+        )
+        assert connection.execute(
+            "SELECT node_id, url FROM github_pull_requests WHERE repository = 'acme/web'"
+        ).fetchone() == (None, None)
+        # One repository's #42 is not another's, but its own #42 is itself.
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO github_pull_requests (repository, number, run_id, opened_at)
+                VALUES ('acme/api', 42, 'other', '2026-09-10T17:02:00Z')
+                """
+            )
+        for column in ("run_id", "opened_at"):
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    f"UPDATE github_pull_requests SET {column} = NULL "
+                    "WHERE repository = 'acme/web'"
+                )
+        # The webhook's question is a primary-key seek, and the run's is indexed.
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM github_pull_requests "
+            "WHERE repository = ? AND number = ?",
+            ("acme/api", 42),
+        ).fetchall()
+        # SQLite serves a composite primary key from its own autoindex, so the
+        # plan names that rather than the key; either way it is one seek.
+        assert any(
+            "sqlite_autoindex_github_pull_requests" in row[3] for row in plan
+        ), plan
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM github_pull_requests WHERE run_id = ?",
+            ("run",),
+        ).fetchall()
+        assert any("github_pull_requests_by_run" in row[3] for row in plan)
+
+    command.downgrade(alembic_config(url, store="graph"), "b41d9c0f5a3e")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'github_pull_requests%'"
+        ).fetchall() == []
+        # The comments a run left outlive a rolled-back ownership table.
+        assert connection.execute("SELECT * FROM github_comments").fetchall() == comments
+
+    upgrade(url, store="graph")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM github_pull_requests"
+        ).fetchone() == (0,)
 
 
 def test_graph_history_rejects_postgres() -> None:
