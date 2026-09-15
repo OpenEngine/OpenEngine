@@ -39,6 +39,7 @@ from engine.ports.source_control import (
     WorkItem,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.change_requests import change_request, names_a_project_step
 
 #: The branch prefix `GitWorktreeWorkspaceProvider` gives every workspace. It
 #: is Engine's bookkeeping, not anybody's proposed change, and a remote branch
@@ -760,17 +761,37 @@ def _base_branch(base_ref: str) -> str:
 
 
 def _pull_request_parts(pr_url: str) -> tuple[str, str, str]:
-    parsed = urlparse(pr_url)
-    parts = parsed.path.strip("/").split("/")
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-        or len(parts) != 4
-        or parts[2] != "pull"
-        or not parts[3].isdigit()
-    ):
+    """Read `owner`, `repo` and the number out of a pull-request URL.
+
+    Read once, by the same reader CICheck and the recorders use, so a URL they
+    bind the run to is a URL this can send. A second parse here is what let
+    `.../pull/42/files` -- the tab a reviewer is looking at when it copies the
+    address -- pass as the run's pull request everywhere else and then fail on
+    the step that posts findings.
+    """
+    found = change_request(pr_url)
+    if found is None or found.kind != "pull":
         raise ValueError("pr_url must be a GitHub pull-request URL")
-    return parts[0], parts[1], parts[3]
+    owner, repo = found.path.split("/")
+    if not _is_repository_name(owner) or not _is_repository_name(repo):
+        raise ValueError("pr_url must be a GitHub pull-request URL")
+    return owner, repo, str(found.number)
+
+
+def _is_repository_name(segment: str) -> bool:
+    """Whether `segment` is a name GitHub writes, and this may paste into a path.
+
+    An owner and repository go into an API address by interpolation --
+    `/repos/{owner}/{repo}/issues/...` -- and `httpx` resolves dot segments in
+    what it is handed, so `..` would send the request somewhere other than
+    where the line building it says. Held to the characters GitHub allows in a
+    login or a repository, since a name that could not exist is never one this
+    should be asking the API about.
+    """
+    return names_a_project_step(segment) and all(
+        character.isascii() and (character.isalnum() or character in "-._")
+        for character in segment
+    )
 
 
 def _parse_repo_coords(remote_url: str) -> tuple[str, str]:
@@ -779,6 +800,9 @@ def _parse_repo_coords(remote_url: str) -> tuple[str, str]:
     Handles the two common spellings:
       https://github.com/owner/repo.git
       git@github.com:owner/repo.git
+
+    Held to the same names a pull-request URL is, since these two go into an
+    API address by interpolation as well.
     """
     remote_url = remote_url.strip()
     # SSH shorthand: git@github.com:owner/repo.git
@@ -789,7 +813,7 @@ def _parse_repo_coords(remote_url: str) -> tuple[str, str]:
         path = parsed.path
     path = path.strip("/").removesuffix(".git")
     parts = path.split("/")
-    if len(parts) < 2:
+    if len(parts) < 2 or not all(_is_repository_name(one) for one in parts[:2]):
         raise GitHubSourceControlError(
             f"cannot determine owner/repo from remote URL: {remote_url!r}"
         )

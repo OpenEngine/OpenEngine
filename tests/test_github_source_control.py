@@ -493,3 +493,87 @@ def test_authenticated_login_refuses_an_unusable_answer(monkeypatch, response):
     monkeypatch.setattr(source, "_api", AsyncMock(return_value=response))
     with pytest.raises(GitHubSourceControlError):
         asyncio.run(source.authenticated_login("https://github.com/acme/api"))
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        # Refused by the shared reader, so refused here too: two change
+        # requests in one path, numbers spelled other than one way, and a
+        # dot segment that httpx would resolve before the request leaves.
+        "https://github.com/acme/api/pull/42/x/victim/repo/pull/99",
+        "https://github.com/acme/api/pull/\u0661\u0662",
+        "https://github.com/acme/api/pull/\u00b2",
+        "https://github.com/acme/api/pull/042",
+        "https://github.com/../x/pull/1",
+        "https://github.com/a/../pull/1",
+        "https://github.com/./x/pull/1",
+        "https://github.com/acme/api/-/merge_requests/1",
+        # Nothing GitHub would not write in a name, either.
+        "https://github.com/acme/api%2F../pull/1",
+        "https://github.com/ac me/api/pull/1",
+    ],
+)
+def test_a_url_the_shared_reader_refuses_is_refused_here_too(
+    monkeypatch: pytest.MonkeyPatch, pr_url: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock()
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment(pr_url, "Finding."))
+    api.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        # The tab a reviewer is looking at when it copies the address. CICheck
+        # and the recorders read past these, so the adapter must as well.
+        "https://github.com/acme/api/pull/42/files",
+        "https://github.com/acme/api/pull/42/commits",
+        "https://github.com/acme/api/pull/42/files#diff-abc",
+        "https://github.com/acme/api/pull/42/",
+    ],
+)
+def test_a_tab_on_a_pull_request_is_the_same_pull_request(
+    monkeypatch: pytest.MonkeyPatch, pr_url: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock(return_value={"id": 1, "html_url": f"{pr_url}#c1"})
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", api)
+    asyncio.run(source.add_comment(pr_url, "Finding."))
+    assert "/repos/acme/api/issues/42/comments" in api.await_args.args[1]
+
+
+@pytest.mark.parametrize(
+    "pr_url, parts",
+    [
+        ("https://github.com/acme/api/pull/42", ("acme", "api", "42")),
+        # A dot inside a name is ordinary; only a whole dot segment moves.
+        ("https://github.com/a.b/c.d/pull/7", ("a.b", "c.d", "7")),
+        ("https://github.com/wei/pull/pull/123", ("wei", "pull", "123")),
+        ("https://github.com/my-org/my_repo/pull/1", ("my-org", "my_repo", "1")),
+        # The reader's key is lowercased; the names sent to the API are what
+        # the URL wrote.
+        ("https://github.com/Acme/API/pull/42/files", ("Acme", "API", "42")),
+    ],
+)
+def test_the_parts_sent_are_the_ones_the_shared_reader_read(
+    pr_url: str, parts: tuple[str, str, str]
+) -> None:
+    from engine.adapters.source_control.github import _pull_request_parts
+
+    assert _pull_request_parts(pr_url) == parts
+
+
+def test_a_remote_url_is_held_to_the_same_names() -> None:
+    from engine.adapters.source_control.github import _parse_repo_coords
+
+    assert _parse_repo_coords("git@github.com:acme/api.git") == ("acme", "api")
+    with pytest.raises(GitHubSourceControlError, match="cannot determine owner/repo"):
+        _parse_repo_coords("https://github.com/../x.git")

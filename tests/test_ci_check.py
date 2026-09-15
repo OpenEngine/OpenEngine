@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from engine.graph_runtime_langgraph.components import CICheck
+from engine.runtime.change_requests import change_request
 from engine.ports import PipelineStatus, StatusCheck
 from test_graph_workflow_definitions import definition_module, nodes_of
 
@@ -177,3 +178,53 @@ def test_missing_required_check_times_out(execution):
     )
     with pytest.raises(TimeoutError):
         asyncio.run(CICheck(poll_interval=0, timeout=0.01)(STATE))
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        # Two change requests in one path: read from the front this is
+        # acme/app#12, read from the back it is #99.
+        "https://github.com/acme/app/pull/12/x/victim/repo/pull/99",
+        "https://github.com/acme/app/pull/12/pull/99",
+        "https://gitlab.com/acme/app/pull/12/-/merge_requests/99",
+        # The number, in the spellings a reader of digits and a reader of
+        # `[1-9][0-9]*` disagree about.
+        "https://github.com/acme/app/pull/\u0661\u0662",
+        "https://github.com/acme/app/pull/\u00b2",
+        "https://github.com/acme/app/pull/042",
+        "https://github.com/../x/pull/1",
+    ],
+)
+def test_the_gate_refuses_what_the_reader_refuses(execution, pr_url: str) -> None:
+    """CI and every other reader of `pr_url` read it through `change_request`."""
+    assert change_request(pr_url) is None
+    execution.runtime.source_control.list_pipeline_status.return_value = status()
+    with pytest.raises(ValueError, match="pull request URL"):
+        asyncio.run(CICheck()({**STATE, "pr_url": pr_url}))
+
+
+@pytest.mark.parametrize(
+    "pr_url",
+    [
+        "https://github.com/owner/repo/pull/42",
+        "https://github.com/owner/repo/pull/42/files",
+        # A repository named `pull`, such as `wei/pull`.
+        "https://github.com/wei/pull/pull/123",
+        "https://gitlab.com/group/sub/project/-/merge_requests/7",
+        "https://gitlab.com/group/project/-/merge_requests/7/diffs",
+        # A GitLab group named `pull`, which carries no number after it.
+        "https://gitlab.com/pull/project/-/merge_requests/3",
+    ],
+)
+def test_the_gate_waits_on_the_change_request_the_reader_names(
+    execution, pr_url: str
+) -> None:
+    found = change_request(pr_url)
+    assert found is not None
+    execution.runtime.source_control.list_pipeline_status.return_value = status()
+    asyncio.run(CICheck()({**STATE, "pr_url": pr_url}))
+    assert [
+        call.kwargs["change_request_number"]
+        for call in execution.runtime.source_control.list_pipeline_status.await_args_list
+    ] == [found.number]
