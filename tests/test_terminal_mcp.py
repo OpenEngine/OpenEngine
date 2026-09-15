@@ -883,20 +883,109 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         ("https://GITHUB.COM/Acme/API/pull/42", ("acme/api", 42)),
         ("https://github.example.com:8443/acme/api/pull/42", ("github.example.com:8443/acme/api", 42)),
         ("/acme/api/pull/42", None),
-        # Another forge numbers its notes from its own counter, so it is left
-        # out rather than filed under a GitHub comment's name.
-        ("https://gitlab.com/acme/api/-/merge_requests/7", None),
+        # A repository, or an owner, named `pull`. The marker that names the
+        # pull request is the one after it, so this is the one it looks like.
+        ("https://github.com/wei/pull/pull/123", ("wei/pull", 123)),
+        ("https://github.com/pull/repo/pull/7", ("pull/repo", 7)),
+        # Merge requests are read too, and namespaced by the host they live
+        # on: two forges number from counters of their own. Nesting is to any
+        # depth, because a GitLab project is.
+        ("https://gitlab.com/acme/api/-/merge_requests/7", ("gitlab.com/acme/api", 7)),
+        (
+            "https://gitlab.com/group/sub/project/-/merge_requests/5#note_9",
+            ("gitlab.com/group/sub/project", 5),
+        ),
+        ("https://gitlab.com/pull/project/-/merge_requests/3", ("gitlab.com/pull/project", 3)),
         ("https://gitlab.example.com/x/y/pull/7/-/merge_requests/1#note_123", None),
+        # GitLab's views of one merge request, read past as `/files` is on a
+        # pull request.
+        ("https://gitlab.com/acme/api/-/merge_requests/7/diffs", ("gitlab.com/acme/api", 7)),
+        ("https://gitlab.com/acme/api/-/merge_requests/7/commits", ("gitlab.com/acme/api", 7)),
+        (
+            "https://gitlab.com/acme/api/-/merge_requests/7/diffs#note_1",
+            ("gitlab.com/acme/api", 7),
+        ),
+        ("https://gitlab.com/acme/api/-/merge_requests/7/", ("gitlab.com/acme/api", 7)),
         ("https://github.com/acme/api/issues/42", None),
         ("https://github.com/acme/api", None),
+        # Two change requests in one path. Read from the front this is
+        # acme/app#12 and read from the back it is #99, so it names neither.
+        ("https://github.com/acme/app/pull/12/x/victim/repo/pull/99", None),
+        ("https://github.com/acme/app/pull/12/pull/99", None),
+        ("https://gitlab.com/a/b/-/merge_requests/1/-/merge_requests/2", None),
+        ("https://gitlab.com/a/b/-/merge_requests/1/x/-/merge_requests/2", None),
+        ("https://gitlab.com/a/b/-/merge_requests/1/merge_requests/2", None),
+        ("https://gitlab.com/a/b/-/merge_requests/1/x/y/pull/9", None),
+        # A number is spelled one way: `str.isdigit` is true of arabic-indic
+        # digits, `int` raises on `²`, and a leading zero is a number to
+        # a reader matching digits and not to one matching `[1-9][0-9]*`.
+        ("https://github.com/acme/api/pull/١٢", None),
+        ("https://github.com/acme/api/pull/²", None),
+        ("https://github.com/acme/api/pull/042", None),
+        ("https://github.com/acme/api/pull/0", None),
+        # A dot segment is a move, not a name.
+        ("https://github.com/../x/pull/1", None),
+        ("https://github.com/a/../pull/1", None),
+        ("https://gitlab.com/../-/merge_requests/1", None),
+        ("https://gitlab.com/a/../../x/-/merge_requests/1", None),
+        # A dot inside a step is ordinary; only a whole segment moves.
+        ("https://github.com/a.b/c.d/pull/7", ("a.b/c.d", 7)),
     ],
 )
-def test_a_github_pull_request_is_read_off_the_review_url(
+def test_a_change_request_is_read_off_its_url_one_way(
     pr_url: str, expected: tuple[str, int] | None
 ) -> None:
-    from engine.runtime.terminal_mcp import _github_pull_request
+    from engine.runtime.change_requests import change_request
 
-    assert _github_pull_request(pr_url) == expected
+    found = change_request(pr_url)
+    assert (None if found is None else (found.project, found.number)) == expected
+
+
+@pytest.mark.parametrize(
+    "project",
+    ["acme/api", "ghe.acme.com/acme/api", "ghe.acme.com:8443/acme/api"],
+)
+def test_a_pull_request_key_spelled_back_reads_as_that_key(project: str) -> None:
+    from engine.runtime.change_requests import ChangeRequest, change_request, pull_request_url
+
+    assert change_request(pull_request_url(project, 7)) == ChangeRequest(project, 7)
+
+
+def test_an_opened_merge_request_is_written_down_like_a_pull_request() -> None:
+    from unittest.mock import AsyncMock
+
+    recorded: list[OpenedPullRequest] = []
+
+    async def record(opened: OpenedPullRequest) -> None:
+        recorded.append(opened)
+
+    url = "https://gitlab.com/group/sub/project/-/merge_requests/7"
+    source = AsyncMock()
+    source.request_review.return_value = url
+
+    async def scenario() -> dict[str, object]:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_pull_request_records(record)
+        broker.enable_repository_tools(
+            source, ("open_pull_request",), WorkspaceId("ws")
+        )
+        broker._result = asyncio.get_running_loop().create_future()
+        return await broker._submit(
+            _direct_request(
+                broker,
+                "open-1",
+                "open_pull_request",
+                {"branch": "feature", "title": "Add a thing"},
+            )
+        )
+
+    assert asyncio.run(scenario())["ok"] is True
+    assert recorded == [OpenedPullRequest("gitlab.com/group/sub/project", 7, url)]
 
 
 @pytest.mark.parametrize(

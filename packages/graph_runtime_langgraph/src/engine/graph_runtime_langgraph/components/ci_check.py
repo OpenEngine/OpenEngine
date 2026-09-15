@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 from engine.domain import WorkspaceId
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import SourceControl
+from engine.runtime.change_requests import change_request
 
 
 _TERMINAL = {
@@ -50,17 +49,12 @@ class CICheck:
         if not isinstance(workspace, str) or not workspace.strip():
             raise ValueError("CICheck needs workspaceId from an upstream WorkspaceNode")
         url = state.get("pr_url")
-        parsed = urlsplit(url) if isinstance(url, str) else None
-        match = (
-            re.fullmatch(r"/.+/(?:pull|-/merge_requests)/([1-9][0-9]*)/?", parsed.path)
-            if parsed else None
-        )
-        if (
-            not parsed or parsed.scheme not in {"http", "https"}
-            or not parsed.netloc or not match
-        ):
+        # Read the way the recorders and adapters read it, so the change
+        # request CI waits on is the one the rest of the run is bound to.
+        found = change_request(url) if isinstance(url, str) else None
+        if found is None:
             raise ValueError("CICheck needs a pull request URL in pr_url")
-        number = int(match[1])
+        number = found.number
         await execution.say(f"Waiting for CI on {url}.")
         async with asyncio.timeout(self.timeout):
             while True:
