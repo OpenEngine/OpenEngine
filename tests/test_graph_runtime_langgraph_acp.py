@@ -2574,11 +2574,14 @@ def test_the_pull_request_a_step_reports_is_what_the_review_is_held_to(
             shown = "agent/ws" if arguments[0] == "symbolic-ref" else "abc123"
             return GitResult(0, f"{shown}\n", "")
 
+        async def authenticated_login(self, _repository_url: str) -> str:
+            return "engine-bot"
+
         async def view_change_request(
             self, _workspace: object, number: int
         ) -> ShownChangeRequest:
             return ShownChangeRequest(
-                number=number, title="", state="open", body="", author="",
+                number=number, title="", state="open", body="", author="engine-bot",
                 url=f"https://github.com/acme/api/pull/{number}",
                 head_ref="agent/ws", head_sha="abc123", base_ref="main",
             )

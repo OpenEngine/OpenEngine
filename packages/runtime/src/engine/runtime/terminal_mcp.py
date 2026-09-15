@@ -768,8 +768,8 @@ class TerminalMcpBroker:
                 return
             if not await self._is_this_workspace_s(url, reported.number):
                 logger.warning(
-                    "Not taking on %s: the forge does not show it on the branch "
-                    "and commit this workspace has checked out",
+                    "Not taking on %s: the forge does not show it authored by this "
+                    "deployment, on the branch and commit this workspace has checked out",
                     url,
                 )
                 return
@@ -793,6 +793,13 @@ class TerminalMcpBroker:
         commit it has checked out. A workspace on a detached head, or one that
         has moved past what it pushed, has shown nothing yet and is not taken
         on; its review has no pull request to post to until one is.
+
+        The checkout alone is not proof, because the agent controls it: it can
+        fetch a person's `refs/pull/N/head` and check it out under that pull
+        request's branch name. So the pull request must also be authored by
+        the account this deployment posts as -- the one thing about it the
+        workspace cannot forge. A forge that cannot say who that is has not
+        shown the pull request is the run's, and it is not taken on.
         """
         if self._source_control is None or self._workspace_id is None:
             return False
@@ -802,6 +809,9 @@ class TerminalMcpBroker:
             self._workspace_id, number
         )
         if change_request(shown.url) != change_request(url):
+            return False
+        login = await self._source_control.authenticated_login(url)
+        if not login or shown.author.casefold() != login.casefold():
             return False
         branch = await self._source_control.run_git(
             self._workspace_id, ("symbolic-ref", "--quiet", "--short", "HEAD")

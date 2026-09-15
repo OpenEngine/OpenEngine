@@ -65,7 +65,10 @@ class GitLabSourceControl:
         raise NotImplementedError("GitLab repository permission checks are not supported")
 
     async def authenticated_login(self, repository_url: str) -> str:
-        raise NotImplementedError("GitLab account identification is not supported")
+        login = self._str(await self._api("GET", "/user"), "username")
+        if not login:
+            raise GitLabSourceControlError("GitLab API returned no authenticated username")
+        return login
 
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
         if in_reply_to_id is not None:

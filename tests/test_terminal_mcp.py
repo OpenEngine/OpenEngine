@@ -1626,6 +1626,8 @@ def _workspace_forge(
     shown_url: str = "https://github.com/acme/api/pull/42",
     shown_ref: str = "agent/ws",
     shown_sha: str = "abc123",
+    shown_author: str = "Engine-Bot",
+    login: str = "engine-bot",
 ):
     """A source control whose forge shows #42 as `shown_*`, and a workspace on `branch`."""
     from unittest.mock import AsyncMock
@@ -1640,8 +1642,9 @@ def _workspace_forge(
 
     source = AsyncMock()
     source.run_git.side_effect = run_git
+    source.authenticated_login.return_value = login
     source.view_change_request.return_value = ShownChangeRequest(
-        number=42, title="", state="open", body="", author="", url=shown_url,
+        number=42, title="", state="open", body="", author=shown_author, url=shown_url,
         head_ref=shown_ref, head_sha=shown_sha, base_ref="main",
     )
     return source
@@ -1692,6 +1695,12 @@ def test_a_report_the_forge_shows_on_this_workspace_is_the_run_s_pull_request() 
         {"shown_url": "https://github.com/acme/other/pull/42"},
         # A detached head has pushed no branch for any pull request to be on.
         {"branch": None},
+        # The checkout matches, but the agent controls the checkout: a
+        # person's pull request fetched from `refs/pull/42/head` and checked
+        # out under its branch name. Only the author says whose it is.
+        {"shown_author": "someone"},
+        # A forge that cannot say who this deployment is shows nothing.
+        {"login": ""},
     ],
 )
 def test_a_report_the_forge_does_not_show_on_this_workspace_is_not_taken_on(

@@ -155,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
     gh_log = state / "gh.jsonl"
 
     async def _fake_api(self, method: str, path: str, **kwargs: object) -> object:
+        if method == "GET" and path == "/user":
+            return {"login": "engine-bot"}
         if method == "GET" and "/pulls/" in path:
             return {"head": {"sha": "abc1234"}, "base": {"ref": "main"}}
         if method == "GET" and "/rules/branches/" in path:
@@ -187,8 +189,9 @@ def main(argv: list[str] | None = None) -> int:
         # The fake forge has one repository, github.com/acme/repository, and
         # every pull request on it is headed by whatever the asking workspace
         # has checked out -- what a real forge would show for a pull request
-        # the implementer opened from its own branch. A reported `pr_url` is
-        # only taken on for the run once the forge shows it that way.
+        # the implementer opened from its own branch, as the account this
+        # deployment posts as. A reported `pr_url` is only taken on for the
+        # run once the forge shows it that way.
         from engine.ports.source_control import ChangeRequest
 
         branch = await self.run_git(workspace_id, ("symbolic-ref", "--short", "HEAD"))
@@ -198,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             title="",
             state="open",
             body="",
-            author="",
+            author="engine-bot",
             url=f"https://github.com/acme/repository/pull/{number}",
             head_ref=branch.stdout.strip(),
             head_sha=head.stdout.strip(),

@@ -261,3 +261,12 @@ def test_a_project_read_off_the_remote_is_names_and_not_moves(
             asyncio.run(source._project("ws"))  # type: ignore[arg-type]
     else:
         assert asyncio.run(source._project("ws")) == project  # type: ignore[arg-type]
+
+
+def test_authenticated_login_is_the_token_s_username() -> None:
+    """Asked of `/user`, so a reported merge request can be checked for authorship."""
+    transport = AsyncMock()
+    transport.request.return_value = {"username": "engine-bot"}
+    source = GitLabSourceControl("token", transport=transport)
+    assert asyncio.run(source.authenticated_login("https://gitlab.com/g/p")) == "engine-bot"
+    assert transport.request.await_args.args[:2] == ("GET", "/user")
