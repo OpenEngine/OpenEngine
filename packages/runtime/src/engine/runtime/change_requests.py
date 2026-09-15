@@ -96,6 +96,22 @@ def _pull_request(authority: str, hostname: str, path: str) -> ChangeRequest | N
     return ChangeRequest(project, number, "pull", hostname, written)
 
 
+def pull_request_url(project: str, number: int) -> str:
+    """The pull-request URL a `project` key reads back as, on its own host.
+
+    The inverse of the keying above, kept beside it so a caller holding only a
+    key -- a channel, a stored record -- spells the URL the way this module
+    will read it: bare `owner/repo` is github.com, and anything else leads with
+    the authority it was keyed under, port included. A caller rebuilding the
+    URL itself is a second reading of the rule, and the first thing such a
+    reading drops is the port.
+    """
+    authority, _, rest = project.partition("/")
+    if "/" not in rest:
+        return f"https://github.com/{project}/pull/{number}"
+    return f"https://{authority}/{rest}/pull/{number}"
+
+
 def _merge_request(authority: str, hostname: str, path: str) -> ChangeRequest | None:
     """Read `<project path>/-/merge_requests/<iid>`.
 

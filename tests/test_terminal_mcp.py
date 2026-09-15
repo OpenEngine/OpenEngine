@@ -1732,3 +1732,19 @@ def test_a_refused_pr_url_report_is_not_written_down() -> None:
     assert answer["ok"] is False
     assert recorded == []
     source.view_change_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "project",
+    ["acme/api", "ghe.acme.com/acme/api", "ghe.acme.com:8443/acme/api"],
+)
+def test_a_pull_request_key_spelled_back_reads_as_that_key(project: str) -> None:
+    """A caller holding only a key spells the URL through the reader's inverse.
+
+    Rebuilding it by hand is a second reading of the keying, and the first
+    thing such a reading drops is a non-default port -- after which the claim
+    and the pull request a step reports are two different keys.
+    """
+    from engine.runtime.change_requests import ChangeRequest, change_request, pull_request_url
+
+    assert change_request(pull_request_url(project, 7)) == ChangeRequest(project, 7)

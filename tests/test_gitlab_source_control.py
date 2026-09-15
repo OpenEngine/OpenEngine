@@ -232,3 +232,32 @@ def test_a_merge_request_copied_off_its_changes_tab_is_the_same_merge_request() 
     assert source._merge_request(
         "https://gitlab.com/group/project/-/merge_requests/7/diffs"
     ) == ("group%2Fproject", 7)
+
+
+@pytest.mark.parametrize(
+    "remote, project",
+    [
+        ("https://gitlab.example/..", None),
+        ("https://gitlab.example/group/../x.git", None),
+        ("git@gitlab.example:./x.git", None),
+        ("https://gitlab.example/group/sub.one/project.git", "group%2Fsub.one%2Fproject"),
+        ("git@gitlab.example:group/project.git", "group%2Fproject"),
+    ],
+)
+def test_a_project_read_off_the_remote_is_names_and_not_moves(
+    monkeypatch: pytest.MonkeyPatch, remote: str, project: str | None
+) -> None:
+    """The remote is held to the step rule a merge-request URL is held to."""
+    from engine.adapters.source_control.gitlab import GitLabSourceControlError
+
+    source = GitLabSourceControl("token", transport=AsyncMock())
+
+    async def checked(_workspace: object, _arguments: object) -> str:
+        return remote
+
+    monkeypatch.setattr(source, "_checked", checked)
+    if project is None:
+        with pytest.raises(GitLabSourceControlError, match="cannot determine the project"):
+            asyncio.run(source._project("ws"))  # type: ignore[arg-type]
+    else:
+        assert asyncio.run(source._project("ws")) == project  # type: ignore[arg-type]

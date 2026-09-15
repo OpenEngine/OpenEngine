@@ -971,6 +971,11 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
             "https://ghe.acme.com/acme/api/issues/7#c",
             "https://ghe.acme.com/acme/api/pull/7",
         ),
+        # On a port of its own, which is part of what names the install.
+        (
+            "https://ghe.acme.com:8443/acme/api/issues/7#c",
+            "https://ghe.acme.com:8443/acme/api/pull/7",
+        ),
     ],
 )
 def test_write_access_is_asked_about_the_github_the_delivery_came_from(
@@ -1005,7 +1010,27 @@ def test_write_access_is_asked_about_the_github_the_delivery_came_from(
             authorized_against, "someone")
 
 
-def test_a_work_order_started_from_enterprise_is_keyed_and_answered_there(tmp_path):
+@pytest.mark.parametrize(
+    "comment_url, key, pr_url",
+    [
+        (
+            "https://ghe.acme.com/acme/api/issues/7#c",
+            "ghe.acme.com/acme/api",
+            "https://ghe.acme.com/acme/api/pull/7",
+        ),
+        # The key keeps a non-default port, as `change_request` does for the
+        # pull request a step later reports -- otherwise the two never match
+        # and every review comment on this work order is refused.
+        (
+            "https://ghe.acme.com:8443/acme/api/issues/7#c",
+            "ghe.acme.com:8443/acme/api",
+            "https://ghe.acme.com:8443/acme/api/pull/7",
+        ),
+    ],
+)
+def test_a_work_order_started_from_enterprise_is_keyed_and_answered_there(
+    tmp_path, comment_url, key, pr_url
+):
     """The delivery's host travels with the comment, all the way to the claim.
 
     Keyed as the runtime keys what a step opens or reports -- host-prefixed
@@ -1032,7 +1057,7 @@ def test_a_work_order_started_from_enterprise_is_keyed_and_answered_there(tmp_pa
     object.__setattr__(capabilities, "source_control", source_control)
 
     payload = _issue_comment(
-        1, "new workorder please", html_url="https://ghe.acme.com/acme/api/issues/7#c"
+        1, "new workorder please", html_url=comment_url
     )
     payload["issue"]["pull_request"] = {}
     body = json.dumps(payload).encode()
@@ -1043,8 +1068,9 @@ def test_a_work_order_started_from_enterprise_is_keyed_and_answered_there(tmp_pa
         assert runtime.start.await_args.args[1] == {
             "task": "Implement it", "repository": "acme/api"}
         claimed = runtime.store.claim_pull_request.await_args.args[0]
-        assert (claimed.repository, claimed.number) == ("ghe.acme.com/acme/api", 7)
-        assert claimed.url == "https://ghe.acme.com/acme/api/pull/7"
-    assert source_control.add_comment.await_args.args[0] == (
-        "https://ghe.acme.com/acme/api/pull/7"
-    )
+        assert (claimed.repository, claimed.number) == (key, 7)
+        assert claimed.url == pr_url
+        from engine.runtime.change_requests import change_request
+
+        assert change_request(pr_url).project == claimed.repository
+    assert source_control.add_comment.await_args.args[0] == pr_url

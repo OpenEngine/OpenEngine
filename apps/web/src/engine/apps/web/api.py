@@ -140,6 +140,7 @@ from engine.ports import (
     UserInputAnswer,
     WorkspaceState,
 )
+from engine.runtime.change_requests import change_request, pull_request_url
 from engine.runtime import (
     PLANNER,
     AgentSession,
@@ -2552,27 +2553,12 @@ def create_app(
     # process did rather than what it was about to try.
     github_activity = GithubActivityLog()
 
-    def _github_pull_request_url(repository: str, number: int | str) -> str:
-        """The pull request a `github:` channel's repository names, on its own host.
-
-        The channel carries a repository the way the runtime keys one: bare on
-        github.com, and prefixed by its host anywhere else. Spelled back on
-        that host, so an Enterprise deployment answers on Enterprise rather
-        than on a github.com its adapter now refuses.
-        """
-        host, _, rest = repository.partition("/")
-        if "/" in rest:
-            return f"https://{host}/{rest}/pull/{number}"
-        return f"https://github.com/{repository}/pull/{number}"
-
-    def _github_owner_repo(repository: str) -> str:
-        """`owner/repo` out of a channel's repository, without any host prefix."""
-        return "/".join(repository.split("/")[-2:])
-
     async def github_reply(origin: RunOrigin, text: str) -> None:
         number, _, review_id = origin.thread_id.partition("/review/")
+        # The channel holds the runtime's key for the repository, so it is
+        # spelled back by the reader that wrote it -- host and port included.
         await session.capabilities.source_control.add_comment(
-            _github_pull_request_url(origin.channel.removeprefix("github:"), number),
+            pull_request_url(origin.channel.removeprefix("github:"), int(number)),
             text,
             in_reply_to_id=int(review_id) if review_id else None,
         )
@@ -2635,20 +2621,23 @@ def create_app(
             )
         runtime = surface.runtime
         assert runtime is not None  # only reached with a runtime in hand
+        # `repository` is the runtime's key, so the URL and the claim come from
+        # the one reader the ownership guard also uses: the claim matches the
+        # pull request a step later reports or posts to, on whatever host and
+        # port it lives on, and not github.com's namesake.
+        url = pull_request_url(repository, number)
+        claimed = change_request(url)
+        assert claimed is not None  # a key spelled back reads as that key
         state = await start_graph_run(
             runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
-            prompt=prompt, repository=_github_owner_repo(repository),
+            prompt=prompt, repository=claimed.path,
             milestone_id=None,
         )
-        # Keyed as the runtime keys what it opens and what a step reports --
-        # host-prefixed off github.com -- so the ownership guard reads this
-        # claim as the pull request it is, and not as github.com's namesake.
-        url = _github_pull_request_url(repository, number)
         try:
             holder = await store.claim_pull_request(
                 PullRequestRecord(
-                    repository=repository.lower(), number=number, run_id=state.run_id,
+                    repository=claimed.project, number=number, run_id=state.run_id,
                     opened_at=datetime.now(UTC).isoformat(), url=url,
                 ),
                 replacing=replacing,
@@ -2799,16 +2788,20 @@ def create_app(
             )
         return posting_login[repository]
 
-    def _github_host(comment_url: str) -> str:
-        """The GitHub a delivery came from, as GitHub itself spelled it.
+    def _github_pull_request(comment: GithubComment) -> str:
+        """The pull request a comment is on, spelled on the GitHub it came from.
 
         A comment's `html_url` is written by the forge that signed the
-        delivery, so it names the Enterprise install on a deployment that has
-        one and github.com on a deployment that does not. Falling back to
-        github.com keeps a delivery whose payload carried no URL behaving as
-        it did before, which is the overwhelmingly common case.
+        delivery, so its scheme and authority -- port included -- name the
+        Enterprise install on a deployment that has one and github.com on a
+        deployment that does not. Falling back to github.com keeps a delivery
+        whose payload carried no URL behaving as it did before.
         """
-        return urlsplit(comment_url).hostname or "github.com"
+        parsed = urlsplit(comment.url)
+        origin = "https://github.com"
+        if parsed.scheme in ("http", "https") and parsed.hostname:
+            origin = f"{parsed.scheme}://{parsed.netloc.rpartition('@')[2]}"
+        return f"{origin}/{comment.repository}/pull/{comment.number}"
 
     async def github_concierge_turn(comment: GithubComment) -> None:
         # Issue-driven work orders are not supported. PR conversation comments
@@ -2845,9 +2838,7 @@ def create_app(
             # comment such a deployment receives -- closed, but closed on all
             # of them, and redelivered forever.
             may_write = await session.capabilities.source_control.can_write_repository(
-                f"https://{_github_host(comment.url)}"
-                f"/{comment.repository}/pull/{comment.number}",
-                comment.author,
+                _github_pull_request(comment), comment.author,
             )
         if not may_write:
             # Ignored rather than answered, like the association filter above:
@@ -2864,17 +2855,18 @@ def create_app(
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":
             thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
-        # The repository as the runtime keys it: bare on github.com, prefixed
-        # by its host elsewhere. Everything downstream -- the reply, the
-        # provenance lookup, the claim a new work order takes -- reads it from
-        # here, so none of it has to assume which GitHub the comment was on.
-        host = _github_host(comment.url).lower()
-        repository = (
-            comment.repository if host == "github.com" else f"{host}/{comment.repository}"
-        )
+        # The repository as the runtime keys it, read by the same reader the
+        # ownership guard uses rather than rebuilt beside it. Everything
+        # downstream -- the reply, the provenance lookup, the claim a new work
+        # order takes -- reads it from the channel, so none of it has to know
+        # which GitHub the comment was on, or on which port.
+        on = change_request(_github_pull_request(comment))
+        if on is None:
+            github_activity.ignored("not a pull request this can name")
+            return
         await github_concierge.handle(FeedbackRequest(
             origin=RunOrigin(
-                channel=f"github:{repository}", thread_id=thread_id,
+                channel=f"github:{on.project}", thread_id=thread_id,
                 author=comment.author,
             ),
             text=comment.body, comment_id=comment.comment_id,

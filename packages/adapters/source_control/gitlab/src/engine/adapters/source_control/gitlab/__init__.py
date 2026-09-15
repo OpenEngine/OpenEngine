@@ -11,7 +11,7 @@ from engine.adapters.source_control.gitlab.transports import GitLabOAuthTranspor
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.change_requests import change_request
+from engine.runtime.change_requests import change_request, names_a_project_step
 
 _MAX_LOG_CHARACTERS = 48_000
 
@@ -146,6 +146,13 @@ class GitLabSourceControl:
     async def _project(self, workspace_id: WorkspaceId) -> str:
         remote = await self._checked(workspace_id,("remote","get-url","origin")); value=remote.removesuffix(".git")
         path = value.split(":",1)[1] if value.startswith("git@") else urlparse(value).path.lstrip("/")
+        # Quoting escapes the separators between steps and leaves a `.` alone,
+        # so a `..` remote would reach `/projects/../merge_requests` and be
+        # resolved away by httpx -- the defect `_merge_request` closes for a
+        # URL a step names. A remote is settable through the git tool, so this
+        # is the less likely way in, not a closed one.
+        if not all(names_a_project_step(step) for step in path.split("/")):
+            raise GitLabSourceControlError(f"cannot determine the project from remote URL: {remote!r}")
         return quote(path, safe="")
     async def _git(self, root: str, args: Sequence[str]) -> GitResult:
         process=await asyncio.create_subprocess_exec("git","-C",root,*args,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env={k:v for k,v in os.environ.items() if k not in {"GITLAB_TOKEN","GH_TOKEN","GITHUB_TOKEN"}}); out,err=await process.communicate(); return GitResult(process.returncode or 0,out.decode(errors="replace").strip(),err.decode(errors="replace").strip())
