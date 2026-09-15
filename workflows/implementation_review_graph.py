@@ -6,6 +6,8 @@ The review stage fans out to four parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
 conciseness).  Their findings are collected by a *reranker* that aggressively
 squashes noise and posts the survivors as PR comments with lineage.
+Surviving findings go back to implementation for one automatic fix-and-review
+cycle before human review.
 """
 
 import json
@@ -179,7 +181,9 @@ class InputReviewNode(_RunnerInput, ReviewNode):
 
 
 class InputRerankerNode(_RunnerInput, RerankerNode):
-    pass
+    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+        update = await super().__call__(state)
+        return {**update, "review_rounds": state.get("review_rounds", 0) + 1}
 
 
 def _with_model(
@@ -206,7 +210,23 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
             "same pr_url output. Use fail_step if the failures cannot be fixed.\n\n"
             f"{ci.get('summary', '')}\n\nOriginal task:\n{state.get('task', '')}"
         )
+    if state.get(REVIEW) and state.get("review_rounds") == 1:
+        return (
+            f"Address the review findings on the existing pull request {state.get('pr_url')}. "
+            "Read the relevant code, make the smallest complete fix, test it, "
+            "commit and push to the same PR branch using git_subcommand. "
+            "Do not open another pull request. Finish with complete_step and the "
+            "same pr_url output. Use fail_step if the findings cannot be addressed.\n\n"
+            f"Review findings:\n{json.dumps(state[REVIEW])}\n\n"
+            f"Original task:\n{state.get('task', '')}"
+        )
     return IMPLEMENTATION_PROMPT.format(task=state.get("task", ""))
+
+
+def _after_reranker(state: dict[str, Any]) -> str:
+    if state.get(REVIEW) and state.get("review_rounds") == 1:
+        return IMPLEMENTATION
+    return HUMAN_REVIEW
 
 
 def _after_ci(state: dict[str, Any]) -> str | list[Send]:
@@ -389,7 +409,9 @@ def pipeline(
     for facet in REVIEW_FACETS:
         builder.add_edge(_review_node_name(facet.id), RERANKER)
 
-    builder.add_edge(RERANKER, HUMAN_REVIEW)
+    builder.add_conditional_edges(
+        RERANKER, _after_reranker, [IMPLEMENTATION, HUMAN_REVIEW],
+    )
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
 

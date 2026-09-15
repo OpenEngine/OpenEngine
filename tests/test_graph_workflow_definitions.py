@@ -360,6 +360,63 @@ def test_the_human_stage_is_the_shared_component_rather_than_a_bespoke_node() ->
 # --- how it is offered -------------------------------------------------------
 
 
+@pytest.mark.parametrize("has_findings", [False, True])
+def test_review_feedback_returns_to_implementation_at_most_once(
+    monkeypatch, has_findings,
+) -> None:
+    from langchain_core.runnables import RunnableLambda
+    from engine.graph_runtime_langgraph.components import RerankerNode
+
+    module = definition_module()
+    builder = module.pipeline("codex")
+    implementation = nodes_of(builder)[module.IMPLEMENTATION]
+    visited = []
+    prompts = []
+    findings = [{"tagline": "Fix the bug", "description": "The result is wrong."}]
+    pr_url = "https://github.com/owner/repo/pull/42"
+
+    async def rerank(self, state):
+        visited.append(module.RERANKER)
+        # Findings persist after the fix to prove that the loop is bounded.
+        return {module.REVIEW: findings if has_findings else []}
+
+    monkeypatch.setattr(RerankerNode, "__call__", rerank)
+
+    def stub(name):
+        def run(state):
+            visited.append(name)
+            if name == module.IMPLEMENTATION:
+                prompts.append(implementation.prompt(state))
+                return {"pr_url": pr_url}
+            if name == module.CI_CHECK:
+                return {"ci_check": {"passed": True}}
+            return {}
+        return RunnableLambda(run)
+
+    for name, spec in builder.nodes.items():
+        if name != module.RERANKER:
+            spec.runnable = stub(name)
+
+    result = asyncio.run(builder.compile().ainvoke({"task": "Repair the result"}))
+
+    rounds = 2 if has_findings else 1
+    assert result["review_rounds"] == rounds
+    assert visited.count(module.IMPLEMENTATION) == rounds
+    assert visited.count(module.CI_CHECK) == rounds
+    assert visited.count(module.RERANKER) == rounds
+    for facet in module.REVIEW_FACETS:
+        assert visited.count(f"review-{facet.id}") == rounds
+    assert visited.count(module.WORKSPACE) == 1
+    assert visited[-1] == module.HUMAN_REVIEW
+    assert prompts[0] == module.IMPLEMENTATION_PROMPT.format(task="Repair the result")
+    if has_findings:
+        assert "Fix the bug" in prompts[1]
+        assert "Repair the result" in prompts[1]
+        assert pr_url in prompts[1]
+        assert "same PR branch" in prompts[1]
+        assert "Do not open another pull request" in prompts[1]
+
+
 def test_the_catalog_answers_for_the_workflow_by_id() -> None:
     """What the interface looks a picked workflow up by.
 
