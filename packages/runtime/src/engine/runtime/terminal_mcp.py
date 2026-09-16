@@ -19,7 +19,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 from engine.domain import (
     AgentRunId,
@@ -38,6 +37,7 @@ from engine.ports import (
     McpServerConfig,
     SourceControl,
 )
+from engine.runtime.change_requests import change_request
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -589,15 +589,14 @@ class TerminalMcpBroker:
         if self._pull_request_recorder is None:
             return
         try:
-            pull_request = _github_pull_request(url)
-            if pull_request is None:
+            opened = change_request(url)
+            if opened is None:
                 logger.warning(
                     "Could not identify the opened pull request for recording: %s", url
                 )
                 return
-            repository, number = pull_request
             await self._pull_request_recorder(
-                OpenedPullRequest(repository, number, url)
+                OpenedPullRequest(opened.project, opened.number, url)
             )
         except Exception:
             logger.exception("Could not record the opened pull request %s", url)
@@ -614,16 +613,15 @@ class TerminalMcpBroker:
         if self._comment_recorder is None:
             return
         try:
-            pull_request = _github_pull_request(result.url)
-            if pull_request is None:
+            posted = change_request(result.url)
+            if posted is None:
                 logger.warning(
                     "Could not identify posted comment %s for recording: %s",
                     result.id, result.url,
                 )
                 return
-            repository, number = pull_request
             await self._comment_recorder(
-                PostedComment(repository, number, kind, result)
+                PostedComment(posted.project, posted.number, kind, result)
             )
         except Exception:
             logger.exception(
@@ -1037,35 +1035,6 @@ def _comment_arguments(
         if file is not None or line is not None:
             raise ValueError("in_reply_to_id cannot be combined with file or line")
     return pr_url, comment, file, line, in_reply_to_id
-
-
-def _github_pull_request(pr_url: str) -> tuple[str, int] | None:
-    """Identify a PR from the comment URL returned by the source control API.
-
-    Preserve github.com's owner/repo keys and namespace Enterprise repositories
-    by authority. Use the returned path to follow renames and normalize casing.
-    GitLab merge-request URLs do not match this path.
-    """
-    parsed = urlsplit(pr_url)
-    if parsed.scheme not in ("https", "http") or not parsed.hostname:
-        return None
-    segments = parsed.path.strip("/").split("/")
-    if (
-        len(segments) < 4
-        or "-" in segments
-        or not all(segments[:2])
-        or segments[2] != "pull"
-        or not segments[3].isdigit()
-    ):
-        return None
-    repository = f"{segments[0]}/{segments[1]}".lower()
-    host = parsed.hostname.lower()
-    port = parsed.port
-    if port is not None and port != (443 if parsed.scheme == "https" else 80):
-        host = f"{host}:{port}"
-    if host != "github.com":
-        repository = f"{host}/{repository}"
-    return repository, int(segments[3])
 
 
 async def _forward_call(

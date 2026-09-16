@@ -11,6 +11,7 @@ from engine.adapters.source_control.gitlab.transports import GitLabOAuthTranspor
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.change_requests import change_request, names_a_project_step
 
 _MAX_LOG_CHARACTERS = 48_000
 
@@ -68,7 +69,7 @@ class GitLabSourceControl:
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")
-        project, iid = self._mr_url(pr_url)
+        project, iid = self._merge_request(pr_url)
         if not comment.strip():
             raise ValueError("comment must not be empty")
         if (file is None) != (line is None):
@@ -144,6 +145,11 @@ class GitLabSourceControl:
     async def _project(self, workspace_id: WorkspaceId) -> str:
         remote = await self._checked(workspace_id,("remote","get-url","origin")); value=remote.removesuffix(".git")
         path = value.split(":",1)[1] if value.startswith("git@") else urlparse(value).path.lstrip("/")
+        # Quoting escapes the separators between steps and leaves a `.` alone,
+        # so a `..` remote would reach `/projects/../merge_requests` and be
+        # resolved away by httpx.
+        if not all(names_a_project_step(step) for step in path.split("/")):
+            raise GitLabSourceControlError(f"cannot determine the project from remote URL: {remote!r}")
         return quote(path, safe="")
     async def _git(self, root: str, args: Sequence[str]) -> GitResult:
         process=await asyncio.create_subprocess_exec("git","-C",root,*args,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env={k:v for k,v in os.environ.items() if k not in {"GITLAB_TOKEN","GH_TOKEN","GITHUB_TOKEN"}}); out,err=await process.communicate(); return GitResult(process.returncode or 0,out.decode(errors="replace").strip(),err.decode(errors="replace").strip())
@@ -178,14 +184,14 @@ class GitLabSourceControl:
     def _public(branch: str) -> None:
         if not branch.strip() or branch.startswith("engine/"): raise ValueError("branch must be a non-internal branch")
     @staticmethod
-    def _mr_url(url: str) -> tuple[str,int]:
-        parsed=urlparse(url); marker="/-/merge_requests/"; path=parsed.path
-        if not parsed.hostname or marker not in path: raise ValueError("not a GitLab merge-request URL")
-        project, tail = path.lstrip("/").split(marker,1)
-        iid, separator, remainder = tail.partition("/")
-        if not project or not iid.isdigit() or separator or remainder:
+    def _merge_request(url: str) -> tuple[str,int]:
+        # Read by the reader CICheck and the recorders use, so a URL they bind
+        # the run to is one this can post to, and one they refuse --
+        # `x/y/pull/7/-/merge_requests/1`, a `..` step -- is refused here too.
+        found = change_request(url)
+        if found is None or found.kind != "merge_request":
             raise ValueError("not a GitLab merge-request URL")
-        return quote(project,safe=""),int(iid)
+        return quote(found.path,safe=""),found.number
 
 
 __all__ = ["GitLabSourceControl", "GitLabSourceControlError"]
