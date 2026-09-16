@@ -13,6 +13,7 @@ from engine.domain import (
     AgentProfile,
     ConversationId,
     Message,
+    Milestone,
     MilestoneId,
     Project,
     ProjectId,
@@ -26,6 +27,7 @@ from engine.ports import AgentTurn
 from engine.runtime import AgentSession, Capabilities
 from engine.runtime.planning_tools import (
     PLANNING_TOOL_NAMES,
+    MilestoneChanges,
     PlanningMcpBroker,
     PlanningTools,
     ProjectPlan,
@@ -114,6 +116,33 @@ def test_planning_tools_create_present_update_and_delete_milestone_objects() -> 
         assert updated.dependencies == ()
         assert await tools.delete_milestone(foundation.milestone_id) == foundation
         assert await store.load_milestone(foundation.milestone_id) is None
+
+    asyncio.run(scenario())
+
+
+def test_planning_tools_announce_milestone_definition_changes() -> None:
+    async def scenario() -> None:
+        store = InMemoryStateStore()
+        project = Project(ProjectId("project-engine"), "OpenEngine")
+        await store.save_project(project)
+        changes = MilestoneChanges()
+        heard: list[Milestone] = []
+
+        async def observe(milestone: Milestone) -> None:
+            heard.append(milestone)
+
+        changes.subscribe(observe)
+        tools = PlanningTools(store, on_change=changes.publish)
+
+        added = await tools.add_milestone(
+            project.project_id, "Foundation", "Persist the planning hierarchy."
+        )
+        unchanged = await tools.update_milestone(added.milestone_id, name="Foundation")
+        renamed = await tools.update_milestone(added.milestone_id, name="Groundwork")
+        await tools.delete_milestone(added.milestone_id)
+
+        assert unchanged == added
+        assert heard == [added, renamed]
 
     asyncio.run(scenario())
 
