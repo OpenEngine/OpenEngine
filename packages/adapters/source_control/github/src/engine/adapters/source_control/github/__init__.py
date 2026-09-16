@@ -115,8 +115,10 @@ class GitHubSourceControl:
         workspace_provider: WorkspaceProvider | None = None,
         git_binary_path: str = "git",
         transport: GitHubApiTransport | None = None,
+        hosts: Sequence[str] = (),
     ) -> None:
         self._transport = transport or GitHubOAuthTransport(token, api_url)
+        self._hosts = frozenset(host.lower() for host in hosts)
         self._workspace_provider = workspace_provider
         self._git_binary_path = git_binary_path
 
@@ -190,7 +192,7 @@ class GitHubSourceControl:
 
     async def can_write_repository(self, pr_url: str, username: str) -> bool:
         """Check effective access, including team and organization grants."""
-        owner, repo, _ = _pull_request_parts(pr_url)
+        owner, repo, _ = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
         response = await self._api(
             "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
         )
@@ -239,7 +241,7 @@ class GitHubSourceControl:
             if file is not None or line is not None:
                 raise ValueError("in_reply_to_id cannot be combined with file or line")
 
-        owner, repo, number = _pull_request_parts(pr_url)
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
 
         if in_reply_to_id is not None:
             response = await self._api(
@@ -760,7 +762,9 @@ def _base_branch(base_ref: str) -> str:
     return base_ref.removeprefix("origin/")
 
 
-def _pull_request_parts(pr_url: str) -> tuple[str, str, str]:
+def _pull_request_parts(
+    pr_url: str, hosts: frozenset[str] = frozenset({"github.com"})
+) -> tuple[str, str, str]:
     """Read `owner`, `repo` and the number out of a pull-request URL.
 
     Read once, by the same reader CICheck and the recorders use, so a URL they
@@ -770,7 +774,7 @@ def _pull_request_parts(pr_url: str) -> tuple[str, str, str]:
     the step that posts findings.
     """
     found = change_request(pr_url)
-    if found is None or found.kind != "pull":
+    if found is None or found.kind != "pull" or found.host not in hosts:
         raise ValueError("pr_url must be a GitHub pull-request URL")
     owner, repo = found.path.split("/")
     if not _is_repository_name(owner) or not _is_repository_name(repo):

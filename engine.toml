@@ -7,6 +7,8 @@ public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 # server-local `.env` beside it. See docs/github-webhooks.md.
 [github]
 repository = "OpenEngine/OpenEngine"
+# Additional accepted hosts; the transport's own host is always included.
+hosts = []
 
 [communications]
 provider = "slack"

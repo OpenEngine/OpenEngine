@@ -443,3 +443,16 @@ def test_github_login_config_requires_strings(key):
 def test_github_login_secret_not_accepted_in_toml():
     with pytest.raises(EngineConfigError):
         parse_engine_config({"github_login_client_secret": "secret"})
+
+
+def test_github_hosts_configuration():
+    assert parse_engine_config({}).github.hosts == ()
+    assert parse_engine_config({"github": {"hosts": ["Forge.Example", "alias.example"]}}).github.hosts == (
+        "forge.example", "alias.example",
+    )
+
+
+@pytest.mark.parametrize("hosts", ["forge.example", [1], [""], [" "], ["duplicate", "duplicate"]])
+def test_github_hosts_must_be_a_list_of_distinct_strings(hosts):
+    with pytest.raises(EngineConfigError, match="github.hosts"):
+        parse_engine_config({"github": {"hosts": hosts}})

@@ -25,6 +25,7 @@ class GitLabSourceControl:
 
     def __init__(self, token: str | Callable[[], str | None], origin: str | Callable[[], str] = "https://gitlab.com", workspace_provider: WorkspaceProvider | None = None, transport: GitLabOAuthTransport | None = None) -> None:
         self._transport = transport or GitLabOAuthTransport(token, origin)
+        self._origin_source = origin
         self._workspace_provider = workspace_provider
 
     async def run_git(self, workspace_id: WorkspaceId, arguments: Sequence[str]) -> GitResult:
@@ -70,6 +71,14 @@ class GitLabSourceControl:
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")
         project, iid = self._merge_request(pr_url)
+        origin = self._origin_source() if callable(self._origin_source) else self._origin_source
+        target, configured = urlparse(pr_url), urlparse(origin)
+        target_port = target.port if target.port is not None else (443 if target.scheme == "https" else 80)
+        configured_port = configured.port if configured.port is not None else (443 if configured.scheme == "https" else 80)
+        if (target.scheme, target.hostname, target_port) != (
+            configured.scheme, configured.hostname, configured_port
+        ):
+            raise ValueError("merge-request URL must be on the configured GitLab origin")
         if not comment.strip():
             raise ValueError("comment must not be empty")
         if (file is None) != (line is None):

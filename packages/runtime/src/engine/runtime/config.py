@@ -101,6 +101,9 @@ class GitHubConfig:
     that never named a repository has nothing to compare a delivery against.
     """
 
+    hosts: tuple[str, ...] = ()
+    """Additional GitHub hosts accepted alongside the transport's own host."""
+
 
 @dataclass(frozen=True, slots=True)
 class WorkOrdersConfig:
@@ -245,7 +248,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository"}, "github")
+    _reject_unknown(github, {"repository", "hosts"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
@@ -342,7 +345,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
-        github=GitHubConfig(repository=github_repository),
+        github=GitHubConfig(
+            repository=github_repository,
+            hosts=tuple(
+                _nonblank_string(host, "github.hosts").lower()
+                for host in _strings(github.get("hosts", []), "github.hosts")
+            ),
+        ),
         communications=CommunicationsConfig(
             provider=communications_provider,
             channel=communications_channel,

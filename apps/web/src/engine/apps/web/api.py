@@ -140,6 +140,7 @@ from engine.ports import (
     UserInputAnswer,
     WorkspaceState,
 )
+from engine.runtime.change_requests import change_request, pull_request_url
 from engine.runtime import (
     PLANNER,
     AgentSession,
@@ -2555,7 +2556,7 @@ def create_app(
     async def github_reply(origin: RunOrigin, text: str) -> None:
         number, _, review_id = origin.thread_id.partition("/review/")
         await session.capabilities.source_control.add_comment(
-            f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}",
+            pull_request_url(origin.channel.removeprefix("github:"), int(number)),
             text,
             in_reply_to_id=int(review_id) if review_id else None,
         )
@@ -2624,7 +2625,7 @@ def create_app(
             prompt=prompt, repository=repository,
             milestone_id=None,
         )
-        url = f"https://github.com/{repository}/pull/{number}"
+        url = pull_request_url(repository, number)
         try:
             holder = await store.claim_pull_request(
                 PullRequestRecord(
@@ -2774,7 +2775,7 @@ def create_app(
             posting_login[repository] = (
                 github_bot_login
                 or await session.capabilities.source_control.authenticated_login(
-                    f"https://github.com/{repository}"
+                    pull_request_url(repository, 1).rsplit("/pull/", 1)[0]
                 )
             )
         return posting_login[repository]
@@ -2785,6 +2786,16 @@ def create_app(
         if not comment.is_pull_request:
             github_activity.ignored("not a pull request")
             return
+        # The delivery names the forge as well as the repository. Preserve its
+        # port in the shared key so claims and replies stay on that forge.
+        delivery = urlsplit(comment.url)
+        found = change_request(delivery._replace(
+            path=f"/{comment.repository}/pull/{comment.number}", query="", fragment="",
+        ).geturl())
+        if found is None:
+            github_activity.ignored("not a pull-request URL")
+            return
+        comment = replace(comment, repository=found.project)
         # Both lookups reach the forge, and the queue behind this has one
         # worker: a comment that waits here is every later comment waiting too,
         # so they are bounded together rather than left to whatever the
@@ -2808,7 +2819,7 @@ def create_app(
             # already the authority to change this repository, so it is no
             # escalation to reach the agent working on it.
             may_write = await session.capabilities.source_control.can_write_repository(
-                f"https://github.com/{comment.repository}/pull/{comment.number}",
+                pull_request_url(comment.repository, comment.number),
                 comment.author,
             )
         if not may_write:

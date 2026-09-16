@@ -568,8 +568,9 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
     assert not communications.posts
 
 
+@pytest.mark.parametrize("host", ["github.com", "forge.example:8443"])
 @pytest.mark.parametrize("absent", ["no-run", "unknown-graph", "finished"])
-def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent):
+def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent, host):
     """Steering is for a run that is working; otherwise the comment is new work.
 
     Which of the two a comment gets is the host's to decide, and it decides
@@ -583,7 +584,10 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
+    repository = "acme/api" if host == "github.com" else f"{host}/acme/api"
+    pr_url = f"https://{host}/acme/api/pull/7"
     runtime, opened = _graph_runtime(
+        repository=repository,
         pr_number=7 if absent != "no-run" else 99,
         known_graph=absent != "unknown-graph",
         status=RunStatus.COMPLETED if absent == "finished" else RunStatus.RUNNING,
@@ -604,6 +608,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
 
     payload = _issue_comment(1, "new workorder please")
     payload["issue"]["pull_request"] = {}
+    payload["comment"]["html_url"] = f"https://{host}/acme/api/issues/7#c"
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=dict(
@@ -613,7 +618,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         # Started on the repository the comment arrived from, which is where
         # the pull request is, rather than the configured default.
         assert runtime.start.await_args.args[1] == {
-            "task": "Implement it", "repository": "acme/api"}
+            "task": "Implement it", "repository": repository}
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
         # No chat origin: this conversation is the pull request, which the
@@ -625,17 +630,19 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         # to the pull request that already exists.
         claimed = runtime.store.claim_pull_request.await_args.args[0]
         assert (claimed.repository, claimed.number, claimed.run_id) == (
-            "acme/api", 7, RunId(STARTED_RUN))
-        assert claimed.url == "https://github.com/acme/api/pull/7"
+            repository, 7, RunId(STARTED_RUN))
+        assert claimed.url == pr_url
         assert provider.clients[0].result["structuredContent"]["started"] is True
     # And the pull request is told a work order was started, not that its
     # comment was forwarded to one that was already at work.
     source_control.add_comment.assert_awaited_once_with(
-        "https://github.com/acme/api/pull/7",
+        pr_url,
         f"Started work order `{STARTED_RUN}` for this pull request. "
         f"https://engine.example/runs/{STARTED_RUN}",
         in_reply_to_id=None,
     )
+    source_control.can_write_repository.assert_awaited_once_with(pr_url, payload["comment"]["user"]["login"])
+    source_control.authenticated_login.assert_awaited_once_with(f"https://{host}/acme/api")
     assert not communications.posts
 
 

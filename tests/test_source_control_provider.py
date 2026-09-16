@@ -471,3 +471,32 @@ def test_gh_cli_status_bounds_the_account_lookup(monkeypatch):
     status = gh_cli_status()
     assert status.installed and status.authenticated and status.account == ""
     assert len(timeouts) == 2 and all(value > 0 for value in timeouts)
+
+
+@pytest.mark.parametrize("explicit, environment, expected", [
+    (None, None, "github.com"),
+    (None, "enterprise.example", "enterprise.example"),
+    ("chosen.example", "enterprise.example", "chosen.example"),
+])
+def test_cli_transport_pins_every_request_to_its_reported_host(monkeypatch, explicit, environment, expected):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.delenv("GH_HOST", raising=False)
+    if environment:
+        monkeypatch.setenv("GH_HOST", environment)
+    transport = GitHubCliTransport(host=explicit)
+    assert transport.host == expected
+    run = AsyncMock(return_value=b"{}")
+    monkeypatch.setattr(transport, "_run", run)
+    asyncio.run(transport.request("GET", "/user"))
+    asyncio.run(transport.download("/logs"))
+    for call in run.await_args_list:
+        assert call.args[call.args.index("--hostname") + 1] == expected
+
+
+@pytest.mark.parametrize("api_url, host", [
+    ("https://api.github.com", "github.com"),
+    ("https://Forge.Example:8443/api/v3", "forge.example"),
+])
+def test_oauth_transport_reports_its_forge_host(api_url, host):
+    assert GitHubOAuthTransport("", api_url).host == host

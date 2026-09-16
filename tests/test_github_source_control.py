@@ -577,3 +577,30 @@ def test_a_remote_url_is_held_to_the_same_names() -> None:
     assert _parse_repo_coords("git@github.com:acme/api.git") == ("acme", "api")
     with pytest.raises(GitHubSourceControlError, match="cannot determine owner/repo"):
         _parse_repo_coords("https://github.com/../x.git")
+
+
+@pytest.mark.parametrize("arguments", [{}, {"file": "app.py", "line": 1}, {"in_reply_to_id": 2}])
+def test_foreign_pull_request_hosts_are_refused_before_any_api_call(monkeypatch, arguments):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    api = AsyncMock()
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment("https://evil.example/acme/api/pull/1", "Finding", **arguments))
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.can_write_repository("https://evil.example/acme/api/pull/1", "alice"))
+    api.assert_not_awaited()
+
+
+@pytest.mark.parametrize("host", ["forge.example", "alias.example"])
+def test_named_hosts_add_to_the_transport_host(monkeypatch, host):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("", api_url="https://forge.example/api/v3", hosts=["ALIAS.EXAMPLE"])
+    api = AsyncMock(return_value={"id": 1, "html_url": f"https://{host}/acme/api/pull/1#c"})
+    monkeypatch.setattr(source, "_api", api)
+    asyncio.run(source.add_comment(f"https://{host}/acme/api/pull/1", "Finding"))
+    api.assert_awaited_once_with("POST", "/repos/acme/api/issues/1/comments", json={"body": "Finding"})
+    with pytest.raises(ValueError):
+        asyncio.run(source.add_comment("https://github.com/acme/api/pull/1", "Finding"))
