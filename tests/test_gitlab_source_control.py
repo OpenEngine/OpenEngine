@@ -103,3 +103,72 @@ def test_gitlab_replies_fail_without_posting_a_flat_comment() -> None:
     with pytest.raises(NotImplementedError, match="replies"):
         asyncio.run(source.add_comment("https://gitlab.com/group/project/-/merge_requests/7", "Reply", in_reply_to_id=123))
     transport.request.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "mr_url",
+    [
+        # Refused by the shared reader, so refused here too.
+        "https://gitlab.com/group/project/-/merge_requests/\u0661\u0662",
+        "https://gitlab.com/group/project/-/merge_requests/\u00b2",
+        "https://gitlab.com/group/project/-/merge_requests/042",
+        "https://gitlab.com/x/y/pull/7/-/merge_requests/1",
+        "https://gitlab.com/a/b/-/merge_requests/1/-/merge_requests/2",
+        "https://gitlab.com/x/y/pull/7",
+        # Quoting escapes the separators between project steps but leaves a
+        # `.` alone, so a bare `..` would be resolved away before sending.
+        "https://gitlab.com/../-/merge_requests/1",
+        "https://gitlab.com/../x/-/merge_requests/1",
+        "https://gitlab.com/a/../../x/-/merge_requests/1",
+        "https://gitlab.com/./x/-/merge_requests/1",
+    ],
+)
+def test_a_url_the_shared_reader_refuses_is_not_sent_to_gitlab(mr_url: str) -> None:
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(ValueError, match="merge-request URL"):
+        asyncio.run(source.add_comment(mr_url, "Finding."))
+    transport.request.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "mr_url, parts",
+    [
+        ("https://gitlab.com/group/sub.one/project/-/merge_requests/7", ("group%2Fsub.one%2Fproject", 7)),
+        # The reader's key is lowercased; the path the API is asked about is not.
+        ("https://gitlab.com/Group/Sub/Project/-/merge_requests/7#note_1", ("Group%2FSub%2FProject", 7)),
+        # Copied off the Changes tab, and read past as CICheck reads past it.
+        ("https://gitlab.com/group/project/-/merge_requests/7/diffs", ("group%2Fproject", 7)),
+        ("https://gitlab.com/group/project/-/merge_requests/7/", ("group%2Fproject", 7)),
+    ],
+)
+def test_a_merge_request_is_read_by_the_shared_reader(mr_url: str, parts: tuple[str, int]) -> None:
+    assert GitLabSourceControl._merge_request(mr_url) == parts
+
+
+@pytest.mark.parametrize(
+    "remote, project",
+    [
+        ("https://gitlab.example/..", None),
+        ("https://gitlab.example/group/../x.git", None),
+        ("git@gitlab.example:./x.git", None),
+        ("https://gitlab.example/group/sub.one/project.git", "group%2Fsub.one%2Fproject"),
+        ("git@gitlab.example:group/project.git", "group%2Fproject"),
+    ],
+)
+def test_a_project_read_off_the_remote_is_names_and_not_moves(
+    monkeypatch: pytest.MonkeyPatch, remote: str, project: str | None
+) -> None:
+    from engine.adapters.source_control.gitlab import GitLabSourceControlError
+
+    source = GitLabSourceControl("token", transport=AsyncMock())
+
+    async def checked(_workspace: object, _arguments: object) -> str:
+        return remote
+
+    monkeypatch.setattr(source, "_checked", checked)
+    if project is None:
+        with pytest.raises(GitLabSourceControlError, match="cannot determine the project"):
+            asyncio.run(source._project("ws"))  # type: ignore[arg-type]
+    else:
+        assert asyncio.run(source._project("ws")) == project  # type: ignore[arg-type]
