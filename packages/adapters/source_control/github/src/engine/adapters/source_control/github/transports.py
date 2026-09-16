@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -24,7 +26,22 @@ class GitHubTransportError(RuntimeError):
     """One transport could not complete a GitHub API request."""
 
 
+def normalized_authority(url: str) -> str:
+    """Compare hosts with their effective port; bare authorities use HTTPS."""
+    parsed = urlsplit(url if "://" in url else f"https://{url}")
+    host = parsed.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    port = parsed.port
+    if port is None:
+        port = 80 if parsed.scheme == "http" else 443
+    return host if port == 443 else f"{host}:{port}"
+
+
 class GitHubApiTransport(Protocol):
+    @property
+    def host(self) -> str: ...
+
     async def request(self, method: str, path: str, **kwargs: object) -> object: ...
 
     async def download(self, path: str) -> bytes: ...
@@ -42,6 +59,11 @@ class GitHubOAuthTransport:
         self._token_source = token
         self._api_url = api_url.rstrip("/")
         self._on_token_unauthorized = on_token_unauthorized
+
+    @property
+    def host(self) -> str:
+        host = normalized_authority(self._api_url)
+        return "github.com" if host == "api.github.com" else host
 
     @property
     def _token(self) -> str:
@@ -137,15 +159,23 @@ class GitHubCliTransport:
     """GitHub REST transport delegated to the user's authenticated ``gh`` CLI."""
 
     def __init__(
-        self, binary_path: str = "gh", timeout_seconds: float = CLI_TIMEOUT_SECONDS
+        self, binary_path: str = "gh", timeout_seconds: float = CLI_TIMEOUT_SECONDS,
+        *, host: str | None = None,
     ) -> None:
         self._binary_path = binary_path
         self._timeout_seconds = timeout_seconds
+        self._host = (host or os.environ.get("GH_HOST") or "github.com").lower()
+
+    @property
+    def host(self) -> str:
+        return normalized_authority(self._host)
 
     async def request(self, method: str, path: str, **kwargs: object) -> object:
         arguments = [
             "api",
             path,
+            "--hostname",
+            self._host,
             "--method",
             method,
             "--header",
@@ -171,7 +201,7 @@ class GitHubCliTransport:
             raise GitHubTransportError("gh returned a non-JSON API response") from error
 
     async def download(self, path: str) -> bytes:
-        return await self._run("api", path, "--method", "GET")
+        return await self._run("api", path, "--hostname", self._host, "--method", "GET")
 
     async def _run(self, *arguments: str, input_bytes: bytes | None = None) -> bytes:
         try:

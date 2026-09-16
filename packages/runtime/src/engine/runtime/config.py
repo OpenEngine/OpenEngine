@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import tomllib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from engine.ports.agent_runner import ResponseStyle
@@ -100,6 +100,9 @@ class GitHubConfig:
     Empty leaves the webhook route unconfigured rather than open: a deployment
     that never named a repository has nothing to compare a delivery against.
     """
+
+    host_aliases: Mapping[str, str] = field(default_factory=dict)
+    """Web authorities mapped to their GitHub transport authority, including ports."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,7 +250,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository"}, "github")
+    _reject_unknown(github, {"repository", "host_aliases"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
@@ -351,7 +354,16 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
-        github=GitHubConfig(repository=github_repository),
+        github=GitHubConfig(
+            repository=github_repository,
+            host_aliases={
+                _nonblank_string(alias, "github.host_aliases").lower():
+                _nonblank_string(target, "github.host_aliases").lower()
+                for alias, target in _table(
+                    github.get("host_aliases", {}), "github.host_aliases"
+                ).items()
+            },
+        ),
         communications=CommunicationsConfig(
             provider=communications_provider,
             channel=communications_channel,
