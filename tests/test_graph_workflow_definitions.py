@@ -576,36 +576,64 @@ def test_input_runner_can_be_reset_to_workflow_default_and_retried(tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("level", ["Green", "Orange", "Red", "Blue", "", None])
-def test_impact_analysis_validates_and_preserves_its_assessment(level):
-    from engine.domain import AgentRunId, RunId, StepCompleted, StepId, StepOutput
+@pytest.mark.parametrize("level", ["Green", "Orange", "Red"])
+@pytest.mark.parametrize(
+    ("invalid_outputs", "error"),
+    [
+        ({"impact_level": "green", "impact_rationale": "Evidence"}, "impact_level"),
+        ({"impact_level": "Blue", "impact_rationale": "Evidence"}, "impact_level"),
+        ({"impact_level": "Green", "impact_rationale": ""}, "impact_rationale"),
+        ({"impact_level": "Green", "impact_rationale": " \n"}, "impact_rationale"),
+    ],
+)
+def test_impact_analysis_rejects_then_accepts_corrected_assessment(
+    monkeypatch, level, invalid_outputs, error,
+):
+    from types import SimpleNamespace
+    from engine.domain import RunId
+    from engine.graph_runtime_langgraph import terminal_mcp
+    from engine.runtime.terminal_mcp import TerminalMcpBroker
+    from tests.test_terminal_mcp import _request
 
     module = definition_module()
     node = nodes_of(module.pipeline("codex"))[module.IMPACT_ANALYSIS]
-    event = StepCompleted(
-        run_id=RunId("run"), step_id=StepId(module.IMPACT_ANALYSIS),
-        agent_run_id=AgentRunId("agent"), outcome="success",
-        summary=f"{level}: assessment",
-        outputs=(
-            StepOutput("impact_level", level),
-            StepOutput("impact_rationale", "Scope, test evidence, and deployment needs."),
-        ),
-    )
-    if level not in ("Green", "Orange", "Red"):
-        with pytest.raises(ValueError, match="impact_level"):
-            node._terminal_update(event)
-        return
-    update = node._terminal_update(event)
-    assert update["impact_level"] == level
-    assert update["impact_rationale"] == event.outputs[1].value
-    assert update[module.IMPACT_ANALYSIS] == event.summary
+    binding, = node._for_runner("codex").mcp_server_bindings
+    brokers = []
 
-    from dataclasses import replace
-    for rationale in ("", " ", None):
-        with pytest.raises(ValueError, match="impact_rationale"):
-            node._terminal_update(replace(event, outputs=(
-                event.outputs[0], StepOutput("impact_rationale", rationale),
-            )))
+    def capture_broker(**kwargs):
+        broker = TerminalMcpBroker(**kwargs)
+        brokers.append(broker)
+        return broker
+
+    monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
+
+    async def scenario():
+        execution = SimpleNamespace(
+            run_id=RunId("run"), execution_id="impact", runtime=SimpleNamespace(
+                source_control=object(),
+            ),
+        )
+        async with binding({"workspaceId": "workspace"}, execution, None):
+            broker, = brokers
+            rejected = await broker._submit(_request(broker, 1, "complete_step", {
+                "outcome": "success", "summary": "Assessment",
+                "outputs": invalid_outputs,
+            }))
+            assert rejected["ok"] is False
+            assert error in rejected["error"]
+            assert not broker._result.done()
+            accepted = await broker._submit(_request(broker, 2, "complete_step", {
+                "outcome": "success", "summary": f"{level}: assessment",
+                "outputs": {"impact_level": level, "impact_rationale": "Evidence"},
+            }))
+            assert accepted["ok"] is True
+            update = node._terminal_update(await broker.result())
+            assert update == {
+                module.IMPACT_ANALYSIS: f"{level}: assessment",
+                "impact_level": level, "impact_rationale": "Evidence",
+            }
+
+    asyncio.run(scenario())
 
 
 def test_impact_analysis_receives_final_evidence_and_selected_review_runner():

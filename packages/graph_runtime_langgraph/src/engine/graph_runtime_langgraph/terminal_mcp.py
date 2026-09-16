@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from engine.domain import AgentId, AgentRunId, StepId, StepSpec
+from engine.domain import AgentId, AgentRunId, StepCompleted, StepId, StepSpec
 from engine.domain.ids import WorkspaceId
 from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.terminal_mcp import (
@@ -38,6 +38,8 @@ class TerminalMcpServer:
     )
     source_control: SourceControl | None = None
     workspace_key: str = WORKSPACE_ID
+    # Raise ValueError to return a correctable tool error before acceptance.
+    validate_completion: Callable[[StepCompleted], None] | None = None
 
     @asynccontextmanager
     async def __call__(
@@ -68,6 +70,7 @@ class TerminalMcpServer:
                 self.required_outputs,
             ),
             registry=TerminalResultRegistry(),
+            validate_completion=self.validate_completion,
         )
         served = tuple(
             name

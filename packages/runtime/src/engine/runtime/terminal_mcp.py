@@ -191,12 +191,14 @@ class TerminalMcpBroker:
         step: StepSpec | None,
         registry: TerminalResultRegistry,
         deliver: TerminalDelivery | None = None,
+        validate_completion: Callable[[StepCompleted], None] | None = None,
     ) -> None:
         self._run_id = run_id
         self._agent_run_id = agent_run_id
         self._step = step
         self._registry = registry
         self._deliver = deliver
+        self._validate_completion = validate_completion
         # Hex rather than URL-safe base64, because this credential is handed to
         # the provider as an argv element: `token_urlsafe` can begin with `-`,
         # and roughly one session in sixty-four then had its server exit on
@@ -437,6 +439,8 @@ class TerminalMcpBroker:
                     arguments=arguments,
                     mcp_request_id=request_id,
                 )
+                if self._validate_completion is not None:
+                    self._validate_completion(event)
             elif name == "fail_step":
                 event = run_failed_from_arguments(
                     run_id=self._run_id,

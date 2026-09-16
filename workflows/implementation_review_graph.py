@@ -38,7 +38,7 @@ from engine.graph_runtime_langgraph.components import (
     WorkspaceNode,
     checkout,
 )
-from engine.graph_runtime_langgraph.acp import TerminalEvent
+from engine.domain import StepCompleted
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -213,14 +213,14 @@ class InputImpactAnalysisNode(_RunnerInput, ACPNode):
 
     graph_node_runner_input = "review_runner"
 
-    def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
-        update = super()._terminal_update(event)
-        if update.get("impact_level") not in ("Green", "Orange", "Red"):
-            raise ValueError("impact_level must be Green, Orange, or Red")
-        rationale = update.get("impact_rationale")
-        if not isinstance(rationale, str) or not rationale.strip():
-            raise ValueError("impact_rationale must be non-empty")
-        return update
+
+def _validate_impact_analysis(event: StepCompleted) -> None:
+    outputs = {output.name: output.value for output in event.outputs}
+    if outputs.get("impact_level") not in ("Green", "Orange", "Red"):
+        raise ValueError("impact_level must be Green, Orange, or Red")
+    rationale = outputs.get("impact_rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise ValueError("impact_rationale must be non-empty")
 
 
 class InputReviewNode(_RunnerInput, ReviewNode):
@@ -456,6 +456,7 @@ def pipeline(
                     step_id=IMPACT_ANALYSIS,
                     agent_id=reviewer,
                     required_outputs=("impact_level", "impact_rationale"),
+                    validate_completion=_validate_impact_analysis,
                     repository_tools=(
                         "view_change_request", "list_pipeline_status", "get_job_logs",
                     ),
