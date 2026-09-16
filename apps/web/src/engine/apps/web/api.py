@@ -2864,14 +2864,6 @@ def create_app(
         runtime = surface.runtime
         if runtime is None:
             return
-        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-            engine_login = await github_posting_login(merged.repository)
-        if merged.merged_by.lower() == engine_login.lower():
-            log.info(
-                "%s#%s was merged by Engine itself, which is not a review",
-                merged.repository, merged.number,
-            )
-            return
         run_id = await github_run_for_pull_request(merged.repository, merged.number)
         if run_id is None:
             log.info(
@@ -2896,6 +2888,16 @@ def create_app(
             log.info(
                 "%s#%s was merged, but work order %s is not waiting on a human review",
                 merged.repository, merged.number, run_id,
+            )
+            return
+        # Asked only once there is a verdict to record: a merge that decides
+        # nothing must not wait on, or fail with, a credential lookup.
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            engine_login = await github_posting_login(merged.repository)
+        if merged.merged_by.lower() == engine_login.lower():
+            log.info(
+                "%s#%s was merged by Engine itself, which is not a review",
+                merged.repository, merged.number,
             )
             return
         try:

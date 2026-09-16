@@ -858,7 +858,7 @@ def _merged(client, number=7, repository="acme/api", **pull_request):
         github_signed(body), **{"x-github-event": "pull_request"}))
 
 
-def _merge_app(tmp_path, opened):
+def _merge_app(tmp_path, opened, authenticated_login=None):
     """An app whose credentials resolve to `OpenEngineBot`, with no
     `GITHUB_BOT_LOGIN` configured -- the usual deployment."""
     app, capabilities, _ = _app(
@@ -867,7 +867,8 @@ def _merge_app(tmp_path, opened):
         _workflow_catalog(), github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
     )
     object.__setattr__(capabilities, "source_control", MagicMock(
-        authenticated_login=AsyncMock(return_value="OpenEngineBot")))
+        authenticated_login=authenticated_login
+        or AsyncMock(return_value="OpenEngineBot")))
     return app
 
 
@@ -993,7 +994,10 @@ def test_a_merge_with_no_review_waiting_decides_nothing(tmp_path, kwargs, why):
     from starlette.testclient import TestClient
 
     runtime, opened = _graph_runtime(**kwargs)
-    app = _merge_app(tmp_path, opened)
+    # A merge with nothing to decide never needs Engine's own login, so an
+    # outage of GitHub's credential lookup cannot fail its delivery.
+    authenticated_login = AsyncMock(side_effect=RuntimeError("GitHub is down"))
+    app = _merge_app(tmp_path, opened, authenticated_login)
 
     with TestClient(app) as client:
         # Settled rather than refused: there is nothing for GitHub to redeliver.
@@ -1001,6 +1005,7 @@ def test_a_merge_with_no_review_waiting_decides_nothing(tmp_path, kwargs, why):
         client.portal.call(app.state.github_ingress.drain)
 
     assert runtime.decide.await_count == 0, why
+    assert authenticated_login.await_count == 0, why
 
 
 def test_a_merge_decided_by_somebody_else_first_is_not_redelivered(tmp_path):
