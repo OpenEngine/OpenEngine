@@ -1251,3 +1251,128 @@ def test_create_workorder_is_opt_in_and_returns_created_run() -> None:
         assert calls == [(RunId("parent"), "Next task")]
 
     asyncio.run(scenario())
+
+
+class OwningSourceControl:
+    """Opens `acme/api#7` and posts wherever it is told to."""
+
+    def __init__(self) -> None:
+        self.posted: list[str] = []
+
+    async def request_review(self, *_arguments: object) -> str:
+        return "https://github.com/acme/api/pull/7"
+
+    async def add_comment(self, pr_url: str, *_arguments: object) -> CommentResult:
+        self.posted.append(pr_url)
+        return CommentResult(1, f"{pr_url}#issuecomment-1")
+
+
+async def _owning_broker(
+    source_control: OwningSourceControl, *, opened: bool, recorded: object,
+) -> TerminalMcpBroker:
+    """A step that may have opened `acme/api#7`, over a store answering `recorded`.
+
+    `recorded` is the store's answer, an exception it raises instead, or
+    `None` for a broker with no store at all.
+    """
+    broker = TerminalMcpBroker(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("agent-run-1"),
+        step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+        registry=TerminalResultRegistry(),
+    )
+    broker.enable_repository_tools(
+        source_control,  # type: ignore[arg-type]
+        ("open_pull_request", "add_comment"),
+        WorkspaceId("workspace"),
+    )
+    if recorded is not None:
+        async def lookup() -> object:
+            if isinstance(recorded, Exception):
+                raise recorded
+            return recorded
+
+        broker.enable_pull_request_ownership(lookup)  # type: ignore[arg-type]
+    broker._result = asyncio.get_running_loop().create_future()
+    if opened:
+        answer = await broker._submit(_direct_request(
+            broker, "open-1", "open_pull_request", {"branch": "feature", "title": "A thing"},
+        ))
+        assert answer["ok"] is True
+    return broker
+
+
+@pytest.mark.parametrize(
+    ("opened", "recorded", "accepted", "refused"),
+    [
+        # What the step opened, before anything is recorded.
+        (True, None, [7], [406]),
+        # What the store recorded, for a step that opened nothing -- CI fixes
+        # and review rounds on a pull request an earlier step opened.
+        (False, [("acme/api", 406)], [406], [407]),
+        # Both at once.
+        (True, [("acme/api", 406)], [7, 406], [407]),
+        # A store that has not caught up with the open still counts it.
+        (True, [], [7], [406]),
+        # Unknown: nothing recorded, a store that cannot be read, or no store.
+        (False, [], [406, 407], []),
+        (True, RuntimeError("the store is gone"), [7, 406], []),
+        (False, None, [406, 407], []),
+    ],
+    ids=["opened", "recorded", "union", "store-lagging", "nothing-recorded",
+         "store-unreachable", "no-store"],
+)
+def test_a_step_reports_and_comments_only_on_its_runs_pull_requests(
+    opened: bool, recorded: object, accepted: list[int], refused: list[int],
+) -> None:
+    """A number read off an issue, a diff or CI output is not this run's PR.
+
+    The review step bound to the merged #406 while its worktree was #407 took
+    exactly that path: an unchecked `pr_url` travelled downstream and every
+    comment went to the wrong pull request.
+    """
+
+    async def outcome(number: int) -> tuple[bool, bool, list[str]]:
+        url = f"https://github.com/acme/api/pull/{number}"
+        source_control = OwningSourceControl()
+        broker = await _owning_broker(source_control, opened=opened, recorded=recorded)
+        commented = await broker._submit(_direct_request(
+            broker, "comment-1", "add_comment", {"pr_url": url, "comment": "Note."},
+        ))
+        completed = await broker._submit(_direct_request(
+            broker, "complete-1", "complete_step",
+            {"outcome": "success", "summary": "Done.", "outputs": {"pr_url": url}},
+        ))
+        return bool(commented["ok"]), bool(completed["ok"]), source_control.posted
+
+    for number in accepted:
+        url = f"https://github.com/acme/api/pull/{number}"
+        assert asyncio.run(outcome(number)) == (True, True, [url])
+    for number in refused:
+        commented, completed, posted = asyncio.run(outcome(number))
+        assert (commented, completed, posted) == (False, False, [])
+
+
+def test_a_misdirected_comment_is_refused_and_says_where_to_post() -> None:
+    async def scenario() -> tuple[dict[str, object], dict[str, object], list[str]]:
+        source_control = OwningSourceControl()
+        broker = await _owning_broker(
+            source_control, opened=False, recorded=[("acme/api", 407)]
+        )
+        misdirected = await broker._submit(_direct_request(
+            broker, "comment-1", "add_comment",
+            {"pr_url": "https://github.com/acme/api/pull/406", "comment": "Note."},
+        ))
+        correct = await broker._submit(_direct_request(
+            broker, "comment-2", "add_comment",
+            # A view of the same pull request is the same pull request.
+            {"pr_url": "https://github.com/ACME/api/pull/407/files", "comment": "Note."},
+        ))
+        return misdirected, correct, source_control.posted
+
+    misdirected, correct, posted = asyncio.run(scenario())
+
+    assert misdirected["ok"] is False
+    assert "acme/api#407" in str(misdirected["error"])
+    assert correct["ok"] is True
+    assert posted == ["https://github.com/ACME/api/pull/407/files"]

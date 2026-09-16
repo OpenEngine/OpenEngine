@@ -37,7 +37,7 @@ from engine.ports import (
     McpServerConfig,
     SourceControl,
 )
-from engine.runtime.change_requests import change_request
+from engine.runtime.change_requests import ChangeRequest, change_request
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -71,6 +71,11 @@ CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 #: is recorded here because opening is the act that creates it; reading it back
 #: off the comments on the pull request would name whoever commented last.
 PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
+
+#: The pull requests the durable store has recorded as this run's, as
+#: `(project, number)` keys. Bound by whoever owns the store, like
+#: `PullRequestRecorder`, and read back when a step names a pull request.
+PullRequestLookup = Callable[[], Awaitable[Sequence[tuple[str, int]]]]
 WorkorderCreator = Callable[[RunId, str], Awaitable[tuple[str, str]]]
 
 _SERVER_NAME = "workflow"
@@ -217,6 +222,8 @@ class TerminalMcpBroker:
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
+        self._pull_request_lookup: PullRequestLookup | None = None
+        self._opened: set[ChangeRequest] = set()
         self._workorder_creator: WorkorderCreator | None = None
 
     def enable_workorder_creation(self, create: WorkorderCreator) -> None:
@@ -251,6 +258,20 @@ class TerminalMcpBroker:
         whichever run last happened to comment there.
         """
         self._pull_request_recorder = record
+
+    def enable_pull_request_ownership(self, lookup: PullRequestLookup) -> None:
+        """Hold `add_comment` and a reported `pr_url` to this run's pull requests.
+
+        The run's pull requests are what this step opened together with what
+        `lookup` says the store has recorded, so a store that has not caught up
+        with an open still counts it. A URL outside them is refused: a number
+        picked up from an issue, a diff or CI output is how a step comes to
+        report, and then post to, somebody else's pull request.
+
+        While the run's pull requests are unknown -- nothing recorded, or the
+        store cannot be read -- nothing is refused.
+        """
+        self._pull_request_lookup = lookup
 
     def enable_repository_tools(
         self,
@@ -462,6 +483,11 @@ class TerminalMcpBroker:
                     arguments=arguments,
                     mcp_request_id=request_id,
                 )
+                for output in event.outputs:
+                    if output.name == "pr_url":
+                        foreign = await self._foreign_pull_request(output.value)
+                        if foreign is not None:
+                            return {"ok": False, "error": foreign}
             elif name == "fail_step":
                 event = run_failed_from_arguments(
                     run_id=self._run_id,
@@ -498,6 +524,9 @@ class TerminalMcpBroker:
         assert self._source_control is not None
         if name == "add_comment":
             pr_url, comment, file, line, in_reply_to_id = _comment_arguments(arguments)
+            foreign = await self._foreign_pull_request(pr_url)
+            if foreign is not None:
+                return {"ok": False, "error": foreign}
             try:
                 result = await self._source_control.add_comment(
                     pr_url, comment, file, line, in_reply_to_id
@@ -600,8 +629,39 @@ class TerminalMcpBroker:
             )
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
+        opened = change_request(url)
+        if opened is not None:
+            self._opened.add(opened)
         await self._record_pull_request(url)
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _foreign_pull_request(self, url: str) -> str | None:
+        """Why `url` is not one of this run's pull requests, or `None` if it is.
+
+        Also `None` while the run's pull requests are unknown, so a run whose
+        pull request was opened by hand or before ownership was recorded is
+        not left unable to post or complete. Failing closed there waits on
+        ownership being recorded for every pull request a run works on.
+        """
+        owned = set(self._opened)
+        if self._pull_request_lookup is not None:
+            try:
+                recorded = await self._pull_request_lookup()
+            except Exception:
+                logger.exception(
+                    "Could not read this run's pull requests; not checking %s", url
+                )
+                return None
+            owned.update(ChangeRequest(project, number) for project, number in recorded)
+        if not owned or change_request(url) in owned:
+            return None
+        named = ", ".join(
+            sorted(f"{one.project}#{one.number}" for one in owned)
+        )
+        return (
+            f"{url} is not a pull request this run opened ({named}); "
+            "use the URL open_pull_request returned"
+        )
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -1293,6 +1353,7 @@ __all__ = [
     "DEFAULT_BASE_REF",
     "OpenedPullRequest",
     "PostedComment",
+    "PullRequestLookup",
     "PullRequestRecorder",
     "READ_ONLY_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",

@@ -85,6 +85,13 @@ class TerminalMcpServer:
             WorkspaceId(workspace),
             approve,
         )
+        if "add_comment" in served or "pr_url" in self.required_outputs:
+            store = execution.runtime.store
+
+            async def owned() -> tuple[tuple[str, int], ...]:
+                return await store.pull_requests(execution.run_id)
+
+            broker.enable_pull_request_ownership(owned)
         if "add_comment" in served:
             store = execution.runtime.store
 

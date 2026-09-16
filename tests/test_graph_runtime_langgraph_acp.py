@@ -2298,6 +2298,93 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
     assert found[0].posted_at
 
 
+def test_a_ci_fix_step_reports_only_the_pull_request_its_run_opened(
+    tmp_path: Path,
+) -> None:
+    """End to end over a real store, for a step that opens nothing itself.
+
+    The pull request was opened by an earlier step and recorded then, so the
+    store is all this step has to be held to -- and a number read off the CI
+    output is refused rather than carried downstream.
+    """
+
+    from engine.graph_runtime_langgraph.store import PullRequestRecord
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    class Runtime:
+        def __init__(self, store: Any) -> None:
+            self.store = store
+            self.source_control = RecordingSourceControl()
+
+    class Execution:
+        def __init__(self, store: Any) -> None:
+            self.runtime = Runtime(store)
+            self.run_id = RunId("run-1")
+            self.execution_id = "task-2"
+            self.node_id = NodeId(IMPLEMENTATION)
+
+    async def refuse(_request: Any) -> ApprovalDecision:
+        raise AssertionError("completing a step is not approved through the broker")
+
+    async def scenario() -> tuple[str, str]:
+        store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        await store.remember_pull_request(PullRequestRecord(
+            repository="acme/api", number=407, run_id=RunId("run-1"),
+            opened_at="2026-09-10T17:00:00+00:00",
+            url="https://github.com/acme/api/pull/407",
+        ))
+        await store.remember_pull_request(PullRequestRecord(
+            repository="acme/api", number=406, run_id=RunId("run-0"),
+            opened_at="2026-09-09T17:00:00+00:00",
+            url="https://github.com/acme/api/pull/406",
+        ))
+        server = TerminalMcpServer(
+            step_id=IMPLEMENTATION,
+            agent_id=AGENT,
+            required_outputs=("pr_url",),
+            repository_tools=("git_subcommand",),
+        )
+        answers = []
+        async with server(
+            {"workspaceId": "ws-graph-run"}, Execution(store), refuse  # type: ignore[arg-type]
+        ) as bound:
+            arguments = list(bound.config["args"])
+            for request_id, number in (("complete-1", 406), ("complete-2", 407)):
+                answer = await _mcp_response(
+                    arguments[arguments.index("--host") + 1],
+                    int(arguments[arguments.index("--port") + 1]),
+                    arguments[arguments.index("--token") + 1],
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "complete_step",
+                            "arguments": {
+                                "outcome": "success",
+                                "summary": "Fixed CI.",
+                                "outputs": {
+                                    "pr_url": f"https://github.com/acme/api/pull/{number}",
+                                },
+                            },
+                        },
+                    },
+                    repository_tools=("git_subcommand",),
+                )
+                answers.append(answer["result"])
+            completed = await bound.result()
+        store.close()
+        assert answers[0]["isError"] is True
+        assert answers[1].get("isError") is not True
+        assert isinstance(completed, StepCompleted)
+        return answers[0]["content"][0]["text"], completed.outputs[0].value
+
+    refused, reported = asyncio.run(scenario())
+
+    assert "acme/api#407" in refused
+    assert reported == "https://github.com/acme/api/pull/407"
+
+
 @pytest.mark.parametrize("partial", ["", "I started looking at the change."])
 @pytest.mark.parametrize("terminal", ["complete_step", "fail_step"])
 def test_cancelled_reopening_waits_for_input_without_harness_correction(
