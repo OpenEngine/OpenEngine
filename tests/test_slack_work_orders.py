@@ -1626,3 +1626,38 @@ def test_an_auto_approved_request_is_not_announced(tmp_path) -> None:
 
     assert "*implementation* needs your approval: Approve the plan" in announced
     assert not [text for text in announced if "Run git" in text]
+
+
+def test_concierge_bridge_can_read_credential_and_list_tools() -> None:
+    """Launch the real MCP child so Windows file-sharing failures are visible."""
+    from pathlib import Path
+    from engine.slack_concierge.slack_egress import ConciergeBroker
+
+    async def scenario() -> None:
+        async def create(repository: str, prompt: str) -> tuple[str, str]:
+            raise AssertionError("listing tools must not create work")
+
+        async with ConciergeBroker(create_workorder=create) as broker:
+            config = broker.config
+            args = config["args"]
+            credential = Path(args[args.index("--token-file") + 1])
+            child = await asyncio.create_subprocess_exec(
+                config["command"], *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(child.communicate(
+                    b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n'
+                ), timeout=20)
+            finally:
+                if child.returncode is None:
+                    child.kill()
+                    await child.wait()
+            assert child.returncode == 0, stderr.decode()
+            response = json.loads(stdout)
+            assert "create_workorder" in [tool["name"] for tool in response["result"]["tools"]]
+        assert not credential.exists()
+
+    asyncio.run(scenario())

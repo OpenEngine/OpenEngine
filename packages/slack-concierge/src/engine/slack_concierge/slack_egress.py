@@ -155,15 +155,16 @@ class ConciergeBroker(SingleToolBroker):
         self._credential: TextIO | None = None
 
     async def __aenter__(self) -> ConciergeBroker:
-        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-")
+        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-", delete=False)
         self._credential.write(self._token)
-        self._credential.flush()
+        # Close before the MCP subprocess reopens it (required on Windows).
+        self._credential.close()
         try:
             self._server = await asyncio.start_server(
                 self._handle_connection, "127.0.0.1", 0
             )
         except BaseException:
-            self._credential.close()
+            Path(self._credential.name).unlink(missing_ok=True)
             raise
         return self
 
@@ -172,7 +173,7 @@ class ConciergeBroker(SingleToolBroker):
             self._server.close()
             await self._server.wait_closed()
         if self._credential is not None:
-            self._credential.close()
+            Path(self._credential.name).unlink(missing_ok=True)
 
     @property
     def config(self) -> dict[str, object]:
