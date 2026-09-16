@@ -23,6 +23,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from engine.adapters.agent_runner.claude_code import (
@@ -79,6 +80,7 @@ from engine.runtime import (
     AgentSession,
     Capabilities,
     EngineConfig,
+    MilestoneChanges,
     PlanningMcpBroker,
     project_chat_capabilities,
 )
@@ -558,6 +560,7 @@ def build_session(
     runners: Mapping[str, AgentRunner],
     repository: str = ".",
     read_only_runners: Mapping[str, AgentRunner] | None = None,
+    milestone_changes: MilestoneChanges | None = None,
 ) -> AgentSession:
     """Conversations, over the capabilities this process composed.
 
@@ -572,13 +575,17 @@ def build_session(
     `read_only_runners` answers the agents that only read, by the same provider
     names -- so a planning conversation is the CLI the user picked, without the
     tools to change the tree it is reading.
+
+    `milestone_changes` hears the planning tools' milestone edits, so the web
+    app can scope new work for them.
     """
+    planning_broker = partial(PlanningMcpBroker, milestone_changes=milestone_changes)
     return AgentSession(
         capabilities,
         runners=runners,
         workspace_repository=repository,
         read_only_runners=read_only_runners,
-        mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
+        mcp_brokers={name: planning_broker for name in PLANNING_TOOL_NAMES},
         capability_resolver=project_chat_capabilities,
     )
 

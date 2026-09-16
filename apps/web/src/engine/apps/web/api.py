@@ -147,6 +147,7 @@ from engine.runtime import (
     ApprovalConfig,
     ApprovalDecisionNotAllowedError,
     ApprovalNotPendingError,
+    MilestoneChanges,
     RunNotifier,
     RunReader,
     UnknownApprovalError,
@@ -915,6 +916,11 @@ def _graph_workorder_name(values: object) -> str:
 #: would read them is not in the room when a server starts.
 log = logging.getLogger(__name__)
 
+#: The policy an unattended rescoping runs under, since nobody wrote one.
+_MILESTONE_CHANGED_RULE = (
+    "The milestone definition changed; reconcile its work orders with it."
+)
+
 #: How long the forge lookups that authorize a GitHub comment may take before
 #: the comment is abandoned. The ingress behind them has one worker, so this is
 #: not only that comment's latency: whatever it waits, every comment queued
@@ -942,6 +948,10 @@ class _GraphSurface:
 
     runtime: GraphRuntime | None = None
     app: Starlette | None = None
+
+
+class ForeignScopeError(ValueError):
+    """The scoper proposed work for a milestone it was not asked about."""
 
 
 class MilestoneScoping(Protocol):
@@ -1023,6 +1033,7 @@ def create_app(
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     utilization: UtilizationService | None = None,
     milestone_scoper: MilestoneScoping | None = None,
+    milestone_changes: MilestoneChanges | None = None,
     concierge_provider: ACPAgentProvider | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
@@ -1501,31 +1512,60 @@ def create_app(
         except ValueError as error:
             return _error(str(error), 400)
 
-        current = tuple(
-            _workorder_for_run(run, milestone_id)
-            for run in await session.state_store.list_runs(milestone_id)
-        )
         if milestone_scoper is None:
             return _error("milestone scoping is not configured", 503)
+        try:
+            plan = await schedule_scoped_work(
+                milestone, ScopingPolicy(rules=(message,))
+            )
+        except ForeignScopeError as error:
+            return _error(str(error), 400)
+        return JSONResponse(_scoping_plan_json(plan))
+
+    async def schedule_scoped_work(
+        milestone: Milestone, policy: ScopingPolicy, *, reconcile: bool = False
+    ) -> ScopingPlan:
+        """Scope `milestone` and keep the proposed work in the scheduled pool.
+
+        Proposals become durable work, but dispatch is an explicit action.
+        `reconcile` also applies the scoper's cancellations and supersessions,
+        and only to work nobody has started: a started run is left alone, and
+        so are the replacements proposed for it.
+        """
+        assert milestone_scoper is not None
+        milestone_id = milestone.milestone_id
+        runs = await session.state_store.list_runs(milestone_id)
         plan = await milestone_scoper.run(
-            workorders=current,
+            workorders=tuple(_workorder_for_run(run, milestone_id) for run in runs),
             milestone=MilestoneScope(
-                milestone_id=milestone.milestone_id,
+                milestone_id=milestone_id,
                 requirements=(milestone.description,) if milestone.description else (),
                 dependencies=milestone.dependencies,
                 name=milestone.name,
             ),
-            policy=ScopingPolicy(rules=(message,)),
+            policy=policy,
         )
-        # Scope proposals become durable work, but dispatch is an explicit action.
+        scheduled = {run.run_id for run in runs if run.phase is RunPhase.SCHEDULED}
+        superseded = tuple(
+            item
+            for item in plan.supersede
+            if reconcile and RunId(item.workorder_id) in scheduled
+        )
+        specs = (
+            *plan.create,
+            *(spec for item in superseded for spec in item.replacements),
+        )
+        if any(spec.milestone_id != milestone_id for spec in specs):
+            raise ForeignScopeError("scoper proposed work for another milestone")
+        retired = (*plan.cancel, *(item.workorder_id for item in superseded))
+        for workorder_id in retired if reconcile else ():
+            if RunId(workorder_id) in scheduled:
+                await session.state_store.delete_run(RunId(workorder_id))
         definition = _mentioned_workflow()
         workflow_id = WorkflowId(
             work_orders.workflow or (str(definition.graph_id) if definition else "")
         )
-        for spec in plan.create:
-            if spec.milestone_id != milestone_id:
-                return _error("scoper proposed work for another milestone", 400)
-        for spec in plan.create:
+        for spec in specs:
             prompt = spec.objective
             if spec.evidence_requirements:
                 prompt += "\n\nEvidence requirements:\n" + "\n".join(spec.evidence_requirements)
@@ -1541,7 +1581,46 @@ def create_app(
                 prompt=prompt,
                 repository=work_orders.repository,
             ))
-        return JSONResponse(_scoping_plan_json(plan))
+        return plan
+
+    # One rescoping per milestone at a time. An edit arriving while one runs is
+    # remembered and scoped once more afterwards, so two scopers never propose
+    # the same work side by side.
+    rescopings: dict[MilestoneId, asyncio.Task[None]] = {}
+    rescope_again: set[MilestoneId] = set()
+
+    async def milestone_changed(milestone: Milestone) -> None:
+        """Scope an edited milestone's work without holding up the edit."""
+        if milestone_scoper is None:
+            return
+        milestone_id = milestone.milestone_id
+        if milestone_id in rescopings:
+            rescope_again.add(milestone_id)
+            return
+        rescopings[milestone_id] = asyncio.create_task(rescope(milestone_id))
+
+    async def rescope(milestone_id: MilestoneId) -> None:
+        try:
+            while True:
+                rescope_again.discard(milestone_id)
+                milestone = await session.state_store.load_milestone(milestone_id)
+                if milestone is None:
+                    return
+                try:
+                    await schedule_scoped_work(
+                        milestone,
+                        ScopingPolicy(rules=(_MILESTONE_CHANGED_RULE,)),
+                        reconcile=True,
+                    )
+                except Exception:
+                    log.exception("scoping changed milestone %s failed", milestone_id)
+                if milestone_id not in rescope_again:
+                    return
+        finally:
+            rescopings.pop(milestone_id, None)
+
+    if milestone_changes is not None:
+        milestone_changes.subscribe(milestone_changed)
 
     async def start_graph_run(
         runtime: GraphRuntime,

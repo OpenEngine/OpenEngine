@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 import json
@@ -71,11 +71,39 @@ class ProjectPlan:
         }
 
 
-class PlanningTools:
-    """Validated milestone mutations over the store boundary."""
+MilestoneObserver = Callable[[Milestone], Awaitable[None]]
 
-    def __init__(self, store: StateStore) -> None:
+
+class MilestoneChanges:
+    """Where milestone definition changes are announced to whoever acts on them.
+
+    Built before either side, so the chat's planning tools and the web app that
+    schedules work can share one without constructing each other.
+    """
+
+    def __init__(self) -> None:
+        self._observers: list[MilestoneObserver] = []
+
+    def subscribe(self, observer: MilestoneObserver) -> None:
+        self._observers.append(observer)
+
+    async def publish(self, milestone: Milestone) -> None:
+        for observer in tuple(self._observers):
+            await observer(milestone)
+
+
+class PlanningTools:
+    """Validated milestone mutations over the store boundary.
+
+    `on_change` hears every added milestone and every update that changed its
+    definition, after it is saved.
+    """
+
+    def __init__(
+        self, store: StateStore, on_change: MilestoneObserver | None = None
+    ) -> None:
         self._store = store
+        self._on_change = on_change
 
     async def add_milestone(
         self,
@@ -95,6 +123,8 @@ class PlanningTools:
             dependencies=normalized,
         )
         await self._store.save_milestone(milestone)
+        if self._on_change is not None:
+            await self._on_change(milestone)
         return milestone
 
     async def list_milestones(self, project_id: ProjectId) -> ProjectPlan:
@@ -135,6 +165,8 @@ class PlanningTools:
         )
         await self._reject_cycle(updated)
         await self._store.save_milestone(updated)
+        if updated != milestone and self._on_change is not None:
+            await self._on_change(updated)
         return updated
 
     async def delete_milestone(self, milestone_id: MilestoneId) -> Milestone:
@@ -211,9 +243,13 @@ class PlanningMcpBroker:
         store: StateStore,
         capabilities: Sequence[str],
         instance: AgentInstance,
+        milestone_changes: MilestoneChanges | None = None,
     ) -> None:
         self._store = store
-        self._tools = PlanningTools(store)
+        self._tools = PlanningTools(
+            store,
+            on_change=milestone_changes.publish if milestone_changes else None,
+        )
         self._capabilities = _validated_capabilities(capabilities)
         self._project_id = project_id_for_instance(instance.instance_id)
         self._token = secrets.token_hex(32)
@@ -637,6 +673,7 @@ def main() -> None:
 
 __all__ = [
     "PLANNING_TOOL_NAMES",
+    "MilestoneChanges",
     "PlanningMcpBroker",
     "PlanningTools",
     "ProjectPlan",

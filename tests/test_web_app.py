@@ -54,6 +54,7 @@ from engine.domain import (
     RunPhase,
     RunState,
     ScopingPlan,
+    Supersession,
     TaskId,
     ToolCall,
     WorkflowId,
@@ -81,6 +82,7 @@ from engine.runtime import (
     ClaudeConfig,
     CommunicationsConfig,
     EngineConfig,
+    MilestoneChanges,
     ResponseStyle,
     WorkflowCatalog,
 )
@@ -1745,6 +1747,147 @@ def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_w
     assert scoper.request["workorders"][0].spec.objective == (
         "Implement the existing portion."
     )
+
+
+async def _wait_for(condition, *, attempts: int = 200) -> None:
+    for _ in range(attempts):
+        if await condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition was not met")
+
+
+def test_changed_milestone_schedules_scoped_work_and_retires_only_unstarted_work() -> None:
+    """An edit scopes work into the scheduled pool without being told to.
+
+    Cancellations and supersessions reach only work nobody started: a running
+    WorkOrder, and the replacements proposed for it, are left alone.
+    """
+
+    class ReconcilingScoper:
+        requests: list = []
+
+        async def run(self, **request):
+            self.requests.append(request)
+            milestone_id = request["milestone"].milestone_id
+            return ScopingPlan(
+                create=(WorkOrderSpec(milestone_id, "New work", "Build it."),),
+                cancel=(WorkOrderId("run-stale"), WorkOrderId("run-running")),
+                supersede=(
+                    Supersession(
+                        WorkOrderId("run-reworked"),
+                        (WorkOrderSpec(milestone_id, "Reworked", "Redo it."),),
+                    ),
+                    Supersession(
+                        WorkOrderId("run-running"),
+                        (WorkOrderSpec(milestone_id, "Duplicate", "Redo it."),),
+                    ),
+                ),
+            )
+
+    store = InMemoryStateStore()
+    changes = MilestoneChanges()
+    runner = ConcurrentRunner()
+    session = _session_with({"test": runner}, state_store=store)
+    scoper = ReconcilingScoper()
+    milestone = Milestone(
+        MilestoneId("milestone-scoping"), ProjectId("project-engine"), "Scoping", "Plan."
+    )
+
+    def run(run_id: str, phase: RunPhase) -> RunState:
+        return RunState(
+            run_id=RunId(run_id),
+            task_id=TaskId(f"task-{run_id}"),
+            workflow_id=WorkflowId("implementation-review-rerank"),
+            milestone_id=milestone.milestone_id,
+            phase=phase,
+            name=run_id,
+        )
+
+    async def scenario():
+        await store.save_project(Project(milestone.project_id, "Engine"))
+        await store.save_milestone(milestone)
+        for run_id in ("run-stale", "run-reworked"):
+            await store.save(run(run_id, RunPhase.SCHEDULED))
+        await store.save(run("run-running", RunPhase.RUNNING_AGENT))
+        create_app(
+            session,
+            {"test": runner},
+            milestone_scoper=scoper,  # type: ignore[arg-type]
+            milestone_changes=changes,
+        )
+        await changes.publish(milestone)
+
+        async def scheduled_new_work() -> bool:
+            names = {item.name for item in await store.list_runs()}
+            return {"New work", "Reworked"} <= names
+
+        await _wait_for(scheduled_new_work)
+        return await store.list_runs()
+
+    runs = asyncio.run(scenario())
+
+    assert {item.name: item.phase for item in runs} == {
+        "run-running": RunPhase.RUNNING_AGENT,
+        "New work": RunPhase.SCHEDULED,
+        "Reworked": RunPhase.SCHEDULED,
+    }
+    assert len(scoper.requests) == 1
+    assert scoper.requests[0]["milestone"].requirements == ("Plan.",)
+
+
+def test_changed_milestone_rescoping_failure_does_not_reach_the_edit(caplog) -> None:
+    class FailingScoper:
+        async def run(self, **request):
+            raise TimeoutError("scoper timed out")
+
+    store = InMemoryStateStore()
+    changes = MilestoneChanges()
+    runner = ConcurrentRunner()
+    session = _session_with({"test": runner}, state_store=store)
+    milestone = Milestone(
+        MilestoneId("milestone-scoping"), ProjectId("project-engine"), "Scoping"
+    )
+
+    async def scenario():
+        await store.save_project(Project(milestone.project_id, "Engine"))
+        await store.save_milestone(milestone)
+        create_app(
+            session,
+            {"test": runner},
+            milestone_scoper=FailingScoper(),  # type: ignore[arg-type]
+            milestone_changes=changes,
+        )
+        await changes.publish(milestone)
+
+        async def logged() -> bool:
+            return "scoping changed milestone" in caplog.text
+
+        await _wait_for(logged)
+        return await store.list_runs()
+
+    with caplog.at_level(logging.ERROR):
+        assert asyncio.run(scenario()) == ()
+
+
+def test_changed_milestone_without_a_scoper_schedules_nothing() -> None:
+    store = InMemoryStateStore()
+    changes = MilestoneChanges()
+    runner = ConcurrentRunner()
+    session = _session_with({"test": runner}, state_store=store)
+    milestone = Milestone(
+        MilestoneId("milestone-scoping"), ProjectId("project-engine"), "Scoping"
+    )
+
+    async def scenario():
+        await store.save_project(Project(milestone.project_id, "Engine"))
+        await store.save_milestone(milestone)
+        create_app(session, {"test": runner}, milestone_changes=changes)
+        await changes.publish(milestone)
+        await asyncio.sleep(0)
+        return await store.list_runs()
+
+    assert asyncio.run(scenario()) == ()
 
 
 def test_projects_api_says_how_many_milestones_each_project_has() -> None:

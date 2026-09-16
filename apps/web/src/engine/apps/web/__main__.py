@@ -37,6 +37,7 @@ from engine.apps.web.source_control import SourceControlPreferences
 from engine.runtime import (
     EngineConfigError,
     LoadedEngineConfig,
+    MilestoneChanges,
     WorkflowCatalog,
     describe_loaded_config,
     load_engine_config,
@@ -178,7 +179,13 @@ def compose_app(
     )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
-    session = build_session(capabilities, runners, read_only_runners=read_only_runners)
+    milestone_changes = MilestoneChanges()
+    session = build_session(
+        capabilities,
+        runners,
+        read_only_runners=read_only_runners,
+        milestone_changes=milestone_changes,
+    )
     # The runtime for the workflows in the configured directory. It
     # is `None` when that directory holds no graphs, and then the interface
     # offers none of them.
@@ -206,6 +213,7 @@ def compose_app(
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         milestone_scoper=build_milestone_scoper(settings),
+        milestone_changes=milestone_changes,
         work_orders=loaded.config.work_orders,
     )
 

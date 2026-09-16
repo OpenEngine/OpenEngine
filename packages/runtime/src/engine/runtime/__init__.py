@@ -53,6 +53,7 @@ from engine.runtime.protocol_diagnostics import (
 )
 from engine.runtime.planning_tools import (
     PLANNING_TOOL_NAMES,
+    MilestoneChanges,
     PlanningMcpBroker,
     PlanningTools,
     ProjectPlan,
@@ -138,6 +139,7 @@ __all__ = [
     "WorkflowsConfig",
     "PolicyDecision",
     "PLANNING_TOOL_NAMES",
+    "MilestoneChanges",
     "PlanningMcpBroker",
     "PlanningTools",
     "ProjectPlan",
