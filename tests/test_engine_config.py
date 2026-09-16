@@ -445,14 +445,22 @@ def test_github_login_secret_not_accepted_in_toml():
         parse_engine_config({"github_login_client_secret": "secret"})
 
 
-def test_github_hosts_configuration():
-    assert parse_engine_config({}).github.hosts == ()
-    assert parse_engine_config({"github": {"hosts": ["Forge.Example", "alias.example"]}}).github.hosts == (
-        "forge.example", "alias.example",
-    )
+def test_github_host_aliases_configuration():
+    assert parse_engine_config({}).github.host_aliases == {}
+    assert parse_engine_config({
+        "github": {"host_aliases": {"Alias.Example": "Forge.Example"}}
+    }).github.host_aliases == {"alias.example": "forge.example"}
 
 
-@pytest.mark.parametrize("hosts", ["forge.example", [1], [""], [" "], ["duplicate", "duplicate"]])
-def test_github_hosts_must_be_a_list_of_distinct_strings(hosts):
-    with pytest.raises(EngineConfigError, match="github.hosts"):
-        parse_engine_config({"github": {"hosts": hosts}})
+@pytest.mark.parametrize("aliases", [
+    "forge.example", ["forge.example"], {"alias.example": 1},
+    {"": "forge.example"}, {"alias.example": " "},
+])
+def test_github_host_aliases_require_nonblank_string_mapping(aliases):
+    with pytest.raises(EngineConfigError, match="github.host_aliases"):
+        parse_engine_config({"github": {"host_aliases": aliases}})
+
+
+def test_github_unbound_hosts_are_not_accepted():
+    with pytest.raises(EngineConfigError, match="hosts"):
+        parse_engine_config({"github": {"hosts": ["forge.example"]}})

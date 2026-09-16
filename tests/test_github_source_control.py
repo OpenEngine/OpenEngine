@@ -594,13 +594,46 @@ def test_foreign_pull_request_hosts_are_refused_before_any_api_call(monkeypatch,
 
 
 @pytest.mark.parametrize("host", ["forge.example", "alias.example"])
-def test_named_hosts_add_to_the_transport_host(monkeypatch, host):
+def test_explicit_aliases_of_the_transport_are_accepted(monkeypatch, host):
     from unittest.mock import AsyncMock
 
-    source = GitHubSourceControl("", api_url="https://forge.example/api/v3", hosts=["ALIAS.EXAMPLE"])
+    source = GitHubSourceControl("", api_url="https://forge.example/api/v3", host_aliases={"ALIAS.EXAMPLE": "FORGE.EXAMPLE"})
     api = AsyncMock(return_value={"id": 1, "html_url": f"https://{host}/acme/api/pull/1#c"})
     monkeypatch.setattr(source, "_api", api)
     asyncio.run(source.add_comment(f"https://{host}/acme/api/pull/1", "Finding"))
     api.assert_awaited_once_with("POST", "/repos/acme/api/issues/1/comments", json={"body": "Finding"})
     with pytest.raises(ValueError):
         asyncio.run(source.add_comment("https://github.com/acme/api/pull/1", "Finding"))
+
+
+@pytest.mark.parametrize("arguments", [{}, {"file": "app.py", "line": 1}, {"in_reply_to_id": 2}])
+@pytest.mark.parametrize("api_url, foreign_url, aliases", [
+    (
+        "https://api.github.com",
+        "https://forge.example/acme/api/pull/1",
+        {"forge.example": "forge.example"},
+    ),
+    (
+        "https://api.github.com",
+        "https://alias.example/acme/api/pull/1",
+        {"alias.example": "forge.example"},
+    ),
+    (
+        "https://forge.example/api/v3",
+        "https://github.com/acme/api/pull/1",
+        {"github.com": "github.com"},
+    ),
+])
+def test_aliases_for_another_transport_cannot_authorize_requests(
+    monkeypatch, arguments, api_url, foreign_url, aliases
+):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("", api_url=api_url, host_aliases=aliases)
+    api = AsyncMock()
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.add_comment(foreign_url, "Private finding", **arguments))
+    with pytest.raises(ValueError, match="pull-request URL"):
+        asyncio.run(source.can_write_repository(foreign_url, "alice"))
+    api.assert_not_awaited()

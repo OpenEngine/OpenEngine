@@ -115,10 +115,16 @@ class GitHubSourceControl:
         workspace_provider: WorkspaceProvider | None = None,
         git_binary_path: str = "git",
         transport: GitHubApiTransport | None = None,
-        hosts: Sequence[str] = (),
+        host_aliases: Mapping[str, str] | None = None,
     ) -> None:
         self._transport = transport or GitHubOAuthTransport(token, api_url)
-        self._hosts = frozenset(host.lower() for host in hosts)
+        # Aliases explicitly name the transport they belong to. An alias of
+        # another forge must never authorize posting through this transport.
+        self._hosts = frozenset(
+            alias.lower()
+            for alias, target in (host_aliases or {}).items()
+            if target.lower() == self._transport.host
+        )
         self._workspace_provider = workspace_provider
         self._git_binary_path = git_binary_path
 

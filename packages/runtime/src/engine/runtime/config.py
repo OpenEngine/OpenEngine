@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import tomllib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from engine.ports.agent_runner import ResponseStyle
@@ -101,8 +101,8 @@ class GitHubConfig:
     that never named a repository has nothing to compare a delivery against.
     """
 
-    hosts: tuple[str, ...] = ()
-    """Additional GitHub hosts accepted alongside the transport's own host."""
+    host_aliases: Mapping[str, str] = field(default_factory=dict)
+    """Web hostname aliases mapped to the host of their GitHub transport."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,7 +248,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "hosts"}, "github")
+    _reject_unknown(github, {"repository", "host_aliases"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
@@ -347,10 +347,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         public_url=public_url.rstrip("/"),
         github=GitHubConfig(
             repository=github_repository,
-            hosts=tuple(
-                _nonblank_string(host, "github.hosts").lower()
-                for host in _strings(github.get("hosts", []), "github.hosts")
-            ),
+            host_aliases={
+                _nonblank_string(alias, "github.host_aliases").lower():
+                _nonblank_string(target, "github.host_aliases").lower()
+                for alias, target in _table(
+                    github.get("host_aliases", {}), "github.host_aliases"
+                ).items()
+            },
         ),
         communications=CommunicationsConfig(
             provider=communications_provider,

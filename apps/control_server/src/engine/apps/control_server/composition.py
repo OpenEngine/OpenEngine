@@ -51,7 +51,7 @@ def build_capabilities(settings: Settings) -> Capabilities:
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=GitHubSourceControl(
             settings.github_token, workspace_provider=workspace_provider,
-            hosts=settings.engine_config.github.hosts
+            host_aliases=settings.engine_config.github.host_aliases
         ),
         agent_runner=CodexAgentRunner(attribution=settings.engine_config.attribution),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
