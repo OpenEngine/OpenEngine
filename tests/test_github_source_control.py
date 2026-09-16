@@ -637,3 +637,51 @@ def test_aliases_for_another_transport_cannot_authorize_requests(
     with pytest.raises(ValueError, match="pull-request URL"):
         asyncio.run(source.can_write_repository(foreign_url, "alice"))
     api.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cli", [False, True])
+@pytest.mark.parametrize("authority", ["forge.example", "forge.example:8443"])
+@pytest.mark.parametrize("arguments", [{}, {"file": "app.py", "line": 1}, {"in_reply_to_id": 2}])
+def test_pull_request_ports_must_match_transport(monkeypatch, cli, authority, arguments):
+    from unittest.mock import AsyncMock
+    from engine.adapters.source_control.github.transports import GitHubCliTransport
+
+    source = GitHubSourceControl(
+        "", api_url=f"https://{authority}/api/v3",
+        transport=GitHubCliTransport(host=authority) if cli else None,
+    )
+    api = AsyncMock(return_value={"id": 1, "html_url": "https://forge.example/o/r/pull/5#c"})
+    monkeypatch.setattr(source, "_api", api)
+    for target in ["forge.example:9999", "forge.example:80"]:
+        with pytest.raises(ValueError, match="pull-request URL"):
+            asyncio.run(source.add_comment(f"https://{target}/o/r/pull/5", "Private", **arguments))
+        with pytest.raises(ValueError, match="pull-request URL"):
+            asyncio.run(source.can_write_repository(f"https://{target}/o/r/pull/5", "alice"))
+    api.assert_not_awaited()
+    accepted = authority if ":" in authority else authority + ":443"
+    asyncio.run(source.add_comment(f"https://{accepted}/o/r/pull/5", "Finding"))
+
+
+@pytest.mark.parametrize("target, accepted", [
+    ("forge.example:443", True),
+    ("forge.example:8443", False),
+])
+def test_alias_ports_are_bound_to_transport(monkeypatch, target, accepted):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl(
+        "", api_url="https://forge.example",
+        host_aliases={"alias.example:8443": target},
+    )
+    api = AsyncMock(return_value={"id": 1, "html_url": "https://forge.example/o/r/pull/5#c"})
+    monkeypatch.setattr(source, "_api", api)
+    with pytest.raises(ValueError):
+        asyncio.run(source.add_comment("https://alias.example/o/r/pull/5", "Private"))
+    url = "https://alias.example:8443/o/r/pull/5"
+    if accepted:
+        asyncio.run(source.add_comment(url, "Finding"))
+        api.assert_awaited_once()
+    else:
+        with pytest.raises(ValueError):
+            asyncio.run(source.add_comment(url, "Private"))
+        api.assert_not_awaited()

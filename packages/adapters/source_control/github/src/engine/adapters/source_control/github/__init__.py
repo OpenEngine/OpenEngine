@@ -24,6 +24,7 @@ from engine.adapters.source_control.github.transports import (
     GitHubApiTransport,
     GitHubOAuthTransport,
     GitHubTransportError,
+    normalized_authority,
 )
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
@@ -121,9 +122,9 @@ class GitHubSourceControl:
         # Aliases explicitly name the transport they belong to. An alias of
         # another forge must never authorize posting through this transport.
         self._hosts = frozenset(
-            alias.lower()
+            normalized_authority(alias)
             for alias, target in (host_aliases or {}).items()
-            if target.lower() == self._transport.host
+            if normalized_authority(target) == self._transport.host
         )
         self._workspace_provider = workspace_provider
         self._git_binary_path = git_binary_path
@@ -780,7 +781,7 @@ def _pull_request_parts(
     the step that posts findings.
     """
     found = change_request(pr_url)
-    if found is None or found.kind != "pull" or found.host not in hosts:
+    if found is None or found.kind != "pull" or normalized_authority(pr_url) not in hosts:
         raise ValueError("pr_url must be a GitHub pull-request URL")
     owner, repo = found.path.split("/")
     if not _is_repository_name(owner) or not _is_repository_name(repo):

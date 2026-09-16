@@ -476,6 +476,8 @@ def test_gh_cli_status_bounds_the_account_lookup(monkeypatch):
 @pytest.mark.parametrize("explicit, environment, expected", [
     (None, None, "github.com"),
     (None, "enterprise.example", "enterprise.example"),
+    (None, "enterprise.example:8443", "enterprise.example:8443"),
+    ("chosen.example:8443", None, "chosen.example:8443"),
     ("chosen.example", "enterprise.example", "chosen.example"),
 ])
 def test_cli_transport_pins_every_request_to_its_reported_host(monkeypatch, explicit, environment, expected):
@@ -496,7 +498,9 @@ def test_cli_transport_pins_every_request_to_its_reported_host(monkeypatch, expl
 
 @pytest.mark.parametrize("api_url, host", [
     ("https://api.github.com", "github.com"),
-    ("https://Forge.Example:8443/api/v3", "forge.example"),
+    ("https://Forge.Example:8443/api/v3", "forge.example:8443"),
+    ("https://api.github.com:443", "github.com"),
+    ("http://forge.example/api/v3", "forge.example:80"),
 ])
 def test_oauth_transport_reports_its_forge_host(api_url, host):
     assert GitHubOAuthTransport("", api_url).host == host

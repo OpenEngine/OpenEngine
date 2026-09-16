@@ -26,6 +26,18 @@ class GitHubTransportError(RuntimeError):
     """One transport could not complete a GitHub API request."""
 
 
+def normalized_authority(url: str) -> str:
+    """Compare hosts with their effective port; bare authorities use HTTPS."""
+    parsed = urlsplit(url if "://" in url else f"https://{url}")
+    host = parsed.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    port = parsed.port
+    if port is None:
+        port = 80 if parsed.scheme == "http" else 443
+    return host if port == 443 else f"{host}:{port}"
+
+
 class GitHubApiTransport(Protocol):
     @property
     def host(self) -> str: ...
@@ -50,7 +62,7 @@ class GitHubOAuthTransport:
 
     @property
     def host(self) -> str:
-        host = urlsplit(self._api_url).hostname or ""
+        host = normalized_authority(self._api_url)
         return "github.com" if host == "api.github.com" else host
 
     @property
@@ -156,7 +168,7 @@ class GitHubCliTransport:
 
     @property
     def host(self) -> str:
-        return urlsplit(f"//{self._host}").hostname or ""
+        return normalized_authority(self._host)
 
     async def request(self, method: str, path: str, **kwargs: object) -> object:
         arguments = [

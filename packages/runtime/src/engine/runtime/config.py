@@ -102,7 +102,7 @@ class GitHubConfig:
     """
 
     host_aliases: Mapping[str, str] = field(default_factory=dict)
-    """Web hostname aliases mapped to the host of their GitHub transport."""
+    """Web authorities mapped to their GitHub transport authority, including ports."""
 
 
 @dataclass(frozen=True, slots=True)
