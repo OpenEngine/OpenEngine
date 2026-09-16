@@ -25,8 +25,11 @@ class CICheck:
     """Poll the PR's current revision until all reported CI has settled.
 
     Reads ``pr_url`` and ``workspaceId`` from upstream nodes. Required gates
-    must all settle; a confirmed absence of requirements passes immediately.
-    Providers without requirement discovery retain polling of reported CI. Provider errors and a
+    and every reported check must all settle, and any failure among them
+    returns to implementation: a check branch protection does not require
+    still says the change is broken. A confirmed absence of requirements
+    with nothing reported passes immediately. Providers without requirement
+    discovery poll until reported CI appears. Provider errors and a
     timeout fail the node, rather than claiming CI passed or asking an agent
     to fix an infrastructure error. Cancellation propagates through polling.
     """
@@ -62,10 +65,11 @@ class CICheck:
                     WorkspaceId(workspace), change_request_number=number,
                 )
                 known_requirements = status.required_checks is not None
-                jobs = (
-                    status.required_checks if known_requirements
-                    else (*status.checks, *status.pipelines)
-                )
+                # A required check is usually reported too; list it once.
+                jobs = tuple(dict.fromkeys((
+                    *(status.required_checks or ()),
+                    *status.checks, *status.pipelines,
+                )))
                 # GitHub supplies a conclusion; GitLab uses terminal statuses.
                 if (known_requirements or jobs) and all(
                     job.status.lower() in _TERMINAL for job in jobs

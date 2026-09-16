@@ -156,6 +156,21 @@ def test_required_gate_waits_even_when_visible_checks_pass(execution):
     assert execution.runtime.source_control.list_pipeline_status.await_count == 2
 
 
+def test_unrequired_check_failure_returns_to_implementation(execution):
+    required = status().checks[0]
+    e2e = StatusCheck("browser end to end", "completed", "failure", "https://ci/e2e")
+    running = StatusCheck("browser end to end", "in_progress", None, "https://ci/e2e")
+    execution.runtime.source_control.list_pipeline_status.side_effect = [
+        PipelineStatus("head", (required, running), (), required_checks=(required,)),
+        PipelineStatus("head", (required, e2e), (), required_checks=(required,)),
+    ]
+    result = asyncio.run(CICheck(poll_interval=0)(STATE))["ci_check"]
+    assert result["passed"] is False
+    assert "browser end to end: failure https://ci/e2e" in result["summary"]
+    assert result["summary"].count("tests") == 0
+    assert execution.runtime.source_control.list_pipeline_status.await_count == 2
+
+
 def test_confirmed_no_required_gates_passes_without_ci(execution):
     execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus(
         "head", (), (), required_checks=(),

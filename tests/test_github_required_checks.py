@@ -42,7 +42,7 @@ def test_confirmed_empty_requirements(source):
 
 
 @pytest.mark.parametrize("with_status_checks", [False, True])
-@pytest.mark.parametrize("conclusion", [None, "failure", "success"])
+@pytest.mark.parametrize("conclusion", ["failure", "success"])
 def test_workflow_rules_warn_and_fail_open(source, monkeypatch, caplog, with_status_checks, conclusion):
     from types import SimpleNamespace
 
@@ -63,8 +63,7 @@ def test_workflow_rules_warn_and_fail_open(source, monkeypatch, caplog, with_sta
     }]}
     data["/actions/runs"] = {"workflow_runs": [{
         "id": 1, "name": "required", "path": ".github/workflows/required.yml",
-        "status": "completed" if conclusion else "in_progress",
-        "conclusion": conclusion,
+        "status": "completed", "conclusion": conclusion,
     }]}
     execution = SimpleNamespace(
         runtime=SimpleNamespace(source_control=adapter), say=AsyncMock(),
@@ -76,7 +75,8 @@ def test_workflow_rules_warn_and_fail_open(source, monkeypatch, caplog, with_sta
     result = asyncio.run(CICheck()({
         "workspaceId": "workspace", "pr_url": "https://github.com/owner/repo/pull/42",
     }))
-    assert result["ci_check"]["passed"] is True
+    # The unreadable rule does not block; the workflow's own run still counts.
+    assert result["ci_check"]["passed"] is (conclusion == "success")
     assert "Unsupported required workflows ruleset" in caplog.text
     assert "owner/repo:release/test" in caplog.text
     assert "failing open" in caplog.text
