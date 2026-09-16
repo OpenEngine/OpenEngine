@@ -7,11 +7,12 @@ in `engine.toml`:
 ```toml
 github_login_client_id = "your-login-client-id"
 github_login_redirect_uri = "https://your-engine-host/api/auth/github/callback"
+github_login_repository = "owner/repo"
 ```
 
-`ENGINE_GITHUB_LOGIN_CLIENT_ID` and `ENGINE_GITHUB_LOGIN_REDIRECT_URI`
-environment variables override those defaults. HTTP callbacks are accepted only
-for loopback development hosts.
+`ENGINE_GITHUB_LOGIN_CLIENT_ID`, `ENGINE_GITHUB_LOGIN_REDIRECT_URI`, and
+`ENGINE_GITHUB_LOGIN_REPOSITORY` environment variables override those defaults.
+HTTP callbacks are accepted only for loopback development hosts.
 
 Store `ENGINE_GITHUB_LOGIN_CLIENT_SECRET=your-secret` in a server-local `.env`
 beside the loaded `engine.toml` (or in the working directory if no config file
@@ -24,18 +25,23 @@ without a restart; changing the client ID or callback URL requires a restart.
 All three values are required when enabling login.
 
 Visit `/login` and select **Sign in with GitHub** to start the browser
-authorization flow. It requests only `read:user`, uses OAuth state and PKCE,
-and issues a signed, HttpOnly session cookie at the callback before redirecting
-to `/`. The user token is not returned or stored in the server's repository
-credential store. This follows
+authorization flow. It requests `read:user` (plus `repo` when a repository
+gate is configured), uses OAuth state and PKCE, and issues a signed, HttpOnly
+session cookie at the callback before redirecting to `/`. The user token is not
+returned or stored in the server's repository credential store. This follows
 [GitHub's web OAuth flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps).
+
+When `github_login_repository` is set to an `owner/repo` string, the OAuth
+callback verifies that the authenticated user can access that repository before
+issuing a session. Users without repository access see an "unauthorized" error
+on the login page. This gates the entire application behind repository
+membership.
 
 When login is configured, the frontend requires a verified session before
 mounting the application. Middleware returns 401 for unauthenticated requests
 to protected `/api/` and `/graph/api/` routes; the four GitHub login endpoints remain public. Slack events bypass browser
 session checks and retain Slack signature verification. The frontend rechecks
 session status every 30 seconds and unmounts the app if the session is invalid.
-Repository permission checks (#302) remain separate work.
 
 Login state and the PKCE verifier live in a signed, HttpOnly browser cookie that expires after ten minutes;
 abandoned logins reserve no server slots. Replay protection relies on GitHub
