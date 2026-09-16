@@ -268,8 +268,8 @@ class TerminalMcpBroker:
         picked up from an issue, a diff or CI output is how a step comes to
         report, and then post to, somebody else's pull request.
 
-        While the run's pull requests are unknown -- nothing recorded, or the
-        store cannot be read -- nothing is refused.
+        This fails closed: with nothing recorded, or a store that cannot be
+        read, only what this step opened is accepted.
         """
         self._pull_request_lookup = lookup
 
@@ -638,23 +638,36 @@ class TerminalMcpBroker:
     async def _foreign_pull_request(self, url: str) -> str | None:
         """Why `url` is not one of this run's pull requests, or `None` if it is.
 
-        Also `None` while the run's pull requests are unknown, so a run whose
-        pull request was opened by hand or before ownership was recorded is
-        not left unable to post or complete. Failing closed there waits on
-        ownership being recorded for every pull request a run works on.
+        Once ownership is enabled this fails closed: a run with nothing
+        recorded, or a store that cannot be read, owns only what this step
+        opened, so a number picked up elsewhere is refused rather than let
+        through while ownership is unknown. Without ownership enabled only
+        what this step opened is held to, and nothing when it opened nothing.
         """
+        requested = change_request(url)
         owned = set(self._opened)
-        if self._pull_request_lookup is not None:
+        if self._pull_request_lookup is None:
+            if not owned or requested in owned:
+                return None
+        elif requested not in owned:
             try:
                 recorded = await self._pull_request_lookup()
-            except Exception:
+            except Exception as error:
                 logger.exception(
-                    "Could not read this run's pull requests; not checking %s", url
+                    "Could not read this run's pull requests to check %s", url
                 )
-                return None
+                return (
+                    f"could not confirm {url} is a pull request this run opened: "
+                    f"{error}; try again"
+                )
             owned.update(ChangeRequest(project, number) for project, number in recorded)
-        if not owned or change_request(url) in owned:
+        if requested is not None and requested in owned:
             return None
+        if not owned:
+            return (
+                f"{url} is not a pull request this run opened; this run has no "
+                "recorded pull request, so open one with open_pull_request first"
+            )
         named = ", ".join(
             sorted(f"{one.project}#{one.number}" for one in owned)
         )

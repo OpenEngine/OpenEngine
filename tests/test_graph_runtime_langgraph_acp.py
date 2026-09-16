@@ -1063,12 +1063,13 @@ def test_run_bound_tools_intersect_with_source_control_capabilities(
     async def scenario() -> None:
         async with runtime_over(
             tmp_path,
-            registry(tmp_path, uses_mcp=True, mcp_terminal="complete_step"),
+            # Nothing here can open a pull request, so there is no pr_url to report.
+            registry(tmp_path, uses_mcp=True, mcp_terminal="fail_step"),
             pipeline_with_run_bound_mcp,
             GitOnlySourceControl(),
         ) as (runtime, log):
             run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
-            await until(log, run.run_id, "run.finished")
+            await until(log, run.run_id, "run.failed")
 
     asyncio.run(scenario())
 
@@ -2221,6 +2222,7 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 ) -> None:
     """The binding, end to end: MCP call -> forge -> the store the run keeps."""
 
+    from engine.graph_runtime_langgraph.store import PullRequestRecord
     from engine.ports import CommentResult
     from engine.runtime.terminal_mcp import _mcp_response
 
@@ -2252,6 +2254,11 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 
     async def scenario() -> tuple[Any, ...]:
         store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        await store.remember_pull_request(PullRequestRecord(
+            repository="acme/api", number=42, run_id=RunId("run-1"),
+            opened_at="2026-09-10T17:00:00+00:00",
+            url="https://github.com/acme/api/pull/42",
+        ))
         server = TerminalMcpServer(
             step_id="reranker",
             agent_id=AGENT,

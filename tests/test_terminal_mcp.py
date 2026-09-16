@@ -1314,13 +1314,16 @@ async def _owning_broker(
         (True, [("acme/api", 406)], [7, 406], [407]),
         # A store that has not caught up with the open still counts it.
         (True, [], [7], [406]),
-        # Unknown: nothing recorded, a store that cannot be read, or no store.
-        (False, [], [406, 407], []),
-        (True, RuntimeError("the store is gone"), [7, 406], []),
+        # Unknown ownership fails closed: nothing recorded, or a store that
+        # cannot be read, leaves only what the step itself opened.
+        (False, [], [], [406, 407]),
+        (True, RuntimeError("the store is gone"), [7], [406]),
+        (False, RuntimeError("the store is gone"), [], [406, 407]),
+        # Ownership not enabled and nothing opened: nothing to hold it to.
         (False, None, [406, 407], []),
     ],
     ids=["opened", "recorded", "union", "store-lagging", "nothing-recorded",
-         "store-unreachable", "no-store"],
+         "store-unreachable", "store-unreachable-nothing-opened", "no-store"],
 )
 def test_a_step_reports_and_comments_only_on_its_runs_pull_requests(
     opened: bool, recorded: object, accepted: list[int], refused: list[int],

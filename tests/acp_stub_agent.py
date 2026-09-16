@@ -173,7 +173,7 @@ def exercise_mcp(session_id: str, prompt_text: str) -> None:
         )
         session["mcp_clarified_once"] = True
         session.setdefault("mcp_clarified", []).append(called)
-    if not clarified_this_turn and not session.get("mcp_tools"):
+    if not clarified_this_turn and "mcp_review" not in session:
         review = call(
             {
                 "jsonrpc": "2.0",
