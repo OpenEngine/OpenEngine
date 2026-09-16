@@ -10,7 +10,8 @@ repository = "OpenEngine/OpenEngine"
 # Explicit aliases of the SAME forge, mapped to its transport authority (host and optional port).
 # Example: { "github-web.example" = "github-api.example" }
 # Aliases are accepted only by the named transport; this does not add forges.
-host_aliases = {}
+# Explicitly include the host of OpenEngine/OpenEngine.
+host_aliases = { "github.com" = "github.com" }
 
 [communications]
 provider = "slack"
