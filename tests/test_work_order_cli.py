@@ -170,3 +170,114 @@ def test_live_watch_receives_messages_before_completion_and_detaches_stream():
         assert closed.is_set()
         assert output.file.getvalue().count("Working now") == 1
     asyncio.run(scenario())
+
+
+def test_external_display_text_cannot_control_terminal():
+    attack = "\x1b[2J\x1b]52;c;Y2xpcGJvYXJk\x1b\\\x9b2J\x07\r\b\x7f"
+    output = console()
+    display = cli.Display(output, "run" + attack)
+    display.event({"sequence": 1, "type": "transcript", "nodeId": "node" + attack,
+                   "payload": {"role": "role" + attack, "text": "hello\n\tworld" + attack}})
+    display.snapshot({"status": "running" + attack, "error": "error" + attack,
+                      "activeExecutions": [{"executionId": "a", "nodeId": "step" + attack}]})
+    output.print(display.render())
+    rendered = output.file.getvalue()
+    assert "hello" in rendered and "world" in rendered
+    assert all(ord(char) >= 32 and not 127 <= ord(char) < 160 or char in "\n\t"
+               for char in rendered)
+    assert cli.terminal_text("hello\n\tworld") == "hello\n\tworld"
+
+
+@pytest.mark.parametrize("failure", ["reset", "timeout", 502, 503])
+def test_watch_recovers_status_and_history_reads(monkeypatch, failure):
+    monkeypatch.setattr(cli, "_RETRY_DELAYS", (0, 0))
+
+    async def scenario():
+        calls = {}
+
+        def respond(request):
+            path = request.url.path
+            if path.endswith("/events"):
+                return httpx.Response(200, text=": connected\n\n")
+            calls[path] = calls.get(path, 0) + 1
+            if calls[path] == 1:
+                if failure == "reset":
+                    raise httpx.ReadError("reset")
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("timeout")
+                return httpx.Response(failure)
+            if path.endswith("graph-events"):
+                return httpx.Response(200, json={"events": []})
+            return httpx.Response(200, json={"status": "completed", "activeExecutions": []})
+
+        async with httpx.AsyncClient(base_url="http://daemon", transport=httpx.MockTransport(respond)) as client:
+            assert await cli.watch(client, "run-1", console()) == 0
+        assert list(calls.values()) == [2, 2]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reader", ["status", "stream"])
+@pytest.mark.parametrize("status,attempts", [(401, 1), (403, 1), (503, 3), ("timeout", 3)])
+def test_read_retries_are_bounded_and_permanent_errors_fail_promptly(monkeypatch, reader, status, attempts):
+    monkeypatch.setattr(cli, "_RETRY_DELAYS", (0, 0))
+
+    async def scenario():
+        calls = 0
+
+        def respond(request):
+            nonlocal calls
+            calls += 1
+            if status == "timeout":
+                raise httpx.ReadTimeout("timeout")
+            return httpx.Response(status, json={"error": "unavailable"})
+
+        async with httpx.AsyncClient(base_url="http://daemon", transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises((RuntimeError, httpx.ReadTimeout)):
+                if reader == "status":
+                    await cli.read_request(client, "/run")
+                else:
+                    await cli.stream_messages(client, "/run", cli.Display(console(), "run"))
+        assert calls == attempts
+
+    asyncio.run(scenario())
+
+
+def test_sse_transient_failures_preserve_cursor_and_back_off(monkeypatch):
+    sleeps = []
+    original_sleep = asyncio.sleep
+
+    async def sleep(delay):
+        sleeps.append(delay)
+        await original_sleep(0)
+
+    monkeypatch.setattr(cli.asyncio, "sleep", sleep)
+
+    async def scenario():
+        output = console()
+        display = cli.Display(output, "run")
+        cursors = []
+        event = {"sequence": 3, "type": "transcript", "nodeId": "review",
+                 "payload": {"text": "Live message"}}
+
+        class BrokenFeed(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield f"data:{json.dumps(event)}\n\n".encode()
+                raise httpx.ReadError("reset")
+
+        def respond(request):
+            cursors.append(request.headers["Last-Event-ID"])
+            if len(cursors) in (1, 4):
+                return httpx.Response(200, stream=BrokenFeed())
+            if len(cursors) < 4:
+                return httpx.Response(503)
+            return httpx.Response(401)
+
+        async with httpx.AsyncClient(base_url="http://daemon", transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(RuntimeError, match="HTTP 401"):
+                await cli.stream_messages(client, "/run", display)
+        assert cursors == ["0", "3", "3", "3", "3"]
+        assert sleeps == [0.5, 1, 2, 0.5]
+        assert output.file.getvalue().count("Live message") == 1
+
+    asyncio.run(scenario())

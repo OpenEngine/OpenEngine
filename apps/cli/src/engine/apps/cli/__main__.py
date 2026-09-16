@@ -17,6 +17,21 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
 
+# Keep text layout, but never let external content issue terminal commands.
+_CONTROL_CHARACTERS = dict.fromkeys(
+    code for code in (*range(32), *range(127, 160)) if code not in (9, 10)
+)
+_RETRY_DELAYS = (0.5, 1, 2, 4)
+
+
+def terminal_text(value: str) -> str:
+    return value.translate(_CONTROL_CHARACTERS)
+
+
+class TransientDaemonError(RuntimeError):
+    """An HTTP refusal that is safe to retry for read requests."""
+
+
 async def request(client: httpx.AsyncClient, method: str, path: str, **kwargs) -> dict:
     response = await client.request(method, path, **kwargs)
     check_response(response)
@@ -30,7 +45,19 @@ def check_response(response: httpx.Response) -> None:
         detail = response.json().get("error", response.reason_phrase)
     except (ValueError, AttributeError):
         detail = response.reason_phrase
-    raise RuntimeError(f"Daemon returned HTTP {response.status_code}: {detail}")
+    error = TransientDaemonError if response.status_code in {408, 429, 500, 502, 503, 504} else RuntimeError
+    raise error(f"Daemon returned HTTP {response.status_code}: {detail}")
+
+
+async def read_request(client: httpx.AsyncClient, path: str) -> dict:
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        try:
+            return await request(client, "GET", path)
+        except (httpx.TransportError, TransientDaemonError):
+            if attempt == len(_RETRY_DELAYS):
+                raise
+            await asyncio.sleep(_RETRY_DELAYS[attempt])
+    raise AssertionError("unreachable")
 
 
 async def events(response: httpx.Response) -> AsyncIterator[dict]:
@@ -48,7 +75,7 @@ async def events(response: httpx.Response) -> AsyncIterator[dict]:
 class Display:
     def __init__(self, console: Console, run_id: str) -> None:
         self.console = console
-        self.run_id = run_id
+        self.run_id = terminal_text(run_id)
         self.cursor = 0
         self.status = "connecting"
         self.error = ""
@@ -66,11 +93,11 @@ class Display:
         payload = event["payload"]
         if event["type"] == "transcript":
             label = f"{event.get('nodeId') or 'agent'} / {payload.get('role', 'assistant')}"
-            self.console.print(Text(f"[{label}] {payload.get('text', '')}"))
+            self.console.print(Text(terminal_text(f"[{label}] {payload.get('text', '')}")))
 
     def snapshot(self, snapshot: dict) -> None:
-        self.status = snapshot["status"]
-        self.error = snapshot.get("error") or ""
+        self.status = terminal_text(snapshot["status"])
+        self.error = terminal_text(snapshot.get("error") or "")
         self.approvals = bool(snapshot.get("pendingApprovals"))
         active = {item["executionId"]: item["nodeId"]
                   for item in snapshot["activeExecutions"]}
@@ -79,7 +106,7 @@ class Display:
                 self.progress.remove_task(self.tasks.pop(execution))
         for execution, node in active.items():
             if execution not in self.tasks:
-                self.tasks[execution] = self.progress.add_task(node, total=None)
+                self.tasks[execution] = self.progress.add_task(terminal_text(node), total=None)
 
     def render(self) -> Group:
         parts = [Text(f"Work order {self.run_id} — {self.status}"), self.progress]
@@ -92,6 +119,7 @@ class Display:
 
 
 async def stream_messages(client: httpx.AsyncClient, path: str, display: Display) -> None:
+    failures = 0
     while True:
         try:
             async with client.stream(
@@ -104,9 +132,16 @@ async def stream_messages(client: httpx.AsyncClient, path: str, display: Display
                     check_response(response)
                 async for event in events(response):
                     display.event(event)
-        except httpx.TransportError:
+                    failures = 0
+            failures = 0
+        except (httpx.TransportError, TransientDaemonError):
             # Replay from the last displayed event after a broken connection.
-            pass
+            if failures == len(_RETRY_DELAYS):
+                raise
+            delay = _RETRY_DELAYS[failures]
+            failures += 1
+            await asyncio.sleep(delay)
+            continue
         await asyncio.sleep(1)
 
 
@@ -120,7 +155,7 @@ async def watch(client: httpx.AsyncClient, run_id: str, console: Console) -> int
             while True:
                 if stream.done():
                     stream.result()
-                snapshot = await request(client, "GET", path)
+                snapshot = await read_request(client, path)
                 display.snapshot(snapshot)
                 live.update(display.render())
                 if snapshot["status"] in {"completed", "failed"}:
@@ -129,7 +164,7 @@ async def watch(client: httpx.AsyncClient, run_id: str, console: Console) -> int
                     stream.cancel()
                     with suppress(asyncio.CancelledError):
                         await stream
-                    history = await request(client, "GET", f"/api/runs/{encoded}/graph-events")
+                    history = await read_request(client, f"/api/runs/{encoded}/graph-events")
                     for event in history["events"]:
                         display.event(event)
                     return 0 if snapshot["status"] == "completed" else 1
@@ -166,7 +201,7 @@ async def run(args: argparse.Namespace, console: Console) -> int:
         if args.command == "workflows":
             config = await request(client, "GET", "/api/config")
             for workflow in config["workflows"]:
-                console.print(Text(f"{workflow['id']}  {workflow['name']}"))
+                console.print(Text(terminal_text(f"{workflow['id']}  {workflow['name']}")))
             return 0
         if args.command == "submit":
             inputs = {}
@@ -182,7 +217,7 @@ async def run(args: argparse.Namespace, console: Console) -> int:
                 "workflowId": args.workflow, "inputs": inputs,
             })
             run_id = created["runId"]
-            console.print(Text(run_id))
+            console.print(Text(terminal_text(run_id)))
             if args.no_watch:
                 return 0
         else:
@@ -198,7 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         Console(stderr=True).print("Detached. The work order continues in the daemon.")
         return 130
     except (httpx.HTTPError, RuntimeError, ValueError) as error:
-        Console(stderr=True).print(Text(str(error), style="red"))
+        Console(stderr=True).print(Text(terminal_text(str(error)), style="red"))
         return 1
 
 
