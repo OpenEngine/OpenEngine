@@ -46,7 +46,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
-from engine.apps.web.github_ingress import GithubComment, GithubIngress
+from engine.apps.web.github_ingress import GithubComment, GithubIngress, GithubMerge
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -129,6 +129,9 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime_langgraph.components.human_review import (
+    TOOL_NAME as HUMAN_REVIEW_TOOL,
+)
 from engine.graph_runtime_langgraph.store import PullRequestRecord
 from engine.ports import (
     AgentRunner,
@@ -1095,7 +1098,7 @@ def create_app(
                 # A single work order asks to run dozens of commands, and
                 # announcing each would bury the requests that are real.
                 return
-            if event.payload.get("toolName") == "human_review":
+            if event.payload.get("toolName") == HUMAN_REVIEW_TOOL:
                 text = "Review complete and ready for your decision."
                 snapshot = await surface.runtime.snapshot(state.run_id) if surface.runtime else None
                 pr_url = snapshot.values.get("pr_url") if snapshot else None
@@ -2834,11 +2837,90 @@ def create_app(
             text=comment.body, comment_id=comment.comment_id,
         ))
 
+    async def github_merge_approves_workorder(merged: GithubMerge) -> None:
+        """Merging a pull request is a person accepting its work order.
+
+        The same decision as the Accept button on the WorkOrder page, made
+        where the reviewer already is: merging is the one event that closes out
+        a work order's pull request, and somebody who has read the diff and
+        merged it has reviewed the run. Asking them to say so a second time in
+        another tab is asking for a click that says nothing new. Rejecting
+        stays the web UI's: closing a pull request without merging says the
+        work was abandoned, not that it was judged.
+
+        `merge_from_payload` has already refused a bot's merge. Engine's own is
+        refused here, against the login its credentials resolve to: a machine
+        user's token merges as an ordinary `User`, and `GITHUB_BOT_LOGIN` is
+        usually unset. Anybody else who merged is a person GitHub let write to
+        the repository -- the same permission the comment path calls
+        `can_write_repository` to establish, here proven by the merge itself.
+
+        A merge that decides nothing is not a failure: a pull request opened by
+        hand, one whose work order has finished, and one waiting on an agent's
+        own approval rather than on a person all arrive here, and none of them
+        has a verdict to record. Anything that does go wrong raises, so the
+        delivery can be redelivered rather than silently losing the approval.
+        """
+        runtime = surface.runtime
+        if runtime is None:
+            return
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            engine_login = await github_posting_login(merged.repository)
+        if merged.merged_by.lower() == engine_login.lower():
+            log.info(
+                "%s#%s was merged by Engine itself, which is not a review",
+                merged.repository, merged.number,
+            )
+            return
+        run_id = await github_run_for_pull_request(merged.repository, merged.number)
+        if run_id is None:
+            log.info(
+                "%s#%s was merged, but no work order opened it",
+                merged.repository, merged.number,
+            )
+            return
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except UnknownGraphError:
+            # A saved work order can outlive the graph it was started from.
+            snapshot = None
+        pending = next(
+            (
+                approval
+                for approval in (snapshot.pending_approvals if snapshot else ())
+                if approval.tool_name == HUMAN_REVIEW_TOOL
+            ),
+            None,
+        )
+        if pending is None:
+            log.info(
+                "%s#%s was merged, but work order %s is not waiting on a human review",
+                merged.repository, merged.number, run_id,
+            )
+            return
+        try:
+            await runtime.decide(run_id, pending.approval_id, ApprovalDecision.ACCEPT)
+        except (UnknownApprovalError, ApprovalNotPendingError):
+            # Somebody decided it between the snapshot and here -- the web UI,
+            # or a cancellation. The verdict is already recorded; a second one
+            # is not owed, and raising would only ask GitHub to redeliver a
+            # merge that has nothing left to do.
+            log.info(
+                "%s#%s was merged, but work order %s had already been decided",
+                merged.repository, merged.number, run_id,
+            )
+            return
+        log.info(
+            "%s merging %s#%s accepted the human review of work order %s",
+            merged.merged_by, merged.repository, merged.number, run_id,
+        )
+
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         self_login=lambda: github_bot_login,
         handle=github_comment_handler or github_concierge_turn,
+        handle_merge=github_merge_approves_workorder,
         activity=github_activity,
     )
 
