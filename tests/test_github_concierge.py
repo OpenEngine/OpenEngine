@@ -951,6 +951,51 @@ def test_a_merge_by_engine_itself_decides_nothing(tmp_path):
     assert runtime.decide.await_count == 0
 
 
+def test_a_merge_before_the_review_is_requested_answers_it_when_it_is(tmp_path):
+    """GitHub sends a merge once. A pull request merged while its work order is
+    still finishing the steps before its review must not leave that review
+    waiting forever: the review step is still reached and shown, and the merge
+    that already answered it is recorded then."""
+    from starlette.testclient import TestClient
+
+    from engine.domain import ApprovalDecision, ApprovalId
+    from engine.graph_runtime import EventKind, RuntimeEvent
+
+    pending = []
+    runtime, opened = _graph_runtime(pending_approvals=pending)
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        assert _merged(client).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert runtime.decide.await_count == 0
+
+        # An agent asking to run a command is not the review, and the merge
+        # must not answer a question nobody was shown.
+        pending.append(_human_review(approval_id="bash-1", tool_name="bash"))
+        observe = runtime.observe.call_args.args[0]
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId("existing"), kind=EventKind.APPROVAL_REQUESTED,
+            payload={"approvalId": "bash-1", "toolName": "bash"},
+        ))
+        assert runtime.decide.await_count == 0
+
+        pending[:] = [_human_review()]
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId("existing"), kind=EventKind.APPROVAL_REQUESTED,
+            payload={"approvalId": "approval-1", "toolName": "human_review"},
+        ))
+        # Once: the merge is spent on the review it answered.
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId("existing"), kind=EventKind.APPROVAL_REQUESTED,
+            payload={"approvalId": "approval-1", "toolName": "human_review"},
+        ))
+
+    runtime.decide.assert_awaited_once_with(
+        RunId("existing"), ApprovalId("approval-1"), ApprovalDecision.ACCEPT
+    )
+
+
 def test_an_approving_review_decides_nothing(tmp_path):
     """Merge is the point the work order's pull request is closed out. An
     approval can be followed by more commits and another round of review."""
@@ -979,11 +1024,9 @@ def test_an_approving_review_decides_nothing(tmp_path):
 @pytest.mark.parametrize(
     ("kwargs", "why"),
     [
-        # Nothing is waiting on a person: the run is working, or it is over.
-        ({}, "no pending approval"),
-        # An agent asking to run a command is not the review's verdict, and a
-        # merge must not answer a question nobody was shown.
-        ({"pending_approvals": (_human_review(tool_name="bash"),)}, "another approval"),
+        # The work order is over, so there is no review left to answer.
+        ({"status": RunStatus.COMPLETED}, "the run finished"),
+        ({"status": RunStatus.FAILED}, "the run failed"),
         # A pull request opened by hand belongs to no work order.
         ({"pr_number": 99}, "no work order owns it"),
         # A saved work order can outlive the graph it was started from.

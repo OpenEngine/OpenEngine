@@ -133,9 +133,14 @@ write to the repository — the same permission a commenter has to hold — so t
 merge is its own proof of it.
 
 A merge with no verdict to record is acknowledged and ignored: a pull request
-opened by hand, one whose work order has already finished, and one whose run is
-working rather than waiting on a person. So is a review already decided in the
-web UI a moment earlier.
+opened by hand, and one whose work order has already stopped. So is a review
+already decided in the web UI a moment earlier.
+
+A pull request merged while its work order is still working towards its review
+does not skip that step. The run still reaches its review and it is shown as
+usual; the merge that already answered it is recorded as soon as it does. The
+merge is held in memory until then, so a restart in between leaves the review
+for the web UI.
 
 ## Watching what arrives
 
