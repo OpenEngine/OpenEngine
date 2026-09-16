@@ -935,6 +935,15 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         ("https://gitlab.com/a/../../x/-/merge_requests/1", None),
         # A dot inside a step is ordinary; only a whole segment moves.
         ("https://github.com/a.b/c.d/pull/7", ("a.b/c.d", 7)),
+        # An authority the standard reader refuses is refused here too, rather
+        # than raised out into CICheck and the adapters.
+        ("https://[invalid/acme/api/pull/1", None),
+        ("https://[::1/acme/api/pull/1", None),
+        ("https://ghe.acme.com:notaport/acme/api/pull/1", None),
+        ("https://ghe.acme.com:99999/acme/api/pull/1", None),
+        # A bracketed host that is well spelled still reads, keyed by the
+        # address the reader read out of the brackets.
+        ("https://[::1]:8443/acme/api/pull/7", ("::1:8443/acme/api", 7)),
     ],
 )
 def test_a_change_request_is_read_off_its_url_one_way(

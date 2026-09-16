@@ -58,15 +58,19 @@ def change_request(url: str) -> ChangeRequest | None:
     standing for two change requests is the misbinding every caller here is
     guarding against, so it is not a name at all.
     """
-    parsed = urlsplit(url)
-    if parsed.scheme not in ("https", "http") or not parsed.hostname:
-        return None
-    hostname = parsed.hostname.lower()
-    authority = hostname
     try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
         port = parsed.port
     except ValueError:
+        # An authority the standard reader refuses -- an unclosed `[`, a port
+        # that is not a number -- names no change request, and saying so is
+        # this module's job rather than leaving by way of an exception.
         return None
+    if parsed.scheme not in ("https", "http") or not hostname:
+        return None
+    hostname = hostname.lower()
+    authority = hostname
     if port is not None and port != (443 if parsed.scheme == "https" else 80):
         authority = f"{hostname}:{port}"
     path = parsed.path
