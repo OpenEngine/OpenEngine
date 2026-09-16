@@ -71,6 +71,7 @@ CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 #: is recorded here because opening is the act that creates it; reading it back
 #: off the comments on the pull request would name whoever commented last.
 PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
+WorkorderCreator = Callable[[RunId, str], Awaitable[tuple[str, str]]]
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -216,6 +217,11 @@ class TerminalMcpBroker:
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
+        self._workorder_creator: WorkorderCreator | None = None
+
+    def enable_workorder_creation(self, create: WorkorderCreator) -> None:
+        """Serve creation with the parent run bound by the host."""
+        self._workorder_creator = create
 
     def enable_status_updates(self, report: StatusReporter) -> None:
         """Serve `update_status`, delivering what it is told to `report`.
@@ -312,6 +318,8 @@ class TerminalMcpBroker:
         )
         for name in self._repository_tools:
             arguments = (*arguments, "--repository-tool", name)
+        if self._workorder_creator is not None:
+            arguments = (*arguments, "--create-workorder")
         if self._status_reporter is not None:
             arguments = (*arguments, "--status-updates")
         if self._step is None:
@@ -376,6 +384,23 @@ class TerminalMcpBroker:
                 if name not in self._repository_tools:
                     return {"ok": False, "error": f"{name} is not enabled for this step"}
                 return await self._repository_call(name, arguments, request_id)
+            if name == "create_workorder":
+                if self._workorder_creator is None:
+                    return {"ok": False, "error": "create_workorder is not enabled for this step"}
+                if (
+                    not isinstance(arguments, dict)
+                    or set(arguments) != {"prompt"}
+                    or not isinstance(arguments["prompt"], str)
+                    or not arguments["prompt"].strip()
+                ):
+                    return {"ok": False, "error": "provide a non-empty prompt"}
+                try:
+                    url, run_id = await self._workorder_creator(
+                        self._run_id, arguments["prompt"].strip()
+                    )
+                except Exception as error:
+                    return {"ok": False, "error": f"could not create workorder: {error}"}
+                return {"ok": True, "output": json.dumps({"url": url, "run_id": run_id})}
             if name == "update_status":
                 if self._status_reporter is None:
                     return {
@@ -681,6 +706,7 @@ def terminal_tool_names(
     *,
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> tuple[str, ...]:
     """The tools a step's server serves, in the order it lists them.
 
@@ -693,6 +719,7 @@ def terminal_tool_names(
             repository_tools,
             terminal_tools=terminal_tools,
             status_updates=status_updates,
+            create_workorder=create_workorder,
         )
     )
 
@@ -702,8 +729,11 @@ def _tools(
     *,
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = list(_TERMINAL_TOOLS) if terminal_tools else []
+    if create_workorder:
+        tools.append(_CREATE_WORKORDER_TOOL)
     if status_updates:
         tools.append(_STATUS_TOOL)
     tools.extend(
@@ -713,6 +743,21 @@ def _tools(
     )
     return tools
 
+
+_CREATE_WORKORDER_TOOL: dict[str, object] = {
+    "name": "create_workorder",
+    "description": (
+        "Create a new workorder for follow-up work in this repository using the "
+        "configured workorder workflow. The new workorder links to this one as its creator. "
+        "Returns its URL and run_id."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {"prompt": {"type": "string", "minLength": 1}},
+        "required": ["prompt"],
+        "additionalProperties": False,
+    },
+}
 
 #: Served only when the run has a conversation to report into.
 _STATUS_TOOL: dict[str, object] = {
@@ -1074,6 +1119,7 @@ async def _serve_stdio(
     repository_tools: Sequence[str] = (),
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> None:
     """Serve newline-delimited MCP JSON-RPC without writing logs to stdout."""
     while line := await asyncio.to_thread(sys.stdin.buffer.readline):
@@ -1087,6 +1133,7 @@ async def _serve_stdio(
                 repository_tools=repository_tools,
                 terminal_tools=terminal_tools,
                 status_updates=status_updates,
+                create_workorder=create_workorder,
             )
             if response is None:
                 continue
@@ -1109,6 +1156,7 @@ async def _mcp_response(
     repository_tools: Sequence[str] = (),
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> dict[str, object] | None:
     if not isinstance(request, dict):
         return _rpc_error(None, -32600, "Invalid Request")
@@ -1142,6 +1190,7 @@ async def _mcp_response(
                     repository_tools,
                     terminal_tools=terminal_tools,
                     status_updates=status_updates,
+                    create_workorder=create_workorder,
                 )
             },
         )
@@ -1224,6 +1273,7 @@ def main() -> None:
         action="store_true",
         help="serve update_status, for a run with a conversation to report to",
     )
+    parser.add_argument("--create-workorder", action="store_true")
     args = parser.parse_args()
     asyncio.run(
         _serve_stdio(
@@ -1233,6 +1283,7 @@ def main() -> None:
             repository_tools=tuple(args.repository_tools),
             terminal_tools=not args.repository_tools_only,
             status_updates=args.status_updates,
+            create_workorder=args.create_workorder,
         )
     )
 

@@ -486,6 +486,24 @@ describe("RunsPage", () => {
 });
 
 describe("RunDetailPage", () => {
+  it("links to the workorder that created this one", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(run({ parentRunId: "parent-run" }));
+      if (path === "/graph/api/runs/run-1") return json({
+        runId: "run-1", graphId: "work-v1", status: "completed",
+        activeExecutions: [], nextNodes: [], pendingApprovals: [], values: {}, error: "",
+      });
+      if (path === "/graph/api/graphs/work-v1") return json({ graphId: "work-v1", nodes: [] });
+      if (path.includes("/github-comments")) return json(noComments);
+      return json({ events: [] });
+    }));
+    render(<RunDetailPage runId="run-1" />);
+    expect(await screen.findByRole("link", { name: "parent-run" })).toHaveAttribute(
+      "href", "/runs/parent-run",
+    );
+  });
+
   it.each([
     ["Approve", "accept"],
     ["Reject", "cancel"],

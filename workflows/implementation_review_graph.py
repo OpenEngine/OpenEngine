@@ -287,6 +287,7 @@ def pipeline(
             mcp_server_bindings=(
                 TerminalMcpServer(
                     step_id=IMPLEMENTATION,
+                    create_workorder=True,
                     agent_id=runner,
                     required_outputs=("pr_url",),
                     repository_tools=(
@@ -374,6 +375,7 @@ def pipeline(
             mcp_server_bindings=(
                 TerminalMcpServer(
                     step_id=RERANKER,
+                    create_workorder=True,
                     agent_id=runner,
                     required_outputs=("findings",),
                     repository_tools=(

@@ -745,6 +745,7 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "prompt": state.prompt,
         "name": state.name,
         "failure_reason": state.failure_reason,
+        "parent_run_id": state.parent_run_id,
         "origin": (
             {
                 "channel": state.origin.channel,
@@ -773,6 +774,7 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         name=str(value.get("name", "")),
         failure_reason=str(value.get("failure_reason", "")),
         origin=_origin_from_dict(value.get("origin")),
+        parent_run_id=(RunId(str(value["parent_run_id"])) if value.get("parent_run_id") else None),
     )
 
 

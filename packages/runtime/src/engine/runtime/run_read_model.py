@@ -31,6 +31,7 @@ class WorkflowRunView:
     phase: str
     terminal_outcome: str | None
     failure_reason: str = ""
+    parent_run_id: RunId | None = None
 
 
 class RunReader:
@@ -77,6 +78,7 @@ class RunReader:
             phase=state.phase.value,
             terminal_outcome=_terminal_outcome(state),
             failure_reason=state.failure_reason,
+            parent_run_id=state.parent_run_id,
         )
 
 

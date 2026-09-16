@@ -2451,3 +2451,41 @@ def test_cancelled_turn_accepts_late_terminal_result_and_simultaneous_input(
     final = asyncio.run(scenario())
     assert final.error == "Accepted after cancellation."
     assert prompts(tmp_path) == [PROMPT, *([REOPEN] if follow_up else [])]
+
+
+def test_graph_workorder_creation_uses_bound_parent() -> None:
+    from types import SimpleNamespace
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    calls = []
+
+    async def create(parent, prompt):
+        calls.append((parent, prompt))
+        return "/runs/child", "child"
+
+    async def approve(_request):
+        raise AssertionError("creation is already granted by the binding")
+
+    async def scenario():
+        execution = SimpleNamespace(
+            runtime=SimpleNamespace(source_control=object(), workorder_creator=create),
+            run_id=RunId("parent"), execution_id="execution",
+        )
+        server = TerminalMcpServer(
+            step_id="implementation", agent_id=AGENT,
+            repository_tools=(), create_workorder=True,
+        )
+        async with server({"workspaceId": "workspace"}, execution, approve) as bound:
+            args = bound.config["args"]
+            assert "--create-workorder" in args
+            result = await _mcp_response(
+                args[args.index("--host") + 1], int(args[args.index("--port") + 1]),
+                args[args.index("--token") + 1],
+                {"id": 1, "method": "tools/call", "params": {
+                    "name": "create_workorder", "arguments": {"prompt": "Follow up"},
+                }},
+            )
+            assert json.loads(result["result"]["content"][0]["text"])["run_id"] == "child"
+        assert calls == [(RunId("parent"), "Follow up")]
+
+    asyncio.run(scenario())

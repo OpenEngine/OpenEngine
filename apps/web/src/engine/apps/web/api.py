@@ -1284,6 +1284,9 @@ def create_app(
                 # therefore no graph entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
+                    bind_creator = getattr(surface.runtime, "bind_workorder_creator", None)
+                    if bind_creator is not None:
+                        bind_creator(agent_create_workorder)
                 except GraphCompilationError as broken:
                     log.error(
                         "graph workflow %r does not compile, so this server "
@@ -1550,6 +1553,7 @@ def create_app(
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
         scheduled: RunState | None = None,
+        parent_run_id: RunId | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1598,6 +1602,7 @@ def create_app(
             prompt=prompt,
             repository=repository,
             origin=origin,
+            parent_run_id=parent_run_id,
         )
         await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
@@ -1624,6 +1629,23 @@ def create_app(
             )
             await session.state_store.save(state)
         return state
+
+    async def agent_create_workorder(parent_run_id: RunId, prompt: str) -> tuple[str, str]:
+        parent = await session.state_store.load(parent_run_id)
+        if parent is None:
+            raise ValueError("the creating workorder does not exist")
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        assert surface.runtime is not None
+        state = await start_graph_run(
+            surface.runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=prompt, repository=parent.repository,
+            milestone_id=parent.milestone_id, parent_run_id=parent.run_id,
+        )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else f"/runs/{state.run_id}", str(state.run_id)
 
     scheduled_start_lock = asyncio.Lock()
 
@@ -3186,6 +3208,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "milestoneId": str(run.milestone_id) if run.milestone_id else None,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},
+        "parentRunId": str(run.parent_run_id) if run.parent_run_id else None,
         "phase": run.phase,
         "terminalOutcome": run.terminal_outcome,
     }
