@@ -1211,3 +1211,43 @@ def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted(
     assert "Could not record posted comment 123" in caplog.text
     assert "the store is gone" in caplog.text
     assert "https://github.com/Acme/Renamed/pull/42#issuecomment-123" in caplog.text
+
+
+def test_create_workorder_is_opt_in_and_returns_created_run() -> None:
+    calls = []
+
+    async def create(parent, prompt):
+        calls.append((parent, prompt))
+        return "/runs/child", "child"
+
+    async def scenario():
+        broker = TerminalMcpBroker(
+            run_id=RunId("parent"), agent_run_id=AgentRunId("agent"),
+            step=STEP, registry=TerminalResultRegistry(),
+        )
+        async with broker:
+            request = _request(broker, 1, "create_workorder", {"prompt": " Next task "})
+            assert (await broker._submit(request))["ok"] is False
+            broker.enable_workorder_creation(create)
+            assert "--create-workorder" in broker.config.args
+            for arguments in ({}, {"prompt": ""}, {"prompt": 1},
+                              {"prompt": "task", "parent_run_id": "spoofed"}):
+                assert (await broker._submit({**request, "arguments": arguments}))["ok"] is False
+            args = broker.config.args
+            response = await _mcp_response(
+                args[args.index("--host") + 1], int(args[args.index("--port") + 1]),
+                args[args.index("--token") + 1],
+                {"id": 2, "method": "tools/call", "params": {
+                    "name": "create_workorder", "arguments": {"prompt": " Next task "},
+                }}, create_workorder=True,
+            )
+            assert json.loads(response["result"]["content"][0]["text"]) == {
+                "url": "/runs/child", "run_id": "child",
+            }
+            listing = await _mcp_response("", 0, "", {
+                "id": 3, "method": "tools/list",
+            }, create_workorder=True)
+            assert "create_workorder" in [t["name"] for t in listing["result"]["tools"]]
+        assert calls == [(RunId("parent"), "Next task")]
+
+    asyncio.run(scenario())

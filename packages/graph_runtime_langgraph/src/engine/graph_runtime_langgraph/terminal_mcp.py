@@ -38,6 +38,7 @@ class TerminalMcpServer:
     )
     source_control: SourceControl | None = None
     workspace_key: str = WORKSPACE_ID
+    create_workorder: bool = False
 
     @asynccontextmanager
     async def __call__(
@@ -69,6 +70,8 @@ class TerminalMcpServer:
             ),
             registry=TerminalResultRegistry(),
         )
+        if self.create_workorder and execution.runtime.workorder_creator is not None:
+            broker.enable_workorder_creation(execution.runtime.workorder_creator)
         served = tuple(
             name
             for name in self.repository_tools

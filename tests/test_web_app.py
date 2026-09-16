@@ -3319,3 +3319,43 @@ def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() ->
                 assert await runtime.snapshot(state.run_id) is not None
                 assert (await client.post("/api/runs/run-scheduled-graph/start")).status_code == 409
     asyncio.run(scenario())
+
+
+def test_agent_created_workorder_links_to_its_creator() -> None:
+    from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
+    from engine.domain import AgentRunId
+
+    graph = _review_graph()
+    runtime = ScriptedGraphRuntime(graph)
+    callbacks = []
+    runtime.bind_workorder_creator = callbacks.append
+    store = InMemoryStateStore()
+    app = _graph_app_over(store, runtime, graph)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                parent = (await client.post("/api/runs", json={
+                    "workflowId": str(graph.graph_id), "prompt": "Original task",
+                    "repository": "acme/api",
+                })).json()
+                broker = TerminalMcpBroker(
+                    run_id=RunId(parent["runId"]), agent_run_id=AgentRunId("agent-1"),
+                    step=None, registry=TerminalResultRegistry(),
+                )
+                broker.enable_workorder_creation(callbacks[0])
+                result = await broker._submit({
+                    "token": broker._token, "request_id": 1,
+                    "name": "create_workorder", "arguments": {"prompt": "Follow up"},
+                })
+                assert result["ok"] is True
+                child_id = json.loads(result["output"])["run_id"]
+                child = (await client.get(f"/api/runs/{child_id}")).json()
+                assert child["parentRunId"] == parent["runId"]
+                assert child["repository"] == "acme/api"
+                assert child["taskPrompt"] == "Follow up"
+                assert (await client.get(f"/api/runs/{child['parentRunId']}")).status_code == 200
+
+    asyncio.run(scenario())
