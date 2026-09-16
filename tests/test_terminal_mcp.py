@@ -923,6 +923,11 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         ("https://github.com/acme/api/pull/²", None),
         ("https://github.com/acme/api/pull/042", None),
         ("https://github.com/acme/api/pull/0", None),
+        # A run of digits longer than `int` converts is refused like any other
+        # spelling that is not a number, rather than raised out of the reader.
+        ("https://github.com/acme/api/pull/" + "1" * 5000, None),
+        ("https://github.com/acme/api/pull/" + "9" * 20, None),
+        ("https://github.com/acme/api/pull/" + "9" * 19, ("acme/api", int("9" * 19))),
         # A dot segment is a move, not a name.
         ("https://github.com/../x/pull/1", None),
         ("https://github.com/a/../pull/1", None),

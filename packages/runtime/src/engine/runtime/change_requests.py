@@ -18,6 +18,9 @@ from urllib.parse import urlsplit
 
 
 _MERGE_REQUESTS = "/-/merge_requests/"
+#: Digits enough for any counter a forge keeps, and few enough that `int` reads
+#: them rather than refusing the conversion.
+_MOST_DIGITS = 19
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,8 +170,18 @@ def change_request_number(segment: str) -> int | None:
     those spellings is a change request to one reader and not to another. `²`
     is worse than a disagreement: `int` raises on it, so a URL spelled that way
     leaves by way of an exception rather than an answer either way.
+
+    A run of thousands of digits is that same exception from the other side:
+    `int` refuses a decimal string past its conversion limit. No forge counts
+    that far -- `_MOST_DIGITS` is already past a signed 64-bit counter -- so a
+    longer run is not a number here either, and is refused rather than raised.
     """
-    if not segment.isascii() or not segment.isdigit() or segment.startswith("0"):
+    if (
+        not segment.isascii()
+        or not segment.isdigit()
+        or segment.startswith("0")
+        or len(segment) > _MOST_DIGITS
+    ):
         return None
     return int(segment)
 
