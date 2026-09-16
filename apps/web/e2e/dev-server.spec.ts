@@ -1,3 +1,5 @@
+import { IMPACT_ANALYSIS_SCENARIO } from "./impact-analysis";
+
 /** The interface as `engine-dev` serves it: Vite in front, the API behind.
  *
  *  Every other spec here opens the client the API serves out of `dist/`, where
@@ -28,6 +30,7 @@ const NAMING_REQUEST = "Give this WorkOrder a concise display name";
 const SCRIPT: Script = {
   title: TITLE,
   scenarios: [
+    IMPACT_ANALYSIS_SCENARIO,
     { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
     {
       when: "Review the implementation",
@@ -102,6 +105,7 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
     "CI check",
     "Review",
     "Reranker",
+    "Impact analysis",
     "Human review",
   ]);
   await expect(page.getByRole("heading", { name: TITLE, level: 1 })).toBeVisible();

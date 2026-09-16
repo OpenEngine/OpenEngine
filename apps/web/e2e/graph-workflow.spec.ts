@@ -1,3 +1,5 @@
+import { IMPACT_ANALYSIS_SCENARIO, IMPACT_ASSESSMENT } from "./impact-analysis";
+
 /** The WorkOrder this repository ships, end to end, run by the graph engine.
  *
  *  Split into the states a run passes through, one test each, rather than
@@ -48,6 +50,7 @@ const BLOCKING_COMMAND = `until [ -f ${RELEASE} ]; do sleep 0.05; done`;
 const ASKING_SCRIPT: Script = {
   title: TITLE,
   scenarios: [
+    IMPACT_ANALYSIS_SCENARIO,
     { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
     {
       when: "Review the implementation",
@@ -106,6 +109,7 @@ const ASKING_SCRIPT: Script = {
 const SCRIPT: Script = {
   title: TITLE,
   scenarios: [
+    IMPACT_ANALYSIS_SCENARIO,
     { when: NAMING_REQUEST, steps: [{ type: "say", text: JSON.stringify({ name: TITLE }) }] },
     // The reviewer is asked about the implementation *and quoted the original
     // task*, so its prompt contains the implementation's own scenario word.
@@ -164,6 +168,7 @@ const SCRIPT: Script = {
 const STEERING_SCRIPT: Script = {
   title: "Waiting for guidance",
   scenarios: [
+    IMPACT_ANALYSIS_SCENARIO,
     {
       when: NAMING_REQUEST,
       steps: [{ type: "say", text: JSON.stringify({ name: "Waiting for guidance" }) }],
@@ -363,6 +368,7 @@ test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) =
     "CI check",
     "Review",
     "Reranker",
+    "Impact analysis",
     "Human review",
   ]);
 });
@@ -397,6 +403,7 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
   await expect(conversations.getByRole("link")).toHaveText([
     "Implementation",
     "Reranker",
+    "Impact analysis",
   ]);
   await conversations.getByText("Review", { exact: true }).click();
   await expect(conversations.getByRole("link")).toHaveText([
@@ -406,6 +413,7 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
     "Review (Performance)",
     "Review (Conciseness)",
     "Reranker",
+    "Impact analysis",
   ]);
 
   await conversations.getByRole("link", { name: "Implementation" }).click();
@@ -535,6 +543,7 @@ test("a graph run waiting on a person says so, and can be answered", async ({
   // Its *summary*, not the outputs it declared: a graph run's page does not
   // show those yet -- see the note in `README.md` -- and a step run's did.
   await expect(step(page, "Implementation")).toContainText(IMPLEMENTED);
+  await expect(step(page, "Impact analysis")).toContainText(IMPACT_ASSESSMENT);
 
   // The reranker's comment left the process the way a real one would, through
   // `gh` -- which here records rather than commenting on somebody's repository.
@@ -560,9 +569,10 @@ test("a graph run waiting on a person says so, and can be answered", async ({
     "CI check",
     "Review",
     "Reranker",
+    "Impact analysis",
     "Human review",
   ]);
-  for (const index of [0, 1, 2, 3, 4, 5, 6])
+  for (const index of [0, 1, 2, 3, 4, 5, 6, 7])
     await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
   await expect(page.locator(".callout-action")).toHaveCount(0);
 });
