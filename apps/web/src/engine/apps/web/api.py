@@ -921,6 +921,11 @@ _MILESTONE_CHANGED_RULE = (
     "The milestone definition changed; reconcile its work orders with it."
 )
 
+#: How many edited milestones may be scoped at once. Each scoping is a
+#: subprocess-backed agent session, so a burst of edits across many milestones
+#: waits its turn rather than starting one per milestone.
+_MILESTONE_RESCOPE_CONCURRENCY = 2
+
 #: How long the forge lookups that authorize a GitHub comment may take before
 #: the comment is abandoned. The ingress behind them has one worker, so this is
 #: not only that comment's latency: whatever it waits, every comment queued
@@ -1542,11 +1547,20 @@ def create_app(
             ),
             policy=policy,
         )
+        # Somebody may have started work while the scoper ran, so what is still
+        # scheduled is read again under the lock that starting takes: a run
+        # started meanwhile is neither deleted nor given a replacement.
+        async with scheduled_start_lock:
+            await save_scoped_work(milestone_id, plan, reconcile=reconcile)
+        return plan
+
+    async def save_scoped_work(
+        milestone_id: MilestoneId, plan: ScopingPlan, *, reconcile: bool
+    ) -> None:
+        runs = await session.state_store.list_runs(milestone_id) if reconcile else ()
         scheduled = {run.run_id for run in runs if run.phase is RunPhase.SCHEDULED}
         superseded = tuple(
-            item
-            for item in plan.supersede
-            if reconcile and RunId(item.workorder_id) in scheduled
+            item for item in plan.supersede if RunId(item.workorder_id) in scheduled
         )
         specs = (
             *plan.create,
@@ -1555,7 +1569,7 @@ def create_app(
         if any(spec.milestone_id != milestone_id for spec in specs):
             raise ForeignScopeError("scoper proposed work for another milestone")
         retired = (*plan.cancel, *(item.workorder_id for item in superseded))
-        for workorder_id in retired if reconcile else ():
+        for workorder_id in retired:
             if RunId(workorder_id) in scheduled:
                 await session.state_store.delete_run(RunId(workorder_id))
         definition = _mentioned_workflow()
@@ -1578,13 +1592,14 @@ def create_app(
                 prompt=prompt,
                 repository=work_orders.repository,
             ))
-        return plan
 
     # One rescoping per milestone at a time. An edit arriving while one runs is
     # remembered and scoped once more afterwards, so two scopers never propose
     # the same work side by side.
     rescopings: dict[MilestoneId, asyncio.Task[None]] = {}
     rescope_again: set[MilestoneId] = set()
+    rescoping_slots = asyncio.Semaphore(_MILESTONE_RESCOPE_CONCURRENCY)
+    scheduled_start_lock = asyncio.Lock()
 
     async def milestone_changed(milestone: Milestone) -> None:
         """Scope an edited milestone's work without holding up the edit."""
@@ -1599,18 +1614,21 @@ def create_app(
     async def rescope(milestone_id: MilestoneId) -> None:
         try:
             while True:
-                rescope_again.discard(milestone_id)
-                milestone = await session.state_store.load_milestone(milestone_id)
-                if milestone is None:
-                    return
-                try:
-                    await schedule_scoped_work(
-                        milestone,
-                        ScopingPolicy(rules=(_MILESTONE_CHANGED_RULE,)),
-                        reconcile=True,
-                    )
-                except Exception:
-                    log.exception("scoping changed milestone %s failed", milestone_id)
+                async with rescoping_slots:
+                    rescope_again.discard(milestone_id)
+                    milestone = await session.state_store.load_milestone(milestone_id)
+                    if milestone is None:
+                        return
+                    try:
+                        await schedule_scoped_work(
+                            milestone,
+                            ScopingPolicy(rules=(_MILESTONE_CHANGED_RULE,)),
+                            reconcile=True,
+                        )
+                    except Exception:
+                        log.exception(
+                            "scoping changed milestone %s failed", milestone_id
+                        )
                 if milestone_id not in rescope_again:
                     return
         finally:
@@ -1703,8 +1721,6 @@ def create_app(
             )
             await session.state_store.save(state)
         return state
-
-    scheduled_start_lock = asyncio.Lock()
 
     async def start_scheduled_run(request: Request) -> JSONResponse:
         async with scheduled_start_lock:

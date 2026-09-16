@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import httpx
@@ -1834,6 +1834,118 @@ def test_changed_milestone_schedules_scoped_work_and_retires_only_unstarted_work
     }
     assert len(scoper.requests) == 1
     assert scoper.requests[0]["milestone"].requirements == ("Plan.",)
+
+
+def test_changed_milestone_leaves_work_started_while_the_scoper_ran() -> None:
+    """What is scheduled is decided after the scoper answers, not before.
+
+    A WorkOrder somebody starts while the scoper is thinking is running work:
+    retiring it would delete the row and leave its graph run going unseen.
+    """
+
+    store = InMemoryStateStore()
+    changes = MilestoneChanges()
+    runner = ConcurrentRunner()
+    session = _session_with({"test": runner}, state_store=store)
+    milestone = Milestone(
+        MilestoneId("milestone-scoping"), ProjectId("project-engine"), "Scoping"
+    )
+    started = RunState(
+        run_id=RunId("run-started"),
+        task_id=TaskId("task-run-started"),
+        workflow_id=WorkflowId("implementation-review-rerank"),
+        milestone_id=milestone.milestone_id,
+        phase=RunPhase.SCHEDULED,
+        name="run-started",
+    )
+
+    class StartedMeanwhileScoper:
+        async def run(self, **request):
+            await store.save(replace(started, phase=RunPhase.RUNNING_AGENT))
+            return ScopingPlan(
+                create=(WorkOrderSpec(milestone.milestone_id, "New work", "Build it."),),
+                supersede=(
+                    Supersession(
+                        WorkOrderId("run-started"),
+                        (WorkOrderSpec(milestone.milestone_id, "Duplicate", "Redo it."),),
+                    ),
+                ),
+            )
+
+    async def scenario():
+        await store.save_project(Project(milestone.project_id, "Engine"))
+        await store.save_milestone(milestone)
+        await store.save(started)
+        create_app(
+            session,
+            {"test": runner},
+            milestone_scoper=StartedMeanwhileScoper(),  # type: ignore[arg-type]
+            milestone_changes=changes,
+        )
+        await changes.publish(milestone)
+
+        async def scheduled_new_work() -> bool:
+            return any(item.name == "New work" for item in await store.list_runs())
+
+        await _wait_for(scheduled_new_work)
+        return await store.list_runs()
+
+    runs = asyncio.run(scenario())
+
+    assert {item.name: item.phase for item in runs} == {
+        "run-started": RunPhase.RUNNING_AGENT,
+        "New work": RunPhase.SCHEDULED,
+    }
+
+
+def test_changed_milestones_are_scoped_a_few_at_a_time() -> None:
+    """A burst of edits across milestones does not start a scoper for each."""
+
+    store = InMemoryStateStore()
+    changes = MilestoneChanges()
+    runner = ConcurrentRunner()
+    session = _session_with({"test": runner}, state_store=store)
+    milestones = [
+        Milestone(MilestoneId(f"milestone-{index}"), ProjectId("project-engine"), "Goal")
+        for index in range(6)
+    ]
+
+    class CountingScoper:
+        active = 0
+        most = 0
+        finished = 0
+
+        async def run(self, **request):
+            self.active += 1
+            self.most = max(self.most, self.active)
+            await asyncio.sleep(0.02)
+            self.active -= 1
+            self.finished += 1
+            return ScopingPlan()
+
+    scoper = CountingScoper()
+
+    async def scenario():
+        await store.save_project(Project(ProjectId("project-engine"), "Engine"))
+        for milestone in milestones:
+            await store.save_milestone(milestone)
+        create_app(
+            session,
+            {"test": runner},
+            milestone_scoper=scoper,  # type: ignore[arg-type]
+            milestone_changes=changes,
+        )
+        for milestone in milestones:
+            await changes.publish(milestone)
+
+        async def all_scoped() -> bool:
+            return scoper.finished == len(milestones)
+
+        await _wait_for(all_scoped)
+
+    asyncio.run(scenario())
+
+    assert 1 < scoper.most <= 2
 
 
 def test_changed_milestone_rescoping_failure_does_not_reach_the_edit(caplog) -> None:
