@@ -101,7 +101,6 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
     "Implementation",
     "CI check",
     "Review",
-    "Reranker",
     "Human review",
   ]);
   await expect(page.getByRole("heading", { name: TITLE, level: 1 })).toBeVisible();

@@ -362,7 +362,6 @@ test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) =
     "Implementation",
     "CI check",
     "Review",
-    "Reranker",
     "Human review",
   ]);
 });
@@ -394,10 +393,7 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
   // conversations in it, and say so about themselves. The review agents are
   // available under their shared group rather than filling the rail at once.
   const conversations = page.getByLabel(/^Conversations for /);
-  await expect(conversations.getByRole("link")).toHaveText([
-    "Implementation",
-    "Reranker",
-  ]);
+  await expect(conversations.getByRole("link")).toHaveText(["Implementation"]);
   await conversations.getByText("Review", { exact: true }).click();
   await expect(conversations.getByRole("link")).toHaveText([
     "Implementation",
@@ -559,10 +555,9 @@ test("a graph run waiting on a person says so, and can be answered", async ({
     "Implementation",
     "CI check",
     "Review",
-    "Reranker",
     "Human review",
   ]);
-  for (const index of [0, 1, 2, 3, 4, 5, 6])
+  for (const index of [0, 1, 2, 3, 4, 5])
     await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
   await expect(page.locator(".callout-action")).toHaveCount(0);
 });

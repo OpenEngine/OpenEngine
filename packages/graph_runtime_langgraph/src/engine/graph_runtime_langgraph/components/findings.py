@@ -192,6 +192,8 @@ class ReviewNode(ACPNode):
 class RerankerNode(ACPNode):
     """Keep the reranker's accepted findings as structured checkpoint state."""
 
+    graph_node_group: str = "Review"
+
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)
         findings = parse_findings(update.get("findings"))
