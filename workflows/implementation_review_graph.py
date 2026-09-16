@@ -215,6 +215,8 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
             f"Address the review findings on the existing pull request {state.get('pr_url')}. "
             "Read the relevant code, make the smallest complete fix, test it, "
             "commit and push to the same PR branch using git_subcommand. "
+            "Reply to each review comment you addressed, explaining the fix, "
+            "and resolve its review thread where applicable. "
             "Do not open another pull request. Finish with complete_step and the "
             "same pr_url output. Use fail_step if the findings cannot be addressed.\n\n"
             f"Review findings:\n{json.dumps(state[REVIEW])}\n\n"
