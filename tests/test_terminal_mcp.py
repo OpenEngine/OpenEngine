@@ -3,10 +3,12 @@
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 
 import pytest
 
 from engine.ports.source_control import ChangeRequest, CommentResult
+from engine.runtime.change_requests import change_request, remote_project
 
 from engine.domain import (
     AgentId,
@@ -1384,24 +1386,24 @@ def test_a_misdirected_comment_is_refused_and_says_where_to_post() -> None:
 class ReportingSourceControl:
     """A forge showing `acme/api#7` on `feature` at `abc123`, by `engine-bot`.
 
-    The checkout is on `branch` at `head`, the credentials act as `login`, and
-    pushing answers `pushed`.
+    Pushing answers `pushed`, reading back a pushed ref answers `commit`, and
+    the credentials act as `login`.
     """
 
     def __init__(
         self,
         *,
         shown_url: str = "https://github.com/acme/api/pull/7",
-        branch: GitResult = GitResult(0, "feature\n", ""),
-        head: GitResult = GitResult(0, "abc123\n", ""),
+        commit: GitResult = GitResult(0, "abc123\n", ""),
         author: str = "engine-bot",
         login: str = "engine-bot",
-        pushed: GitResult = GitResult(0, "", "To github.com:acme/api.git\n * [new branch]      feature -> feature\n"),
+        pushed: GitResult = GitResult(
+            0, "", "To github.com:acme/api.git\n * [new branch]      feature -> feature\n"
+        ),
     ) -> None:
         self.pushed = pushed
         self.shown_url = shown_url
-        self.branch = branch
-        self.head = head
+        self.commit = commit
         self.author = author
         self.login = login
 
@@ -1412,9 +1414,10 @@ class ReportingSourceControl:
         )
 
     async def run_git(self, _workspace_id: object, arguments: tuple[str, ...]) -> GitResult:
-        if arguments[0] == "push":
+        if "push" in arguments:
             return self.pushed
-        return self.branch if arguments[0] == "symbolic-ref" else self.head
+        assert arguments[0] == "rev-parse"
+        return self.commit
 
     async def authenticated_login(self, _repository_url: str) -> str:
         return self.login
@@ -1426,15 +1429,17 @@ _REPORT = {
     "outputs": {"pr_url": "https://github.com/acme/api/pull/7"},
 }
 
+_PUSH = ("push", "-u", "origin", "feature")
+
 
 async def _reporting_broker(
     source_control: ReportingSourceControl,
     claim: object,
     *,
     workspace: str | None = "workspace",
-    push: bool = True,
+    push: Sequence[str] | None = _PUSH,
 ) -> TerminalMcpBroker:
-    """A step with nothing recorded, that pushed its branch unless `push` is off."""
+    """A step with nothing recorded, that ran `push` unless it is nothing."""
 
     async def lookup() -> list[tuple[str, int]]:
         return []
@@ -1454,44 +1459,67 @@ async def _reporting_broker(
     broker.enable_pull_request_ownership(lookup)
     broker.enable_pull_request_claims(claim)  # type: ignore[arg-type]
     broker._result = asyncio.get_running_loop().create_future()
-    if push:
+    if push is not None:
         await broker._submit(_direct_request(
-            broker, "push-1", "git_subcommand",
-            {"arguments": ["push", "-u", "origin", "feature"]},
+            broker, "push-1", "git_subcommand", {"arguments": list(push)},
         ))
     return broker
+
+
+def _push_output(text: str) -> GitResult:
+    return GitResult(0, "", text)
 
 
 @pytest.mark.parametrize(
     ("source_control", "workspace", "push", "recorded"),
     [
-        (ReportingSourceControl(), "workspace", True, True),
-        (ReportingSourceControl(pushed=GitResult(0, "To github.com:acme/api.git\n=\trefs/heads/feature:refs/heads/feature\t[up to date]\nDone\n", "")), "workspace", True, False),
-        (ReportingSourceControl(pushed=GitResult(0, "*\trefs/heads/feature:refs/heads/feature\t[new branch]\nDone\n", "")), "workspace", True, True),
-        (ReportingSourceControl(branch=GitResult(0, "other\n", "")), "workspace", True, False),
-        (ReportingSourceControl(head=GitResult(0, "def456\n", "")), "workspace", True, False),
-        (ReportingSourceControl(shown_url="https://github.com/acme/other/pull/7"), "workspace", True, False),
-        (ReportingSourceControl(branch=GitResult(1, "", "fatal: ref HEAD is not a symbolic ref")), "workspace", True, False),
-        (ReportingSourceControl(author="somebody-else"), "workspace", True, False),
-        (ReportingSourceControl(author="", login=""), "workspace", True, False),
-        (ReportingSourceControl(), None, True, False),
-        (ReportingSourceControl(), "workspace", False, False),
-        (ReportingSourceControl(pushed=GitResult(0, "", "Everything up-to-date\n")), "workspace", True, False),
-        (ReportingSourceControl(pushed=GitResult(0, "", " * [new branch]      other -> other\n")), "workspace", True, False),
+        (ReportingSourceControl(), "workspace", _PUSH, True),
+        (ReportingSourceControl(), "workspace", ("--no-pager", *_PUSH), True),
+        (ReportingSourceControl(pushed=GitResult(
+            0, "To https://github.com/Acme/API.git\n*\trefs/heads/feature:refs/heads/feature\t[new branch]\nDone\n", "",
+        )), "workspace", _PUSH, True),
+        (ReportingSourceControl(pushed=GitResult(
+            0, "To github.com:acme/api.git\n=\trefs/heads/feature:refs/heads/feature\t[up to date]\nDone\n", "",
+        )), "workspace", _PUSH, False),
+        (ReportingSourceControl(pushed=_push_output(
+            "To github.com:acme/other.git\n * [new branch]      feature -> feature\n"
+        )), "workspace", _PUSH, False),
+        (ReportingSourceControl(pushed=_push_output(
+            "To /tmp/mirror.git\n * [new branch]      feature -> feature\n"
+        )), "workspace", _PUSH, False),
+        (ReportingSourceControl(pushed=_push_output(
+            " * [new branch]      feature -> feature\n"
+        )), "workspace", _PUSH, False),
+        (ReportingSourceControl(commit=GitResult(0, "def456\n", "")), "workspace", _PUSH, False),
+        (ReportingSourceControl(commit=GitResult(1, "", "fatal: bad revision")), "workspace", _PUSH, False),
+        (ReportingSourceControl(shown_url="https://github.com/acme/other/pull/7"), "workspace", _PUSH, False),
+        (ReportingSourceControl(author="somebody-else"), "workspace", _PUSH, False),
+        (ReportingSourceControl(author="", login=""), "workspace", _PUSH, False),
+        (ReportingSourceControl(), None, _PUSH, False),
+        (ReportingSourceControl(), "workspace", None, False),
+        (ReportingSourceControl(pushed=_push_output("Everything up-to-date\n")), "workspace", _PUSH, False),
+        (ReportingSourceControl(pushed=_push_output(
+            "To github.com:acme/api.git\n * [new branch]      other -> other\n"
+        )), "workspace", _PUSH, False),
     ],
-    ids=["matching", "porcelain-up-to-date", "porcelain-new-branch", "another-branch",
-         "another-commit", "another-repo", "detached-head", "another-author", "empty-login",
-         "no-workspace", "never-pushed", "pushed-nothing", "pushed-another-branch"],
+    ids=["matching", "global-option-before-push", "porcelain-new-branch",
+         "porcelain-up-to-date", "another-repository", "a-remote-of-its-own",
+         "no-remote-named", "another-commit", "unreadable-commit", "another-pull-request",
+         "another-author", "empty-login", "no-workspace", "never-pushed",
+         "pushed-nothing", "pushed-another-branch"],
 )
 def test_a_reported_pull_request_is_recorded_only_when_the_forge_shows_it_is_the_runs(
-    source_control: ReportingSourceControl, workspace: str | None, push: bool, recorded: bool,
+    source_control: ReportingSourceControl,
+    workspace: str | None,
+    push: Sequence[str] | None,
+    recorded: bool,
 ) -> None:
     """A step that opened its pull request in the shell has nothing recorded.
 
-    Its report is claimed when the forge agrees it is this step's work; the
-    checkout alone is the agent's to arrange -- another run's branch can be
-    fetched and checked out under the same login -- so every part has to
-    match, and the branch has to be one this step's push moved.
+    Its report is claimed when the forge agrees it is this step's work: the
+    login is shared by every run and the checkout is the agent's to arrange, so
+    what has to match is this step's own push -- of that commit, to that
+    branch, in the repository the pull request lives in.
     """
 
     async def scenario() -> tuple[dict[str, object], list[OpenedPullRequest]]:
@@ -1579,3 +1607,33 @@ def test_concurrent_completions_claim_for_only_the_accepted_one() -> None:
 
     assert sorted(answer["ok"] for answer in answers) == [False, True]
     assert len(claimed) == 1
+
+
+@pytest.mark.parametrize(
+    ("remote_url", "change_request_url"),
+    [
+        ("git@github.com:acme/api.git", "https://github.com/acme/api/pull/7"),
+        ("https://github.com/Acme/API.git", "https://github.com/acme/api/pull/7"),
+        ("ssh://git@github.com/acme/api", "https://github.com/acme/api/pull/7"),
+        ("git@github.com:acme/api", "https://github.com/acme/api/pull/7"),
+        (
+            "git@gitlab.example.com:group/sub/project.git",
+            "https://gitlab.example.com/group/sub/project/-/merge_requests/3",
+        ),
+    ],
+)
+def test_a_push_names_the_project_its_change_requests_are_keyed_by(
+    remote_url: str, change_request_url: str,
+) -> None:
+    """The two readings have to agree, or a push confirms no pull request."""
+    requested = change_request(change_request_url)
+    assert requested is not None
+    assert remote_project(remote_url) == requested.project
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    ["/tmp/mirror.git", "../mirror", "git@github.com:api.git", "", "https:///api.git"],
+)
+def test_a_remote_naming_no_forge_project_names_none(remote_url: str) -> None:
+    assert remote_project(remote_url) is None

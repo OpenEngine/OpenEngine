@@ -119,6 +119,42 @@ def pull_request_url(project: str, number: int) -> str:
     return f"https://{authority}/{rest}/pull/{number}"
 
 
+def remote_project(remote_url: str) -> str | None:
+    """The project a git remote URL names, keyed the way a change request is.
+
+    Both spellings a forge hands out are read: `https://host/owner/repo.git`
+    and the scp-like `git@host:owner/repo.git`. The key is the one
+    `change_request` writes, so what a push wrote to can be compared with where
+    a pull request is said to live -- which is the only reason this is here and
+    not spelled again by each caller.
+
+    A remote naming no host, or naming one by a bare path, is no project: a
+    push to `/tmp/other.git` says nothing about a repository on a forge. A
+    forge served on a non-default web port keys its change requests by that
+    port, which a remote does not carry, so its pushes name no project here
+    either and its pull requests are confirmed some other way.
+    """
+    remote = remote_url.strip()
+    if "://" in remote:
+        try:
+            parsed = urlsplit(remote)
+        except ValueError:
+            return None
+        hostname, path = parsed.hostname, parsed.path
+    else:
+        hostname, separator, path = remote.rpartition("@")[2].partition(":")
+        if not separator:
+            return None
+    if not hostname:
+        return None
+    steps = path.strip("/").removesuffix(".git").split("/")
+    if len(steps) < 2 or not all(names_a_project_step(step) for step in steps):
+        return None
+    written = "/".join(steps).lower()
+    host = hostname.lower()
+    return written if host == "github.com" else f"{host}/{written}"
+
+
 def _merge_request(authority: str, hostname: str, path: str) -> ChangeRequest | None:
     """Read `<project path>/-/merge_requests/<iid>`.
 
@@ -196,4 +232,5 @@ __all__ = [
     "change_request_number",
     "names_a_project_step",
     "pull_request_url",
+    "remote_project",
 ]
