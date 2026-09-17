@@ -83,7 +83,15 @@ describe("Sidebar", () => {
     );
     await user.click(header("Filter WorkOrders"));
     expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
-    for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeChecked();
+    // The accepted run is done, so it is in the archive rather than the rail
+    // until the filter asks for it.
+    expect(screen.queryByRole("link", { name: /Succeeded run/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "succeeded" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Archived" }));
+    expect(screen.getByRole("link", { name: /Succeeded run/ })).toBeVisible();
+    for (const name of ["Implementation", "Review", "Human review", "failed", "succeeded"]) {
+      expect(screen.getByRole("checkbox", { name })).toBeChecked();
+    }
     await user.click(screen.getByRole("checkbox", { name: "succeeded" }));
     expect(screen.queryByRole("link", { name: /Succeeded run/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Failed run/ })).toBeVisible();
@@ -112,9 +120,10 @@ describe("Sidebar", () => {
     );
     await user.click(header("Filter WorkOrders"));
     expect(screen.getByText("No WorkOrder history yet.")).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "Archived" }));
     rerender(<Sidebar runs={[custom, { ...custom, runId: "duplicate" }]}
       graphNodes={graphNodes} initialSection="workflows" />);
-    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
     await user.click(screen.getByRole("checkbox", { name: "Implementation" }));
     expect(screen.queryByRole("link", { name: /First run/ })).not.toBeInTheDocument();
     const finished = { ...run, runId: "done", name: "Finished run", phase: "succeeded" };
@@ -132,6 +141,7 @@ describe("Sidebar", () => {
     const { rerender } = render(<Sidebar runs={[{ ...graphRun, graphProgress }]}
       graphNodes={{ [graphRun.workflowId]: nodes }} initialSection="workflows" />);
     await user.click(header("Filter WorkOrders"));
+    await user.click(screen.getByRole("checkbox", { name: "Archived" }));
     await user.click(screen.getByRole("checkbox", { name: "Review" }));
     expect(screen.queryByRole("link", { name: /Second run/ })).not.toBeInTheDocument();
     rerender(<Sidebar runs={[{ ...graphRun, phase: "succeeded", graphProgress }]}
@@ -689,7 +699,8 @@ describe("Sidebar", () => {
     }
   });
 
-  it("clears graph activity and approval markers when the run finishes", () => {
+  it("clears graph activity and approval markers when the run finishes", async () => {
+    const user = userEvent.setup();
     render(
       <Sidebar
         runs={[{ ...graphRun, phase: "succeeded", graphProgress: {
@@ -699,6 +710,9 @@ describe("Sidebar", () => {
         initialSection="workflows"
       />,
     );
+    // An accepted run is archived, so the row this is about is read there.
+    await user.click(header("Filter WorkOrders"));
+    await user.click(screen.getByRole("checkbox", { name: "Archived" }));
 
     expect(screen.getByRole("link", { name: /Second run/ })).toHaveTextContent("succeeded ·");
     expect(screen.queryByLabelText("WorkOrder is in progress")).not.toBeInTheDocument();

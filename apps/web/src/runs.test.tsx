@@ -483,6 +483,45 @@ describe("RunsPage", () => {
     ).toBeVisible();
     expect(screen.getByText("0 of 2 shown")).toBeInTheDocument();
   });
+
+  /** A run past human review is a WorkOrder somebody accepted, and the page is
+   *  about the work still in hand -- but the archive is a click away. */
+  it("keeps accepted WorkOrders out of the list until the archive is asked for", async () => {
+    const runs = [run(), run({ runId: "run-2", name: "Second run", phase: "succeeded" })];
+    const user = userEvent.setup();
+    const { container } = render(<RunsPage runs={runs} error="" />);
+
+    expect(container.querySelectorAll(".cards .card")).toHaveLength(1);
+    expect(screen.queryByRole("heading", { name: "Second run" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 of 1 shown")).toBeInTheDocument();
+    const phases = screen.getByRole("group", { name: "Filter WorkOrders by phase" });
+    expect(within(phases).queryByRole("button", { name: "succeeded" })).not.toBeInTheDocument();
+
+    const archived = screen.getByRole("button", { name: "Archived" });
+    await user.click(archived);
+    expect(archived).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("heading", { name: "Second run" })).toBeVisible();
+    expect(screen.getByText("2 of 2 shown")).toBeInTheDocument();
+
+    // The phase this reveals is pressed, and putting the archive away again
+    // would leave it pressed over nothing, so it is released with it.
+    await user.click(within(phases).getByRole("button", { name: "succeeded" }));
+    expect(container.querySelectorAll(".cards .card")).toHaveLength(1);
+    await user.click(archived);
+    expect(within(phases).getByRole("button", { name: "All" })).toHaveAttribute(
+      "aria-pressed", "true",
+    );
+    expect(screen.getByRole("heading", { name: "First run" })).toBeVisible();
+  });
+
+  it("says a list emptied by the archive is filtered rather than unstarted", () => {
+    render(<RunsPage runs={[run({ phase: "succeeded" })]} error="" />);
+
+    expect(
+      screen.getByRole("heading", { name: "No WorkOrders match this filter." }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Archived" })).toBeVisible();
+  });
 });
 
 describe("RunDetailPage", () => {

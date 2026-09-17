@@ -19,7 +19,7 @@ import {
 } from "./api";
 import { RailBrand, RailFoot } from "./brand";
 import { SettingsPanel } from "./settings-panel";
-import { runFinished, runStatusLabel } from "./runs";
+import { runArchived, runFinished, runStatusLabel } from "./runs";
 
 export type RailSection = "projects" | "workflows";
 
@@ -130,10 +130,13 @@ function workOrderCategories(run: ApiWorkflowRunListing, nodes: GraphNodes): str
   return stages.length ? stages : [runStatusLabel(run)];
 }
 
-function WorkOrderFilters({ options, excluded, onChange }: {
+function WorkOrderFilters({ options, excluded, onChange, archived, onArchivedChange }: {
   options: string[];
   excluded: string[];
   onChange: (excluded: string[]) => void;
+  /** Whether the done WorkOrders are in the rail. */
+  archived: boolean;
+  onArchivedChange: (archived: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -161,7 +164,9 @@ function WorkOrderFilters({ options, excluded, onChange }: {
     }}>
       <button type="button" className="rail-filter-toggle" aria-label="Filter WorkOrders"
         title="Filter WorkOrders" aria-expanded={open} aria-controls="rail-workorder-filters"
-        data-active={options.some((option) => excluded.includes(option)) || undefined}
+        data-active={
+          archived || options.some((option) => excluded.includes(option)) || undefined
+        }
         onClick={() => setOpen(!open)}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
@@ -170,6 +175,15 @@ function WorkOrderFilters({ options, excluded, onChange }: {
       </button>
       {open && <div ref={menuRef} className="rail-filter-options" id="rail-workorder-filters"
         role="group" aria-label="WorkOrder filters">
+        {/* Above the stages, and apart from them: the stages narrow what is
+            listed, while this is what decides which of them are there to
+            narrow at all. An archived WorkOrder is in no stage any more. */}
+        <label className="rail-filter-archive">
+          <input type="checkbox" checked={archived} onChange={(event) =>
+            onArchivedChange(event.target.checked)
+          } />
+          Archived
+        </label>
         {options.length === 0 && <span>No WorkOrder history yet.</span>}
         {options.map((filter) => <label key={filter}>
           <input type="checkbox" checked={!excluded.includes(filter)} onChange={(event) =>
@@ -353,10 +367,16 @@ export function Sidebar({
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Keep exclusions so newly observed stages are selected without resetting user choices.
   const [excludedFilters, setExcludedFilters] = useState<string[]>([]);
+  // The archive is out of the rail until it is asked for. A WorkOrder a person
+  // has accepted is done, and the rail is what is being worked on -- the list
+  // would otherwise grow by one every time a run is finished with and never
+  // shrink.
+  const [showArchived, setShowArchived] = useState(false);
   runs = runs.filter((run) => run.phase !== "scheduled");
-  const runCategories = runs.map((run) => workOrderCategories(run, graphNodes));
+  const listed = showArchived ? runs : runs.filter((run) => !runArchived(run));
+  const runCategories = listed.map((run) => workOrderCategories(run, graphNodes));
   const filterOptions = [...new Set(runCategories.flat())].sort((a, b) => a.localeCompare(b));
-  const filteredRuns = runs.filter((_, index) =>
+  const filteredRuns = listed.filter((_, index) =>
     runCategories[index].some((category) => !excludedFilters.includes(category)),
   );
   // A row with nowhere to go is never the page you are reading. Both sides are
@@ -411,7 +431,9 @@ export function Sidebar({
           </nav>
         </Section>
         <Section id="workflows" title="WorkOrders" open={open === "workflows"} onToggle={toggle}
-          action={<WorkOrderFilters options={filterOptions} excluded={excludedFilters} onChange={setExcludedFilters} />}>
+          action={<WorkOrderFilters options={filterOptions} excluded={excludedFilters}
+            onChange={setExcludedFilters} archived={showArchived}
+            onArchivedChange={setShowArchived} />}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/runs/new">
               + New WorkOrder
