@@ -95,6 +95,23 @@ class TerminalMcpServer:
                 return await store.pull_requests(execution.run_id)
 
             broker.enable_pull_request_ownership(owned)
+        if "pr_url" in self.required_outputs:
+            store = execution.runtime.store
+
+            async def claim_reported(reported: OpenedPullRequest) -> bool:
+                holder = await store.claim_pull_request(
+                    PullRequestRecord(
+                        repository=reported.repository,
+                        number=reported.number,
+                        run_id=execution.run_id,
+                        opened_at=datetime.now(UTC).isoformat(),
+                        node_id=execution.node_id,
+                        url=reported.url,
+                    )
+                )
+                return holder == execution.run_id
+
+            broker.enable_pull_request_claims(claim_reported)
         if "add_comment" in served:
             store = execution.runtime.store
 

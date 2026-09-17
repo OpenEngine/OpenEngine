@@ -76,7 +76,13 @@ PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
 #: `(project, number)` keys. Bound by whoever owns the store, like
 #: `PullRequestRecorder`, and read back when a step names a pull request.
 PullRequestLookup = Callable[[], Awaitable[Sequence[tuple[str, int]]]]
+
+#: Given a pull request the forge shows is this run's work, take it on unless
+#: another run already holds it, and say whether this run holds it now. Bound
+#: by whoever owns the store, like `PullRequestRecorder`.
+PullRequestClaimer = Callable[["OpenedPullRequest"], Awaitable[bool]]
 WorkorderCreator = Callable[[RunId, str, RunId | None], Awaitable[tuple[str, str]]]
+
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -225,6 +231,7 @@ class TerminalMcpBroker:
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
         self._pull_request_lookup: PullRequestLookup | None = None
+        self._pull_request_claimer: PullRequestClaimer | None = None
         self._opened: set[ChangeRequest] = set()
         self._workorder_creator: WorkorderCreator | None = None
 
@@ -274,6 +281,20 @@ class TerminalMcpBroker:
         read, only what this step opened is accepted.
         """
         self._pull_request_lookup = lookup
+
+    def enable_pull_request_claims(self, claim: PullRequestClaimer) -> None:
+        """Record a reported `pr_url` the forge shows is this step's work.
+
+        A step that opened its pull request some other way -- `gh pr create`
+        in the shell -- leaves nothing recorded, and a later step would have
+        nothing to be held to. Naming a pull request is not enough to own it,
+        though, and neither is the checkout, which the agent controls: a report
+        is claimed only when the forge shows that pull request in the
+        workspace's repository, on the checked-out branch at `HEAD`, authored
+        by the account these credentials act as. A pull request another run
+        already holds stays with that run.
+        """
+        self._pull_request_claimer = claim
 
     def enable_repository_tools(
         self,
@@ -495,7 +516,9 @@ class TerminalMcpBroker:
                 for output in event.outputs:
                     if output.name == "pr_url":
                         foreign = await self._foreign_pull_request(output.value)
-                        if foreign is not None:
+                        if foreign is not None and not await self._claim_reported_pull_request(
+                            output.value
+                        ):
                             return {"ok": False, "error": foreign}
             elif name == "fail_step":
                 event = run_failed_from_arguments(
@@ -684,6 +707,48 @@ class TerminalMcpBroker:
             f"{url} is not a pull request this run opened ({named}); "
             "use the URL open_pull_request returned"
         )
+
+    async def _claim_reported_pull_request(self, url: str) -> bool:
+        """Claim `url` for this run if the forge shows it is this step's work.
+
+        See `enable_pull_request_claims` for what has to match. Anything that
+        cannot be confirmed -- a forge or store that does not answer, a
+        detached head, an empty login -- claims nothing.
+        """
+        if self._pull_request_claimer is None or self._workspace_id is None:
+            return False
+        requested = change_request(url)
+        if requested is None or self._source_control is None:
+            return False
+        try:
+            shown = await self._source_control.view_change_request(
+                self._workspace_id, requested.number
+            )
+            branch = await self._source_control.run_git(
+                self._workspace_id, ("symbolic-ref", "--quiet", "--short", "HEAD")
+            )
+            head = await self._source_control.run_git(
+                self._workspace_id, ("rev-parse", "HEAD")
+            )
+            login = await self._source_control.authenticated_login(url)
+            if not (
+                change_request(shown.url) == requested
+                and branch.ok
+                and branch.stdout.strip()
+                and shown.head_ref == branch.stdout.strip()
+                and head.ok
+                and head.stdout.strip()
+                and shown.head_sha == head.stdout.strip()
+                and login
+                and shown.author == login
+            ):
+                return False
+            return await self._pull_request_claimer(
+                OpenedPullRequest(requested.project, requested.number, url)
+            )
+        except Exception:
+            logger.exception("Could not confirm the reported pull request %s", url)
+            return False
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -1379,6 +1444,7 @@ __all__ = [
     "DEFAULT_BASE_REF",
     "OpenedPullRequest",
     "PostedComment",
+    "PullRequestClaimer",
     "PullRequestLookup",
     "PullRequestRecorder",
     "READ_ONLY_REPOSITORY_TOOLS",

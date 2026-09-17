@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from engine.ports.source_control import CommentResult
+from engine.ports.source_control import ChangeRequest, CommentResult
 
 from engine.domain import (
     AgentId,
@@ -1385,3 +1385,133 @@ def test_a_misdirected_comment_is_refused_and_says_where_to_post() -> None:
     assert "acme/api#407" in str(misdirected["error"])
     assert correct["ok"] is True
     assert posted == ["https://github.com/ACME/api/pull/407/files"]
+
+
+class ReportingSourceControl:
+    """A forge showing `acme/api#7` on `feature` at `abc123`, by `engine-bot`.
+
+    The checkout is on `branch` at `head`, and the credentials act as `login`.
+    """
+
+    def __init__(
+        self,
+        *,
+        shown_url: str = "https://github.com/acme/api/pull/7",
+        branch: GitResult = GitResult(0, "feature\n", ""),
+        head: GitResult = GitResult(0, "abc123\n", ""),
+        author: str = "engine-bot",
+        login: str = "engine-bot",
+    ) -> None:
+        self.shown_url = shown_url
+        self.branch = branch
+        self.head = head
+        self.author = author
+        self.login = login
+
+    async def view_change_request(self, _workspace_id: object, number: int) -> ChangeRequest:
+        return ChangeRequest(
+            number=number, title="A thing", state="open", body="", author=self.author,
+            url=self.shown_url, head_ref="feature", head_sha="abc123", base_ref="main",
+        )
+
+    async def run_git(self, _workspace_id: object, arguments: tuple[str, ...]) -> GitResult:
+        return self.branch if arguments[0] == "symbolic-ref" else self.head
+
+    async def authenticated_login(self, _repository_url: str) -> str:
+        return self.login
+
+
+@pytest.mark.parametrize(
+    ("source_control", "workspace", "recorded"),
+    [
+        (ReportingSourceControl(), "workspace", True),
+        (ReportingSourceControl(branch=GitResult(0, "other\n", "")), "workspace", False),
+        (ReportingSourceControl(head=GitResult(0, "def456\n", "")), "workspace", False),
+        (ReportingSourceControl(shown_url="https://github.com/acme/other/pull/7"), "workspace", False),
+        (ReportingSourceControl(branch=GitResult(1, "", "fatal: ref HEAD is not a symbolic ref")), "workspace", False),
+        (ReportingSourceControl(author="somebody-else"), "workspace", False),
+        (ReportingSourceControl(author="", login=""), "workspace", False),
+        (ReportingSourceControl(), None, False),
+    ],
+    ids=["matching", "another-branch", "another-commit", "another-repo", "detached-head",
+         "another-author", "empty-login", "no-workspace"],
+)
+def test_a_reported_pull_request_is_recorded_only_when_the_forge_shows_it_is_the_runs(
+    source_control: ReportingSourceControl, workspace: str | None, recorded: bool,
+) -> None:
+    """A step that opened its pull request in the shell has nothing recorded.
+
+    Its report is claimed when the forge agrees it is this step's work; the
+    checkout alone is the agent's to arrange, so every part has to match.
+    """
+
+    async def scenario() -> tuple[dict[str, object], list[OpenedPullRequest]]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(reported: OpenedPullRequest) -> bool:
+            claimed.append(reported)
+            return True
+
+        async def lookup() -> list[tuple[str, int]]:
+            return []
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            source_control,  # type: ignore[arg-type]
+            ("git_subcommand",),
+            None if workspace is None else WorkspaceId(workspace),
+        )
+        broker.enable_pull_request_ownership(lookup)
+        broker.enable_pull_request_claims(claim)
+        broker._result = asyncio.get_running_loop().create_future()
+        answer = await broker._submit(_direct_request(
+            broker, "complete-1", "complete_step",
+            {"outcome": "success", "summary": "Done.",
+             "outputs": {"pr_url": "https://github.com/acme/api/pull/7"}},
+        ))
+        return answer, claimed
+
+    answer, claimed = asyncio.run(scenario())
+
+    assert answer["ok"] is recorded
+    expected = [OpenedPullRequest("acme/api", 7, "https://github.com/acme/api/pull/7")]
+    assert claimed == (expected if recorded else [])
+
+
+def test_a_reported_pull_request_another_run_holds_is_refused() -> None:
+    async def scenario() -> dict[str, object]:
+        async def claim(_reported: OpenedPullRequest) -> bool:
+            return False
+
+        async def lookup() -> list[tuple[str, int]]:
+            return []
+
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            ReportingSourceControl(),  # type: ignore[arg-type]
+            ("git_subcommand",),
+            WorkspaceId("workspace"),
+        )
+        broker.enable_pull_request_ownership(lookup)
+        broker.enable_pull_request_claims(claim)
+        broker._result = asyncio.get_running_loop().create_future()
+        return await broker._submit(_direct_request(
+            broker, "complete-1", "complete_step",
+            {"outcome": "success", "summary": "Done.",
+             "outputs": {"pr_url": "https://github.com/acme/api/pull/7"}},
+        ))
+
+    answer = asyncio.run(scenario())
+
+    assert answer["ok"] is False
+    assert "not a pull request this run opened" in str(answer["error"])
