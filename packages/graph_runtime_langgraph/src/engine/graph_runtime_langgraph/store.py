@@ -275,6 +275,15 @@ class GraphRuntimeStore(EventStore, Protocol):
         """
         ...
 
+    async def pull_requests(self, run_id: RunId) -> tuple[tuple[str, int], ...]:
+        """Every pull request this run is recorded as having opened.
+
+        `pull_request_for_run` in full, for a caller that has to say whether a
+        pull request is this run's rather than name one: a step holding a
+        `pr_url` that may have been read off an issue, a diff or CI output.
+        """
+        ...
+
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         """Settle every open request this run raised, without deciding one.
 
@@ -387,6 +396,13 @@ class InMemoryGraphRuntimeStore:
             if record.run_id == run_id:
                 return (repository, number)
         return None
+
+    async def pull_requests(self, run_id: RunId) -> tuple[tuple[str, int], ...]:
+        return tuple(
+            (repository, number)
+            for (repository, number), record in self._pull_requests.items()
+            if record.run_id == run_id
+        )
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         for approval_id, record in tuple(self._approvals.items()):
@@ -632,6 +648,14 @@ class SqliteGraphRuntimeStore:
             (str(run_id),),
         ).fetchone()
         return None if row is None else (row["repository"], int(row["number"]))
+
+    async def pull_requests(self, run_id: RunId) -> tuple[tuple[str, int], ...]:
+        rows = self._connection.execute(
+            "SELECT repository, number FROM github_pull_requests "
+            "WHERE run_id = ? ORDER BY opened_at, repository, number",
+            (str(run_id),),
+        ).fetchall()
+        return tuple((row["repository"], int(row["number"])) for row in rows)
 
     async def abandon_run_approvals(self, run_id: RunId) -> None:
         self._connection.execute(

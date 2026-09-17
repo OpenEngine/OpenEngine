@@ -151,10 +151,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     # Stub out real GitHub API calls so e2e tests work without a token.
+    # Opening a pull request answers acme/repository#7, the URL scripts report.
     # Comment POSTs are recorded to gh.jsonl so tests can assert on them.
     gh_log = state / "gh.jsonl"
 
     async def _fake_api(self, method: str, path: str, **kwargs: object) -> object:
+        if method == "POST" and path.endswith("/pulls"):
+            owner, repo = path.removeprefix("/repos/").split("/")[:2]
+            return {"html_url": f"https://github.com/{owner}/{repo}/pull/7"}
         if method == "GET" and "/pulls/" in path:
             return {"head": {"sha": "abc1234"}, "base": {"ref": "main"}}
         if method == "GET" and "/rules/branches/" in path:
@@ -181,7 +185,13 @@ def main(argv: list[str] | None = None) -> int:
             }
         return {}
 
+    # The fixture's origin is a bare directory, which names no GitHub
+    # repository; a pull request opened from it is opened on this one.
+    async def _fake_repo_coords(self, root_path: str) -> tuple[str, str]:
+        return ("acme", "repository")
+
     GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]
+    GitHubSourceControl._repo_coords = _fake_repo_coords  # type: ignore[method-assign]
 
     print(describe_loaded_config(loaded), flush=True)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")

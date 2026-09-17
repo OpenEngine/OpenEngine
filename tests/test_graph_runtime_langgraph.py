@@ -585,6 +585,8 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
         assert await store.pull_request_for_run(RunId("run-2")) == ("acme/web", 7)
         # A run that opened nothing, which is most of them.
         assert await store.pull_request_for_run(RunId("run-9")) is None
+        assert await store.pull_requests(RunId("run-1")) == (("acme/api", 42),)
+        assert await store.pull_requests(RunId("run-9")) == ()
         # The repository is part of the question: two forges number their pull
         # requests from counters of their own.
         assert await store.run_for_pull_request("acme/web", 42) is None
@@ -610,6 +612,7 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
         # request no longer holds one.
         assert await store.pull_request_for_run(RunId("run-3")) == ("acme/api", 42)
         assert await store.pull_request_for_run(RunId("run-1")) is None
+        assert await store.pull_requests(RunId("run-1")) == ()
         # Claiming is the conditional form, for a caller that needs one run per
         # pull request: a held one stays with its holder, and the claimant is
         # told so rather than displacing it.
@@ -630,6 +633,13 @@ def test_a_pull_request_belongs_to_the_run_that_opened_it(
             opened, number=999, run_id=RunId("run-6"), url="https://example/pr/999",
         )) == RunId("run-6")
         assert await store.run_for_pull_request("acme/api", 999) == RunId("run-6")
+        # A run that opened more than one is held to all of them.
+        await store.remember_pull_request(replace(
+            elsewhere, number=8, run_id=RunId("run-6"), opened_at="2026-09-10T22:00:00Z",
+        ))
+        assert await store.pull_requests(RunId("run-6")) == (
+            ("acme/api", 999), ("acme/web", 8),
+        )
 
     asyncio.run(scenario())
 
