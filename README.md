@@ -36,6 +36,33 @@ uv run engine-dev
 
 Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
+## Terminal client
+
+With the daemon (`engine-web`) running, submit a work order from the terminal:
+
+```bash
+uv run engine workflows
+uv run engine submit "Fix the failing tests" --repository owner/repo --workflow WORKFLOW_ID
+uv run engine watch RUN_ID
+```
+
+`engine submit` prints the run ID and opens a live terminal view. It shows an
+animated progress bar for each active graph step and streams agent messages,
+including messages already recorded before connecting. Step bars are
+indeterminate because the API does not report percentage completion. Parallel
+steps each have a bar. Approvals are shown as waiting and can be handled in the
+web UI. The CLI has no steering controls.
+
+Use `--input NAME=VALUE` repeatedly for workflow inputs, or `--no-watch` to
+submit and return immediately. `Ctrl-C` detaches without cancelling the work;
+`engine watch RUN_ID` reconnects. Watching exits with code 0 on completion, 1
+on failure, and 130 when interrupted.
+
+The default daemon URL is `http://localhost:8000`. Override it with
+`engine --url URL ...` or `ENGINE_URL`. If the daemon requires login, set
+`ENGINE_COOKIE` to an authenticated session's Cookie header value. The client
+does not start a daemon or require a local checkout of the submitted repository.
+
 ## engine.toml
 The main configuration file for OpenEngine. It's defined [here](./engine.toml).
 While we use sensible defaults, if you need to configure engine, point it at a new 

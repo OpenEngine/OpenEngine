@@ -247,9 +247,12 @@ def test_apps_do_not_depend_on_each_other(package: Package) -> None:
 
 
 def test_apps_actually_wire_adapters() -> None:
-    """If no app names an adapter, the composition root is not composing."""
+    """Server apps compose adapters; the terminal client uses only HTTP."""
     for package in by_layer(APP):
         imported = {m for modules in engine_imports(package).values() for m in modules}
+        if package.dist_name == "engine-cli":
+            assert not imported, "the CLI must use the public API, not engine internals"
+            continue
         assert any(m.startswith("engine.adapters") for m in imported), (
             f"{package.dist_name} imports no adapters; it is not a composition root"
         )
