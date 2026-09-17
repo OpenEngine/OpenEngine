@@ -59,6 +59,19 @@ class OrchestratorConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TailscaleConfig:
+    """Settings for exposing this deployment on the tailnet with Tailscale.
+
+    No secrets belong here: an auth key, if one is ever needed, follows the
+    `.env`-beside-`engine.toml` convention described on `GitHubConfig`.
+    """
+
+    enabled: bool = False
+    port: int | None = None
+    """Local port to expose, or ``None`` for the web server's own port."""
+
+
+@dataclass(frozen=True, slots=True)
 class ClaudeConfig:
     """Settings that only apply when Claude Code is the runner.
 
@@ -141,6 +154,7 @@ class EngineConfig:
     approvals: ApprovalConfig = ApprovalConfig()
     workflows: WorkflowsConfig = WorkflowsConfig()
     orchestrator: OrchestratorConfig = OrchestratorConfig()
+    tailscale: TailscaleConfig = TailscaleConfig()
     claude: ClaudeConfig = ClaudeConfig()
     attribution: bool = True
 
@@ -228,6 +242,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_token",
             "orchestrator",
             "public_url",
+            "tailscale",
             "work_orders",
             "workflows",
         },
@@ -342,6 +357,19 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "orchestrator.health_check_interval must be a positive number"
         )
 
+    tailscale = _table(document.get("tailscale", {}), "tailscale")
+    _reject_unknown(tailscale, {"enabled", "port"}, "tailscale")
+    tailscale_enabled = tailscale.get("enabled", False)
+    if not isinstance(tailscale_enabled, bool):
+        raise EngineConfigError("tailscale.enabled must be a boolean")
+    tailscale_port = tailscale.get("port")
+    if tailscale_port is not None and (
+        not isinstance(tailscale_port, int)
+        or isinstance(tailscale_port, bool)
+        or not 1 <= tailscale_port <= 65535
+    ):
+        raise EngineConfigError("tailscale.port must be an integer from 1 to 65535")
+
     return EngineConfig(
         attribution=attribution,
         default_branch=default_branch,
@@ -390,6 +418,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             database=orchestrator_database,
             health_check_interval=float(health_check_interval),
         ),
+        tailscale=TailscaleConfig(enabled=tailscale_enabled, port=tailscale_port),
     )
 
 
@@ -522,6 +551,7 @@ __all__ = [
     "GitHubConfig",
     "LoadedEngineConfig",
     "ResponseStyle",
+    "TailscaleConfig",
     "WorkOrdersConfig",
     "WorkflowsConfig",
     "describe_loaded_config",
