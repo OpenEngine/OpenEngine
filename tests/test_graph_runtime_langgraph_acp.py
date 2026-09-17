@@ -2409,10 +2409,13 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
         async def run_git(
             self, workspace_id: WorkspaceId, arguments: Sequence[str]
         ) -> GitResult:
-            if tuple(arguments[:1]) == ("symbolic-ref",):
-                return GitResult(0, "agent/greeting\n", "")
             if tuple(arguments[:1]) == ("push",):
-                return GitResult(0, "", " * [new branch]      agent/greeting -> agent/greeting\n")
+                return GitResult(
+                    0,
+                    "",
+                    "To https://github.com/acme/repository.git\n"
+                    " * [new branch]      agent/greeting -> agent/greeting\n",
+                )
             return GitResult(0, "abc123\n", "")
 
         async def view_change_request(
