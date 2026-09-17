@@ -56,6 +56,18 @@ export function runFinished(run: ApiWorkflowRunListing) {
   return run.phase === "succeeded" || run.phase === "failed";
 }
 
+/** Whether a WorkOrder is done, and so belongs in the archive rather than in
+ *  the lists of work in hand.
+ *
+ *  Human review is the last stage a workflow runs, and only an approval
+ *  carries a run past it: rejecting one cancels the run, which reads as
+ *  failed. So a succeeded run is one a person has accepted -- as done as a
+ *  WorkOrder gets -- and the lists put it away rather than keeping it at the
+ *  top of the pile for as long as the engine remembers it. */
+export function runArchived(run: ApiWorkflowRunListing) {
+  return run.phase === "succeeded";
+}
+
 /** What a row says a run is doing, when nothing more specific is known.
  *
  *  The rail prefers the graph's own vocabulary -- the nodes on the frontier --
@@ -165,25 +177,38 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
   // phase buttons so the two narrow together: a title is how a WorkOrder is
   // recognized, and a long list is quicker to search than to read.
   const [title, setTitle] = useState("");
+  // Whether the archive is on screen. A WorkOrder a person has accepted is
+  // finished with, and the page is about the work still in hand -- but the
+  // archive is one click away rather than gone, because "what came of that
+  // one?" is a question this page is the answer to.
+  const [archived, setArchived] = useState(false);
+
+  // What the page is about: every WorkOrder, less the archive until it is
+  // asked for. Everything below narrows this rather than the whole list, so
+  // the counts, the phase buttons and the cards all say the same thing.
+  const listed = useMemo(
+    () => (archived ? runs : runs.filter((run) => !runArchived(run))),
+    [archived, runs],
+  );
 
   // Built from the phases actually present rather than from a fixed list, so a
   // filter is never offered that would empty the page, and a phase the workflow
   // grows later still gets a button.
   const phases = useMemo(() => {
     const seen: string[] = [];
-    for (const run of runs) if (!seen.includes(run.phase)) seen.push(run.phase);
+    for (const run of listed) if (!seen.includes(run.phase)) seen.push(run.phase);
     return seen;
-  }, [runs]);
+  }, [listed]);
   const search = title.trim().toLowerCase();
-  const shown = runs.filter(
+  const shown = listed.filter(
     (run) =>
       (!filter || run.phase === filter) &&
       (!search || run.name.toLowerCase().includes(search)),
   );
 
-  const awaiting = runs.filter((run) => run.phase === "awaiting_human_review").length;
-  const failed = runs.filter((run) => run.phase === "failed").length;
-  const running = runs.filter((run) => IN_PROGRESS_PHASES.has(run.phase)).length;
+  const awaiting = listed.filter((run) => run.phase === "awaiting_human_review").length;
+  const failed = listed.filter((run) => run.phase === "failed").length;
+  const running = listed.filter((run) => IN_PROGRESS_PHASES.has(run.phase)).length;
 
   return (
     <main className="panel-scroll">
@@ -195,7 +220,7 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
         </p>
       </header>
       <StatStrip>
-        <Stat label="WorkOrders" value={runs.length} />
+        <Stat label="WorkOrders" value={listed.length} />
         <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />
         <Stat label="Failed" value={failed} tone={failed ? "alert" : undefined} />
         <Stat label="Running" value={running} />
@@ -217,6 +242,26 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
               </button>
             ))}
           </div>
+          {/* Kept out of the phase buttons: the archive is not a phase, and a
+              reader asking for it is asking for more of the list rather than
+              for less of it. */}
+          <div className="segmented">
+            <button
+              type="button"
+              aria-pressed={archived}
+              onClick={() => {
+                const next = !archived;
+                setArchived(next);
+                // A phase button exists only while a WorkOrder is in that
+                // phase, so putting the archive away can take the pressed one
+                // with it and leave nothing on screen and nothing pressed.
+                if (!next && !runs.some((run) => !runArchived(run) && run.phase === filter))
+                  setFilter("");
+              }}
+            >
+              Archived
+            </button>
+          </div>
           <input
             aria-label="Filter WorkOrders by title"
             className="toolbar-search"
@@ -227,7 +272,7 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
           />
           <div className="toolbar-end">
             <span className="micro">
-              {shown.length} of {runs.length} shown
+              {shown.length} of {listed.length} shown
             </span>
             <a className="btn" href="/runs/new">
               New WorkOrder
@@ -239,14 +284,19 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
         <p className="notice notice-block">
           Could not load WorkOrders: {error}
         </p>
-      ) : runs.length > 0 && shown.length === 0 ? (
+      ) : runs.length === 0 ? (
+        <div className="empty">
+          <h2>No WorkOrders yet.</h2>
+        </div>
+      ) : shown.length === 0 ? (
         // Unlike the phase buttons -- built from the phases on screen, so none
         // of them can empty the page -- a typed title can match nothing, and
-        // that reads as a lost list without something saying otherwise.
+        // everything on the page can be archived, and either reads as a lost
+        // list without something saying otherwise.
         <div className="empty">
           <h2>No WorkOrders match this filter.</h2>
         </div>
-      ) : runs.length ? (
+      ) : (
         <div className="cards">
           {shown.map((run) => {
             return (
@@ -277,10 +327,6 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
               </a>
             );
           })}
-        </div>
-      ) : (
-        <div className="empty">
-          <h2>No WorkOrders yet.</h2>
         </div>
       )}
     </main>

@@ -46,7 +46,12 @@ async function verifyPersistedNavigation({
   // page, then follow the same links a person uses instead of addressing each
   // API or detail route directly.
   await page.goto("/runs");
-  await expect(page.getByRole("heading", { name: "WorkOrders" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "WorkOrders", exact: true }),
+  ).toBeVisible();
+  // The seeded run was accepted, and an accepted WorkOrder is archived: the
+  // list is about work in hand until the archive is asked for.
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
   const seededRunCard = page
     .locator(".cards")
     .getByRole("link", { name: new RegExp(SEEDED_RUN) });
@@ -153,6 +158,7 @@ async function verifyPersistedNavigation({
   // Creating new records did not replace the old ones: the original run is
   // still reachable from the list after both new execution paths completed.
   await page.getByRole("link", { name: "All WorkOrders", exact: true }).click();
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
   await expect(
     page.locator(".cards").getByRole("link", { name: new RegExp(SEEDED_RUN) }),
   ).toBeVisible();

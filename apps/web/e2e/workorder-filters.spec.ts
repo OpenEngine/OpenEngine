@@ -22,6 +22,9 @@ test("WorkOrder filters stay in the viewport with Projects expanded", async ({ p
   await page.getByRole("button", { name: "Filter WorkOrders", exact: true }).click();
 
   const menu = page.getByRole("group", { name: "WorkOrder filters" });
+  // The accepted run is archived, and its stage is only an option once the
+  // archive is in the rail.
+  await menu.getByRole("checkbox", { name: "Archived", exact: true }).check();
   await expect(menu).toBeInViewport({ ratio: 1 });
   expect(await menu.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
   for (const name of options) {

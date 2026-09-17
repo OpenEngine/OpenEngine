@@ -237,6 +237,9 @@ ul, ol { padding: 0; list-style: none; }
   box-shadow: 0 6px 18px #0004;
 }
 .rail-filter-options label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+/* The archive sits above the stages it decides the presence of, with the rule
+   between saying the two are different questions. */
+.rail-filter-archive { padding-bottom: 10px; border-bottom: 1px solid var(--night-rule); }
 /* Projects fills the rail and leaves the WorkOrders header above the footer. */
 @media (min-width: 761px) {
   .rail-section[data-open] + .rail-section .rail-filter-options {
