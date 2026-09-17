@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import secrets
 import shlex
 import sys
@@ -34,6 +35,7 @@ from engine.ports import (
     ApprovalHandler,
     ApprovalRequest,
     CommentResult,
+    GitResult,
     McpServerConfig,
     SourceControl,
 )
@@ -174,13 +176,22 @@ class TerminalResultRegistry:
         agent_run_id: AgentRunId,
         event: TerminalEvent,
         deliver: TerminalDelivery | None,
+        admit: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
+        """Accept `event` once per agent run.
+
+        `admit` runs only for the submission that gets past the guard, before
+        anything is delivered, so what it records is never left behind by a
+        duplicate or a refusal. It raises to refuse the submission.
+        """
         async with self._lock:
             previous = self._accepted.get(agent_run_id)
             if previous is not None:
                 raise TerminalResultAlreadySubmittedError(
                     "a terminal result was already accepted for this agent run"
                 )
+            if admit is not None:
+                await admit()
             if deliver is not None:
                 await deliver(event)
             self._accepted[agent_run_id] = event
@@ -233,6 +244,7 @@ class TerminalMcpBroker:
         self._pull_request_lookup: PullRequestLookup | None = None
         self._pull_request_claimer: PullRequestClaimer | None = None
         self._opened: set[ChangeRequest] = set()
+        self._pushed: set[str] = set()
         self._workorder_creator: WorkorderCreator | None = None
 
     def enable_workorder_creation(self, create: WorkorderCreator) -> None:
@@ -291,8 +303,12 @@ class TerminalMcpBroker:
         though, and neither is the checkout, which the agent controls: a report
         is claimed only when the forge shows that pull request in the
         workspace's repository, on the checked-out branch at `HEAD`, authored
-        by the account these credentials act as. A pull request another run
-        already holds stays with that run.
+        by the account these credentials act as, whose branch this step moved
+        with `git_subcommand`. The login is shared by every run, and fetching
+        another run's branch reproduces its checkout, so only a push this
+        broker saw land ties the pull request to this step. A pull request
+        another run already holds stays with that run, and nothing is claimed
+        for a submission the single-result guard turns away.
         """
         self._pull_request_claimer = claim
 
@@ -498,6 +514,7 @@ class TerminalMcpBroker:
                 assert self._clarifications is not None
                 self._clarifications.put_nowait(None)
                 return {"ok": True, "acknowledgement": "clarified"}
+            admit: Callable[[], Awaitable[None]] | None = None
             if name == "complete_step":
                 if "add_comment" in self._repository_tools and not self._comments_added:
                     return {
@@ -513,13 +530,18 @@ class TerminalMcpBroker:
                 )
                 if self._validate_completion is not None:
                     self._validate_completion(event)
+                claims: list[tuple[OpenedPullRequest, str]] = []
                 for output in event.outputs:
                     if output.name == "pr_url":
                         foreign = await self._foreign_pull_request(output.value)
-                        if foreign is not None and not await self._claim_reported_pull_request(
-                            output.value
-                        ):
+                        if foreign is None:
+                            continue
+                        confirmed = await self._confirmed_pull_request(output.value)
+                        if confirmed is None:
                             return {"ok": False, "error": foreign}
+                        claims.append((confirmed, foreign))
+                if claims:
+                    admit = self._claim_confirmed_pull_requests(claims)
             elif name == "fail_step":
                 event = run_failed_from_arguments(
                     run_id=self._run_id,
@@ -530,7 +552,7 @@ class TerminalMcpBroker:
             else:
                 return {"ok": False, "error": f"unknown terminal tool: {name}"}
             await self._registry.accept(
-                self._agent_run_id, event, self._deliver
+                self._agent_run_id, event, self._deliver, admit
             )
         except (
             InvalidStepResultError,
@@ -592,6 +614,8 @@ class TerminalMcpBroker:
                 )
             except Exception as error:
                 return {"ok": False, "error": f"could not run git: {error}"}
+            if git_arguments[0] == "push" and result.ok:
+                self._pushed.update(_pushed_branches(result))
             reported = "\n".join(part for part in (result.stdout, result.stderr) if part)
             if not result.ok:
                 return {
@@ -708,18 +732,19 @@ class TerminalMcpBroker:
             "use the URL open_pull_request returned"
         )
 
-    async def _claim_reported_pull_request(self, url: str) -> bool:
-        """Claim `url` for this run if the forge shows it is this step's work.
+    async def _confirmed_pull_request(self, url: str) -> OpenedPullRequest | None:
+        """`url` as this run's, if the forge shows it is this step's work.
 
-        See `enable_pull_request_claims` for what has to match. Anything that
-        cannot be confirmed -- a forge or store that does not answer, a
-        detached head, an empty login -- claims nothing.
+        See `enable_pull_request_claims` for what has to match. This only reads;
+        the claim is made when the completion is accepted. Anything that cannot
+        be confirmed -- a forge that does not answer, a detached head, an empty
+        login, a branch this step never pushed -- confirms nothing.
         """
         if self._pull_request_claimer is None or self._workspace_id is None:
-            return False
+            return None
         requested = change_request(url)
         if requested is None or self._source_control is None:
-            return False
+            return None
         try:
             shown = await self._source_control.view_change_request(
                 self._workspace_id, requested.number
@@ -731,24 +756,48 @@ class TerminalMcpBroker:
                 self._workspace_id, ("rev-parse", "HEAD")
             )
             login = await self._source_control.authenticated_login(url)
-            if not (
-                change_request(shown.url) == requested
-                and branch.ok
-                and branch.stdout.strip()
-                and shown.head_ref == branch.stdout.strip()
-                and head.ok
-                and head.stdout.strip()
-                and shown.head_sha == head.stdout.strip()
-                and login
-                and shown.author == login
-            ):
-                return False
-            return await self._pull_request_claimer(
-                OpenedPullRequest(requested.project, requested.number, url)
-            )
         except Exception:
             logger.exception("Could not confirm the reported pull request %s", url)
-            return False
+            return None
+        if not (
+            change_request(shown.url) == requested
+            and branch.ok
+            and branch.stdout.strip()
+            and shown.head_ref == branch.stdout.strip()
+            and shown.head_ref in self._pushed
+            and head.ok
+            and head.stdout.strip()
+            and shown.head_sha == head.stdout.strip()
+            and login
+            and shown.author == login
+        ):
+            return None
+        return OpenedPullRequest(requested.project, requested.number, url)
+
+    def _claim_confirmed_pull_requests(
+        self, claims: Sequence[tuple[OpenedPullRequest, str]]
+    ) -> Callable[[], Awaitable[None]]:
+        """Claim each confirmed report, refusing the completion if one is held.
+
+        Run by the registry for the one submission it accepts, so a duplicate
+        or concurrent `complete_step` claims nothing.
+        """
+        claimer = self._pull_request_claimer
+        assert claimer is not None
+
+        async def admit() -> None:
+            for reported, foreign in claims:
+                try:
+                    held = await claimer(reported)
+                except Exception as error:
+                    logger.exception(
+                        "Could not claim the reported pull request %s", reported.url
+                    )
+                    raise InvalidStepResultError(foreign) from error
+                if not held:
+                    raise InvalidStepResultError(foreign)
+
+        return admit
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -1156,6 +1205,26 @@ def _status_argument(arguments: object) -> str:
     if not isinstance(status, str) or not status.strip():
         raise ValueError("status must be a non-empty string")
     return status.strip()
+
+
+#: A ref `git push` updated, as it reports one: `  a..b  src -> dst` (or `*`
+#: new, `+` forced) on stderr, or `*\tsrc:dst\t[new branch]` with `--porcelain`.
+#: Up-to-date (`=`), rejected (`!`) and deleted (`-`) refs moved nothing.
+_PUSHED_REF = re.compile(
+    r"^(?: [ +*] (?:\[[^\]]+\]|\S+)\s+\S+ -> (?P<human>\S+)"
+    r"|[ +*]\t[^\t]*:(?P<porcelain>[^\t]+)\t)"
+)
+
+
+def _pushed_branches(result: GitResult) -> set[str]:
+    """The branches a successful `git push` moved on the remote."""
+    branches: set[str] = set()
+    for line in (result.stdout + "\n" + result.stderr).splitlines():
+        match = _PUSHED_REF.match(line)
+        if match is not None:
+            ref = match.group("human") or match.group("porcelain")
+            branches.add(ref.removeprefix("refs/heads/"))
+    return branches
 
 
 def _git_arguments(arguments: object) -> tuple[str, ...]:

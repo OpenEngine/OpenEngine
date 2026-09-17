@@ -1390,7 +1390,8 @@ def test_a_misdirected_comment_is_refused_and_says_where_to_post() -> None:
 class ReportingSourceControl:
     """A forge showing `acme/api#7` on `feature` at `abc123`, by `engine-bot`.
 
-    The checkout is on `branch` at `head`, and the credentials act as `login`.
+    The checkout is on `branch` at `head`, the credentials act as `login`, and
+    pushing answers `pushed`.
     """
 
     def __init__(
@@ -1401,7 +1402,9 @@ class ReportingSourceControl:
         head: GitResult = GitResult(0, "abc123\n", ""),
         author: str = "engine-bot",
         login: str = "engine-bot",
+        pushed: GitResult = GitResult(0, "", "To github.com:acme/api.git\n * [new branch]      feature -> feature\n"),
     ) -> None:
+        self.pushed = pushed
         self.shown_url = shown_url
         self.branch = branch
         self.head = head
@@ -1415,34 +1418,86 @@ class ReportingSourceControl:
         )
 
     async def run_git(self, _workspace_id: object, arguments: tuple[str, ...]) -> GitResult:
+        if arguments[0] == "push":
+            return self.pushed
         return self.branch if arguments[0] == "symbolic-ref" else self.head
 
     async def authenticated_login(self, _repository_url: str) -> str:
         return self.login
 
 
+_REPORT = {
+    "outcome": "success",
+    "summary": "Done.",
+    "outputs": {"pr_url": "https://github.com/acme/api/pull/7"},
+}
+
+
+async def _reporting_broker(
+    source_control: ReportingSourceControl,
+    claim: object,
+    *,
+    workspace: str | None = "workspace",
+    push: bool = True,
+) -> TerminalMcpBroker:
+    """A step with nothing recorded, that pushed its branch unless `push` is off."""
+
+    async def lookup() -> list[tuple[str, int]]:
+        return []
+
+    broker = TerminalMcpBroker(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("agent-run-1"),
+        step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+        registry=TerminalResultRegistry(),
+    )
+    broker.enable_repository_tools(
+        source_control,  # type: ignore[arg-type]
+        ("git_subcommand",),
+        None if workspace is None else WorkspaceId(workspace),
+        git_approval=_approve_git,
+    )
+    broker.enable_pull_request_ownership(lookup)
+    broker.enable_pull_request_claims(claim)  # type: ignore[arg-type]
+    broker._result = asyncio.get_running_loop().create_future()
+    if push:
+        await broker._submit(_direct_request(
+            broker, "push-1", "git_subcommand",
+            {"arguments": ["push", "-u", "origin", "feature"]},
+        ))
+    return broker
+
+
 @pytest.mark.parametrize(
-    ("source_control", "workspace", "recorded"),
+    ("source_control", "workspace", "push", "recorded"),
     [
-        (ReportingSourceControl(), "workspace", True),
-        (ReportingSourceControl(branch=GitResult(0, "other\n", "")), "workspace", False),
-        (ReportingSourceControl(head=GitResult(0, "def456\n", "")), "workspace", False),
-        (ReportingSourceControl(shown_url="https://github.com/acme/other/pull/7"), "workspace", False),
-        (ReportingSourceControl(branch=GitResult(1, "", "fatal: ref HEAD is not a symbolic ref")), "workspace", False),
-        (ReportingSourceControl(author="somebody-else"), "workspace", False),
-        (ReportingSourceControl(author="", login=""), "workspace", False),
-        (ReportingSourceControl(), None, False),
+        (ReportingSourceControl(), "workspace", True, True),
+        (ReportingSourceControl(pushed=GitResult(0, "To github.com:acme/api.git\n=\trefs/heads/feature:refs/heads/feature\t[up to date]\nDone\n", "")), "workspace", True, False),
+        (ReportingSourceControl(pushed=GitResult(0, "*\trefs/heads/feature:refs/heads/feature\t[new branch]\nDone\n", "")), "workspace", True, True),
+        (ReportingSourceControl(branch=GitResult(0, "other\n", "")), "workspace", True, False),
+        (ReportingSourceControl(head=GitResult(0, "def456\n", "")), "workspace", True, False),
+        (ReportingSourceControl(shown_url="https://github.com/acme/other/pull/7"), "workspace", True, False),
+        (ReportingSourceControl(branch=GitResult(1, "", "fatal: ref HEAD is not a symbolic ref")), "workspace", True, False),
+        (ReportingSourceControl(author="somebody-else"), "workspace", True, False),
+        (ReportingSourceControl(author="", login=""), "workspace", True, False),
+        (ReportingSourceControl(), None, True, False),
+        (ReportingSourceControl(), "workspace", False, False),
+        (ReportingSourceControl(pushed=GitResult(0, "", "Everything up-to-date\n")), "workspace", True, False),
+        (ReportingSourceControl(pushed=GitResult(0, "", " * [new branch]      other -> other\n")), "workspace", True, False),
     ],
-    ids=["matching", "another-branch", "another-commit", "another-repo", "detached-head",
-         "another-author", "empty-login", "no-workspace"],
+    ids=["matching", "porcelain-up-to-date", "porcelain-new-branch", "another-branch",
+         "another-commit", "another-repo", "detached-head", "another-author", "empty-login",
+         "no-workspace", "never-pushed", "pushed-nothing", "pushed-another-branch"],
 )
 def test_a_reported_pull_request_is_recorded_only_when_the_forge_shows_it_is_the_runs(
-    source_control: ReportingSourceControl, workspace: str | None, recorded: bool,
+    source_control: ReportingSourceControl, workspace: str | None, push: bool, recorded: bool,
 ) -> None:
     """A step that opened its pull request in the shell has nothing recorded.
 
     Its report is claimed when the forge agrees it is this step's work; the
-    checkout alone is the agent's to arrange, so every part has to match.
+    checkout alone is the agent's to arrange -- another run's branch can be
+    fetched and checked out under the same login -- so every part has to
+    match, and the branch has to be one this step's push moved.
     """
 
     async def scenario() -> tuple[dict[str, object], list[OpenedPullRequest]]:
@@ -1452,28 +1507,12 @@ def test_a_reported_pull_request_is_recorded_only_when_the_forge_shows_it_is_the
             claimed.append(reported)
             return True
 
-        async def lookup() -> list[tuple[str, int]]:
-            return []
-
-        broker = TerminalMcpBroker(
-            run_id=RunId("run-1"),
-            agent_run_id=AgentRunId("agent-run-1"),
-            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
-            registry=TerminalResultRegistry(),
+        broker = await _reporting_broker(
+            source_control, claim, workspace=workspace, push=push
         )
-        broker.enable_repository_tools(
-            source_control,  # type: ignore[arg-type]
-            ("git_subcommand",),
-            None if workspace is None else WorkspaceId(workspace),
+        answer = await broker._submit(
+            _direct_request(broker, "complete-1", "complete_step", _REPORT)
         )
-        broker.enable_pull_request_ownership(lookup)
-        broker.enable_pull_request_claims(claim)
-        broker._result = asyncio.get_running_loop().create_future()
-        answer = await broker._submit(_direct_request(
-            broker, "complete-1", "complete_step",
-            {"outcome": "success", "summary": "Done.",
-             "outputs": {"pr_url": "https://github.com/acme/api/pull/7"}},
-        ))
         return answer, claimed
 
     answer, claimed = asyncio.run(scenario())
@@ -1484,34 +1523,65 @@ def test_a_reported_pull_request_is_recorded_only_when_the_forge_shows_it_is_the
 
 
 def test_a_reported_pull_request_another_run_holds_is_refused() -> None:
-    async def scenario() -> dict[str, object]:
+    async def scenario() -> tuple[dict[str, object], bool]:
         async def claim(_reported: OpenedPullRequest) -> bool:
             return False
 
-        async def lookup() -> list[tuple[str, int]]:
-            return []
-
-        broker = TerminalMcpBroker(
-            run_id=RunId("run-1"),
-            agent_run_id=AgentRunId("agent-run-1"),
-            step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
-            registry=TerminalResultRegistry(),
+        broker = await _reporting_broker(ReportingSourceControl(), claim)
+        answer = await broker._submit(
+            _direct_request(broker, "complete-1", "complete_step", _REPORT)
         )
-        broker.enable_repository_tools(
-            ReportingSourceControl(),  # type: ignore[arg-type]
-            ("git_subcommand",),
-            WorkspaceId("workspace"),
-        )
-        broker.enable_pull_request_ownership(lookup)
-        broker.enable_pull_request_claims(claim)
-        broker._result = asyncio.get_running_loop().create_future()
-        return await broker._submit(_direct_request(
-            broker, "complete-1", "complete_step",
-            {"outcome": "success", "summary": "Done.",
-             "outputs": {"pr_url": "https://github.com/acme/api/pull/7"}},
-        ))
+        return answer, broker._result.done()  # type: ignore[union-attr]
 
-    answer = asyncio.run(scenario())
+    answer, done = asyncio.run(scenario())
 
     assert answer["ok"] is False
     assert "not a pull request this run opened" in str(answer["error"])
+    assert done is False
+
+
+def test_a_completion_turned_away_as_a_duplicate_claims_nothing() -> None:
+    """The claim is made for the one accepted result, so a second (or
+    concurrent) `complete_step` cannot take another pull request with it."""
+
+    async def scenario() -> tuple[list[dict[str, object]], list[OpenedPullRequest]]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(reported: OpenedPullRequest) -> bool:
+            claimed.append(reported)
+            return True
+
+        broker = await _reporting_broker(ReportingSourceControl(), claim)
+        broker._registry._accepted[broker._agent_run_id] = object()  # type: ignore[assignment]
+        answers = list(await asyncio.gather(
+            broker._submit(_direct_request(broker, "complete-1", "complete_step", _REPORT)),
+            broker._submit(_direct_request(broker, "complete-2", "complete_step", _REPORT)),
+        ))
+        return answers, claimed
+
+    answers, claimed = asyncio.run(scenario())
+
+    assert [answer["ok"] for answer in answers] == [False, False]
+    assert all("already accepted" in str(answer["error"]) for answer in answers)
+    assert claimed == []
+
+
+def test_concurrent_completions_claim_for_only_the_accepted_one() -> None:
+    async def scenario() -> tuple[list[dict[str, object]], list[OpenedPullRequest]]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(reported: OpenedPullRequest) -> bool:
+            claimed.append(reported)
+            return True
+
+        broker = await _reporting_broker(ReportingSourceControl(), claim)
+        answers = list(await asyncio.gather(
+            broker._submit(_direct_request(broker, "complete-1", "complete_step", _REPORT)),
+            broker._submit(_direct_request(broker, "complete-2", "complete_step", _REPORT)),
+        ))
+        return answers, claimed
+
+    answers, claimed = asyncio.run(scenario())
+
+    assert sorted(answer["ok"] for answer in answers) == [False, True]
+    assert len(claimed) == 1
