@@ -48,6 +48,7 @@ type SlackState = {
 /** What a status response says about the panel's own state, and nothing else. */
 function fromSlackStatus(status: SlackStatus) {
   return {
+    error: status.error,
     configured: status.configured,
     connected: status.connected,
     events: status.events ?? false,
@@ -207,7 +208,11 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     });
     getSlackStatus()
       .then((status) => setSlack((value) => ({ ...value, ...fromSlackStatus(status), loading: false })))
-      .catch(() => setSlack((value) => ({ ...value, loading: false })));
+      .catch((err) => setSlack((value) => ({
+        ...value,
+        loading: false,
+        error: err instanceof Error ? err.message : "Could not check Slack connection.",
+      })));
     getGitLabStatus()
       .then((status) =>
         setGitLab((value) => ({
@@ -481,8 +486,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       const poll = async () => {
         try {
           const status = await getSlackStatus();
-          if (status.connected || Date.now() >= deadline) {
-            setSlack((value) => ({ ...value, ...fromSlackStatus(status), loading: false }));
+          const connectionStatus = fromSlackStatus(status);
+          if (status.error || status.connected || Date.now() >= deadline) {
+            setSlack((value) => ({
+              ...value, ...connectionStatus, loading: false,
+              error: status.error || (status.connected ? undefined : "Slack authorization timed out."),
+            }));
             return;
           }
           slackPollTimeoutRef.current = setTimeout(() => void poll(), 1000);
@@ -985,7 +994,14 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               <span aria-hidden="true" className="settings-spinner" /> Checking…
             </p>
           )}
-          {slack.error && <p className="settings-status settings-status-error">{slack.error}</p>}
+          {slack.error && (
+            <div role="alert">
+              <p className="settings-status settings-status-error">{slack.error}</p>
+              <p className="settings-status settings-status-muted">
+                Check your Slack app’s OAuth credentials and redirect URL, update credentials if needed, then try connecting again.
+              </p>
+            </div>
+          )}
           {!slack.loading && (!slack.configured || slack.editing) && (
             <div className="settings-client-id-form">
               <label className="settings-label" htmlFor="slack-client-id">Slack OAuth Client ID</label>
