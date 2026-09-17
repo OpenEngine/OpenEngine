@@ -2411,6 +2411,8 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
         ) -> GitResult:
             if tuple(arguments[:1]) == ("symbolic-ref",):
                 return GitResult(0, "agent/greeting\n", "")
+            if tuple(arguments[:1]) == ("push",):
+                return GitResult(0, "", " * [new branch]      agent/greeting -> agent/greeting\n")
             return GitResult(0, "abc123\n", "")
 
         async def view_change_request(
@@ -2434,8 +2436,9 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
             self.execution_id = "task-1"
             self.node_id = NodeId(IMPLEMENTATION)
 
-    async def refuse(_request: Any) -> ApprovalDecision:
-        raise AssertionError("completing a step is not approved through the broker")
+    async def approve_push(request: Any) -> ApprovalDecision:
+        assert request.command == "git push origin agent/greeting"
+        return ApprovalDecision.ACCEPT
 
     async def scenario() -> tuple[dict[str, Any], Any, Any]:
         store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
@@ -2451,9 +2454,24 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
             repository_tools=("git_subcommand",),
         )
         async with server(
-            {"workspaceId": "ws-graph-run"}, Execution(store), refuse  # type: ignore[arg-type]
+            {"workspaceId": "ws-graph-run"}, Execution(store), approve_push  # type: ignore[arg-type]
         ) as bound:
             arguments = list(bound.config["args"])
+            await _mcp_response(
+                arguments[arguments.index("--host") + 1],
+                int(arguments[arguments.index("--port") + 1]),
+                arguments[arguments.index("--token") + 1],
+                {
+                    "jsonrpc": "2.0",
+                    "id": "push-1",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "git_subcommand",
+                        "arguments": {"arguments": ["push", "origin", "agent/greeting"]},
+                    },
+                },
+                repository_tools=("git_subcommand",),
+            )
             answer = await _mcp_response(
                 arguments[arguments.index("--host") + 1],
                 int(arguments[arguments.index("--port") + 1]),
