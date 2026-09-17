@@ -97,6 +97,23 @@ def test_gitlab_general_comment_returns_provenance() -> None:
     assert result.url == "https://gitlab.com/group/project/-/merge_requests/7#note_124"
 
 
+def test_gitlab_authenticated_login_asks_who_the_token_is() -> None:
+    transport = AsyncMock()
+    transport.request.return_value = {"id": 1, "username": "engine-bot"}
+    source = GitLabSourceControl("token", transport=transport)
+    assert asyncio.run(source.authenticated_login("https://gitlab.com/group/project")) == "engine-bot"
+    transport.request.assert_awaited_once_with("GET", "/user")
+
+
+@pytest.mark.parametrize("response", [{}, {"username": ""}, {"username": 7}, []])
+def test_gitlab_authenticated_login_refuses_an_unusable_answer(response: object) -> None:
+    transport = AsyncMock()
+    transport.request.return_value = response
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(RuntimeError, match="username"):
+        asyncio.run(source.authenticated_login("https://gitlab.com/group/project"))
+
+
 def test_gitlab_replies_fail_without_posting_a_flat_comment() -> None:
     transport = AsyncMock()
     source = GitLabSourceControl("token", transport=transport)

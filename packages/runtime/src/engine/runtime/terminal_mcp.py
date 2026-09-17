@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import secrets
 import shlex
 import sys
@@ -34,10 +35,15 @@ from engine.ports import (
     ApprovalHandler,
     ApprovalRequest,
     CommentResult,
+    GitResult,
     McpServerConfig,
     SourceControl,
 )
-from engine.runtime.change_requests import ChangeRequest, change_request
+from engine.runtime.change_requests import (
+    ChangeRequest,
+    change_request,
+    remote_project,
+)
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -76,6 +82,11 @@ PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
 #: `(project, number)` keys. Bound by whoever owns the store, like
 #: `PullRequestRecorder`, and read back when a step names a pull request.
 PullRequestLookup = Callable[[], Awaitable[Sequence[tuple[str, int]]]]
+
+#: Given a pull request the forge shows is this run's work, take it on unless
+#: another run already holds it, and say whether this run holds it now. Bound
+#: by whoever owns the store, like `PullRequestRecorder`.
+PullRequestClaimer = Callable[["OpenedPullRequest"], Awaitable[bool]]
 WorkorderCreator = Callable[[RunId, str], Awaitable[tuple[str, str]]]
 
 _SERVER_NAME = "workflow"
@@ -168,13 +179,22 @@ class TerminalResultRegistry:
         agent_run_id: AgentRunId,
         event: TerminalEvent,
         deliver: TerminalDelivery | None,
+        admit: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
+        """Accept `event` once per agent run.
+
+        `admit` runs only for the submission that gets past the guard, before
+        anything is delivered, so what it records is never left behind by a
+        duplicate or a refusal. It raises to refuse the submission.
+        """
         async with self._lock:
             previous = self._accepted.get(agent_run_id)
             if previous is not None:
                 raise TerminalResultAlreadySubmittedError(
                     "a terminal result was already accepted for this agent run"
                 )
+            if admit is not None:
+                await admit()
             if deliver is not None:
                 await deliver(event)
             self._accepted[agent_run_id] = event
@@ -223,7 +243,9 @@ class TerminalMcpBroker:
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
         self._pull_request_lookup: PullRequestLookup | None = None
+        self._pull_request_claimer: PullRequestClaimer | None = None
         self._opened: set[ChangeRequest] = set()
+        self._pushed: set[_PushedBranch] = set()
         self._workorder_creator: WorkorderCreator | None = None
 
     def enable_workorder_creation(self, create: WorkorderCreator) -> None:
@@ -272,6 +294,26 @@ class TerminalMcpBroker:
         read, only what this step opened is accepted.
         """
         self._pull_request_lookup = lookup
+
+    def enable_pull_request_claims(self, claim: PullRequestClaimer) -> None:
+        """Record a reported `pr_url` the forge shows is this step's work.
+
+        A step that opened its pull request some other way -- `gh pr create`
+        in the shell -- leaves nothing recorded, and a later step would have
+        nothing to be held to. Naming a pull request is not enough to own it,
+        though, and neither is the checkout, which the agent arranges as it
+        likes: a report is claimed only when the forge shows that pull request
+        authored by the account these credentials act as, and this step's own
+        `git_subcommand` push put its head commit on its head branch in the
+        repository it lives in. The login is shared by every run, so what ties
+        a pull request to this step is that push and nothing else -- fetching
+        another run's branch reproduces its checkout, and pushing a branch of
+        the same name to a remote of one's own proves nothing about the
+        repository the pull request is in. A pull request another run already
+        holds stays with that run, and nothing is claimed for a submission the
+        single-result guard turns away.
+        """
+        self._pull_request_claimer = claim
 
     def enable_repository_tools(
         self,
@@ -470,6 +512,7 @@ class TerminalMcpBroker:
                 assert self._clarifications is not None
                 self._clarifications.put_nowait(None)
                 return {"ok": True, "acknowledgement": "clarified"}
+            admit: Callable[[], Awaitable[None]] | None = None
             if name == "complete_step":
                 if "add_comment" in self._repository_tools and not self._comments_added:
                     return {
@@ -483,11 +526,18 @@ class TerminalMcpBroker:
                     arguments=arguments,
                     mcp_request_id=request_id,
                 )
+                claims: list[tuple[OpenedPullRequest, str]] = []
                 for output in event.outputs:
                     if output.name == "pr_url":
                         foreign = await self._foreign_pull_request(output.value)
-                        if foreign is not None:
+                        if foreign is None:
+                            continue
+                        confirmed = await self._confirmed_pull_request(output.value)
+                        if confirmed is None:
                             return {"ok": False, "error": foreign}
+                        claims.append((confirmed, foreign))
+                if claims:
+                    admit = self._claim_confirmed_pull_requests(claims)
             elif name == "fail_step":
                 event = run_failed_from_arguments(
                     run_id=self._run_id,
@@ -498,7 +548,7 @@ class TerminalMcpBroker:
             else:
                 return {"ok": False, "error": f"unknown terminal tool: {name}"}
             await self._registry.accept(
-                self._agent_run_id, event, self._deliver
+                self._agent_run_id, event, self._deliver, admit
             )
         except (
             InvalidStepResultError,
@@ -560,6 +610,8 @@ class TerminalMcpBroker:
                 )
             except Exception as error:
                 return {"ok": False, "error": f"could not run git: {error}"}
+            if result.ok and _git_subcommand(git_arguments) == "push":
+                await self._remember_push(result)
             reported = "\n".join(part for part in (result.stdout, result.stderr) if part)
             if not result.ok:
                 return {
@@ -675,6 +727,87 @@ class TerminalMcpBroker:
             f"{url} is not a pull request this run opened ({named}); "
             "use the URL open_pull_request returned"
         )
+
+    async def _confirmed_pull_request(self, url: str) -> OpenedPullRequest | None:
+        """`url` as this run's, if the forge shows it is this step's work.
+
+        See `enable_pull_request_claims` for what has to match. This only reads;
+        the claim is made when the completion is accepted. Anything that cannot
+        be confirmed -- a forge that does not answer, an empty login, a head
+        this step never pushed to that repository -- confirms nothing.
+        """
+        if self._pull_request_claimer is None or self._workspace_id is None:
+            return None
+        requested = change_request(url)
+        if requested is None or self._source_control is None:
+            return None
+        try:
+            shown = await self._source_control.view_change_request(
+                self._workspace_id, requested.number
+            )
+            login = await self._source_control.authenticated_login(url)
+        except Exception:
+            logger.exception("Could not confirm the reported pull request %s", url)
+            return None
+        pushed = _PushedBranch(requested.project, shown.head_ref, shown.head_sha)
+        if not (
+            change_request(shown.url) == requested
+            and pushed in self._pushed
+            and login
+            and shown.author == login
+        ):
+            return None
+        return OpenedPullRequest(requested.project, requested.number, url)
+
+    async def _remember_push(self, result: GitResult) -> None:
+        """Remember what a successful `git push` put where.
+
+        A branch name on its own says nothing -- any run can push `feature` to
+        a remote of its own -- so what is kept is the repository the push wrote
+        to, the branch it wrote, and the commit it sent there, read back from
+        the local ref rather than from git's abbreviated report of it.
+        """
+        assert self._source_control is not None and self._workspace_id is not None
+        for remote, source, destination in _pushed_refs(result):
+            project = remote_project(remote)
+            if project is None:
+                continue
+            try:
+                commit = await self._source_control.run_git(
+                    self._workspace_id, ("rev-parse", f"{source}^{{commit}}")
+                )
+            except Exception:
+                logger.exception("Could not read the commit pushed to %s", remote)
+                continue
+            if commit.ok and commit.stdout.strip():
+                self._pushed.add(
+                    _PushedBranch(project, destination, commit.stdout.strip())
+                )
+
+    def _claim_confirmed_pull_requests(
+        self, claims: Sequence[tuple[OpenedPullRequest, str]]
+    ) -> Callable[[], Awaitable[None]]:
+        """Claim each confirmed report, refusing the completion if one is held.
+
+        Run by the registry for the one submission it accepts, so a duplicate
+        or concurrent `complete_step` claims nothing.
+        """
+        claimer = self._pull_request_claimer
+        assert claimer is not None
+
+        async def admit() -> None:
+            for reported, foreign in claims:
+                try:
+                    held = await claimer(reported)
+                except Exception as error:
+                    logger.exception(
+                        "Could not claim the reported pull request %s", reported.url
+                    )
+                    raise InvalidStepResultError(foreign) from error
+                if not held:
+                    raise InvalidStepResultError(foreign)
+
+        return admit
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -1080,6 +1213,63 @@ def _status_argument(arguments: object) -> str:
     return status.strip()
 
 
+@dataclass(frozen=True, slots=True)
+class _PushedBranch:
+    """A branch one `git push` put on one repository, at one commit."""
+
+    project: str
+    branch: str
+    commit: str
+
+
+#: The remote a push wrote to, which git names before the refs it wrote.
+_PUSH_REMOTE = re.compile(r"^To (?P<remote>\S+)$")
+
+#: A ref `git push` updated, as it reports one: `  a..b  src -> dst` (or `*`
+#: new, `+` forced) on stderr, or `*\tsrc:dst\t[new branch]` with `--porcelain`.
+#: Up-to-date (`=`), rejected (`!`) and deleted (`-`) refs moved nothing.
+_PUSHED_REF = re.compile(
+    r"^(?: [ +*] (?:\[[^\]]+\]|\S+)\s+(?P<from>\S+) -> (?P<to>\S+)"
+    r"|[ +*]\t(?P<porcelain_from>[^\t:]+):(?P<porcelain_to>[^\t]+)\t)"
+)
+
+
+def _pushed_refs(result: GitResult) -> tuple[tuple[str, str, str], ...]:
+    """Each `(remote, source ref, branch)` a successful `git push` moved.
+
+    Read in order, since git names the remote it is writing to before the refs
+    it writes there, and both spellings of the report carry the source ref the
+    commit has to be read back from.
+    """
+    pushed: list[tuple[str, str, str]] = []
+    remote = ""
+    for line in (result.stdout + "\n" + result.stderr).splitlines():
+        destination = _PUSH_REMOTE.match(line)
+        if destination is not None:
+            remote = destination.group("remote")
+            continue
+        match = _PUSHED_REF.match(line)
+        if match is None or not remote:
+            continue
+        source = match.group("from") or match.group("porcelain_from")
+        branch = match.group("to") or match.group("porcelain_to")
+        pushed.append((remote, source, branch.removeprefix("refs/heads/")))
+    return tuple(pushed)
+
+
+def _git_subcommand(arguments: Sequence[str]) -> str | None:
+    """The subcommand a git argument vector runs, past git's own options.
+
+    The adapter finds it the same way, permitting a closed set of global
+    options before it, so `git --no-pager push origin agent/x` is the push it
+    is here too rather than a vector whose first word is not one.
+    """
+    for argument in arguments:
+        if not argument.startswith("-"):
+            return argument
+    return None
+
+
 def _git_arguments(arguments: object) -> tuple[str, ...]:
     if not isinstance(arguments, dict):
         raise ValueError("git_subcommand arguments must be an object")
@@ -1366,6 +1556,7 @@ __all__ = [
     "DEFAULT_BASE_REF",
     "OpenedPullRequest",
     "PostedComment",
+    "PullRequestClaimer",
     "PullRequestLookup",
     "PullRequestRecorder",
     "READ_ONLY_REPOSITORY_TOOLS",
