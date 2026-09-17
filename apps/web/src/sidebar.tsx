@@ -304,6 +304,7 @@ function ProjectItem({
 
 export function Sidebar({
   projects = [],
+  showProjects = true,
   runs,
   graphNodes = {},
   initialSection,
@@ -316,6 +317,7 @@ export function Sidebar({
   onDeleteRun,
 }: {
   projects?: ApiProject[];
+  showProjects?: boolean;
   runs: ApiWorkflowRunListing[];
   /** The graphs behind the graph WorkOrders listed, which is where their
    *  conversations are named. Empty until they have been read, and for a rail
@@ -348,7 +350,8 @@ export function Sidebar({
   // one is such a choice, and `closed` is how it is held: not "nothing chosen
   // yet", which is what would put the page's section back on screen.
   const [chosen, setChosen] = useState<RailSection | "closed" | null>(null);
-  const open = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
+  const selected = chosen === null ? initialSection : chosen === "closed" ? null : chosen;
+  const open = !showProjects && selected === "projects" ? "workflows" : selected;
   const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Keep exclusions so newly observed stages are selected without resetting user choices.
@@ -370,7 +373,7 @@ export function Sidebar({
     <aside className="rail">
       <RailBrand href="/" />
       <div className="rail-sections">
-        <Section id="projects" title="Projects" open={open === "projects"} onToggle={toggle}>
+        {showProjects && <Section id="projects" title="Projects" open={open === "projects"} onToggle={toggle}>
           <div className="rail-nav">
             <a className="rail-button rail-button-primary" href="/plan">
               + New project
@@ -409,7 +412,7 @@ export function Sidebar({
               </details>
             )}
           </nav>
-        </Section>
+        </Section>}
         <Section id="workflows" title="WorkOrders" open={open === "workflows"} onToggle={toggle}
           action={<WorkOrderFilters options={filterOptions} excluded={excludedFilters} onChange={setExcludedFilters} />}>
           <div className="rail-nav">

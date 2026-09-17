@@ -1026,6 +1026,7 @@ def create_app(
     communications_channel: str = "",
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
+    show_projects: bool = True,
     utilization: UtilizationService | None = None,
     milestone_scoper: MilestoneScoping | None = None,
     concierge_provider: ACPAgentProvider | None = None,
@@ -1550,6 +1551,7 @@ def create_app(
                     else ""
                 ),
                 "defaultRunner": session.default_runner,
+                "showProjects": show_projects,
                 # Only the graphs this process can actually start are here --
                 # see `offered_graphs` -- because an entry nobody could run
                 # would be a choice that fails after it was made. Their

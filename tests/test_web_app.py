@@ -139,7 +139,10 @@ def test_web_selects_the_configured_communications_provider() -> None:
         )
 
 
-def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("show_projects", [None, True, False])
+def test_the_application_can_be_built_from_configuration_alone(
+    tmp_path, monkeypatch, show_projects
+) -> None:
     """The contract the development server's reloader depends on.
 
     It constructs the application again in every child process it starts, with
@@ -148,6 +151,11 @@ def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeyp
     """
     monkeypatch.chdir(tmp_path)
 
+    monkeypatch.delenv("ENGINE_CONFIG", raising=False)
+    if show_projects is not None:
+        (tmp_path / "engine.toml").write_text(
+            f"show_projects = {str(show_projects).lower()}\n"
+        )
     app = build_app()
 
     async def ask() -> httpx.Response:
@@ -158,6 +166,7 @@ def test_the_application_can_be_built_from_configuration_alone(tmp_path, monkeyp
 
     answered = asyncio.run(ask())
     assert answered.status_code == 200
+    assert answered.json()["showProjects"] is (show_projects is not False)
     assert answered.json()["runners"] == [
         {"id": "codex", "implementation": "CodexAgentRunner"},
         {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},

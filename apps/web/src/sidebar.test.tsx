@@ -53,6 +53,19 @@ function body(name: string) {
 }
 
 describe("Sidebar", () => {
+  it("hides Projects and falls back to WorkOrders on a project page", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar runs={[run]} initialSection="projects" showProjects={false} />);
+
+    expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "+ New project" })).not.toBeInTheDocument();
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
+    await user.click(header("WorkOrders"));
+    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
+    await user.click(header("WorkOrders"));
+    expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
+  });
+
   it("keeps the two sections in one order and opens only the one asked for", () => {
     const { container } = render(<Sidebar runs={[run]} initialSection="workflows" />);
 
