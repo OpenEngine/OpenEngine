@@ -36,7 +36,7 @@ STARTED_RUN = "fresh"
 def _graph_runtime(
     *, run_id="existing", graph_id="implementation-review-v1",
     pr_number=7, repository="acme/api", always_open=("implementation",),
-    known_graph=True, status=RunStatus.RUNNING,
+    known_graph=True, status=RunStatus.RUNNING, pending_approvals=(),
 ):
     """A runtime answering the three questions the concierge asks of one.
 
@@ -76,12 +76,13 @@ def _graph_runtime(
             # The run this fake just started, which is running by construction.
             return SimpleNamespace(
                 run_id=asked, graph_id=GraphId(graph_id),
-                status=RunStatus.RUNNING, values={},
+                status=RunStatus.RUNNING, values={}, pending_approvals=(),
             )
         if not known_graph:
             raise UnknownGraphError(graph_id)
         return SimpleNamespace(
             run_id=asked, graph_id=GraphId(graph_id), status=status, values={},
+            pending_approvals=tuple(pending_approvals),
         )
 
     topology = GraphTopology(
@@ -101,6 +102,7 @@ def _graph_runtime(
     runtime.topology = MagicMock(return_value=topology)
     runtime.steer = AsyncMock()
     runtime.cancel = AsyncMock()
+    runtime.decide = AsyncMock()
     runtime.start = AsyncMock(return_value=SimpleNamespace(
         run_id=RunId(STARTED_RUN), graph_id=GraphId(graph_id),
         status=RunStatus.RUNNING, values={},
@@ -568,8 +570,9 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
     assert not communications.posts
 
 
+@pytest.mark.parametrize("host", ["github.com", "forge.example:8443"])
 @pytest.mark.parametrize("absent", ["no-run", "unknown-graph", "finished"])
-def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent):
+def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent, host):
     """Steering is for a run that is working; otherwise the comment is new work.
 
     Which of the two a comment gets is the host's to decide, and it decides
@@ -583,7 +586,10 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
+    repository = "acme/api" if host == "github.com" else f"{host}/acme/api"
+    pr_url = f"https://{host}/acme/api/pull/7"
     runtime, opened = _graph_runtime(
+        repository=repository,
         pr_number=7 if absent != "no-run" else 99,
         known_graph=absent != "unknown-graph",
         status=RunStatus.COMPLETED if absent == "finished" else RunStatus.RUNNING,
@@ -604,6 +610,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
 
     payload = _issue_comment(1, "new workorder please")
     payload["issue"]["pull_request"] = {}
+    payload["comment"]["html_url"] = f"https://{host}/acme/api/issues/7#c"
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=dict(
@@ -613,7 +620,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         # Started on the repository the comment arrived from, which is where
         # the pull request is, rather than the configured default.
         assert runtime.start.await_args.args[1] == {
-            "task": "Implement it", "repository": "acme/api"}
+            "task": "Implement it", "repository": repository}
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
         # No chat origin: this conversation is the pull request, which the
@@ -625,17 +632,19 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         # to the pull request that already exists.
         claimed = runtime.store.claim_pull_request.await_args.args[0]
         assert (claimed.repository, claimed.number, claimed.run_id) == (
-            "acme/api", 7, RunId(STARTED_RUN))
-        assert claimed.url == "https://github.com/acme/api/pull/7"
+            repository, 7, RunId(STARTED_RUN))
+        assert claimed.url == pr_url
         assert provider.clients[0].result["structuredContent"]["started"] is True
     # And the pull request is told a work order was started, not that its
     # comment was forwarded to one that was already at work.
     source_control.add_comment.assert_awaited_once_with(
-        "https://github.com/acme/api/pull/7",
+        pr_url,
         f"Started work order `{STARTED_RUN}` for this pull request. "
         f"https://engine.example/runs/{STARTED_RUN}",
         in_reply_to_id=None,
     )
+    source_control.can_write_repository.assert_awaited_once_with(pr_url, payload["comment"]["user"]["login"])
+    source_control.authenticated_login.assert_awaited_once_with(f"https://{host}/acme/api")
     assert not communications.posts
 
 
@@ -829,6 +838,246 @@ def test_github_asks_who_it_posts_as_only_once(tmp_path):
         client.portal.call(app.state.github_ingress.drain)
         source_control.authenticated_login.assert_awaited_once()
         assert len(provider.clients) == 1
+
+
+# --- merging as the human review's verdict -----------------------------------
+
+
+def _human_review(approval_id="approval-1", tool_name="human_review"):
+    """The request `HumanReviewNode` is waiting on, as a snapshot reports it."""
+    from engine.domain import ApprovalId, ApprovalKind
+    from engine.graph_runtime import ExecutionId, NodeId, PendingApproval
+
+    return PendingApproval(
+        approval_id=ApprovalId(approval_id), execution_id=ExecutionId("execution-1"),
+        node_id=NodeId("human-review"), kind=ApprovalKind.USER_INPUT,
+        reason="approval of this run", tool_name=tool_name,
+    )
+
+
+def _merged(client, number=7, repository="acme/api", **pull_request):
+    from test_github_ingress import _merged_pull_request, _signed as github_signed
+
+    payload = _merged_pull_request(number, **pull_request)
+    payload["repository"]["full_name"] = repository
+    body = json.dumps(payload).encode()
+    return client.post("/api/github/events", content=body, headers=dict(
+        github_signed(body), **{"x-github-event": "pull_request"}))
+
+
+def _merge_app(tmp_path, opened, authenticated_login=None):
+    """An app whose credentials resolve to `OpenEngineBot`, with no
+    `GITHUB_BOT_LOGIN` configured -- the usual deployment."""
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(workflow="implementation-review-v1", runner="default"),
+        _workflow_catalog(), github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        authenticated_login=authenticated_login
+        or AsyncMock(return_value="OpenEngineBot")))
+    return app
+
+
+def test_merging_a_pull_request_approves_its_work_orders_review(tmp_path):
+    """The merge is the reviewer's verdict: the run is released without anybody
+    going back to the web UI to press Accept a second time."""
+    from starlette.testclient import TestClient
+
+    from engine.domain import ApprovalDecision, ApprovalId
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        assert _merged(client).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    runtime.decide.assert_awaited_once_with(
+        RunId("existing"), ApprovalId("approval-1"), ApprovalDecision.ACCEPT
+    )
+
+
+def test_a_merge_is_acted_on_once_however_often_it_is_delivered(tmp_path):
+    from starlette.testclient import TestClient
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        assert _merged(client).status_code == 200
+        assert _merged(client).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 1
+
+
+@pytest.mark.parametrize(
+    ("pull_request", "why"),
+    [
+        # The gate exists to make a person read the diff, and a bot with write
+        # access -- a merge queue, an auto-merge firing on green CI, a
+        # Dependabot-style app -- has read nothing. Releasing it on their merge
+        # would defeat the gate.
+        ({"merged_by": {"login": "github-merge-queue[bot]", "type": "Bot"}}, "a bot merged"),
+        # A merge Engine cannot attribute to a person is not a review.
+        ({"merged_by": None}, "GitHub named nobody"),
+        # Closing without merging says the work was abandoned, not judged.
+        ({"merged": False}, "it was closed unmerged"),
+    ],
+)
+def test_a_merge_that_decides_nothing_leaves_the_review_waiting(tmp_path, pull_request, why):
+    from starlette.testclient import TestClient
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        # Settled rather than refused: there is nothing for GitHub to redeliver.
+        assert _merged(client, **pull_request).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 0, why
+
+
+def test_a_merge_by_engine_itself_decides_nothing(tmp_path):
+    """A machine account holding a token is an ordinary `User` to GitHub, so
+    the bot type does not catch Engine's own merge; the login does -- the one
+    its credentials resolve to, since `GITHUB_BOT_LOGIN` is usually unset."""
+    from starlette.testclient import TestClient
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        # Case-insensitively, the way GitHub reads a login.
+        merged_by = {"login": "openenginebot", "type": "User"}
+        assert _merged(client, merged_by=merged_by).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 0
+
+
+def test_a_merge_before_the_review_is_requested_answers_it_when_it_is(tmp_path):
+    """GitHub sends a merge once. A pull request merged while its work order is
+    still finishing the steps before its review must not leave that review
+    waiting forever: the review step is still reached and shown, and the merge
+    that already answered it is recorded then."""
+    from starlette.testclient import TestClient
+
+    from engine.domain import ApprovalDecision, ApprovalId
+    from engine.graph_runtime import EventKind, RuntimeEvent
+
+    pending = []
+    runtime, opened = _graph_runtime(pending_approvals=pending)
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        assert _merged(client).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert runtime.decide.await_count == 0
+
+        # An agent asking to run a command is not the review, and the merge
+        # must not answer a question nobody was shown.
+        pending.append(_human_review(approval_id="bash-1", tool_name="bash"))
+        observe = runtime.observe.call_args.args[0]
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId("existing"), kind=EventKind.APPROVAL_REQUESTED,
+            payload={"approvalId": "bash-1", "toolName": "bash"},
+        ))
+        assert runtime.decide.await_count == 0
+
+        pending[:] = [_human_review()]
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId("existing"), kind=EventKind.APPROVAL_REQUESTED,
+            payload={"approvalId": "approval-1", "toolName": "human_review"},
+        ))
+        # Once: the merge is spent on the review it answered.
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId("existing"), kind=EventKind.APPROVAL_REQUESTED,
+            payload={"approvalId": "approval-1", "toolName": "human_review"},
+        ))
+
+    runtime.decide.assert_awaited_once_with(
+        RunId("existing"), ApprovalId("approval-1"), ApprovalDecision.ACCEPT
+    )
+
+
+def test_an_approving_review_decides_nothing(tmp_path):
+    """Merge is the point the work order's pull request is closed out. An
+    approval can be followed by more commits and another round of review."""
+    from starlette.testclient import TestClient
+
+    from test_github_ingress import _signed as github_signed
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app = _merge_app(tmp_path, opened)
+
+    body = json.dumps({
+        "action": "submitted",
+        "review": {"id": 5, "state": "approved", "author_association": "COLLABORATOR",
+                   "user": {"login": "maintainer", "type": "User"}},
+        "pull_request": {"number": 7},
+        "repository": {"full_name": "acme/api"},
+    }).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "pull_request_review"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "why"),
+    [
+        # The work order is over, so there is no review left to answer.
+        ({"status": RunStatus.COMPLETED}, "the run finished"),
+        ({"status": RunStatus.FAILED}, "the run failed"),
+        # A pull request opened by hand belongs to no work order.
+        ({"pr_number": 99}, "no work order owns it"),
+        # A saved work order can outlive the graph it was started from.
+        ({"pending_approvals": (_human_review(),), "known_graph": False}, "graph is gone"),
+    ],
+)
+def test_a_merge_with_no_review_waiting_decides_nothing(tmp_path, kwargs, why):
+    from starlette.testclient import TestClient
+
+    runtime, opened = _graph_runtime(**kwargs)
+    # A merge with nothing to decide never needs Engine's own login, so an
+    # outage of GitHub's credential lookup cannot fail its delivery.
+    authenticated_login = AsyncMock(side_effect=RuntimeError("GitHub is down"))
+    app = _merge_app(tmp_path, opened, authenticated_login)
+
+    with TestClient(app) as client:
+        # Settled rather than refused: there is nothing for GitHub to redeliver.
+        assert _merged(client).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 0, why
+    assert authenticated_login.await_count == 0, why
+
+
+def test_a_merge_decided_by_somebody_else_first_is_not_redelivered(tmp_path):
+    """The web UI and the merge button are two ways to the same verdict, and
+    both can be used at once. The one that arrives second has nothing to do."""
+    from starlette.testclient import TestClient
+
+    from engine.runtime import ApprovalNotPendingError
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    runtime.decide = AsyncMock(side_effect=ApprovalNotPendingError("already decided"))
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        assert _merged(client).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        # Handled rather than failed, so a second delivery is deduplicated away
+        # instead of asking the graph engine the same settled question again.
+        assert _merged(client).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    assert runtime.decide.await_count == 1
 
 
 # --- the feedback broker, on its own -----------------------------------------

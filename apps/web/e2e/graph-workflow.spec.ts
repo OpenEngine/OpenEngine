@@ -20,7 +20,7 @@ import path from "node:path";
 
 import type { Page } from "@playwright/test";
 
-import { expect, shot, test, type Script } from "./harness";
+import { expect, shot, test, type Script, type ScriptStep } from "./harness";
 
 /** What the workflow dropdown calls the graph. */
 const WORKFLOW = "Implementation review rerank";
@@ -30,6 +30,14 @@ const NAMING_REQUEST = "Give this WorkOrder a concise display name";
 const GREETING = "greeting.txt";
 const PULL_REQUEST = "https://github.com/acme/repository/pull/7";
 const IMPLEMENTED = "Wrote the greeting.";
+/** What an implementer does before it reports `PULL_REQUEST`, which the
+ *  harness answers with that URL: a step may only report a pull request its
+ *  run opened. */
+const OPEN_PULL_REQUEST: ScriptStep = {
+  type: "tool",
+  name: "open_pull_request",
+  arguments: { branch: "agent/greeting", title: "Add a greeting" },
+};
 const REVIEWED = "Read the change; greeting.txt is not covered by a test.";
 
 const STEER = "Also write a licence file.";
@@ -84,6 +92,7 @@ const ASKING_SCRIPT: Script = {
       when: STEER,
       steps: [
         { type: "say", text: STEERED },
+        OPEN_PULL_REQUEST,
         {
           type: "tool",
           name: "complete_step",
@@ -151,6 +160,7 @@ const SCRIPT: Script = {
         // test in this file.
         { type: "run", command: `echo hello > ${GREETING}`, approval: false },
         { type: "say", text: IMPLEMENTED },
+        OPEN_PULL_REQUEST,
         {
           type: "tool",
           name: "complete_step",
@@ -177,6 +187,7 @@ const STEERING_SCRIPT: Script = {
       when: INTERRUPT_STEERING,
       steps: [
         { type: "say", text: ACKNOWLEDGEMENT },
+        OPEN_PULL_REQUEST,
         {
           type: "tool",
           name: "complete_step",
@@ -367,7 +378,6 @@ test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) =
     "Implementation",
     "CI check",
     "Review",
-    "Reranker",
     "Impact analysis",
     "Human review",
   ]);
@@ -402,7 +412,6 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
   const conversations = page.getByLabel(/^Conversations for /);
   await expect(conversations.getByRole("link")).toHaveText([
     "Implementation",
-    "Reranker",
     "Impact analysis",
   ]);
   await conversations.getByText("Review", { exact: true }).click();
@@ -568,11 +577,10 @@ test("a graph run waiting on a person says so, and can be answered", async ({
     "Implementation",
     "CI check",
     "Review",
-    "Reranker",
     "Impact analysis",
     "Human review",
   ]);
-  for (const index of [0, 1, 2, 3, 4, 5, 6, 7])
+  for (const index of [0, 1, 2, 3, 4, 5, 6])
     await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
   await expect(page.locator(".callout-action")).toHaveCount(0);
 });

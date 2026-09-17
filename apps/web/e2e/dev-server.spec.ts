@@ -104,7 +104,6 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
     "Implementation",
     "CI check",
     "Review",
-    "Reranker",
     "Impact analysis",
     "Human review",
   ]);

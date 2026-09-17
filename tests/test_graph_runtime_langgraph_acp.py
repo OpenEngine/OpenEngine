@@ -1063,12 +1063,13 @@ def test_run_bound_tools_intersect_with_source_control_capabilities(
     async def scenario() -> None:
         async with runtime_over(
             tmp_path,
-            registry(tmp_path, uses_mcp=True, mcp_terminal="complete_step"),
+            # Nothing here can open a pull request, so there is no pr_url to report.
+            registry(tmp_path, uses_mcp=True, mcp_terminal="fail_step"),
             pipeline_with_run_bound_mcp,
             GitOnlySourceControl(),
         ) as (runtime, log):
             run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
-            await until(log, run.run_id, "run.finished")
+            await until(log, run.run_id, "run.failed")
 
     asyncio.run(scenario())
 
@@ -2221,6 +2222,7 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 ) -> None:
     """The binding, end to end: MCP call -> forge -> the store the run keeps."""
 
+    from engine.graph_runtime_langgraph.store import PullRequestRecord
     from engine.ports import CommentResult
     from engine.runtime.terminal_mcp import _mcp_response
 
@@ -2252,6 +2254,11 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 
     async def scenario() -> tuple[Any, ...]:
         store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        await store.remember_pull_request(PullRequestRecord(
+            repository="acme/api", number=42, run_id=RunId("run-1"),
+            opened_at="2026-09-10T17:00:00+00:00",
+            url="https://github.com/acme/api/pull/42",
+        ))
         server = TerminalMcpServer(
             step_id="reranker",
             agent_id=AGENT,
@@ -2296,6 +2303,93 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
     assert found[0].node_id == NodeId("reranker")
     assert found[0].url == "https://github.com/acme/api/pull/42#c123"
     assert found[0].posted_at
+
+
+def test_a_ci_fix_step_reports_only_the_pull_request_its_run_opened(
+    tmp_path: Path,
+) -> None:
+    """End to end over a real store, for a step that opens nothing itself.
+
+    The pull request was opened by an earlier step and recorded then, so the
+    store is all this step has to be held to -- and a number read off the CI
+    output is refused rather than carried downstream.
+    """
+
+    from engine.graph_runtime_langgraph.store import PullRequestRecord
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    class Runtime:
+        def __init__(self, store: Any) -> None:
+            self.store = store
+            self.source_control = RecordingSourceControl()
+
+    class Execution:
+        def __init__(self, store: Any) -> None:
+            self.runtime = Runtime(store)
+            self.run_id = RunId("run-1")
+            self.execution_id = "task-2"
+            self.node_id = NodeId(IMPLEMENTATION)
+
+    async def refuse(_request: Any) -> ApprovalDecision:
+        raise AssertionError("completing a step is not approved through the broker")
+
+    async def scenario() -> tuple[str, str]:
+        store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        await store.remember_pull_request(PullRequestRecord(
+            repository="acme/api", number=407, run_id=RunId("run-1"),
+            opened_at="2026-09-10T17:00:00+00:00",
+            url="https://github.com/acme/api/pull/407",
+        ))
+        await store.remember_pull_request(PullRequestRecord(
+            repository="acme/api", number=406, run_id=RunId("run-0"),
+            opened_at="2026-09-09T17:00:00+00:00",
+            url="https://github.com/acme/api/pull/406",
+        ))
+        server = TerminalMcpServer(
+            step_id=IMPLEMENTATION,
+            agent_id=AGENT,
+            required_outputs=("pr_url",),
+            repository_tools=("git_subcommand",),
+        )
+        answers = []
+        async with server(
+            {"workspaceId": "ws-graph-run"}, Execution(store), refuse  # type: ignore[arg-type]
+        ) as bound:
+            arguments = list(bound.config["args"])
+            for request_id, number in (("complete-1", 406), ("complete-2", 407)):
+                answer = await _mcp_response(
+                    arguments[arguments.index("--host") + 1],
+                    int(arguments[arguments.index("--port") + 1]),
+                    arguments[arguments.index("--token") + 1],
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "complete_step",
+                            "arguments": {
+                                "outcome": "success",
+                                "summary": "Fixed CI.",
+                                "outputs": {
+                                    "pr_url": f"https://github.com/acme/api/pull/{number}",
+                                },
+                            },
+                        },
+                    },
+                    repository_tools=("git_subcommand",),
+                )
+                answers.append(answer["result"])
+            completed = await bound.result()
+        store.close()
+        assert answers[0]["isError"] is True
+        assert answers[1].get("isError") is not True
+        assert isinstance(completed, StepCompleted)
+        return answers[0]["content"][0]["text"], completed.outputs[0].value
+
+    refused, reported = asyncio.run(scenario())
+
+    assert "acme/api#407" in refused
+    assert reported == "https://github.com/acme/api/pull/407"
 
 
 @pytest.mark.parametrize("partial", ["", "I started looking at the change."])
@@ -2451,3 +2545,41 @@ def test_cancelled_turn_accepts_late_terminal_result_and_simultaneous_input(
     final = asyncio.run(scenario())
     assert final.error == "Accepted after cancellation."
     assert prompts(tmp_path) == [PROMPT, *([REOPEN] if follow_up else [])]
+
+
+def test_graph_workorder_creation_uses_bound_parent() -> None:
+    from types import SimpleNamespace
+    from engine.runtime.terminal_mcp import _mcp_response
+
+    calls = []
+
+    async def create(parent, prompt):
+        calls.append((parent, prompt))
+        return "/runs/child", "child"
+
+    async def approve(_request):
+        raise AssertionError("creation is already granted by the binding")
+
+    async def scenario():
+        execution = SimpleNamespace(
+            runtime=SimpleNamespace(source_control=object(), workorder_creator=create),
+            run_id=RunId("parent"), execution_id="execution",
+        )
+        server = TerminalMcpServer(
+            step_id="implementation", agent_id=AGENT,
+            repository_tools=(), create_workorder=True,
+        )
+        async with server({"workspaceId": "workspace"}, execution, approve) as bound:
+            args = bound.config["args"]
+            assert "--create-workorder" in args
+            result = await _mcp_response(
+                args[args.index("--host") + 1], int(args[args.index("--port") + 1]),
+                args[args.index("--token") + 1],
+                {"id": 1, "method": "tools/call", "params": {
+                    "name": "create_workorder", "arguments": {"prompt": "Follow up"},
+                }},
+            )
+            assert json.loads(result["result"]["content"][0]["text"])["run_id"] == "child"
+        assert calls == [(RunId("parent"), "Follow up")]
+
+    asyncio.run(scenario())

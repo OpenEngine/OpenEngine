@@ -15,6 +15,7 @@ import pytest
 from engine.apps.web.github_ingress import (
     GithubIngress,
     comment_from_payload,
+    merge_from_payload,
     verify_signature,
 )
 
@@ -37,6 +38,19 @@ def _issue_comment(comment_id: int = 1, body: str = "please fix it", **comment) 
             {"id": comment_id, "body": body, "html_url": "https://github.com/acme/api/issues/7#c",
              "user": {"login": "someone", "type": "User"}, "author_association": "COLLABORATOR"},
             **comment,
+        ),
+        "repository": {"full_name": "acme/api"},
+    }
+
+
+def _merged_pull_request(number: int = 7, **pull_request) -> dict:
+    return {
+        "action": "closed",
+        "pull_request": dict(
+            {"number": number, "merged": True,
+             "merged_by": {"login": "maintainer", "type": "User"},
+             "html_url": "https://github.com/acme/api/pull/7"},
+            **pull_request,
         ),
         "repository": {"full_name": "acme/api"},
     }
@@ -117,6 +131,70 @@ def test_engine_does_not_answer_its_own_comments() -> None:
 def test_a_github_app_is_still_recognised_by_its_user_type() -> None:
     payload = _issue_comment(user={"login": "engine[bot]", "type": "Bot"})
     assert comment_from_payload("issue_comment", payload, self_login="") is None
+
+
+def test_a_merged_pull_request_is_read() -> None:
+    merged = merge_from_payload("pull_request", _merged_pull_request())
+    assert merged is not None
+    assert (merged.repository, merged.number) == ("acme/api", 7)
+    assert merged.merged_by == "maintainer"
+    assert merged.url == "https://github.com/acme/api/pull/7"
+
+
+@pytest.mark.parametrize(
+    ("event", "payload"),
+    [
+        # Closed without merging: the work was abandoned, not accepted.
+        ("pull_request", _merged_pull_request(merged=False)),
+        ("pull_request", _merged_pull_request(merged=None)),
+        # Anything else in a pull request's lifecycle decides nothing.
+        ("pull_request", dict(_merged_pull_request(), action="opened")),
+        ("pull_request", dict(_merged_pull_request(), action="synchronize")),
+        ("pull_request", dict(_merged_pull_request(), repository={})),
+        ("pull_request", _merged_pull_request(number="7")),
+        ("issue_comment", _issue_comment()),
+        # An approving review is not read: the branch can take more commits and
+        # another round of review after one, so it is not the point the work
+        # order's pull request is closed out.
+        ("pull_request_review", {"action": "submitted",
+                                 "review": {"id": 5, "state": "approved",
+                                            "user": {"login": "maintainer", "type": "User"},
+                                            "author_association": "COLLABORATOR"},
+                                 "pull_request": {"number": 7},
+                                 "repository": {"full_name": "acme/api"}}),
+    ],
+)
+def test_deliveries_that_are_not_a_merge(event, payload) -> None:
+    assert merge_from_payload(event, payload) is None
+
+
+@pytest.mark.parametrize(
+    "pull_request",
+    [
+        # The gate asks for a person to read the diff, and write access is not
+        # that property: a merge queue, an auto-merge firing on green CI, a
+        # Dependabot-style app, or Engine's own App all hold it and none of
+        # them has read anything.
+        {"merged_by": {"login": "github-merge-queue[bot]", "type": "Bot"}},
+        {"merged_by": {"login": "openengine-bot", "type": "User"}},
+        # A merge Engine cannot attribute to a person is not a person having
+        # reviewed the work.
+        {"merged_by": None},
+        {"merged_by": {"type": "User"}},
+        {"merged_by": {"login": "", "type": "User"}},
+    ],
+)
+def test_a_merge_by_somebody_who_may_not_decide_is_ignored(pull_request) -> None:
+    payload = _merged_pull_request(**pull_request)
+    assert merge_from_payload(
+        "pull_request", payload, self_login="OpenEngine-Bot"
+    ) is None
+
+
+def test_a_comment_and_a_merge_are_told_apart() -> None:
+    """One reader per kind: neither payload is the other's shape."""
+    assert comment_from_payload("pull_request", _merged_pull_request()) is None
+    assert merge_from_payload("issue_comment", _issue_comment()) is None
 
 
 def test_only_our_secret_signs_a_delivery() -> None:
@@ -225,6 +303,91 @@ def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
         ingress.accept("issue_comment", _issue_comment(comment_id=2))
         await ingress.drain()
         assert [c.comment_id for c in handled] == ["1", "2"]
+        await ingress.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_merge_is_handled_once_however_often_it_is_delivered() -> None:
+    async def scenario():
+        merges = []
+        ingress = GithubIngress(
+            repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+            handle=_record([]), handle_merge=_record(merges),
+        )
+        assert ingress.accept("pull_request", _merged_pull_request(number=7))
+        assert ingress.accept("pull_request", _merged_pull_request(number=7))
+        assert ingress.accept("pull_request", _merged_pull_request(number=8))
+        await ingress.drain()
+        assert [m.number for m in merges] == [7, 8]
+        await ingress.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_merge_is_refused_while_nothing_is_wired_to_act_on_it() -> None:
+    ingress = GithubIngress(
+        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=_record([]),
+    )
+    assert not ingress.accept("pull_request", _merged_pull_request())
+    # A pull request closed without merging is settled either way.
+    assert ingress.accept("pull_request", _merged_pull_request(merged=False))
+
+
+def test_a_merge_from_another_repository_is_ignored() -> None:
+    merges = []
+    ingress = GithubIngress(
+        repository="other/api", webhook_secret=lambda: WEBHOOK_SECRET,
+        handle=_record([]), handle_merge=_record(merges),
+    )
+    assert ingress.accept("pull_request", _merged_pull_request())
+    assert merges == []
+
+
+def test_a_failed_merge_can_be_redelivered() -> None:
+    """The verdict a merge carries is not something to drop on one failure."""
+
+    async def scenario():
+        attempts = []
+
+        async def handle_merge(merged):
+            attempts.append(merged.number)
+            if len(attempts) == 1:
+                raise RuntimeError("the graph engine is down")
+
+        ingress = GithubIngress(
+            repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+            handle=_record([]), handle_merge=handle_merge,
+        )
+        assert ingress.accept("pull_request", _merged_pull_request())
+        await ingress.drain()
+        assert ingress.accept("pull_request", _merged_pull_request())
+        await ingress.drain()
+        assert attempts == [7, 7]
+        # Once it succeeds it is remembered again, so a third copy is dropped.
+        assert ingress.accept("pull_request", _merged_pull_request())
+        await ingress.drain()
+        assert attempts == [7, 7]
+        await ingress.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_merge_does_not_take_a_row_on_the_comment_panel() -> None:
+    """The panel is a window on comments somebody is waiting for an answer to;
+    a merge is a verdict this process acts on, not a conversation."""
+
+    async def scenario():
+        from engine.apps.web.github_activity import GithubActivityLog
+
+        activity = GithubActivityLog()
+        ingress = GithubIngress(
+            repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+            handle=_record([]), handle_merge=_record([]), activity=activity,
+        )
+        assert ingress.accept("pull_request", _merged_pull_request())
+        await ingress.drain()
+        assert activity.recent() == ()
         await ingress.close()
 
     asyncio.run(scenario())

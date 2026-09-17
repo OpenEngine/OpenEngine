@@ -194,7 +194,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review",
         "Review",
         "Review",
-        "",
+        "Review",
         "",
         "",
     ]
@@ -322,7 +322,9 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
         assert binding.required_outputs == ("findings",)
 
     # The reranker gets add_comment so it can post the final findings.
+    assert nodes[module.IMPLEMENTATION].mcp_server_bindings[0].create_workorder
     reranker = nodes[module.RERANKER]
+    assert reranker.mcp_server_bindings[0].create_workorder
     assert len(reranker.mcp_server_bindings) == 1
     reranker_binding = reranker.mcp_server_bindings[0]
     assert reranker_binding.repository_tools == (

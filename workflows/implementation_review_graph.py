@@ -89,7 +89,9 @@ IMPLEMENTATION_PROMPT = (
     "Every git operation goes through the git_subcommand tool. When the change "
     "is ready, create a descriptive agent/<description> branch, commit only this "
     "change, push that branch, then call open_pull_request. Finish by calling "
-    "complete_step with the pull request URL as the pr_url output. Use fail_step "
+    "complete_step with the URL open_pull_request returned as the pr_url output. "
+    "Report that URL, not a pull request number read from an issue, a diff or CI "
+    "output. Use fail_step "
     "if the work cannot be completed, or clarify only when answering a question "
     "without changing the implementation.\n\n"
     "The task:\n{task}"
@@ -262,6 +264,8 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
             f"Address the review findings on the existing pull request {state.get('pr_url')}. "
             "Read the relevant code, make the smallest complete fix, test it, "
             "commit and push to the same PR branch using git_subcommand. "
+            "Reply to each review comment you addressed, explaining the fix, "
+            "and resolve its review thread where applicable. "
             "Do not open another pull request. Finish with complete_step and the "
             "same pr_url output. Use fail_step if the findings cannot be addressed.\n\n"
             f"Review findings:\n{json.dumps(state[REVIEW])}\n\n"
@@ -332,6 +336,7 @@ def pipeline(
             mcp_server_bindings=(
                 TerminalMcpServer(
                     step_id=IMPLEMENTATION,
+                    create_workorder=True,
                     agent_id=runner,
                     required_outputs=("pr_url",),
                     repository_tools=(
@@ -419,6 +424,7 @@ def pipeline(
             mcp_server_bindings=(
                 TerminalMcpServer(
                     step_id=RERANKER,
+                    create_workorder=True,
                     agent_id=runner,
                     required_outputs=("findings",),
                     repository_tools=(

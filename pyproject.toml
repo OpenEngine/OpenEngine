@@ -22,7 +22,7 @@ members = ["packages/*", "packages/adapters/*/*", "apps/*"]
 # `packages/adapters` is a grouping directory, not a distribution. The
 # capability directories under it are the same, and `packages/*` does not reach
 # them.
-exclude = ["packages/adapters"]
+exclude = ["packages/adapters", "packages/engine"]
 
 [dependency-groups]
 # `watchfiles` is what `engine-dev` reloads on: Uvicorn falls back to polling

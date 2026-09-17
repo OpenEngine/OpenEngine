@@ -172,3 +172,20 @@ def test_a_project_read_off_the_remote_is_names_and_not_moves(
             asyncio.run(source._project("ws"))  # type: ignore[arg-type]
     else:
         assert asyncio.run(source._project("ws")) == project  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("suffix", ["", ":8443"])
+def test_gitlab_comments_stay_on_the_current_configured_origin(suffix):
+    origin = {"url": "https://gitlab.example" + suffix}
+    transport = AsyncMock()
+    transport.request.return_value = {"id": 1}
+    source = GitLabSourceControl("", origin=lambda: origin["url"], transport=transport)
+    for host in ["evil.example", "gitlab.com", "gitlab.example:9443"]:
+        with pytest.raises(ValueError, match="configured GitLab origin"):
+            asyncio.run(source.add_comment(f"https://{host}/group/project/-/merge_requests/7", "Hello"))
+    transport.request.assert_not_awaited()
+    asyncio.run(source.add_comment(origin["url"] + "/group/project/-/merge_requests/7", "Hello"))
+    transport.request.assert_awaited_once()
+    origin["url"] = "https://other.example"
+    with pytest.raises(ValueError, match="configured GitLab origin"):
+        asyncio.run(source.add_comment("https://gitlab.example" + suffix + "/group/project/-/merge_requests/7", "Hello"))

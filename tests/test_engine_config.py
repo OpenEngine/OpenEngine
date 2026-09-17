@@ -118,6 +118,7 @@ def test_loads_what_a_mention_should_start(tmp_path: Path) -> None:
         'repository = "acme/api"\n'
         'workflow = "implementation-review-v1"\n'
         'runner = "claude"\n'
+        'slack_operators = ["U-operator", "U-release"]\n'
     )
 
     loaded = load_engine_config(path, environ={}, cwd=tmp_path)
@@ -125,6 +126,7 @@ def test_loads_what_a_mention_should_start(tmp_path: Path) -> None:
     assert loaded.config.work_orders.repository == "acme/api"
     assert loaded.config.work_orders.workflow == "implementation-review-v1"
     assert loaded.config.work_orders.runner == "claude"
+    assert loaded.config.work_orders.slack_operators == ("U-operator", "U-release")
 
 
 def test_rejects_an_unknown_work_order_key(tmp_path: Path) -> None:
@@ -443,3 +445,24 @@ def test_github_login_config_requires_strings(key):
 def test_github_login_secret_not_accepted_in_toml():
     with pytest.raises(EngineConfigError):
         parse_engine_config({"github_login_client_secret": "secret"})
+
+
+def test_github_host_aliases_configuration():
+    assert parse_engine_config({}).github.host_aliases == {}
+    assert parse_engine_config({
+        "github": {"host_aliases": {"Alias.Example": "Forge.Example"}}
+    }).github.host_aliases == {"alias.example": "forge.example"}
+
+
+@pytest.mark.parametrize("aliases", [
+    "forge.example", ["forge.example"], {"alias.example": 1},
+    {"": "forge.example"}, {"alias.example": " "},
+])
+def test_github_host_aliases_require_nonblank_string_mapping(aliases):
+    with pytest.raises(EngineConfigError, match="github.host_aliases"):
+        parse_engine_config({"github": {"host_aliases": aliases}})
+
+
+def test_github_unbound_hosts_are_not_accepted():
+    with pytest.raises(EngineConfigError, match="hosts"):
+        parse_engine_config({"github": {"hosts": ["forge.example"]}})

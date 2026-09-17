@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import tomllib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from engine.ports.agent_runner import ResponseStyle
@@ -101,6 +101,9 @@ class GitHubConfig:
     that never named a repository has nothing to compare a delivery against.
     """
 
+    host_aliases: Mapping[str, str] = field(default_factory=dict)
+    """Web authorities mapped to their GitHub transport authority, including ports."""
+
 
 @dataclass(frozen=True, slots=True)
 class WorkOrdersConfig:
@@ -118,6 +121,8 @@ class WorkOrdersConfig:
     """Which workflow to run, or empty for the deployment's only one."""
     runner: str = ""
     """Which agent runs it, or empty for the executor's default."""
+    slack_operators: tuple[str, ...] = ()
+    """Slack user IDs allowed to control WorkOrders started by other people."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +250,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository"}, "github")
+    _reject_unknown(github, {"repository", "host_aliases"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
@@ -265,7 +270,9 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     )
 
     work_orders = _table(document.get("work_orders", {}), "work_orders")
-    _reject_unknown(work_orders, {"repository", "runner", "workflow"}, "work_orders")
+    _reject_unknown(
+        work_orders, {"repository", "runner", "workflow", "slack_operators"}, "work_orders"
+    )
     work_order_repository = _optional_nonblank_string(
         work_orders.get("repository", ""), "work_orders.repository"
     )
@@ -275,6 +282,11 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     work_order_runner = _optional_nonblank_string(
         work_orders.get("runner", ""), "work_orders.runner"
     )
+    work_order_slack_operators = _strings(
+        work_orders.get("slack_operators", ()), "work_orders.slack_operators"
+    )
+    if any(not user_id.strip() for user_id in work_order_slack_operators):
+        raise EngineConfigError("work_orders.slack_operators must not contain empty user IDs")
 
     claude = _table(document.get("claude", {}), "claude")
     _reject_unknown(claude, {"output_style"}, "claude")
@@ -342,7 +354,16 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
-        github=GitHubConfig(repository=github_repository),
+        github=GitHubConfig(
+            repository=github_repository,
+            host_aliases={
+                _nonblank_string(alias, "github.host_aliases").lower():
+                _nonblank_string(target, "github.host_aliases").lower()
+                for alias, target in _table(
+                    github.get("host_aliases", {}), "github.host_aliases"
+                ).items()
+            },
+        ),
         communications=CommunicationsConfig(
             provider=communications_provider,
             channel=communications_channel,
@@ -351,6 +372,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             repository=work_order_repository,
             workflow=work_order_workflow,
             runner=work_order_runner,
+            slack_operators=work_order_slack_operators,
         ),
         claude=ClaudeConfig(output_style=output_style),
         approvals=ApprovalConfig(

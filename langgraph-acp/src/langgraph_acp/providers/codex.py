@@ -55,7 +55,12 @@ from langgraph_acp.permissions import ACPPermissionHandler
 #:
 #: An installation that wants the pin takes it, and gives up the above:
 #: `CodexACPProvider(command=["npx", "--yes", "@agentclientprotocol/codex-acp@1.9.0"])`.
-CODEX_ACP_COMMAND = ("npx", "--yes", "@agentclientprotocol/codex-acp")
+# Windows CreateProcess needs the npm command shim extension.
+CODEX_ACP_COMMAND = (
+    "npx.cmd" if os.name == "nt" else "npx",
+    "--yes",
+    "@agentclientprotocol/codex-acp",
+)
 
 
 @dataclass(frozen=True, slots=True)

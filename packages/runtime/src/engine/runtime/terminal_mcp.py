@@ -37,7 +37,7 @@ from engine.ports import (
     McpServerConfig,
     SourceControl,
 )
-from engine.runtime.change_requests import change_request
+from engine.runtime.change_requests import ChangeRequest, change_request
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -71,6 +71,12 @@ CommentRecorder = Callable[["PostedComment"], Awaitable[None]]
 #: is recorded here because opening is the act that creates it; reading it back
 #: off the comments on the pull request would name whoever commented last.
 PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
+
+#: The pull requests the durable store has recorded as this run's, as
+#: `(project, number)` keys. Bound by whoever owns the store, like
+#: `PullRequestRecorder`, and read back when a step names a pull request.
+PullRequestLookup = Callable[[], Awaitable[Sequence[tuple[str, int]]]]
+WorkorderCreator = Callable[[RunId, str], Awaitable[tuple[str, str]]]
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -218,6 +224,13 @@ class TerminalMcpBroker:
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
+        self._pull_request_lookup: PullRequestLookup | None = None
+        self._opened: set[ChangeRequest] = set()
+        self._workorder_creator: WorkorderCreator | None = None
+
+    def enable_workorder_creation(self, create: WorkorderCreator) -> None:
+        """Serve creation with the parent run bound by the host."""
+        self._workorder_creator = create
 
     def enable_status_updates(self, report: StatusReporter) -> None:
         """Serve `update_status`, delivering what it is told to `report`.
@@ -247,6 +260,20 @@ class TerminalMcpBroker:
         whichever run last happened to comment there.
         """
         self._pull_request_recorder = record
+
+    def enable_pull_request_ownership(self, lookup: PullRequestLookup) -> None:
+        """Hold `add_comment` and a reported `pr_url` to this run's pull requests.
+
+        The run's pull requests are what this step opened together with what
+        `lookup` says the store has recorded, so a store that has not caught up
+        with an open still counts it. A URL outside them is refused: a number
+        picked up from an issue, a diff or CI output is how a step comes to
+        report, and then post to, somebody else's pull request.
+
+        This fails closed: with nothing recorded, or a store that cannot be
+        read, only what this step opened is accepted.
+        """
+        self._pull_request_lookup = lookup
 
     def enable_repository_tools(
         self,
@@ -314,6 +341,8 @@ class TerminalMcpBroker:
         )
         for name in self._repository_tools:
             arguments = (*arguments, "--repository-tool", name)
+        if self._workorder_creator is not None:
+            arguments = (*arguments, "--create-workorder")
         if self._status_reporter is not None:
             arguments = (*arguments, "--status-updates")
         if self._step is None:
@@ -378,6 +407,23 @@ class TerminalMcpBroker:
                 if name not in self._repository_tools:
                     return {"ok": False, "error": f"{name} is not enabled for this step"}
                 return await self._repository_call(name, arguments, request_id)
+            if name == "create_workorder":
+                if self._workorder_creator is None:
+                    return {"ok": False, "error": "create_workorder is not enabled for this step"}
+                if (
+                    not isinstance(arguments, dict)
+                    or set(arguments) != {"prompt"}
+                    or not isinstance(arguments["prompt"], str)
+                    or not arguments["prompt"].strip()
+                ):
+                    return {"ok": False, "error": "provide a non-empty prompt"}
+                try:
+                    url, run_id = await self._workorder_creator(
+                        self._run_id, arguments["prompt"].strip()
+                    )
+                except Exception as error:
+                    return {"ok": False, "error": f"could not create workorder: {error}"}
+                return {"ok": True, "output": json.dumps({"url": url, "run_id": run_id})}
             if name == "update_status":
                 if self._status_reporter is None:
                     return {
@@ -441,6 +487,11 @@ class TerminalMcpBroker:
                 )
                 if self._validate_completion is not None:
                     self._validate_completion(event)
+                for output in event.outputs:
+                    if output.name == "pr_url":
+                        foreign = await self._foreign_pull_request(output.value)
+                        if foreign is not None:
+                            return {"ok": False, "error": foreign}
             elif name == "fail_step":
                 event = run_failed_from_arguments(
                     run_id=self._run_id,
@@ -477,6 +528,9 @@ class TerminalMcpBroker:
         assert self._source_control is not None
         if name == "add_comment":
             pr_url, comment, file, line, in_reply_to_id = _comment_arguments(arguments)
+            foreign = await self._foreign_pull_request(pr_url)
+            if foreign is not None:
+                return {"ok": False, "error": foreign}
             try:
                 result = await self._source_control.add_comment(
                     pr_url, comment, file, line, in_reply_to_id
@@ -579,8 +633,52 @@ class TerminalMcpBroker:
             )
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
+        opened = change_request(url)
+        if opened is not None:
+            self._opened.add(opened)
         await self._record_pull_request(url)
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _foreign_pull_request(self, url: str) -> str | None:
+        """Why `url` is not one of this run's pull requests, or `None` if it is.
+
+        Once ownership is enabled this fails closed: a run with nothing
+        recorded, or a store that cannot be read, owns only what this step
+        opened, so a number picked up elsewhere is refused rather than let
+        through while ownership is unknown. Without ownership enabled only
+        what this step opened is held to, and nothing when it opened nothing.
+        """
+        requested = change_request(url)
+        owned = set(self._opened)
+        if self._pull_request_lookup is None:
+            if not owned or requested in owned:
+                return None
+        elif requested not in owned:
+            try:
+                recorded = await self._pull_request_lookup()
+            except Exception as error:
+                logger.exception(
+                    "Could not read this run's pull requests to check %s", url
+                )
+                return (
+                    f"could not confirm {url} is a pull request this run opened: "
+                    f"{error}; try again"
+                )
+            owned.update(ChangeRequest(project, number) for project, number in recorded)
+        if requested is not None and requested in owned:
+            return None
+        if not owned:
+            return (
+                f"{url} is not a pull request this run opened; this run has no "
+                "recorded pull request, so open one with open_pull_request first"
+            )
+        named = ", ".join(
+            sorted(f"{one.project}#{one.number}" for one in owned)
+        )
+        return (
+            f"{url} is not a pull request this run opened ({named}); "
+            "use the URL open_pull_request returned"
+        )
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -685,6 +783,7 @@ def terminal_tool_names(
     *,
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> tuple[str, ...]:
     """The tools a step's server serves, in the order it lists them.
 
@@ -697,6 +796,7 @@ def terminal_tool_names(
             repository_tools,
             terminal_tools=terminal_tools,
             status_updates=status_updates,
+            create_workorder=create_workorder,
         )
     )
 
@@ -706,8 +806,11 @@ def _tools(
     *,
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = list(_TERMINAL_TOOLS) if terminal_tools else []
+    if create_workorder:
+        tools.append(_CREATE_WORKORDER_TOOL)
     if status_updates:
         tools.append(_STATUS_TOOL)
     tools.extend(
@@ -717,6 +820,21 @@ def _tools(
     )
     return tools
 
+
+_CREATE_WORKORDER_TOOL: dict[str, object] = {
+    "name": "create_workorder",
+    "description": (
+        "Create a new workorder for follow-up work in this repository using the "
+        "configured workorder workflow. The new workorder links to this one as its creator. "
+        "Returns its URL and run_id."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {"prompt": {"type": "string", "minLength": 1}},
+        "required": ["prompt"],
+        "additionalProperties": False,
+    },
+}
 
 #: Served only when the run has a conversation to report into.
 _STATUS_TOOL: dict[str, object] = {
@@ -1078,6 +1196,7 @@ async def _serve_stdio(
     repository_tools: Sequence[str] = (),
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> None:
     """Serve newline-delimited MCP JSON-RPC without writing logs to stdout."""
     while line := await asyncio.to_thread(sys.stdin.buffer.readline):
@@ -1091,6 +1210,7 @@ async def _serve_stdio(
                 repository_tools=repository_tools,
                 terminal_tools=terminal_tools,
                 status_updates=status_updates,
+                create_workorder=create_workorder,
             )
             if response is None:
                 continue
@@ -1113,6 +1233,7 @@ async def _mcp_response(
     repository_tools: Sequence[str] = (),
     terminal_tools: bool = True,
     status_updates: bool = False,
+    create_workorder: bool = False,
 ) -> dict[str, object] | None:
     if not isinstance(request, dict):
         return _rpc_error(None, -32600, "Invalid Request")
@@ -1146,6 +1267,7 @@ async def _mcp_response(
                     repository_tools,
                     terminal_tools=terminal_tools,
                     status_updates=status_updates,
+                    create_workorder=create_workorder,
                 )
             },
         )
@@ -1228,6 +1350,7 @@ def main() -> None:
         action="store_true",
         help="serve update_status, for a run with a conversation to report to",
     )
+    parser.add_argument("--create-workorder", action="store_true")
     args = parser.parse_args()
     asyncio.run(
         _serve_stdio(
@@ -1237,6 +1360,7 @@ def main() -> None:
             repository_tools=tuple(args.repository_tools),
             terminal_tools=not args.repository_tools_only,
             status_updates=args.status_updates,
+            create_workorder=args.create_workorder,
         )
     )
 
@@ -1246,6 +1370,7 @@ __all__ = [
     "DEFAULT_BASE_REF",
     "OpenedPullRequest",
     "PostedComment",
+    "PullRequestLookup",
     "PullRequestRecorder",
     "READ_ONLY_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",

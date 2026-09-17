@@ -209,6 +209,7 @@ export type ApiWorkflowRunListing = {
   milestoneId: string | null;
   repository: string;
   repositoryContext: { repository: string };
+  parentRunId?: string | null;
   phase: string;
   /** Live graph frontier supplied by the polled runs list. */
   graphProgress?: {

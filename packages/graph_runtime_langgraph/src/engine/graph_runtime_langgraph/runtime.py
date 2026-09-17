@@ -51,6 +51,7 @@ from uuid import uuid4
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
 from engine.ports import SourceControl, WorkspaceState
+from engine.runtime.terminal_mcp import WorkorderCreator
 from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
@@ -161,6 +162,11 @@ class LangGraphRuntime:
         self._live: dict[RunId, _Live] = {}
         self._entries: dict[NodeId, int] = {}
         self._source_control = source_control
+        self.workorder_creator: WorkorderCreator | None = None
+
+    def bind_workorder_creator(self, create: WorkorderCreator) -> None:
+        """Bind the host that starts workorders and records their provenance."""
+        self.workorder_creator = create
 
     # --- the contract ------------------------------------------------------
 

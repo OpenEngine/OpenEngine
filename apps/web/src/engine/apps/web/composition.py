@@ -307,6 +307,7 @@ def build_capabilities(
 
     oauth = GitHubSourceControl(
         _token,
+        host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
         transport=GitHubOAuthTransport(
             _token, on_token_unauthorized=_refresh_after_unauthorized
@@ -379,6 +380,7 @@ def build_capabilities(
             settings.source_control_preferences,
             GitHubSourceControl(
                 _token,
+                host_aliases=settings.engine_config.github.host_aliases,
                 workspace_provider=workspace_provider,
                 transport=GitHubCliTransport(),
             ),

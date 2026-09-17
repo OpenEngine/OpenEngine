@@ -870,6 +870,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
           <StatStrip>
             <Stat label="Run ID" value={run.runId} />
             <Stat label="Repository" value={run.repository} />
+            {run.parentRunId && (
+              <Stat label="Created by" value={
+                <a href={`/runs/${encodeURIComponent(run.parentRunId)}`}>
+                  {run.parentRunId}
+                </a>
+              } />
+            )}
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
             {/* Where the comments are. Steering by comment happens entirely

@@ -40,6 +40,7 @@ class TerminalMcpServer:
     workspace_key: str = WORKSPACE_ID
     # Raise ValueError to return a correctable tool error before acceptance.
     validate_completion: Callable[[StepCompleted], None] | None = None
+    create_workorder: bool = False
 
     @asynccontextmanager
     async def __call__(
@@ -72,6 +73,8 @@ class TerminalMcpServer:
             registry=TerminalResultRegistry(),
             validate_completion=self.validate_completion,
         )
+        if self.create_workorder and execution.runtime.workorder_creator is not None:
+            broker.enable_workorder_creation(execution.runtime.workorder_creator)
         served = tuple(
             name
             for name in self.repository_tools
@@ -85,6 +88,13 @@ class TerminalMcpServer:
             WorkspaceId(workspace),
             approve,
         )
+        if "add_comment" in served or "pr_url" in self.required_outputs:
+            store = execution.runtime.store
+
+            async def owned() -> tuple[tuple[str, int], ...]:
+                return await store.pull_requests(execution.run_id)
+
+            broker.enable_pull_request_ownership(owned)
         if "add_comment" in served:
             store = execution.runtime.store
 

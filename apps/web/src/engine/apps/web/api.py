@@ -46,7 +46,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
-from engine.apps.web.github_ingress import GithubComment, GithubIngress
+from engine.apps.web.github_ingress import GithubComment, GithubIngress, GithubMerge
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -89,6 +89,7 @@ from engine.domain import (
     AgentRunStatus,
     ApprovalDecision,
     ApprovalId,
+    ApprovalKind,
     ApprovalRecord,
     Message,
     Milestone,
@@ -129,6 +130,9 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime_langgraph.components.human_review import (
+    TOOL_NAME as HUMAN_REVIEW_TOOL,
+)
 from engine.graph_runtime_langgraph.store import PullRequestRecord
 from engine.ports import (
     AgentRunner,
@@ -140,6 +144,7 @@ from engine.ports import (
     UserInputAnswer,
     WorkspaceState,
 )
+from engine.runtime.change_requests import change_request, pull_request_url
 from engine.runtime import (
     PLANNER,
     AgentSession,
@@ -1072,6 +1077,10 @@ def create_app(
     run_reader = RunReader(session.state_store, catalog)
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
+    # A pull request merged while its work order was still working towards its
+    # human review. GitHub sends the merge once, so it is kept until the run
+    # asks for that review rather than dropped for having arrived early.
+    merges_awaiting_review: dict[RunId, GithubMerge] = {}
     graph_notification_lock = asyncio.Lock()
 
     async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
@@ -1095,7 +1104,7 @@ def create_app(
                 # A single work order asks to run dozens of commands, and
                 # announcing each would bury the requests that are real.
                 return
-            if event.payload.get("toolName") == "human_review":
+            if event.payload.get("toolName") == HUMAN_REVIEW_TOOL:
                 text = "Review complete and ready for your decision."
                 snapshot = await surface.runtime.snapshot(state.run_id) if surface.runtime else None
                 pr_url = snapshot.values.get("pr_url") if snapshot else None
@@ -1147,6 +1156,20 @@ def create_app(
         """
         await graph_events.append(event)
         await graph_notifications(event)
+        if (
+            event.kind is EventKind.APPROVAL_REQUESTED
+            and event.payload.get("toolName") == HUMAN_REVIEW_TOOL
+            and event.run_id in merges_awaiting_review
+        ):
+            # After the notification, so the review step is still shown before
+            # the merge that already answered it is recorded against it.
+            try:
+                await github_accept_merged_review(event.run_id)
+            except Exception:
+                log.exception(
+                    "could not accept the human review of work order %s from its merge",
+                    event.run_id,
+                )
         phase = GRAPH_EVENT_PHASES.get(event.kind)
         name = _graph_workorder_name(event.payload.get("values"))
         if phase is None and not name:
@@ -1284,6 +1307,9 @@ def create_app(
                 # therefore no graph entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
+                    bind_creator = getattr(surface.runtime, "bind_workorder_creator", None)
+                    if bind_creator is not None:
+                        bind_creator(agent_create_workorder)
                 except GraphCompilationError as broken:
                     log.error(
                         "graph workflow %r does not compile, so this server "
@@ -1308,6 +1334,195 @@ def create_app(
                     surface.runtime.observe(graph_event)
                     await restore_graph_runs(surface.runtime)
             yield
+
+    def workflow_is_active(thread: ChatThread) -> bool:
+        return (
+            thread.workflow_run_id is not None
+            and thread.workflow_run_id in workflow_tasks
+        )
+
+    async def interrupt_workflow(thread: ChatThread) -> None:
+        """Stop the active process for an editable step without failing its run."""
+
+        if not thread.editable or thread.workflow_run_id is None:
+            raise RuntimeError("this workflow conversation is read-only")
+        state = await session.state_store.load(thread.workflow_run_id)
+        if (
+            state is None
+            or state.phase is not RunPhase.RUNNING_AGENT
+            or state.current_step_id != thread.workflow_step_id
+        ):
+            raise RuntimeError("this workflow step is no longer active")
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task = workflow_tasks.get(thread.workflow_run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        assert thread.workflow_step_id is not None
+        await workflow_executor.pause_agent_step(
+            thread.workflow_run_id, thread.workflow_step_id
+        )
+
+    async def switch_workflow_runner(thread: ChatThread) -> None:
+        """Restart an active workflow turn on its conversation's new runner."""
+
+        assert thread.workflow_run_id is not None
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
+        async with lock:
+            task = workflow_tasks.get(thread.workflow_run_id)
+            if task is None or task.done():
+                return
+            state = await session.state_store.load(thread.workflow_run_id)
+            if (
+                state is None
+                or state.phase is not RunPhase.RUNNING_AGENT
+                or state.current_step_id != thread.workflow_step_id
+            ):
+                return
+            if state.current_agent_run_id is not None:
+                await service.approvals.cancel_run(state.current_agent_run_id)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+            # The completed turn may have advanced to another agent between the
+            # first state read and cancellation. Resume whichever conversation is
+            # now current, without applying this conversation's choice to another.
+            state = await session.state_store.load(thread.workflow_run_id)
+            if (
+                state is None
+                or state.phase is not RunPhase.RUNNING_AGENT
+                or state.agent_paused
+            ):
+                return
+            runner_name = await workflow_runner_for(state)
+            track_workflow(
+                state.run_id,
+                asyncio.create_task(
+                    workflow_executor.resume_agent_step(
+                        state.run_id, runner_name=runner_name
+                    )
+                ),
+            )
+
+    async def continue_workflow(
+        thread: ChatThread, text: str, *, active_only: bool = False, resume_only: bool = False,
+    ) -> None:
+        """Serialize web and Slack continuations for the same WorkOrder."""
+        assert thread.workflow_run_id is not None
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
+        async with lock:
+            await continue_workflow_locked(thread, text, active_only=active_only, resume_only=resume_only)
+
+    async def continue_workflow_locked(
+        thread: ChatThread, text: str, *, active_only: bool = False, resume_only: bool = False,
+    ) -> None:
+        """Interrupt, append a human message, and resume the same workflow step."""
+
+        assert thread.workflow_run_id is not None
+        if not thread.editable:
+            raise RuntimeError("this workflow conversation is read-only")
+        await service.require_somewhere_to_run(thread.instance_id)
+        before = len(await service.history(thread.instance_id))
+        state = await session.state_store.load(thread.workflow_run_id)
+        if state is None:
+            raise RuntimeError("this workflow step is no longer active")
+        if resume_only:
+            executing = workflow_tasks.get(thread.workflow_run_id)
+            if executing is not None and not executing.done():
+                raise RuntimeError("this work order already has an execution in progress; use steering")
+            if state.phase not in (RunPhase.SUCCEEDED, RunPhase.FAILED, RunPhase.AWAITING_HUMAN_REVIEW):
+                raise RuntimeError("this work order has not finished; use steering for running work or the WorkOrder page for paused work")
+            pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
+            if any(record.status.value == "pending" for record in pending):
+                raise RuntimeError("answer the pending decision on the WorkOrder page first")
+        if active_only:
+            if (
+                state.phase is not RunPhase.RUNNING_AGENT
+                or state.current_step_id != thread.workflow_step_id
+                or state.agent_paused
+            ):
+                raise RuntimeError("this work order is not running an agent; continue it on the WorkOrder page")
+            pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
+            if any(record.status.value == "pending" for record in pending):
+                raise RuntimeError("this agent needs a decision on the WorkOrder page before Slack steering")
+        if state.current_agent_run_id is not None:
+            await service.approvals.cancel_run(state.current_agent_run_id)
+        task = workflow_tasks.get(thread.workflow_run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        latest = await session.state_store.load(thread.workflow_run_id)
+        if active_only and (
+            latest is None or latest.phase is not RunPhase.RUNNING_AGENT
+            or latest.current_step_id != thread.workflow_step_id
+        ):
+            # The run may advance while cancellation is in progress. Do not
+            # reopen the old step, or strand a newer one we interrupted.
+            if latest is not None and latest.phase is RunPhase.RUNNING_AGENT and not latest.agent_paused:
+                track_workflow(latest.run_id, asyncio.create_task(
+                    workflow_executor.resume_agent_step(latest.run_id)
+                ))
+            raise RuntimeError("the workflow moved to another step before the instruction could be delivered; try again")
+        if (
+            state.phase is RunPhase.RUNNING_AGENT
+            and state.current_step_id == thread.workflow_step_id
+        ):
+            await workflow_executor.pause_agent_step(
+                thread.workflow_run_id, thread.workflow_step_id
+            )
+        task = asyncio.create_task(
+            workflow_executor.resume_agent_step(
+                thread.workflow_run_id,
+                text,
+                thread.runner,
+                step_id=thread.workflow_step_id,
+            )
+        )
+        track_workflow(thread.workflow_run_id, task)
+        if active_only or resume_only:
+            while True:
+                history = await service.history(thread.instance_id)
+                if any(message.role is Role.USER and message.content == text for message in history[before:]):
+                    return
+                if task.done():
+                    raise RuntimeError("the agent stopped before the instruction was recorded; check the WorkOrder page")
+                # The agent task records the message independently. Yielding with
+                # zero delay turns this acknowledgement wait into a hot loop.
+                await asyncio.sleep(0.01)
+        while (
+            len(await service.history(thread.instance_id)) <= before and not task.done()
+        ):
+            await asyncio.sleep(0.01)
+        if task.done() and not task.cancelled() and task.exception() is not None:
+            raise RuntimeError(str(task.exception()))
+
+    async def stream_workflow_conversation(
+        instance_id: AgentInstanceId, run_id: RunId
+    ) -> AsyncIterator[bytes]:
+        """Poll durable workflow progress into the chat client's snapshot stream."""
+        previous: list[dict[str, object]] | None = None
+        previous_approvals: dict[str, dict[str, object]] = {}
+        while True:
+            history = await service.history(instance_id)
+            content = _latest_assistant_content(history)
+            approvals = await session.state_store.list_approvals(
+                instance_id=instance_id
+            )
+            active = run_id in workflow_tasks
+            for record in approvals:
+                approval = _approval_json(record)
+                approval_id = str(record.approval_id)
+                if approval != previous_approvals.get(approval_id):
+                    previous_approvals[approval_id] = approval
+                    yield _json_line({"type": "approval", "approval": approval})
+            if not active:
+                yield _json_line({"type": "done", "content": content})
+                return
+            if content != previous:
+                previous = content
+                yield _json_line({"type": "content", "content": content})
+            await asyncio.sleep(0.25)
 
     async def config(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -1550,6 +1765,7 @@ def create_app(
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
         scheduled: RunState | None = None,
+        parent_run_id: RunId | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1598,6 +1814,7 @@ def create_app(
             prompt=prompt,
             repository=repository,
             origin=origin,
+            parent_run_id=parent_run_id,
         )
         await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
@@ -1624,6 +1841,23 @@ def create_app(
             )
             await session.state_store.save(state)
         return state
+
+    async def agent_create_workorder(parent_run_id: RunId, prompt: str) -> tuple[str, str]:
+        parent = await session.state_store.load(parent_run_id)
+        if parent is None:
+            raise ValueError("the creating workorder does not exist")
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        assert surface.runtime is not None
+        state = await start_graph_run(
+            surface.runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=prompt, repository=parent.repository,
+            milestone_id=parent.milestone_id, parent_run_id=parent.run_id,
+        )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else f"/runs/{state.run_id}", str(state.run_id)
 
     scheduled_start_lock = asyncio.Lock()
 
@@ -1782,6 +2016,43 @@ def create_app(
                 ]
             }
         )
+
+    async def complete_human_review(request: Request) -> JSONResponse:
+        run_id = RunId(request.path_params["run_id"])
+        body = await _json_body(request)
+        approved = body.get("approved")
+        if not isinstance(approved, bool):
+            return _error("approved must be a boolean", 400)
+        summary = str(body.get("summary", "")).strip()
+        lock = workflow_restart_locks.setdefault(run_id, asyncio.Lock())
+        async with lock:
+            state = await session.state_store.load(run_id)
+            if state is None:
+                return _error("run not found", 404)
+            if (
+                state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
+                or state.current_step_id is None
+            ):
+                return _error("run is not awaiting human review", 409)
+            try:
+                next_state = await workflow_executor.complete_human_review(
+                    HumanReviewCompleted(
+                        run_id=run_id,
+                        step_id=state.current_step_id,
+                        approved=approved,
+                        summary=summary,
+                    )
+                )
+                if next_state.phase is RunPhase.RUNNING_AGENT:
+                    track_workflow(
+                        run_id,
+                        asyncio.create_task(workflow_executor.resume_agent_step(run_id)),
+                    )
+            except WorkflowExecutionError as error:
+                return _error(str(error), 409)
+        run = await run_reader.get(run_id)
+        assert run is not None
+        return JSONResponse(_run_json(run))
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
@@ -2534,11 +2805,147 @@ def create_app(
         ))
         return link.url if link else "", str(state.run_id)
 
+    async def concierge_find_workorders(origin: RunOrigin) -> list[RunState]:
+        return [
+            state for state in await session.state_store.list_runs()
+            if state.origin is not None
+            and state.origin.channel == origin.channel
+            and state.origin.thread_id == origin.thread_id
+        ]
+
+    async def concierge_controlled_workorder(origin: RunOrigin) -> RunState:
+        linked = await concierge_find_workorders(origin)
+        if len(linked) != 1:
+            raise RuntimeError(
+                "this thread has no work order" if not linked else
+                "this thread has multiple work orders; use the WorkOrder page to select one"
+            )
+        state = linked[0]
+        assert state.origin is not None
+        if (
+            origin.author != state.origin.author
+            and origin.author not in work_orders.slack_operators
+        ):
+            raise RuntimeError(
+                "only the person who started this WorkOrder or a configured Slack operator can control it"
+            )
+        return state
+
+    async def concierge_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("graph WorkOrders are not running in this process")
+        try:
+            await runtime.steer(
+                state.run_id, f"Slack instruction from <@{origin.author}>:\n{prompt}"
+            )
+        except GraphRuntimeError as error:
+            raise RuntimeError(str(error)) from error
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
+    async def concierge_resume_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        definition = state.workflow_definition or catalog.get(state.workflow_id)
+        if definition is None:
+            raise RuntimeError("the stored step workflow is unavailable")
+        instances = await session.state_store.list_instances(workflow_run_id=state.run_id)
+        candidates = [
+            instance for instance in instances
+            if instance.workflow_step_id is not None
+            and isinstance(step := definition.step(instance.workflow_step_id), AgentStep)
+            and step.editable and step.workspace_access.value == "write"
+        ]
+        if len(candidates) != 1:
+            raise RuntimeError("no unique editable implementation to resume; select a conversation on the WorkOrder page")
+        thread = await service.get(candidates[0].instance_id)
+        if thread is None:
+            raise RuntimeError("the implementation conversation is unavailable")
+        await continue_workflow(
+            thread, f"Slack follow-up from <@{origin.author}>:\n{prompt}", resume_only=True,
+        )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
+    async def concierge_find_questions(origin: RunOrigin) -> list[dict]:
+        linked = await concierge_find_workorders(origin)
+        if len(linked) != 1 or linked[0].phase is not RunPhase.RUNNING_AGENT:
+            return []
+        state = linked[0]
+        if state.current_agent_run_id is None:
+            return []
+        return [
+            {"approval_id": str(record.approval_id), "questions": json.loads(record.questions)}
+            for record in await session.state_store.list_approvals(agent_run_id=state.current_agent_run_id)
+            if record.is_pending and record.kind is ApprovalKind.USER_INPUT and record.questions
+        ]
+
+    async def concierge_answer_question(
+        origin: RunOrigin, approval_id: str, answers: dict[str, list[str]],
+    ) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        lock = workflow_restart_locks.setdefault(state.run_id, asyncio.Lock())
+        async with lock:
+            state = await session.state_store.load(state.run_id)
+            record = await session.state_store.load_approval(ApprovalId(approval_id))
+            if (
+                state is None or state.phase is not RunPhase.RUNNING_AGENT
+                or record is None or not record.is_pending
+                or record.kind is not ApprovalKind.USER_INPUT or not record.questions
+                or record.agent_run_id != state.current_agent_run_id
+            ):
+                raise RuntimeError("this question is not pending for the active WorkOrder")
+            instance = await session.state_store.load_instance(record.instance_id)
+            if instance is None or instance.workflow_run_id != state.run_id:
+                raise RuntimeError("this question belongs to another WorkOrder")
+            await service.answer_question(
+                record.instance_id, record.approval_id,
+                tuple(UserInputAnswer(question_id=key, answers=tuple(values)) for key, values in answers.items()),
+                state.current_agent_run_id,
+            )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
+    async def concierge_decide_review(
+        origin: RunOrigin, approved: bool, summary: str,
+    ) -> tuple[str, str]:
+        state = await concierge_controlled_workorder(origin)
+        lock = workflow_restart_locks.setdefault(state.run_id, asyncio.Lock())
+        async with lock:
+            state = await session.state_store.load(state.run_id)
+            if (
+                state is None
+                or state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
+                or state.current_step_id is None
+            ):
+                raise RuntimeError("this WorkOrder is not awaiting a review decision")
+            try:
+                next_state = await workflow_executor.complete_human_review(
+                    HumanReviewCompleted(
+                        run_id=state.run_id,
+                        step_id=state.current_step_id,
+                        approved=approved,
+                        summary=summary,
+                    )
+                )
+            except WorkflowExecutionError as error:
+                raise RuntimeError(str(error)) from error
+            if next_state.phase is RunPhase.RUNNING_AGENT:
+                track_workflow(
+                    state.run_id,
+                    asyncio.create_task(workflow_executor.resume_agent_step(state.run_id)),
+                )
+        link = run_notifier.work_order_link(state)
+        return link.url if link else "", str(state.run_id)
+
     slack_concierge = SlackConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
         turn_finished=concierge_turn_finished,
+        find_workorders=concierge_find_workorders,
+        steer_workorder=concierge_steer_workorder,
     )
     _slack_comms = SlackCommunications(_slack_store)
     slack_ingress = SlackIngress(
@@ -2555,7 +2962,7 @@ def create_app(
     async def github_reply(origin: RunOrigin, text: str) -> None:
         number, _, review_id = origin.thread_id.partition("/review/")
         await session.capabilities.source_control.add_comment(
-            f"https://github.com/{origin.channel.removeprefix('github:')}/pull/{number}",
+            pull_request_url(origin.channel.removeprefix("github:"), int(number)),
             text,
             in_reply_to_id=int(review_id) if review_id else None,
         )
@@ -2624,7 +3031,7 @@ def create_app(
             prompt=prompt, repository=repository,
             milestone_id=None,
         )
-        url = f"https://github.com/{repository}/pull/{number}"
+        url = pull_request_url(repository, number)
         try:
             holder = await store.claim_pull_request(
                 PullRequestRecord(
@@ -2774,7 +3181,7 @@ def create_app(
             posting_login[repository] = (
                 github_bot_login
                 or await session.capabilities.source_control.authenticated_login(
-                    f"https://github.com/{repository}"
+                    pull_request_url(repository, 1).rsplit("/pull/", 1)[0]
                 )
             )
         return posting_login[repository]
@@ -2785,6 +3192,16 @@ def create_app(
         if not comment.is_pull_request:
             github_activity.ignored("not a pull request")
             return
+        # The delivery names the forge as well as the repository. Preserve its
+        # port in the shared key so claims and replies stay on that forge.
+        delivery = urlsplit(comment.url)
+        found = change_request(delivery._replace(
+            path=f"/{comment.repository}/pull/{comment.number}", query="", fragment="",
+        ).geturl())
+        if found is None:
+            github_activity.ignored("not a pull-request URL")
+            return
+        comment = replace(comment, repository=found.project)
         # Both lookups reach the forge, and the queue behind this has one
         # worker: a comment that waits here is every later comment waiting too,
         # so they are bounded together rather than left to whatever the
@@ -2808,7 +3225,7 @@ def create_app(
             # already the authority to change this repository, so it is no
             # escalation to reach the agent working on it.
             may_write = await session.capabilities.source_control.can_write_repository(
-                f"https://github.com/{comment.repository}/pull/{comment.number}",
+                pull_request_url(comment.repository, comment.number),
                 comment.author,
             )
         if not may_write:
@@ -2834,11 +3251,129 @@ def create_app(
             text=comment.body, comment_id=comment.comment_id,
         ))
 
+    async def github_merge_approves_workorder(merged: GithubMerge) -> None:
+        """Merging a pull request is a person accepting its work order.
+
+        The same decision as the Accept button on the WorkOrder page, made
+        where the reviewer already is: merging is the one event that closes out
+        a work order's pull request, and somebody who has read the diff and
+        merged it has reviewed the run. Asking them to say so a second time in
+        another tab is asking for a click that says nothing new. Rejecting
+        stays the web UI's: closing a pull request without merging says the
+        work was abandoned, not that it was judged.
+
+        `merge_from_payload` has already refused a bot's merge. Engine's own is
+        refused here, against the login its credentials resolve to: a machine
+        user's token merges as an ordinary `User`, and `GITHUB_BOT_LOGIN` is
+        usually unset. Anybody else who merged is a person GitHub let write to
+        the repository -- the same permission the comment path calls
+        `can_write_repository` to establish, here proven by the merge itself.
+
+        A merge that decides nothing is not a failure: a pull request opened by
+        hand and one whose work order has stopped arrive here with no verdict
+        to record. A work order still working towards its review keeps the
+        merge until it asks for one. Anything that does go wrong raises, so the
+        delivery can be redelivered rather than silently losing the approval.
+        """
+        runtime = surface.runtime
+        if runtime is None:
+            return
+        run_id = await github_run_for_pull_request(merged.repository, merged.number)
+        if run_id is None:
+            log.info(
+                "%s#%s was merged, but no work order opened it",
+                merged.repository, merged.number,
+            )
+            return
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except UnknownGraphError:
+            # A saved work order can outlive the graph it was started from.
+            log.info(
+                "%s#%s was merged, but work order %s can no longer be run",
+                merged.repository, merged.number, run_id,
+            )
+            return
+        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+            log.info(
+                "%s#%s was merged, but work order %s has already stopped",
+                merged.repository, merged.number, run_id,
+            )
+            return
+        # Asked only for a run the merge can still decide: a pull request
+        # opened by hand or a finished work order must not wait on, or fail
+        # with, a credential lookup.
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            engine_login = await github_posting_login(merged.repository)
+        if merged.merged_by.lower() == engine_login.lower():
+            log.info(
+                "%s#%s was merged by Engine itself, which is not a review",
+                merged.repository, merged.number,
+            )
+            return
+        # Kept before looking for the review, so one requested while this looks
+        # still finds the merge waiting for it.
+        merges_awaiting_review[run_id] = merged
+        await github_accept_merged_review(run_id)
+
+    async def github_accept_merged_review(run_id: RunId) -> None:
+        """Answer a work order's human review with the merge kept for it.
+
+        Called when the merge arrives and again when the run asks for its
+        review, whichever comes second finding both halves: a pull request can
+        be merged while the run is still finishing the steps before the review,
+        and GitHub will not send the merge a second time.
+        """
+        merged = merges_awaiting_review.get(run_id)
+        runtime = surface.runtime
+        if merged is None or runtime is None:
+            return
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except UnknownGraphError:
+            merges_awaiting_review.pop(run_id, None)
+            return
+        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+            merges_awaiting_review.pop(run_id, None)
+            return
+        pending = next(
+            (
+                approval
+                for approval in snapshot.pending_approvals
+                if approval.tool_name == HUMAN_REVIEW_TOOL
+            ),
+            None,
+        )
+        if pending is None:
+            log.info(
+                "%s#%s was merged before work order %s asked for its human review; "
+                "the merge will answer it when it does",
+                merged.repository, merged.number, run_id,
+            )
+            return
+        merges_awaiting_review.pop(run_id, None)
+        try:
+            await runtime.decide(run_id, pending.approval_id, ApprovalDecision.ACCEPT)
+        except (UnknownApprovalError, ApprovalNotPendingError):
+            # Somebody decided it between the snapshot and here -- the web UI,
+            # or a cancellation. The verdict is already recorded; a second one
+            # is not owed.
+            log.info(
+                "%s#%s was merged, but work order %s had already been decided",
+                merged.repository, merged.number, run_id,
+            )
+            return
+        log.info(
+            "%s merging %s#%s accepted the human review of work order %s",
+            merged.merged_by, merged.repository, merged.number, run_id,
+        )
+
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         self_login=lambda: github_bot_login,
         handle=github_comment_handler or github_concierge_turn,
+        handle_merge=github_merge_approves_workorder,
         activity=github_activity,
     )
 
@@ -3186,6 +3721,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "milestoneId": str(run.milestone_id) if run.milestone_id else None,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},
+        "parentRunId": str(run.parent_run_id) if run.parent_run_id else None,
         "phase": run.phase,
         "terminalOutcome": run.terminal_outcome,
     }

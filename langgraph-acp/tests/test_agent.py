@@ -6,6 +6,8 @@ longer: it is what lets a graph say `ACPNode(agent="codex")` without importing
 anything that knows what Codex is.
 """
 
+import os
+
 import pytest
 
 from langgraph_acp import (
@@ -85,7 +87,7 @@ def test_the_same_agent_can_be_registered_twice_under_different_settings() -> No
 def test_codex_is_reached_through_its_acp_adapter() -> None:
     """Codex itself does not speak ACP; this is the wrapper that does."""
     assert CODEX_ACP_COMMAND == (
-        "npx",
+        "npx.cmd" if os.name == "nt" else "npx",
         "--yes",
         "@agentclientprotocol/codex-acp",
     )

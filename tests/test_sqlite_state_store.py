@@ -368,3 +368,19 @@ def test_a_row_this_build_cannot_read_is_skipped_rather_than_hiding_the_rest(
         store.close()
 
     assert runs == (current,)
+
+
+def test_workorder_parent_survives_reopening(tmp_path) -> None:
+    path = tmp_path / "provenance.db"
+    state = RunState(
+        run_id=RunId("child"), task_id=TaskId("task"),
+        workflow_id=WorkflowId("workflow"), parent_run_id=RunId("parent"),
+    )
+    store = SQLiteStateStore(path)
+    asyncio.run(store.save(state))
+    store.close()
+    reopened = SQLiteStateStore(path)
+    try:
+        assert asyncio.run(reopened.load(state.run_id)).parent_run_id == RunId("parent")
+    finally:
+        reopened.close()

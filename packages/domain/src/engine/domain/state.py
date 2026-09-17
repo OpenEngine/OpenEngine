@@ -61,6 +61,8 @@ class RunState:
     failure_reason: str = ""
     origin: RunOrigin | None = None
     """The conversation this run was requested from, or ``None`` for the web."""
+    parent_run_id: RunId | None = None
+    """The workorder that created this one, when created by a workflow tool."""
 
     @property
     def is_terminal(self) -> bool:
