@@ -24,6 +24,9 @@ const WORKFLOW = "Implementation review rerank";
 const TASK = "Add a greeting file to the repository.";
 const TITLE = "Adding a greeting";
 const NAMING_REQUEST = "Give this WorkOrder a concise display name";
+/** The harness's single repository, which answers opening a pull request with
+ *  this URL: a step may only report a pull request its run opened. */
+const PULL_REQUEST = "https://github.com/acme/repository/pull/7";
 
 const SCRIPT: Script = {
   title: TITLE,
@@ -44,7 +47,7 @@ const SCRIPT: Script = {
         {
           type: "tool",
           name: "add_comment",
-          arguments: { pr_url: "https://github.com/acme/api/pull/7", comment: "No issues found." },
+          arguments: { pr_url: PULL_REQUEST, comment: "No issues found." },
         },
         {
           type: "tool",
@@ -63,11 +66,16 @@ const SCRIPT: Script = {
         { type: "say", text: "Wrote the greeting." },
         {
           type: "tool",
+          name: "open_pull_request",
+          arguments: { branch: "agent/greeting", title: "Add a greeting" },
+        },
+        {
+          type: "tool",
           name: "complete_step",
           arguments: {
             outcome: "success",
             summary: "Added the greeting.",
-            outputs: { pr_url: "https://github.com/acme/api/pull/7" },
+            outputs: { pr_url: PULL_REQUEST },
           },
         },
       ],
