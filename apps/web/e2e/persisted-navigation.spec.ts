@@ -1,3 +1,5 @@
+import { IMPACT_ANALYSIS_SCENARIO } from "./impact-analysis";
+
 import type { Page, TestInfo } from "@playwright/test";
 
 import {
@@ -75,6 +77,7 @@ async function verifyPersistedNavigation({
   const workflowScript: Script = {
     title: FRESH_TITLE,
     scenarios: [
+      IMPACT_ANALYSIS_SCENARIO,
       {
         when: NAMING_REQUEST,
         steps: [{ type: "say", text: JSON.stringify({ name: FRESH_TITLE }) }],

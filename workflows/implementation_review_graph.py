@@ -1,13 +1,13 @@
 """Implementation and review, run as a graph.
 
-    workspace -> naming -> implementation -> ci-check -> [review facets] -> reranker -> human-review
+    workspace -> naming -> implementation -> ci-check -> [review facets] -> reranker -> impact-analysis -> human-review
 
 The review stage fans out to four parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
 conciseness).  Their findings are collected by a *reranker* that aggressively
 squashes noise and posts the survivors as PR comments with lineage.
 Surviving findings go back to implementation for one automatic fix-and-review
-cycle before human review.
+cycle before impact analysis and human review.
 """
 
 import json
@@ -38,6 +38,7 @@ from engine.graph_runtime_langgraph.components import (
     WorkspaceNode,
     checkout,
 )
+from engine.domain import StepCompleted
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -58,6 +59,7 @@ IMPLEMENTATION = "implementation"
 CI_CHECK = "ci-check"
 REVIEW = "review"
 RERANKER = "reranker"
+IMPACT_ANALYSIS = "impact-analysis"
 HUMAN_REVIEW = "human-review"
 
 #: Codex and Claude, reached through their ACP adapters.  `agent_registry` is
@@ -143,6 +145,36 @@ RERANKER_PROMPT = (
 )
 
 
+IMPACT_ANALYSIS_PROMPT = (
+    "Assess the impact of the final change on pull request {pr_url}. Read the "
+    "diff and surrounding code, tests, CI results, and review findings. Inspect "
+    "only: do not edit, commit, merge, or deploy anything.\n\n"
+    "Rank the change at exactly one level:\n"
+    "Green 🟢: No significant UI or architectural changes. Administrative "
+    "changes, narrowly scoped bug fixes, or minor product behavior changes. "
+    "Well tested with few testing blind spots, and no new integrated component "
+    "requiring human setup.\n"
+    "Orange 🟠: Moderate UI adjustments, a new architectural component, or "
+    "significant code changes to prevent a bug. Well tested, but a new "
+    "integrated component may require human setup, or integration testing "
+    "may be incomplete for a known reason.\n"
+    "Red 🔴: Significant architectural alterations, a major new feature, or "
+    "excess complexity. May touch sensitive components such as security or "
+    "auth, and requires human involvement to deploy. Requires careful review "
+    "and must not be merged without a human.\n\n"
+    "Choose the highest applicable level; passing tests alone does not lower "
+    "the impact. Explain uncertainty and testing gaps rather than assuming "
+    "untested behavior is safe. Give evidence for UI/product and architectural "
+    "scope, complexity, sensitive components, test coverage and blind spots, "
+    "and human setup or deployment work.\n\n"
+    "Call complete_step with impact_level set to exactly Green, Orange, or Red "
+    "and impact_rationale containing your evidence and required human actions. "
+    "Include the color label and emoji and the rationale in the summary.\n\n"
+    "Original task:\n{task}\n\nImplementation report:\n{implementation}\n\n"
+    "CI results:\n{ci}\n\nFinal review findings:\n{findings}"
+)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -176,6 +208,21 @@ class InputImplementationNode(_RunnerInput, ACPNode):
 
 class InputNameNode(_RunnerInput, NameNode):
     pass
+
+
+class InputImpactAnalysisNode(_RunnerInput, ACPNode):
+    """Keep a validated impact rating and its evidence in checkpoint state."""
+
+    graph_node_runner_input = "review_runner"
+
+
+def _validate_impact_analysis(event: StepCompleted) -> None:
+    outputs = {output.name: output.value for output in event.outputs}
+    if outputs.get("impact_level") not in ("Green", "Orange", "Red"):
+        raise ValueError("impact_level must be Green, Orange, or Red")
+    rationale = outputs.get("impact_rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise ValueError("impact_rationale must be non-empty")
 
 
 class InputReviewNode(_RunnerInput, ReviewNode):
@@ -230,7 +277,7 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
 def _after_reranker(state: dict[str, Any]) -> str:
     if state.get(REVIEW) and state.get("review_rounds") == 1:
         return IMPLEMENTATION
-    return HUMAN_REVIEW
+    return IMPACT_ANALYSIS
 
 
 def _after_ci(state: dict[str, Any]) -> str | list[Send]:
@@ -397,6 +444,36 @@ def pipeline(
         ),
     )
 
+    builder.add_node(
+        IMPACT_ANALYSIS,
+        InputImpactAnalysisNode(
+            agent=reviewer,
+            registry=agents,
+            prompt=lambda state: IMPACT_ANALYSIS_PROMPT.format(
+                pr_url=state.get("pr_url", ""),
+                task=state.get("task", ""),
+                implementation=state.get(IMPLEMENTATION, ""),
+                ci=json.dumps(state.get("ci_check", {})),
+                findings=json.dumps(state.get(REVIEW, [])),
+            ),
+            cwd=checkout,
+            mcp_server_bindings=(
+                TerminalMcpServer(
+                    step_id=IMPACT_ANALYSIS,
+                    agent_id=reviewer,
+                    required_outputs=("impact_level", "impact_rationale"),
+                    validate_completion=_validate_impact_analysis,
+                    repository_tools=(
+                        "view_change_request", "list_pipeline_status", "get_job_logs",
+                    ),
+                ),
+            ),
+            output_key=IMPACT_ANALYSIS,
+            graph_node_name="Impact analysis",
+            graph_node_description="Ranks change impact as Green 🟢, Orange 🟠, or Red 🔴.",
+            session_config=session_config,
+        ),
+    )
     builder.add_node(HUMAN_REVIEW, HumanReviewNode())
 
     # ---- edges --------------------------------------------------------------
@@ -416,8 +493,9 @@ def pipeline(
         builder.add_edge(_review_node_name(facet.id), RERANKER)
 
     builder.add_conditional_edges(
-        RERANKER, _after_reranker, [IMPLEMENTATION, HUMAN_REVIEW],
+        RERANKER, _after_reranker, [IMPLEMENTATION, IMPACT_ANALYSIS],
     )
+    builder.add_edge(IMPACT_ANALYSIS, HUMAN_REVIEW)
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
 

@@ -169,6 +169,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "review-performance",
         "review-conciseness",
         "reranker",
+        "impact-analysis",
         "human-review",
     ]
     assert [node.name for node in codex.nodes] == [
@@ -181,6 +182,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review (Performance)",
         "Review (Conciseness)",
         "Reranker",
+        "Impact analysis",
         "Human review",
     ]
     assert [node.group for node in codex.nodes] == [
@@ -194,14 +196,16 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review",
         "Review",
         "",
+        "",
     ]
-    # The kinds: a checkout, seven agents (implementation + 4 reviewers +
-    # reranker + naming), and the one stage that is a person.
+    # The kinds: a checkout, eight agents (implementation + 4 reviewers +
+    # reranker + naming + impact analysis), and the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
         "workspace",
         "agent",
         "agent",
         "tool",
+        "agent",
         "agent",
         "agent",
         "agent",
@@ -217,6 +221,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         False,
         True,
         False,
+        True,
         True,
         True,
         True,
@@ -286,7 +291,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 7
+    assert len(agents) == 8
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
@@ -409,7 +414,8 @@ def test_review_feedback_returns_to_implementation_at_most_once(
     for facet in module.REVIEW_FACETS:
         assert visited.count(f"review-{facet.id}") == rounds
     assert visited.count(module.WORKSPACE) == 1
-    assert visited[-1] == module.HUMAN_REVIEW
+    assert visited.count(module.IMPACT_ANALYSIS) == 1
+    assert visited[-2:] == [module.IMPACT_ANALYSIS, module.HUMAN_REVIEW]
     assert prompts[0] == module.IMPLEMENTATION_PROMPT.format(task="Repair the result")
     if has_findings:
         assert "Fix the bug" in prompts[1]
@@ -570,3 +576,87 @@ def test_input_runner_can_be_reset_to_workflow_default_and_retried(tmp_path):
             assert (await runtime.store.session(run.run_id, "implementation")).agent == "codex"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("level", ["Green", "Orange", "Red"])
+@pytest.mark.parametrize(
+    ("invalid_outputs", "error"),
+    [
+        ({"impact_level": "green", "impact_rationale": "Evidence"}, "impact_level"),
+        ({"impact_level": "Blue", "impact_rationale": "Evidence"}, "impact_level"),
+        ({"impact_level": "Green", "impact_rationale": ""}, "impact_rationale"),
+        ({"impact_level": "Green", "impact_rationale": " \n"}, "impact_rationale"),
+    ],
+)
+def test_impact_analysis_rejects_then_accepts_corrected_assessment(
+    monkeypatch, level, invalid_outputs, error,
+):
+    from types import SimpleNamespace
+    from engine.domain import RunId
+    from engine.graph_runtime_langgraph import terminal_mcp
+    from engine.runtime.terminal_mcp import TerminalMcpBroker
+    from tests.test_terminal_mcp import _request
+
+    module = definition_module()
+    node = nodes_of(module.pipeline("codex"))[module.IMPACT_ANALYSIS]
+    binding, = node._for_runner("codex").mcp_server_bindings
+    brokers = []
+
+    def capture_broker(**kwargs):
+        broker = TerminalMcpBroker(**kwargs)
+        brokers.append(broker)
+        return broker
+
+    monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
+
+    async def scenario():
+        execution = SimpleNamespace(
+            run_id=RunId("run"), execution_id="impact", runtime=SimpleNamespace(
+                source_control=object(),
+            ),
+        )
+        async with binding({"workspaceId": "workspace"}, execution, None):
+            broker, = brokers
+            rejected = await broker._submit(_request(broker, 1, "complete_step", {
+                "outcome": "success", "summary": "Assessment",
+                "outputs": invalid_outputs,
+            }))
+            assert rejected["ok"] is False
+            assert error in rejected["error"]
+            assert not broker._result.done()
+            accepted = await broker._submit(_request(broker, 2, "complete_step", {
+                "outcome": "success", "summary": f"{level}: assessment",
+                "outputs": {"impact_level": level, "impact_rationale": "Evidence"},
+            }))
+            assert accepted["ok"] is True
+            update = node._terminal_update(await broker.result())
+            assert update == {
+                module.IMPACT_ANALYSIS: f"{level}: assessment",
+                "impact_level": level, "impact_rationale": "Evidence",
+            }
+
+    asyncio.run(scenario())
+
+
+def test_impact_analysis_receives_final_evidence_and_selected_review_runner():
+    module = definition_module()
+    node = nodes_of(module.pipeline("codex"))[module.IMPACT_ANALYSIS]
+    assert node.graph_node_runner_input == "review_runner"
+    selected = node._for_runner("codex")
+    assert selected.agent == "codex"
+    binding, = selected.mcp_server_bindings
+    assert binding.agent_id == "codex"
+    assert binding.required_outputs == ("impact_level", "impact_rationale")
+    assert binding.repository_tools == (
+        "view_change_request", "list_pipeline_status", "get_job_logs",
+    )
+    prompt = node.prompt({
+        "task": "Repair saving", "pr_url": "https://example.com/pull/42",
+        module.IMPLEMENTATION: "Fixed saving", "ci_check": {"passed": True},
+        module.REVIEW: [{"tagline": "Remaining finding"}],
+    })
+    for evidence in ("Repair saving", "https://example.com/pull/42", "Fixed saving",
+                     '"passed": true', "Remaining finding",
+                     "Green 🟢", "Orange 🟠", "Red 🔴",
+                     "must not be merged without a human"):
+        assert evidence in prompt
