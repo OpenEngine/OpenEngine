@@ -118,11 +118,16 @@ def test_multiple_workorders_are_selected_in_slack_per_sender(tmp_path):
     app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
                                _workflow_catalog(), provider=provider, graph_runtime=opened)
     with TestClient(app) as client:
-        for name in ("first", "second"):
-            client.portal.call(capabilities.state_store.save, saved_run(name))
+        for run in (
+            replace(saved_run("first"), name='Ask <@U123> & keep "quotes"'),
+            replace(saved_run("second"), prompt="Fix <!channel> & <@U456>"),
+        ):
+            client.portal.call(capabilities.state_store.save, run)
         send(client, app, "Fix it")
         assert not provider.clients
         assert "Which WorkOrder" in communications.posts[-1][1].text
+        assert '`first` (Ask &lt;@U123&gt; &amp; keep "quotes")' in communications.posts[-1][1].text
+        assert "`second` (Fix &lt;!channel&gt; &amp; &lt;@U456&gt;)" in communications.posts[-1][1].text
         send(client, app, "second", ts="3")
         assert "Selected WorkOrder" in communications.posts[-1][1].text
         send(client, app, "Fix it", ts="4")

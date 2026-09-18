@@ -7,6 +7,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from html import escape
 from tempfile import TemporaryDirectory
 from typing import TypedDict
 
@@ -172,7 +173,9 @@ class SlackConcierge:
             if len(selected) == 1 and self.select_workorder is not None:
                 await self.select_workorder(message.origin, str(selected[0].run_id))
                 return {"reply": f"Selected WorkOrder `{selected[0].run_id}`. What would you like me to do?"}
-            choices = ", ".join(f"`{run.run_id}` ({run.name or run.prompt})" for run in linked)
+            choices = ", ".join(
+                f"`{run.run_id}` ({escape(run.name or run.prompt, quote=False)})" for run in linked
+            )
             return {"reply": f"Which WorkOrder does this apply to? Reply with its ID: {choices}"}
         key = (message.origin.channel, message.origin.thread_id)
         fresh = key not in self._threads
