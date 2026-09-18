@@ -2024,7 +2024,7 @@ def create_app(
         return JSONResponse(_run_json(run))
 
     async def delete_run(request: Request) -> Response:
-        """Throw a WorkOrder away, whatever it was in the middle of.
+        """Throw a WorkOrder away unless scheduled work still depends on it.
 
         A run still being worked on is the graph engine's, and its driver is a
         task in the engine rather than anything this app holds. Deleting the
@@ -2037,6 +2037,17 @@ def create_app(
         state = await session.state_store.load(run_id)
         if state is None:
             return _error("run not found", 404)
+        dependents = [
+            str(run.run_id)
+            for run in await session.state_store.list_runs()
+            if run.phase is RunPhase.SCHEDULED and run.depends_on_run_id == run_id
+        ]
+        if dependents:
+            return _error(
+                "cannot delete workorder required by scheduled workorders: "
+                + ", ".join(dependents),
+                409,
+            )
         if state.phase is not RunPhase.SCHEDULED:
             await cancel_graph_run(run_id)
         await session.state_store.delete_run(run_id)

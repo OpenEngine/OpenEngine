@@ -2686,6 +2686,48 @@ def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
     assert snapshot.error == CANCELLED
 
 
+@pytest.mark.parametrize(
+    "phase",
+    [RunPhase.SCHEDULED, RunPhase.RUNNING_AGENT, RunPhase.SUCCEEDED, RunPhase.FAILED],
+)
+def test_deleting_a_prerequisite_with_scheduled_dependents_is_rejected(
+    phase: RunPhase,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario():
+        store = InMemoryStateStore()
+        app, runtime = _graph_app(store, _review_graph())
+        runtime.cancel = AsyncMock()
+        prerequisite = RunState(
+            run_id=RunId("prerequisite"), task_id=TaskId("prerequisite"),
+            workflow_id=WorkflowId("implementation-review-codex"), phase=phase,
+        )
+        dependent = RunState(
+            run_id=RunId("dependent"), task_id=TaskId("dependent"),
+            workflow_id=prerequisite.workflow_id, phase=RunPhase.SCHEDULED,
+            depends_on_run_id=prerequisite.run_id,
+        )
+        await store.save(prerequisite)
+        await store.save(dependent)
+        # Keep dispatch stopped to also cover a completed prerequisite whose
+        # dependent has not yet been started.
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.delete("/api/runs/prerequisite")
+            assert response.status_code == 409
+            assert "dependent" in response.json()["error"]
+            assert await store.load(prerequisite.run_id) == prerequisite
+            assert await store.load(dependent.run_id) == dependent
+            runtime.cancel.assert_not_awaited()
+            assert (await client.delete("/api/runs/dependent")).status_code == 204
+            assert (await client.delete("/api/runs/prerequisite")).status_code == 204
+            assert await store.list_runs() == ()
+
+    asyncio.run(scenario())
+
+
 def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> None:
     """A row whose graph state is gone is still the reader's to throw away.
 
