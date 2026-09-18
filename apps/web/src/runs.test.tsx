@@ -19,6 +19,7 @@ const config: EngineConfig = {
   runners: [],
   defaultAgent: "agent",
   planAgent: "planner",
+  showProjects: true,
   defaultRunner: "runner",
   workflows: [
     { id: "work-v1", name: "Work" },

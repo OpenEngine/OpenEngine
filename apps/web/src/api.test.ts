@@ -77,6 +77,7 @@ describe("newChatAgent", () => {
     runners: [],
     defaultAgent: "coder",
     planAgent: "planner",
+    showProjects: true,
     defaultRunner: "claude",
     workflows: [],
   } satisfies EngineConfig;

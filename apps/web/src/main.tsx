@@ -361,6 +361,7 @@ function App() {
   const sidebar = () => (
     <Sidebar
       projects={projects}
+      showProjects={config.showProjects}
       runs={runs}
       graphNodes={graphNodes}
       initialSection={sectionFor(route)}

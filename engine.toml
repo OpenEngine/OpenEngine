@@ -1,5 +1,7 @@
 attribution = false
 default_branch = "main"
+# Hide the Projects accordion; set true to show it (defaults to true if omitted).
+show_projects = false
 public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 
 # Whose GitHub events this deployment answers. The secret that signs those
