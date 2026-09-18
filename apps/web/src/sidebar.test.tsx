@@ -706,7 +706,8 @@ describe("Sidebar", () => {
     expect(entry).toHaveTextContent(`${label} · ${graphRun.workflowId}`);
     expect(within(entry).queryByLabelText("WorkOrder is in progress") !== null).toBe(live);
     for (const name of ["Implementation", "Review"]) {
-      const conversation = screen.getByRole("link", { name: new RegExp(`^${name}( Waiting for input)?$`) });
+      // jsdom versions differ on spacing before the inline marker's accessible name.
+      const conversation = screen.getByRole("link", { name: new RegExp(`^${name}(\\s*Waiting for input)?$`) });
       expect(within(conversation).queryByLabelText("Waiting for input") !== null)
         .toBe(graphProgress.waitingNodeIds.includes(name.toLowerCase()));
     }
