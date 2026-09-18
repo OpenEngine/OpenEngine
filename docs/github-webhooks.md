@@ -11,6 +11,24 @@ Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, 
 `issue_comment`, `pull_request_review_comment`, and `pull_request` events, and
 give it a secret.
 
+## Making `public_url` reachable
+
+GitHub has to reach `public_url` from the internet. On a deployment exposed
+with Tailscale, `public_url` is the machine's `*.ts.net` hostname, published
+with `tailscale funnel` (or `tailscale serve` for tailnet-only access). Declare
+that in `engine.toml`:
+
+```toml
+[tailscale]
+enabled = true
+# port = 8000  # the local port to expose; omit to reuse the web server's own
+```
+
+The table is validated at startup; Engine does not start Tailscale for you
+yet, so run `tailscale funnel` yourself and keep `public_url` in step with it.
+No auth key belongs in this table -- if one is ever needed it goes in the
+server-local `.env` described below.
+
 ## Naming the repository
 
 Name the repository whose deliveries this deployment answers in `engine.toml`:

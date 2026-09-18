@@ -33,6 +33,8 @@ def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     assert loaded.config.orchestrator.host == "127.0.0.1:7233"
     assert loaded.config.orchestrator.database == ".engine/temporal.sqlite3"
     assert loaded.config.orchestrator.health_check_interval == 5.0
+    assert loaded.config.tailscale.enabled is False
+    assert loaded.config.tailscale.port is None
     assert loaded.config.claude.output_style is None
     assert loaded.config.approvals.allow == (ApprovalCapability.READ,)
     assert loaded.config.approvals.auto_approve is False
@@ -148,6 +150,16 @@ def test_loads_the_repository_webhook_deliveries_are_accepted_from(
     assert loaded.config.github.repository == "owner/name"
 
 
+def test_loads_tailscale_exposure(tmp_path: Path) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text("[tailscale]\nenabled = true\nport = 8443\n")
+
+    loaded = load_engine_config(path, environ={}, cwd=tmp_path)
+
+    assert loaded.config.tailscale.enabled is True
+    assert loaded.config.tailscale.port == 8443
+
+
 def test_loads_github_deployment_credentials(tmp_path: Path) -> None:
     path = tmp_path / "engine.toml"
     path.write_text(
@@ -216,6 +228,11 @@ def test_selection_is_explicit_then_environment_then_working_directory(
             {"orchestrator": {"health_check_interval": 0}},
             "orchestrator.health_check_interval must be a positive number",
         ),
+        ({"tailscale": {"funnel": True}}, "unknown key in tailscale: funnel"),
+        ({"tailscale": {"enabled": "yes"}}, "tailscale.enabled must be a boolean"),
+        ({"tailscale": {"port": "8000"}}, "tailscale.port must be an integer"),
+        ({"tailscale": {"port": True}}, "tailscale.port must be an integer"),
+        ({"tailscale": {"port": 0}}, "tailscale.port must be an integer"),
         ({"output_style": "concise"}, "unknown key in configuration: output_style"),
         ({"claude": {"style": "concise"}}, "unknown key in claude: style"),
         ({"claude": {"output_style": True}}, "claude.output_style must be a string"),

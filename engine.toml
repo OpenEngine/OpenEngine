@@ -30,6 +30,12 @@ host = "127.0.0.1:7233"
 database = ".engine/temporal.sqlite3"
 health_check_interval = 5.0
 
+# Exposing public_url on the tailnet. Declared only for now: `tailscale serve`
+# or `funnel` is still run by hand. Omit port to reuse the web server's own.
+# See docs/github-webhooks.md.
+[tailscale]
+enabled = false
+
 [claude]
 output_style = "concise"
 
