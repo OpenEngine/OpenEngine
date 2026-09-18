@@ -211,6 +211,7 @@ export type ApiWorkflowRunListing = {
   repository: string;
   repositoryContext: { repository: string };
   parentRunId?: string | null;
+  dependsOnRunId?: string | null;
   phase: string;
   /** Live graph frontier supplied by the polled runs list. */
   graphProgress?: {

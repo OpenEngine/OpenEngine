@@ -3368,3 +3368,80 @@ def test_agent_created_workorder_links_to_its_creator() -> None:
                 assert (await client.get(f"/api/runs/{child['parentRunId']}")).status_code == 200
 
     asyncio.run(scenario())
+
+
+def test_workorder_dependencies_wait_and_release_a_chain() -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        waiting = ScriptedGraph(GraphId("waiting"), "Waiting", (
+            ScriptedNode(NodeId("work"), (AwaitSteering(),)),
+        ))
+        quick = ScriptedGraph(GraphId("quick"), "Quick", (
+            ScriptedNode(NodeId("work"), (Say("Done"),)),
+        ))
+        app, runtime = _graph_app(store, waiting, quick)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                async def create(graph, dependency=None):
+                    body = {"workflowId": graph, "repository": ".", "prompt": "Task"}
+                    if dependency:
+                        body["dependsOnRunId"] = dependency
+                    return await client.post("/api/runs", json=body)
+
+                assert (await create("quick", "missing")).status_code == 400
+                first = (await create("waiting")).json()["runId"]
+                chain = [first]
+                # Exceeds Python's usual recursion limit.
+                for _ in range(1050):
+                    response = await create("quick", chain[-1])
+                    assert response.status_code == 201
+                    assert response.json()["phase"] == "scheduled"
+                    assert response.json()["dependsOnRunId"] == chain[-1]
+                    chain.append(response.json()["runId"])
+                    assert await runtime.snapshot(RunId(chain[-1])) is None
+                assert (await client.post(f"/api/runs/{chain[1]}/start")).status_code == 409
+                # Wait until the prerequisite is ready to receive steering.
+                for _ in range(100):
+                    snapshot = await runtime.snapshot(RunId(first))
+                    if snapshot.active_executions:
+                        break
+                    await asyncio.sleep(0.001)
+                await runtime.steer(RunId(first), "Proceed")
+                async with asyncio.timeout(10):
+                    while (await store.load(RunId(chain[-1]))).phase is not RunPhase.SUCCEEDED:
+                        await asyncio.sleep(0.001)
+                for run_id in chain:
+                    assert (await store.load(RunId(run_id))).phase is RunPhase.SUCCEEDED
+                ready = await create("waiting", chain[-1])
+                assert ready.json()["phase"] != "scheduled"
+                assert len(await store.list_runs()) == len(chain) + 1
+        await runtime.aclose()
+    asyncio.run(scenario())
+
+
+def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisites_blocked() -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        graph = _review_graph()
+        for run_id, phase, dependency in (
+            ("complete", RunPhase.SUCCEEDED, None),
+            ("failed", RunPhase.FAILED, None),
+            ("ready", RunPhase.SCHEDULED, "complete"),
+            ("blocked", RunPhase.SCHEDULED, "failed"),
+        ):
+            await store.save(RunState(
+                run_id=RunId(run_id), task_id=TaskId(run_id),
+                workflow_id=WorkflowId(str(graph.graph_id)), repository=".",
+                phase=phase, depends_on_run_id=RunId(dependency) if dependency else None,
+            ))
+        app, runtime = _graph_app(store, graph)
+        async with app.router.lifespan_context(app):
+            for _ in range(1000):
+                if (await store.load(RunId("ready"))).phase is RunPhase.SUCCEEDED:
+                    break
+                await asyncio.sleep(0.001)
+            assert (await store.load(RunId("ready"))).phase is RunPhase.SUCCEEDED
+            assert (await store.load(RunId("blocked"))).phase is RunPhase.SCHEDULED
+            assert await runtime.snapshot(RunId("blocked")) is None
+        await runtime.aclose()
+    asyncio.run(scenario())

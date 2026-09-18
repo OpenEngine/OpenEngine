@@ -1083,6 +1083,7 @@ def create_app(
     # asks for that review rather than dropped for having arrived early.
     merges_awaiting_review: dict[RunId, GithubMerge] = {}
     graph_notification_lock = asyncio.Lock()
+    dependencies_changed = asyncio.Event()
 
     async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
         """Report lifecycle events without making delivery failure fail the graph."""
@@ -1189,6 +1190,8 @@ def create_app(
         )
         if updated != state:
             await session.state_store.save(updated)
+        if updated.phase is RunPhase.SUCCEEDED:
+            dependencies_changed.set()
 
     async def restore_graph_runs(runtime: GraphRuntime) -> None:
         """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
@@ -1334,6 +1337,14 @@ def create_app(
                     surface.app = create_graph_app(surface.runtime, graph_events)
                     surface.runtime.observe(graph_event)
                     await restore_graph_runs(surface.runtime)
+                    dependency_task = asyncio.create_task(dispatch_dependencies())
+                    dependencies_changed.set()
+
+                    async def stop_dependencies() -> None:
+                        dependency_task.cancel()
+                        await asyncio.gather(dependency_task, return_exceptions=True)
+
+                    opened.push_async_callback(stop_dependencies)
             yield
 
     def workflow_is_active(thread: ChatThread) -> bool:
@@ -1731,7 +1742,8 @@ def create_app(
             ),
             policy=ScopingPolicy(rules=(message,)),
         )
-        # Scope proposals become durable work, but dispatch is an explicit action.
+        # Independent proposals wait for explicit dispatch; dependent proposals
+        # start when their prerequisite succeeds.
         definition = _mentioned_workflow()
         workflow_id = WorkflowId(
             work_orders.workflow or (str(definition.graph_id) if definition else "")
@@ -1739,6 +1751,10 @@ def create_app(
         for spec in plan.create:
             if spec.milestone_id != milestone_id:
                 return _error("scoper proposed work for another milestone", 400)
+            if len(spec.dependencies) > 1:
+                return _error("workorders support one prerequisite", 400)
+            if spec.dependencies and await session.state_store.load(RunId(str(spec.dependencies[0]))) is None:
+                return _error("unknown prerequisite workorder", 400)
         for spec in plan.create:
             prompt = spec.objective
             if spec.evidence_requirements:
@@ -1754,7 +1770,9 @@ def create_app(
                 name=spec.name,
                 prompt=prompt,
                 repository=work_orders.repository,
+                depends_on_run_id=RunId(str(spec.dependencies[0])) if spec.dependencies else None,
             ))
+        dependencies_changed.set()
         return JSONResponse(_scoping_plan_json(plan))
 
     async def start_graph_run(
@@ -1768,6 +1786,7 @@ def create_app(
         origin: RunOrigin | None = None,
         scheduled: RunState | None = None,
         parent_run_id: RunId | None = None,
+        depends_on_run_id: RunId | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1790,6 +1809,24 @@ def create_app(
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
+        if depends_on_run_id is not None:
+            prerequisite = await session.state_store.load(depends_on_run_id)
+            if prerequisite is None:
+                raise ValueError(f"unknown prerequisite workorder: {depends_on_run_id}")
+            if prerequisite.phase is not RunPhase.SUCCEEDED:
+                state = RunState(
+                    run_id=RunId(f"run-{uuid4().hex[:12]}"),
+                    task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+                    workflow_id=WorkflowId(str(graph.graph_id)),
+                    milestone_id=milestone_id, phase=RunPhase.SCHEDULED,
+                    prompt=prompt, repository=repository, origin=origin,
+                    parent_run_id=parent_run_id, depends_on_run_id=depends_on_run_id,
+                    inputs=inputs,
+                )
+                await session.state_store.save(state)
+                # Recheck after saving to cover completion racing with creation.
+                dependencies_changed.set()
+                return state
         snapshot = await runtime.start(
             GraphId(str(graph.graph_id)),
             {
@@ -1816,7 +1853,9 @@ def create_app(
             prompt=prompt,
             repository=repository,
             origin=origin,
-            parent_run_id=parent_run_id,
+            parent_run_id=scheduled.parent_run_id if scheduled else parent_run_id,
+            depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
+            inputs=inputs,
         )
         await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
@@ -1842,9 +1881,13 @@ def create_app(
                 failure_reason=latest.error,
             )
             await session.state_store.save(state)
+        if state.phase is RunPhase.SUCCEEDED:
+            dependencies_changed.set()
         return state
 
-    async def agent_create_workorder(parent_run_id: RunId, prompt: str) -> tuple[str, str]:
+    async def agent_create_workorder(
+        parent_run_id: RunId, prompt: str, depends_on_run_id: RunId | None = None,
+    ) -> tuple[str, str]:
         parent = await session.state_store.load(parent_run_id)
         if parent is None:
             raise ValueError("the creating workorder does not exist")
@@ -1857,11 +1900,45 @@ def create_app(
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=parent.repository,
             milestone_id=parent.milestone_id, parent_run_id=parent.run_id,
+            depends_on_run_id=depends_on_run_id,
         )
         link = run_notifier.work_order_link(state)
         return link.url if link else f"/runs/{state.run_id}", str(state.run_id)
 
     scheduled_start_lock = asyncio.Lock()
+
+    async def dependency_ready(state: RunState) -> bool:
+        if state.depends_on_run_id is None:
+            return True
+        prerequisite = await session.state_store.load(state.depends_on_run_id)
+        return prerequisite is not None and prerequisite.phase is RunPhase.SUCCEEDED
+
+    async def dispatch_dependencies() -> None:
+        # Iterative dispatch keeps arbitrarily deep chains off the call stack.
+        while True:
+            await dependencies_changed.wait()
+            dependencies_changed.clear()
+            async with scheduled_start_lock:
+                for state in await session.state_store.list_runs():
+                    if (
+                        state.phase is not RunPhase.SCHEDULED
+                        or state.depends_on_run_id is None
+                        or not await dependency_ready(state)
+                    ):
+                        continue
+                    try:
+                        graph = offered_graphs()[str(state.workflow_id)]
+                        assert surface.runtime is not None
+                        await start_graph_run(
+                            surface.runtime, graph,
+                            inputs=resolve_inputs(getattr(graph, "inputs", ()), state.inputs),
+                            prompt=state.prompt,
+                            repository=state.repository or work_orders.repository,
+                            milestone_id=state.milestone_id, origin=state.origin,
+                            scheduled=state,
+                        )
+                    except Exception:
+                        log.exception("could not start dependent workorder %s", state.run_id)
 
     async def start_scheduled_run(request: Request) -> JSONResponse:
         async with scheduled_start_lock:
@@ -1870,6 +1947,8 @@ def create_app(
                 return _error("run not found", 404)
             if state.phase is not RunPhase.SCHEDULED:
                 return _error("workorder is already started", 409)
+            if not await dependency_ready(state):
+                return _error("prerequisite workorder is not complete", 409)
             workflow_id = state.workflow_id or WorkflowId(work_orders.workflow)
             graph = offered_graphs().get(str(workflow_id)) if workflow_id else _mentioned_workflow()
             if graph is None:
@@ -1879,13 +1958,13 @@ def create_app(
                 return _error("configure work_orders.repository before starting this workorder", 400)
             assert surface.runtime is not None
             try:
-                inputs = resolve_inputs(getattr(graph, "inputs", ()), {})
+                inputs = resolve_inputs(getattr(graph, "inputs", ()), state.inputs)
             except ValueError as error:
                 return _error(str(error), 400)
             state = await start_graph_run(
                 surface.runtime, graph, inputs=inputs, prompt=state.prompt,
                 repository=repository, milestone_id=state.milestone_id,
-                scheduled=state,
+                scheduled=state, origin=state.origin,
             )
             run = await run_reader.get(state.run_id)
             assert run is not None
@@ -1899,6 +1978,7 @@ def create_app(
             repository = _required_string(body, "repository")
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
             milestone_value = _optional_string(body, "milestoneId")
+            dependency_value = _optional_string(body, "dependsOnRunId")
         except ValueError as error:
             return _error(str(error), 400)
         graph = offered_graphs().get(str(workflow_id))
@@ -1921,6 +2001,8 @@ def create_app(
             )
         except ValueError as error:
             return _error(str(error), 400)
+        if dependency_value is not None and await session.state_store.load(RunId(dependency_value)) is None:
+            return _error(f"unknown prerequisite workorder: {dependency_value}", 400)
         state = await start_graph_run(
             surface.runtime,
             graph,
@@ -1928,6 +2010,7 @@ def create_app(
             prompt=prompt,
             repository=repository,
             milestone_id=milestone_id,
+            depends_on_run_id=RunId(dependency_value) if dependency_value else None,
         )
         run = await run_reader.get(state.run_id)
         assert run is not None
@@ -3672,6 +3755,7 @@ def _workorder_for_run(run: RunState, milestone_id: MilestoneId) -> WorkOrder:
             milestone_id=milestone_id,
             name=run.name or str(run.task_id),
             objective=run.prompt,
+            dependencies=(WorkOrderId(str(run.depends_on_run_id)),) if run.depends_on_run_id else (),
         ),
         status=status,
     )
@@ -3724,6 +3808,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},
         "parentRunId": str(run.parent_run_id) if run.parent_run_id else None,
+        "dependsOnRunId": str(run.depends_on_run_id) if run.depends_on_run_id else None,
         "phase": run.phase,
         "terminalOutcome": run.terminal_outcome,
     }

@@ -6,7 +6,7 @@ checkpoints -- what is here is identity, submission metadata and a lifecycle
 projection the runtime repairs from that truth.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from engine.domain.ids import (
@@ -63,6 +63,10 @@ class RunState:
     """The conversation this run was requested from, or ``None`` for the web."""
     parent_run_id: RunId | None = None
     """The workorder that created this one, when created by a workflow tool."""
+
+    depends_on_run_id: RunId | None = None
+    """Immediate prerequisite; only successful completion releases this work."""
+    inputs: dict[str, str] = field(default_factory=dict)
 
     @property
     def is_terminal(self) -> bool:
