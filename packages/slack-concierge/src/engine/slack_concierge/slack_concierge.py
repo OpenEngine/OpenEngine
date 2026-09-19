@@ -7,6 +7,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from html import escape
 from tempfile import TemporaryDirectory
 from typing import TypedDict
 
@@ -40,16 +41,22 @@ claim delivery unless it succeeds. Questions about work do not by themselves
 request changes. For follow-up fixes after work stops or completes (for example,
 'browser e2e tests are failing'), use resume_workorder if granted. This continues
 the same work, not a new task. Never create a replacement if steering or resuming
-fails; explain the tool error and direct the user to the WorkOrder page.
-If several work orders are linked, explain the ambiguity rather than guessing.
+fails; explain the tool error and ask a short clarifying question in Slack.
+Never send users to the web UI merely because no execution is active.
+Answer status questions from the latest host context without changing work.
+After a successful tool call, state the action actually taken; never imply success
+on a failed call. The web UI link is optional detail, not a prerequisite.
+If several work orders are linked, ask which WorkOrder ID the message applies to.
+Ask short clarifying questions for ambiguous messages rather than guessing.
 When the user answers a pending question, use answer_workorder_question with
 the exact approval_id and question IDs supplied in host context. Submit only
 answers the human actually provided. Ask for clarification if their answer is
 ambiguous or incomplete. Never use steering/resuming to bypass a pending question
 or treat an answer as a tool permission or a review approval.
 When the host says a WorkOrder awaits human review, use decide_workorder_review
-only for an explicit approval or explicit request for changes. Include the user's
-feedback when requesting changes. Do not infer either decision from discussion,
+for an explicit approval, or for bug reports and actionable feedback as requests
+for changes. Include the user's feedback when requesting changes and explain
+that it was recorded and implementation resumed. Do not infer either decision from discussion,
 questions, or a status update.
 """
 
@@ -96,6 +103,7 @@ class SlackConcierge:
                  find_workorders: FindWorkorders | None = None,
                  steer_workorder: SteerWorkorder | None = None,
                  resume_workorder: SteerWorkorder | None = None,
+                 select_workorder: Callable[[RunOrigin, str], Awaitable[None]] | None = None,
                  find_questions: FindQuestions | None = None,
                  answer_question: AnswerQuestion | None = None,
                  decide_review: DecideReview | None = None,
@@ -112,6 +120,7 @@ class SlackConcierge:
         self.find_workorders = find_workorders
         self.steer_workorder = steer_workorder
         self.resume_workorder = resume_workorder
+        self.select_workorder = select_workorder
         self.find_questions = find_questions
         self.answer_question = answer_question
         self.decide_review = decide_review
@@ -159,6 +168,15 @@ class SlackConcierge:
     async def _turn(self, state: ConversationState) -> dict[str, str]:
         message = state["message"]
         linked = await self.linked_workorders(message.origin)
+        if len(linked) > 1:
+            selected = [run for run in linked if message.text.strip() == str(run.run_id)]
+            if len(selected) == 1 and self.select_workorder is not None:
+                await self.select_workorder(message.origin, str(selected[0].run_id))
+                return {"reply": f"Selected WorkOrder `{selected[0].run_id}`. What would you like me to do?"}
+            choices = ", ".join(
+                f"`{run.run_id}` ({escape(run.name or run.prompt, quote=False)})" for run in linked
+            )
+            return {"reply": f"Which WorkOrder does this apply to? Reply with its ID: {choices}"}
         key = (message.origin.channel, message.origin.thread_id)
         fresh = key not in self._threads
         self._origins[key] = message.origin
@@ -176,7 +194,7 @@ class SlackConcierge:
                         raise RuntimeError(
                             f"This thread already belongs to work order(s): {ids}. "
                             "Use steer_workorder for running work or resume_workorder for stopped work when available; "
-                            "otherwise continue on the WorkOrder page. "
+                            "Answer pending questions or review decisions in this Slack thread. "
                             "Start a new Slack thread for separate work."
                         )
                     return await self.create_workorder(self._origins[key], repository, prompt)
@@ -215,10 +233,12 @@ class SlackConcierge:
             "raw_text": message.raw_text or message.text,
             "mentioned_users": message.mentioned_users,
             "event_type": message.event_type,
-            "pending_questions": self._questions[key],
+            "pending_questions": [q for q in self._questions[key] if q.get("tool_name") != "human_review"],
+            "pending_reviews": [q for q in self._questions[key] if q.get("tool_name") == "human_review"],
             "linked_workorders": [
                 {"run_id": str(run.run_id), "name": run.name,
-                 "phase": run.phase.value, "prompt": run.prompt}
+                 "phase": run.phase.value, "prompt": run.prompt,
+                 "failure_reason": run.failure_reason}
                 for run in linked
             ],
         })

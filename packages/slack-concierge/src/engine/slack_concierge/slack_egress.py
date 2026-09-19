@@ -76,7 +76,7 @@ _RESUME_TOOL_SPEC = {
     "name": "resume_workorder",
     "description": (
         "Continue the existing work order in this Slack thread after it finishes, "
-        "fails or awaits review. Use for follow-up fixes such as failing "
+        "fails or is cancelled. Use for follow-up fixes such as failing "
         "tests. Retains the existing work order and history. Does not create new "
         "work or approve a decision. The host selects a unique editable implementation."
     ),
@@ -106,7 +106,7 @@ _REVIEW_TOOL_SPEC = {
     "description": (
         "Submit an explicit approval or request for changes for the pending human review "
         "in this Slack thread. The host chooses the linked WorkOrder. Set approved true only "
-        "when the user clearly approves; set it false only when they clearly request changes, "
+        "when the user clearly approves; set it false for bug reports or actionable feedback requesting changes, "
         "putting their feedback in summary. Never infer a decision from a question or status check."
     ),
     "inputSchema": {
@@ -229,7 +229,7 @@ class ConciergeBroker(SingleToolBroker):
                 url, run_id = await self._decide_review(approved, summary.strip())
             except Exception as error:
                 return {"ok": False, "error": f"could not submit the review decision: {error}"}
-            outcome = "approved" if approved else "changes requested"
+            outcome = "approved" if approved else "changes requested and implementation resumed"
             return {"ok": True, "text": f"Review {outcome} for work order `{run_id}`.",
                     "data": {"run_id": run_id, "url": url, "approved": approved}}
         if name == "answer_workorder_question":
@@ -273,7 +273,8 @@ class ConciergeBroker(SingleToolBroker):
                 return {"ok": False, "error": f"could not {action} the work order: {error}"}
             return {
                 "ok": True,
-                "text": f"Instruction delivered to work order `{run_id}`. This does not mean the change is implemented yet.",
+                "text": (f"Resumed work order `{run_id}` with your follow-up." if action == "resume"
+                         else f"Sent your instructions to work order `{run_id}` as steering."),
                 "data": {"run_id": run_id, "url": url},
             }
         repository = self._default_repository or "."
