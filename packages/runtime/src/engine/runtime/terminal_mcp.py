@@ -76,7 +76,7 @@ PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
 #: `(project, number)` keys. Bound by whoever owns the store, like
 #: `PullRequestRecorder`, and read back when a step names a pull request.
 PullRequestLookup = Callable[[], Awaitable[Sequence[tuple[str, int]]]]
-WorkorderCreator = Callable[[RunId, str], Awaitable[tuple[str, str]]]
+WorkorderCreator = Callable[[RunId, str, RunId | None], Awaitable[tuple[str, str]]]
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -412,14 +412,19 @@ class TerminalMcpBroker:
                     return {"ok": False, "error": "create_workorder is not enabled for this step"}
                 if (
                     not isinstance(arguments, dict)
-                    or set(arguments) != {"prompt"}
+                    or not {"prompt"} <= set(arguments) <= {"prompt", "depends_on_run_id"}
                     or not isinstance(arguments["prompt"], str)
                     or not arguments["prompt"].strip()
+                    or ("depends_on_run_id" in arguments and (
+                        not isinstance(arguments["depends_on_run_id"], str)
+                        or not arguments["depends_on_run_id"].strip()
+                    ))
                 ):
                     return {"ok": False, "error": "provide a non-empty prompt"}
                 try:
                     url, run_id = await self._workorder_creator(
-                        self._run_id, arguments["prompt"].strip()
+                        self._run_id, arguments["prompt"].strip(),
+                        RunId(arguments["depends_on_run_id"].strip()) if arguments.get("depends_on_run_id") else None
                     )
                 except Exception as error:
                     return {"ok": False, "error": f"could not create workorder: {error}"}
@@ -826,11 +831,15 @@ _CREATE_WORKORDER_TOOL: dict[str, object] = {
     "description": (
         "Create a new workorder for follow-up work in this repository using the "
         "configured workorder workflow. The new workorder links to this one as its creator. "
+        "Optionally set depends_on_run_id to wait for that workorder to succeed. "
         "Returns its URL and run_id."
     ),
     "inputSchema": {
         "type": "object",
-        "properties": {"prompt": {"type": "string", "minLength": 1}},
+        "properties": {
+            "prompt": {"type": "string", "minLength": 1},
+            "depends_on_run_id": {"type": "string", "minLength": 1},
+        },
         "required": ["prompt"],
         "additionalProperties": False,
     },

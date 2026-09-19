@@ -2686,6 +2686,48 @@ def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
     assert snapshot.error == CANCELLED
 
 
+@pytest.mark.parametrize(
+    "phase",
+    [RunPhase.SCHEDULED, RunPhase.RUNNING_AGENT, RunPhase.SUCCEEDED, RunPhase.FAILED],
+)
+def test_deleting_a_prerequisite_with_scheduled_dependents_is_rejected(
+    phase: RunPhase,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario():
+        store = InMemoryStateStore()
+        app, runtime = _graph_app(store, _review_graph())
+        runtime.cancel = AsyncMock()
+        prerequisite = RunState(
+            run_id=RunId("prerequisite"), task_id=TaskId("prerequisite"),
+            workflow_id=WorkflowId("implementation-review-codex"), phase=phase,
+        )
+        dependent = RunState(
+            run_id=RunId("dependent"), task_id=TaskId("dependent"),
+            workflow_id=prerequisite.workflow_id, phase=RunPhase.SCHEDULED,
+            depends_on_run_id=prerequisite.run_id,
+        )
+        await store.save(prerequisite)
+        await store.save(dependent)
+        # Keep dispatch stopped to also cover a completed prerequisite whose
+        # dependent has not yet been started.
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.delete("/api/runs/prerequisite")
+            assert response.status_code == 409
+            assert "dependent" in response.json()["error"]
+            assert await store.load(prerequisite.run_id) == prerequisite
+            assert await store.load(dependent.run_id) == dependent
+            runtime.cancel.assert_not_awaited()
+            assert (await client.delete("/api/runs/dependent")).status_code == 204
+            assert (await client.delete("/api/runs/prerequisite")).status_code == 204
+            assert await store.list_runs() == ()
+
+    asyncio.run(scenario())
+
+
 def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> None:
     """A row whose graph state is gone is still the reader's to throw away.
 
@@ -3366,5 +3408,162 @@ def test_agent_created_workorder_links_to_its_creator() -> None:
                 assert child["repository"] == "acme/api"
                 assert child["taskPrompt"] == "Follow up"
                 assert (await client.get(f"/api/runs/{child['parentRunId']}")).status_code == 200
+
+    asyncio.run(scenario())
+
+
+def test_workorder_dependencies_wait_and_release_a_chain() -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        waiting = ScriptedGraph(GraphId("waiting"), "Waiting", (
+            ScriptedNode(NodeId("work"), (AwaitSteering(),)),
+        ))
+        quick = ScriptedGraph(GraphId("quick"), "Quick", (
+            ScriptedNode(NodeId("work"), (Say("Done"),)),
+        ))
+        app, runtime = _graph_app(store, waiting, quick)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                async def create(graph, dependency=None):
+                    body = {"workflowId": graph, "repository": ".", "prompt": "Task"}
+                    if dependency:
+                        body["dependsOnRunId"] = dependency
+                    return await client.post("/api/runs", json=body)
+
+                assert (await create("quick", "missing")).status_code == 400
+                first = (await create("waiting")).json()["runId"]
+                chain = [first]
+                # Exceeds Python's usual recursion limit.
+                for _ in range(1050):
+                    response = await create("quick", chain[-1])
+                    assert response.status_code == 201
+                    assert response.json()["phase"] == "scheduled"
+                    assert response.json()["dependsOnRunId"] == chain[-1]
+                    chain.append(response.json()["runId"])
+                    assert await runtime.snapshot(RunId(chain[-1])) is None
+                assert (await client.post(f"/api/runs/{chain[1]}/start")).status_code == 409
+                # Wait until the prerequisite is ready to receive steering.
+                for _ in range(100):
+                    snapshot = await runtime.snapshot(RunId(first))
+                    if snapshot.active_executions:
+                        break
+                    await asyncio.sleep(0.001)
+                await runtime.steer(RunId(first), "Proceed")
+                async with asyncio.timeout(10):
+                    while (await store.load(RunId(chain[-1]))).phase is not RunPhase.SUCCEEDED:
+                        await asyncio.sleep(0.001)
+                for run_id in chain:
+                    assert (await store.load(RunId(run_id))).phase is RunPhase.SUCCEEDED
+                ready = await create("waiting", chain[-1])
+                assert ready.json()["phase"] != "scheduled"
+                assert len(await store.list_runs()) == len(chain) + 1
+        await runtime.aclose()
+    asyncio.run(scenario())
+
+
+def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisites_blocked() -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        graph = _review_graph()
+        for run_id, phase, dependency in (
+            ("complete", RunPhase.SUCCEEDED, None),
+            ("failed", RunPhase.FAILED, None),
+            ("ready", RunPhase.SCHEDULED, "complete"),
+            ("blocked", RunPhase.SCHEDULED, "failed"),
+        ):
+            await store.save(RunState(
+                run_id=RunId(run_id), task_id=TaskId(run_id),
+                workflow_id=WorkflowId(str(graph.graph_id)), repository=".",
+                phase=phase, depends_on_run_id=RunId(dependency) if dependency else None,
+            ))
+        app, runtime = _graph_app(store, graph)
+        async with app.router.lifespan_context(app):
+            for _ in range(1000):
+                if (await store.load(RunId("ready"))).phase is RunPhase.SUCCEEDED:
+                    break
+                await asyncio.sleep(0.001)
+            assert (await store.load(RunId("ready"))).phase is RunPhase.SUCCEEDED
+            assert (await store.load(RunId("blocked"))).phase is RunPhase.SCHEDULED
+            assert await runtime.snapshot(RunId("blocked")) is None
+        await runtime.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("creation", ["api", "agent", "scope"])
+def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creation) -> None:
+    async def scenario():
+        store = InMemoryStateStore()
+        graph = _review_graph()
+        runtime = ScriptedGraphRuntime(graph)
+        callbacks = []
+        runtime.bind_workorder_creator = callbacks.append
+        cancelling = asyncio.Event()
+        release = asyncio.Event()
+
+        async def cancel(run_id):
+            cancelling.set()
+            await release.wait()
+
+        runtime.cancel = cancel
+
+        @asynccontextmanager
+        async def running(_app=None):
+            yield runtime
+
+        project = Project(ProjectId("project"), "Project")
+        milestone = Milestone(MilestoneId("milestone"), project.project_id, "Milestone")
+
+        class Scoper:
+            async def run(self, **kwargs):
+                return ScopingPlan(create=(WorkOrderSpec(
+                    milestone.milestone_id, "Dependent", "Follow up",
+                    dependencies=(WorkOrderId("prerequisite"),),
+                ),))
+
+        app = create_app(
+            _session_with({"test": ConcurrentRunner()}, state_store=store),
+            {"test": ConcurrentRunner()},
+            workflow_catalog=WorkflowCatalog.from_graphs((graph,)),
+            graph_runtime=running(),
+            milestone_scoper=Scoper(),
+        )
+        await store.save_project(project)
+        await store.save_milestone(milestone)
+        async with app.router.lifespan_context(app):
+            prerequisite = RunState(
+                run_id=RunId("prerequisite"), task_id=TaskId("task"),
+                workflow_id=WorkflowId(str(graph.graph_id)),
+                phase=RunPhase.RUNNING_AGENT, repository=".",
+            )
+            await store.save(prerequisite)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test",
+            ) as client:
+                deletion = asyncio.create_task(client.delete("/api/runs/prerequisite"))
+                try:
+                    async with asyncio.timeout(5):
+                        await cancelling.wait()
+                        if creation == "api":
+                            result = await client.post("/api/runs", json={
+                                "workflowId": str(graph.graph_id), "repository": ".",
+                                "prompt": "Follow up", "dependsOnRunId": "prerequisite",
+                            })
+                            assert result.status_code == 400
+                        elif creation == "agent":
+                            with pytest.raises(ValueError, match="prerequisite"):
+                                await callbacks[0](prerequisite.run_id, "Follow up", prerequisite.run_id)
+                        else:
+                            result = await client.post(
+                                "/api/projects/project/milestones/milestone/scope",
+                                json={"message": "Plan work"},
+                            )
+                            assert result.status_code == 400
+                    assert await store.list_runs() == (prerequisite,)
+                finally:
+                    release.set()
+                    result = await deletion
+                assert result.status_code == 204
+                assert await store.list_runs() == ()
+        await runtime.aclose()
 
     asyncio.run(scenario())

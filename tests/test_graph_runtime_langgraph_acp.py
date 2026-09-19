@@ -2553,8 +2553,8 @@ def test_graph_workorder_creation_uses_bound_parent() -> None:
 
     calls = []
 
-    async def create(parent, prompt):
-        calls.append((parent, prompt))
+    async def create(parent, prompt, dependency):
+        calls.append((parent, prompt, dependency))
         return "/runs/child", "child"
 
     async def approve(_request):
@@ -2580,6 +2580,6 @@ def test_graph_workorder_creation_uses_bound_parent() -> None:
                 }},
             )
             assert json.loads(result["result"]["content"][0]["text"])["run_id"] == "child"
-        assert calls == [(RunId("parent"), "Follow up")]
+        assert calls == [(RunId("parent"), "Follow up", None)]
 
     asyncio.run(scenario())
