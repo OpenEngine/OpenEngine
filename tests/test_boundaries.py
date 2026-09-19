@@ -249,6 +249,14 @@ def test_apps_do_not_depend_on_each_other(package: Package) -> None:
 def test_apps_actually_wire_adapters() -> None:
     """If no app names an adapter, the composition root is not composing."""
     for package in by_layer(APP):
+        # The remote MCP gateway delegates over HTTP to the web composition
+        # root. It must not instantiate a second runtime or its adapters.
+        if package.dist_name == "engine-mcp-server":
+            assert not any(
+                m.startswith("engine.adapters")
+                for modules in engine_imports(package).values() for m in modules
+            )
+            continue
         imported = {m for modules in engine_imports(package).values() for m in modules}
         assert any(m.startswith("engine.adapters") for m in imported), (
             f"{package.dist_name} imports no adapters; it is not a composition root"

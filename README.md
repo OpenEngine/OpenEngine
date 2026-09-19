@@ -178,3 +178,5 @@ The key concepts are:
 Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine uses claude and codex CLI under the hood. 
 
 ![sdlc](docs/images/oe_sdlc.png)
+
+Remote clients can [create and immediately execute work orders through MCP](docs/remote-mcp.md), hosted on a Mac mini behind Tailscale Funnel.
