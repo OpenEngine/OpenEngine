@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import heapq
+import os
+import subprocess
 from pathlib import Path
 
 
 REPOSITORY_TOOL_SPECS = [
     {
         "name": "list_repository_files",
-        "description": "List up to 200 entries and 4000 characters from a repository directory. Paths are relative to the configured checkout; hidden paths and symlinks are excluded.",
+        "description": "List up to 200 entries and 4000 characters from tracked repository files and their directories. Paths are relative to the configured checkout; hidden paths and symlinks are excluded.",
         "annotations": {"readOnlyHint": True},
         "inputSchema": {
             "type": "object",
@@ -18,7 +20,7 @@ REPOSITORY_TOOL_SPECS = [
     },
     {
         "name": "read_repository_file",
-        "description": "Read UTF-8 repository source or documentation, with line numbers. Returns up to 200 lines and 4000 characters; use start_line to continue. Hidden paths, symlinks, binary files and files over 1 MiB are excluded.",
+        "description": "Read tracked UTF-8 repository source or documentation, with line numbers. Returns up to 200 lines and 4000 characters; use start_line to continue. Hidden paths, symlinks, binary files and files over 1 MiB are excluded.",
         "annotations": {"readOnlyHint": True},
         "inputSchema": {
             "type": "object",
@@ -53,6 +55,23 @@ class RepositoryReader:
             raise ValueError("path must stay inside the repository")
         return path
 
+    def _tracked_paths(self) -> set[Path]:
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "--cached", "-z", "--"], cwd=self.root,
+                check=True, capture_output=True, timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("tracked repository files are unavailable") from exc
+        paths = set()
+        for name in result.stdout.split(b"\0"):
+            if name:
+                try:
+                    paths.add(self._path(os.fsdecode(name)))
+                except ValueError:
+                    continue
+        return paths
+
     def call(self, name: str, arguments: object) -> str:
         if name not in REPOSITORY_TOOL_NAMES:
             raise ValueError("unknown repository tool")
@@ -60,11 +79,18 @@ class RepositoryReader:
         if not isinstance(arguments, dict) or set(arguments) - allowed:
             raise ValueError("unknown repository arguments")
         path = self._path(arguments.get("path", "." if name == "list_repository_files" else ""))
+        tracked = self._tracked_paths()
         if name == "list_repository_files":
+            directories = {parent for file in tracked for parent in file.parents
+                           if parent.is_relative_to(self.root)}
+            if path != self.root and path not in directories:
+                raise ValueError("path must name a tracked repository directory")
+            visible = tracked | directories
             entries = heapq.nsmallest(201, (
                 entry.name + ("/" if entry.is_dir() else "")
                 for entry in path.iterdir()
                 if not entry.name.startswith(".") and not entry.is_symlink()
+                and entry in visible
                 and (entry.is_file() or entry.is_dir())
             ))
             output = "\n".join(entries[:200])
@@ -73,6 +99,8 @@ class RepositoryReader:
         start = arguments.get("start_line", 1)
         if type(start) is not int or start < 1:
             raise ValueError("start_line must be a positive integer")
+        if path not in tracked:
+            raise ValueError("path must name a tracked repository file")
         if not path.is_file():
             raise ValueError("path must name a regular file")
         with path.open("rb") as source:

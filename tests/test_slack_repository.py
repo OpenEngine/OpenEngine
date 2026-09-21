@@ -1,6 +1,7 @@
 """Repository inspection is available through MCP without write authority."""
 import asyncio
 import json
+import subprocess
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,12 +11,23 @@ from engine.slack_concierge.slack_egress import ConciergeBroker, _mcp_response, 
 from langgraph_acp.permissions import ACPPermissionOption, ACPPermissionRequest
 
 
+@pytest.fixture(autouse=True)
+def repository_index(tmp_path):
+    subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
+
+
+def track(root, *paths):
+    subprocess.run(['git', '-C', str(root), 'add', '--', *paths],
+                   check=True, capture_output=True)
+
+
 def test_repository_listing_and_paged_read(tmp_path):
     (tmp_path / 'src').mkdir()
     source = tmp_path / 'src' / 'app.py'
     source.write_text('\n'.join(f'line {i}' for i in range(1, 251)))
     (tmp_path / '.env').write_text('secret')
     (tmp_path / 'link').symlink_to(source)
+    track(tmp_path, 'src', '.env', 'link')
     reader = RepositoryReader(str(tmp_path))
     assert reader.call('list_repository_files', {}) == 'src/'
     assert reader.call('list_repository_files', {'path': 'src'}) == 'app.py'
@@ -43,6 +55,7 @@ def test_repository_limits_and_argument_validation(tmp_path):
     source = tmp_path / 'source'
     for data in (b'\0binary', b'x' * (1024 * 1024 + 1), b'\xff'):
         source.write_bytes(data)
+        track(tmp_path, 'source')
         with pytest.raises(ValueError):
             reader.call('read_repository_file', {'path': 'source'})
     source.write_text('x' * 40000)
@@ -55,11 +68,13 @@ def test_repository_limits_and_argument_validation(tmp_path):
         reader.call('write_file', {'path': 'source'})
     for i in range(210):
         (tmp_path / f'file{i}').touch()
+    track(tmp_path, '.')
     assert len(reader.call('list_repository_files', {}).splitlines()) == 201
 
 
 def test_repository_tools_over_mcp_and_permissions(tmp_path):
     (tmp_path / 'README.md').write_text('Repository guidance')
+    track(tmp_path, 'README.md')
 
     async def scenario():
         create = AsyncMock()
@@ -94,6 +109,7 @@ def test_repository_tools_over_mcp_and_permissions(tmp_path):
                     'id': 3, 'method': 'tools/call', 'params': {'name': name, 'arguments': {}}})
                 assert response['result']['isError'] is True
             (tmp_path / 'unicode.txt').write_text('😀' * 15000)
+            track(tmp_path, 'unicode.txt')
             bounded = await _mcp_response('127.0.0.1', port, broker._token, {
                 'id': 4, 'method': 'tools/call', 'params': {
                     'name': 'read_repository_file', 'arguments': {'path': 'unicode.txt'}}})
@@ -109,3 +125,42 @@ def test_repository_tools_over_mcp_and_permissions(tmp_path):
                     options=(ACPPermissionOption('yes', kind='allow_once'),)))
                 assert permission.granted == (name in names)
     asyncio.run(scenario())
+
+
+def test_repository_excludes_ignored_and_untracked_files(tmp_path):
+    (tmp_path / '.gitignore').write_text(
+        'graph-state/\nconversations.sqlite3\nnode_modules/\n*.pem\ncredentials.toml\n')
+    (tmp_path / 'src').mkdir()
+    (tmp_path / 'src' / 'app.py').write_text('public source')
+    track(tmp_path, '.gitignore', 'src/app.py')
+    private = ['graph-state/state.json', 'conversations.sqlite3',
+               'node_modules/package/index.js', 'key.pem', 'credentials.toml',
+               'secrets.json', 'src/local.txt']
+    for name in private:
+        file = tmp_path / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text('private text without NUL bytes')
+    reader = RepositoryReader(str(tmp_path))
+    assert reader.call('list_repository_files', {}) == 'src/'
+    assert reader.call('list_repository_files', {'path': 'src'}) == 'app.py'
+    assert reader.call('read_repository_file', {'path': 'src/app.py'}) == '1: public source'
+    for name in private:
+        with pytest.raises(ValueError, match='tracked repository file'):
+            reader.call('read_repository_file', {'path': name})
+    for name in ('graph-state', 'node_modules', 'node_modules/package'):
+        with pytest.raises(ValueError, match='tracked repository directory'):
+            reader.call('list_repository_files', {'path': name})
+
+
+def test_repository_fails_closed_without_git_metadata(tmp_path):
+    import shutil
+
+    (tmp_path / 'source').write_text('private text')
+    track(tmp_path, 'source')
+    reader = RepositoryReader(str(tmp_path))
+    assert reader.call('read_repository_file', {'path': 'source'}) == '1: private text'
+    shutil.rmtree(tmp_path / '.git')
+    for name, arguments in [('list_repository_files', {}),
+                            ('read_repository_file', {'path': 'source'})]:
+        with pytest.raises(ValueError, match='tracked repository files are unavailable'):
+            reader.call(name, arguments)
