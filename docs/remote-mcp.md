@@ -18,18 +18,26 @@ control. Rotate it by changing the private env file and restarting the gateway.
 ## Host on the Mac mini
 
 1. Install and run OE as described in the [README](../README.md). Verify that
-   the configured workflow can start from the UI. OE must remain running at
-   `http://127.0.0.1:8000` (or set `OE_MCP_ENGINE_URL` to another loopback origin).
+   the configured workflow can start from the UI. Keep OE running. `engine-dev`
+   does not guarantee the API port: it uses 8000 when free, otherwise an arbitrary
+   free port. For a loopback integration, set `OE_MCP_ENGINE_URL=http://localhost:5173`
+   to use the Vite dev server's fixed port; it proxies `/api` to the actual API
+   port. GitHub and Slack webhooks use this same indirection. The example env
+   file and gateway settings default to `http://127.0.0.1:8000`; that address is
+   correct only when the API port is pinned with `engine-dev --port 8000`.
    Run `uv sync --locked --all-packages` from this checkout.
 2. Install Tailscale on the mini, sign in, and enable Funnel for the node in your
    tailnet policy. Follow the [Funnel prerequisites](https://tailscale.com/docs/features/tailscale-funnel).
    Reserve a funnel listener for this gateway; do not point it at OE's web port.
+   Conversely, do not let the gateway take over the origin serving OE's interface:
+   keep `/` routed to the interface and mount the gateway at `/mcp`.
 3. Copy [oe-mcp.env.example](examples/oe-mcp.env.example) to
    `~/.config/openengine/mcp.env` (create that directory first), then run
    `chmod 600 ~/.config/openengine/mcp.env`. Replace the token using
    `openssl rand -hex 32`, repository with an absolute checkout path on the mini,
    workflow with an installed workflow ID, and public URL with the mini's exact
    HTTPS Funnel origin. Include the port if using a non-default HTTPS port.
+   Set `OE_MCP_ENGINE_URL` as described in step 1.
 4. Start the gateway from the checkout:
 
    ```sh
@@ -39,12 +47,15 @@ control. Rotate it by changing the private env file and restarting the gateway.
 5. In another terminal, publish the gateway:
 
    ```sh
-   tailscale funnel --bg http://127.0.0.1:8765
+   tailscale funnel --bg --set-path /mcp http://127.0.0.1:8765/mcp
    tailscale funnel status
    ```
 
    Use the HTTPS origin printed by Funnel as `OE_MCP_PUBLIC_URL` and restart
    the gateway if it changed. The client URL is that origin plus `/mcp`.
+   Publishing the gateway at `/` would shadow OE's interface when `public_url`
+   in `engine.toml` uses the same origin, so browsers would receive
+   `{"error":"Unauthorized"}` instead of the UI.
    [Funnel command reference](https://tailscale.com/docs/reference/tailscale-cli/funnel).
 6. For automatic startup at login, edit every `/Users/YOU` and checkout path in
    [com.openengine.mcp.plist](examples/com.openengine.mcp.plist), copy it to
@@ -114,6 +125,15 @@ and Claude Code with an explicit header. Browser connector flows requiring OAuth
 need an OAuth-capable gateway; do not disable authentication to accommodate them.
 
 ## Verify and troubleshoot
+
+The loopback health check needs no secret:
+
+```sh
+curl -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/mcp
+```
+
+A 401 proves the gateway is listening and enforcing its bearer token. A 200
+means authentication is not being applied.
 
 An unauthenticated `curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp` must return
 401. With the bearer header, an MCP client should initialize and list exactly
