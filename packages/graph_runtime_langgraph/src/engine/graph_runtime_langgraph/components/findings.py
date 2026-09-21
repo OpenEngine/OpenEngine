@@ -16,6 +16,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any
 
+from engine.domain import StepCompleted
 from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
 
 
@@ -161,13 +162,16 @@ __all__ = [
 ]
 
 
-def parse_findings(value: object) -> list[Finding]:
+def parse_findings(value: object, *, require_lineage: bool = False) -> list[Finding]:
     """Reject malformed reviewer output instead of silently treating it as clean."""
     if isinstance(value, str):
         value = json.loads(value)
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
         raise ValueError("findings must be a JSON array of objects")
-    return [Finding.from_dict(item) for item in value]
+    findings = [Finding.from_dict(item) for item in value]
+    if require_lineage and any(not finding.agent or not finding.facet for finding in findings):
+        raise ValueError("reranked findings must retain reviewer lineage")
+    return findings
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -176,6 +180,11 @@ class ReviewNode(ACPNode):
 
     facet: str
     graph_node_group: str = "Review"
+
+    @staticmethod
+    def validate_completion(event: StepCompleted) -> None:
+        outputs = {output.name: output.value for output in event.outputs}
+        parse_findings(outputs.get("findings"))
 
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)
@@ -194,9 +203,12 @@ class RerankerNode(ACPNode):
 
     graph_node_group: str = "Review"
 
+    @staticmethod
+    def validate_completion(event: StepCompleted) -> None:
+        outputs = {output.name: output.value for output in event.outputs}
+        parse_findings(outputs.get("findings"), require_lineage=True)
+
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)
-        findings = parse_findings(update.get("findings"))
-        if any(not finding.agent or not finding.facet for finding in findings):
-            raise ValueError("reranked findings must retain reviewer lineage")
+        findings = parse_findings(update.get("findings"), require_lineage=True)
         return {self.output_key: [finding.to_dict() for finding in findings]}

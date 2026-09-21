@@ -118,3 +118,74 @@ def test_empty_results_and_reranker_lineage_requirement():
     assert reranker._terminal_update(completed([])) == {"review": []}
     with pytest.raises(ValueError, match="lineage"):
         reranker._terminal_update(completed([{"tagline": "Bad", "description": "Bad"}]))
+
+
+@pytest.mark.parametrize("node_name", [
+    "review-security", "review-bugs", "review-performance", "review-conciseness",
+    "reranker",
+])
+@pytest.mark.parametrize("invalid,error", [
+    ("not json", "Expecting value"),
+    ("{}", "JSON array"),
+    (json.dumps([{"tagline": "a\nb\nc", "description": "Bad"}]), "tagline"),
+    (json.dumps([{"tagline": "Bad", "description": " "}]), "description"),
+    (json.dumps([{"tagline": "Bad", "description": "Bad", "line": 0}]), "line"),
+])
+def test_review_tool_rejects_then_accepts_corrected_findings(
+    monkeypatch, node_name, invalid, error,
+):
+    from types import SimpleNamespace
+    from engine.graph_runtime_langgraph import terminal_mcp
+    from engine.runtime.terminal_mcp import TerminalMcpBroker
+    from tests.test_terminal_mcp import _request
+
+    node = nodes_of(definition_module().pipeline("codex"))[node_name]
+    binding, = node._for_runner("claude").mcp_server_bindings
+    brokers = []
+
+    def capture_broker(**kwargs):
+        broker = TerminalMcpBroker(**kwargs)
+        brokers.append(broker)
+        return broker
+
+    monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
+
+    async def scenario():
+        execution = SimpleNamespace(
+            run_id=RunId("run"), execution_id=node_name,
+            runtime=SimpleNamespace(source_control=object(), workorder_creator=None),
+        )
+        async with binding({"workspaceId": "workspace"}, execution, None):
+            broker, = brokers
+            rejected = await broker._submit(_request(broker, 1, "complete_step", {
+                "outcome": "success", "summary": "Review", "outputs": {"findings": invalid},
+            }))
+            assert rejected["ok"] is False
+            assert error in rejected["error"]
+            assert not broker._result.done()
+            if node_name == "reranker":
+                rejected = await broker._submit(_request(broker, 2, "complete_step", {
+                    "outcome": "success", "summary": "Review",
+                    "outputs": {"findings": json.dumps([{
+                        "tagline": "Bad", "description": "Bad",
+                    }])},
+                }))
+                assert rejected["ok"] is False
+                assert "lineage" in rejected["error"]
+                assert not broker._result.done()
+            findings = [{
+                "tagline": "Work is lost", "description": "Saving deletes prior work.",
+                "agent": "claude", "facet": "bugs",
+            }]
+            accepted = await broker._submit(_request(broker, 3, "complete_step", {
+                "outcome": "success", "summary": "Review",
+                "outputs": {"findings": json.dumps(findings)},
+            }))
+            assert accepted["ok"] is True
+            update = node._terminal_update(await broker.result())
+            expected = dict(findings[0])
+            if node_name != "reranker":
+                expected.update(agent=node.agent, facet=node.facet)
+            assert update == {node.output_key: [expected]}
+
+    asyncio.run(scenario())
