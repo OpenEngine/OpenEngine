@@ -163,6 +163,8 @@ from engine.runtime import (
     load_workflow_catalog,
 )
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
@@ -376,6 +378,19 @@ class ApprovalFeed:
                 await condition.wait_for(
                     lambda: self._revisions.get(instance_id, 0) > revision
                 )
+
+
+class WebGZipMiddleware(GZipMiddleware):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Starlette excludes SSE already. Older supported versions can buffer
+        # NDJSON, so keep both live and resumed agent turns uncompressed too.
+        path = scope.get("path", "")
+        if path.startswith("/api/threads/") and path.endswith(
+            ("/runs", "/runs/current")
+        ):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
 
 
 class BuiltClient(StaticFiles):
@@ -3693,7 +3708,11 @@ def create_app(
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
     else:
         routes.append(Route("/", _missing_frontend))
-    app = Starlette(routes=routes, lifespan=lifespan)
+    app = Starlette(
+        routes=routes,
+        lifespan=lifespan,
+        middleware=[Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5)],
+    )
     app.state.thread_service = service
     app.state.milestone_scoper = milestone_scoper
     app.state.slack_ingress = slack_ingress
