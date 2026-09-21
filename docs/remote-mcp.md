@@ -9,9 +9,12 @@ The call returns the new run ID even while it is waiting. Existing workflow
 review and approval rules still apply. Time-based scheduling is not exposed.
 Each call creates a new work order; after a timeout, check OE before retrying.
 
-The gateway is a separate loopback process. Only its port goes through the
-funnel; it does not expose OE's UI, settings, or other APIs. Repository and
-workflow are chosen by the host, not the caller. Any holder of the bearer token
+The gateway is a separate loopback process that exposes only its MCP tool.
+Funnel visibility applies to the entire HTTPS port, not individual paths: sharing
+an origin with OE's interface also publishes its UI, settings, and other APIs,
+even if the interface was previously tailnet-only. The gateway's bearer token
+does not protect those routes. See [Tailscale's port visibility rules](https://tailscale.com/docs/features/tailscale-serve#limitations).
+Repository and workflow are chosen by the host, not the caller. Any holder of the bearer token
 can start work in that repository. Keep it out of prompts, URLs, and source
 control. Rotate it by changing the private env file and restarting the gateway.
 
@@ -28,9 +31,11 @@ control. Rotate it by changing the private env file and restarting the gateway.
    Run `uv sync --locked --all-packages` from this checkout.
 2. Install Tailscale on the mini, sign in, and enable Funnel for the node in your
    tailnet policy. Follow the [Funnel prerequisites](https://tailscale.com/docs/features/tailscale-funnel).
-   Reserve a funnel listener for this gateway; do not point it at OE's web port.
-   Conversely, do not let the gateway take over the origin serving OE's interface:
-   keep `/` routed to the interface and mount the gateway at `/mcp`.
+   Point the gateway's Funnel route at its loopback port, not OE's web port.
+   Do not let the gateway take over the origin serving OE's interface: if both
+   may be public, keep `/` routed to the interface and mount the gateway at `/mcp`.
+   If the interface must remain private, use a separate HTTPS listener for the
+   gateway as described in step 5.
 3. Copy [oe-mcp.env.example](examples/oe-mcp.env.example) to
    `~/.config/openengine/mcp.env` (create that directory first), then run
    `chmod 600 ~/.config/openengine/mcp.env`. Replace the token using
@@ -44,7 +49,9 @@ control. Rotate it by changing the private env file and restarting the gateway.
    .venv/bin/engine-mcp-server --env-file "$HOME/.config/openengine/mcp.env"
    ```
 
-5. In another terminal, publish the gateway:
+5. In another terminal, publish the gateway. **This shared-origin setup also
+   makes any existing `/` interface handler public**, including one previously
+   limited to the tailnet:
 
    ```sh
    tailscale funnel --bg --set-path /mcp http://127.0.0.1:8765/mcp
@@ -56,6 +63,20 @@ control. Rotate it by changing the private env file and restarting the gateway.
    Publishing the gateway at `/` would shadow OE's interface when `public_url`
    in `engine.toml` uses the same origin, so browsers would receive
    `{"error":"Unauthorized"}` instead of the UI.
+
+   To keep the interface private, leave it on a tailnet-only Serve listener
+   (for example, HTTPS port 443) and publish only the gateway on a separate,
+   unused HTTPS port instead of running the shared-origin command above:
+
+   ```sh
+   tailscale funnel --bg --https=8443 --set-path /mcp http://127.0.0.1:8765/mcp
+   tailscale funnel status
+   ```
+
+   Keep OE's web routes off that listener. Set
+   `OE_MCP_PUBLIC_URL=https://YOUR-MINI.YOUR-TAILNET.ts.net:8443`, restart the
+   gateway, and use `https://YOUR-MINI.YOUR-TAILNET.ts.net:8443/mcp` in clients
+   and public health checks below. Leave OE's `public_url` on its private origin.
    [Funnel command reference](https://tailscale.com/docs/reference/tailscale-cli/funnel).
 6. For automatic startup at login, edit every `/Users/YOU` and checkout path in
    [com.openengine.mcp.plist](examples/com.openengine.mcp.plist), copy it to
@@ -138,7 +159,7 @@ means authentication is not being applied.
 An unauthenticated `curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp` must return
 401. With the bearer header, an MCP client should initialize and list exactly
 `create_workorder`. A successful call returns a run ID which appears immediately
-in OE's work-order list. The MCP origin itself does not serve that list.
+in OE's work-order list. The gateway itself does not serve that list.
 
 401 means the token is missing or incorrect; 403/421 means the configured public
 origin or Host does not match. Tool errors with OE HTTP 400 usually indicate an
