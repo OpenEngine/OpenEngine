@@ -384,3 +384,20 @@ def test_workorder_parent_survives_reopening(tmp_path) -> None:
         assert asyncio.run(reopened.load(state.run_id)).parent_run_id == RunId("parent")
     finally:
         reopened.close()
+
+
+def test_scheduled_dependency_and_inputs_survive_reopening(tmp_path) -> None:
+    path = tmp_path / "dependencies.sqlite3"
+    state = RunState(
+        run_id=RunId("dependent"), task_id=TaskId("task"),
+        workflow_id=WorkflowId("workflow"), phase=RunPhase.SCHEDULED,
+        depends_on_run_id=RunId("prerequisite"), inputs={"runner": "codex"},
+    )
+    store = SQLiteStateStore(path)
+    asyncio.run(store.save(state))
+    store.close()
+    store = SQLiteStateStore(path)
+    try:
+        assert asyncio.run(store.load(state.run_id)) == state
+    finally:
+        store.close()

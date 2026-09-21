@@ -1213,11 +1213,12 @@ def test_a_comment_that_cannot_be_recorded_is_still_reported_as_posted(
     assert "https://github.com/Acme/Renamed/pull/42#issuecomment-123" in caplog.text
 
 
-def test_create_workorder_is_opt_in_and_returns_created_run() -> None:
+@pytest.mark.parametrize("dependency", [None, "prerequisite"])
+def test_create_workorder_is_opt_in_and_returns_created_run(dependency) -> None:
     calls = []
 
-    async def create(parent, prompt):
-        calls.append((parent, prompt))
+    async def create(parent, prompt, dependency):
+        calls.append((parent, prompt, dependency))
         return "/runs/child", "child"
 
     async def scenario():
@@ -1226,19 +1227,24 @@ def test_create_workorder_is_opt_in_and_returns_created_run() -> None:
             step=STEP, registry=TerminalResultRegistry(),
         )
         async with broker:
-            request = _request(broker, 1, "create_workorder", {"prompt": " Next task "})
+            arguments = {"prompt": " Next task "}
+            if dependency:
+                arguments["depends_on_run_id"] = dependency
+            request = _request(broker, 1, "create_workorder", arguments)
             assert (await broker._submit(request))["ok"] is False
             broker.enable_workorder_creation(create)
             assert "--create-workorder" in broker.config.args
-            for arguments in ({}, {"prompt": ""}, {"prompt": 1},
+            for invalid in ({}, {"prompt": ""}, {"prompt": 1},
+                              {"prompt": "task", "depends_on_run_id": ""},
+                              {"prompt": "task", "depends_on_run_id": 1},
                               {"prompt": "task", "parent_run_id": "spoofed"}):
-                assert (await broker._submit({**request, "arguments": arguments}))["ok"] is False
+                assert (await broker._submit({**request, "arguments": invalid}))["ok"] is False
             args = broker.config.args
             response = await _mcp_response(
                 args[args.index("--host") + 1], int(args[args.index("--port") + 1]),
                 args[args.index("--token") + 1],
                 {"id": 2, "method": "tools/call", "params": {
-                    "name": "create_workorder", "arguments": {"prompt": " Next task "},
+                    "name": "create_workorder", "arguments": arguments,
                 }}, create_workorder=True,
             )
             assert json.loads(response["result"]["content"][0]["text"]) == {
@@ -1248,7 +1254,7 @@ def test_create_workorder_is_opt_in_and_returns_created_run() -> None:
                 "id": 3, "method": "tools/list",
             }, create_workorder=True)
             assert "create_workorder" in [t["name"] for t in listing["result"]["tools"]]
-        assert calls == [(RunId("parent"), "Next task")]
+        assert calls == [(RunId("parent"), "Next task", dependency)]
 
     asyncio.run(scenario())
 
