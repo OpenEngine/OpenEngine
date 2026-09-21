@@ -3,10 +3,12 @@
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 
 import pytest
 
-from engine.ports.source_control import CommentResult
+from engine.ports.source_control import ChangeRequest, CommentResult
+from engine.runtime.change_requests import change_request, remote_project
 
 from engine.domain import (
     AgentId,
@@ -1385,3 +1387,331 @@ def test_a_misdirected_comment_is_refused_and_says_where_to_post() -> None:
     assert "acme/api#407" in str(misdirected["error"])
     assert correct["ok"] is True
     assert posted == ["https://github.com/ACME/api/pull/407/files"]
+
+
+class ReportingSourceControl:
+    """Independent remote tips and forge metadata for a reported PR."""
+
+    def __init__(
+        self, *, shown_url="https://github.com/acme/api/pull/7",
+        commit=GitResult(0, "abc123\n", ""), author="engine-bot",
+        login="engine-bot", pushed=GitResult(0, "", ""),
+        remote="https://github.com/acme/api.git", before="", same_repository=True,
+        moves=True,
+    ) -> None:
+        self.pushed, self.shown_url, self.commit = pushed, shown_url, commit
+        self.author, self.login, self.remote = author, login, remote
+        self.before, self.same_repository, self.moves = before, same_repository, moves
+        self.did_push = False
+
+    async def view_change_request(self, _workspace_id, number):
+        return ChangeRequest(
+            number=number, title="A thing", state="open", body="", author=self.author,
+            url=self.shown_url, head_ref="feature", head_sha="abc123", base_ref="main",
+            head_is_same_repository=self.same_repository,
+        )
+
+    async def run_git(self, _workspace_id, arguments):
+        if "push" in arguments:
+            self.did_push = self.moves
+            return self.pushed
+        if arguments[0] == "rev-parse":
+            return self.commit
+        if arguments[0] == "remote":
+            return GitResult(0, self.remote + "\n", "")
+        raise AssertionError(f"unexpected Git transport read: {arguments}")
+
+    async def branch_tips(self, project, destinations):
+        if not self.commit.ok:
+            raise RuntimeError("forge unavailable")
+        tip = self.commit.stdout.strip() if self.did_push else self.before
+        return {"feature": tip} if tip else {}
+
+    async def authenticated_login(self, _repository_url):
+        return self.login
+
+
+_REPORT = {
+    "outcome": "success",
+    "summary": "Done.",
+    "outputs": {"pr_url": "https://github.com/acme/api/pull/7"},
+}
+
+_PUSH = ("push", "-u", "origin", "feature")
+
+
+async def _reporting_broker(
+    source_control: ReportingSourceControl,
+    claim: object,
+    *,
+    workspace: str | None = "workspace",
+    push: Sequence[str] | None = _PUSH,
+) -> TerminalMcpBroker:
+    """A step with nothing recorded, that ran `push` unless it is nothing."""
+
+    async def lookup() -> list[tuple[str, int]]:
+        return []
+
+    broker = TerminalMcpBroker(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("agent-run-1"),
+        step=StepSpec(StepId("implementation"), AgentId("coder"), ("pr_url",)),
+        registry=TerminalResultRegistry(),
+    )
+    broker.enable_repository_tools(
+        source_control,  # type: ignore[arg-type]
+        ("git_subcommand",),
+        None if workspace is None else WorkspaceId(workspace),
+        git_approval=_approve_git,
+    )
+    broker.enable_pull_request_ownership(lookup)
+    broker.enable_pull_request_claims(claim)  # type: ignore[arg-type]
+    broker._result = asyncio.get_running_loop().create_future()
+    if push is not None:
+        await broker._submit(_direct_request(
+            broker, "push-1", "git_subcommand", {"arguments": list(push)},
+        ))
+    return broker
+
+
+def _push_output(text: str) -> GitResult:
+    return GitResult(0, "", text)
+
+
+@pytest.mark.parametrize(
+    ("source_control", "workspace", "push", "recorded"),
+    [
+        (ReportingSourceControl(), "workspace", _PUSH, True),
+        (ReportingSourceControl(), "workspace", ("--no-pager", *_PUSH), True),
+        (ReportingSourceControl(before="old123"), "workspace", _PUSH, True),
+        (ReportingSourceControl(before="abc123"), "workspace", _PUSH, False),
+        (ReportingSourceControl(remote="https://github.com/acme/other.git"), "workspace", _PUSH, False),
+        (ReportingSourceControl(remote="/tmp/mirror.git"), "workspace", _PUSH, False),
+        (ReportingSourceControl(remote="https://github.com:2222/acme/api.git"), "workspace", _PUSH, False),
+        (ReportingSourceControl(commit=GitResult(0, "def456\n", "")), "workspace", _PUSH, False),
+        (ReportingSourceControl(commit=GitResult(1, "", "unavailable")), "workspace", _PUSH, False),
+        (ReportingSourceControl(shown_url="https://github.com/acme/other/pull/7"), "workspace", _PUSH, False),
+        (ReportingSourceControl(author="somebody-else"), "workspace", _PUSH, False),
+        (ReportingSourceControl(author="", login=""), "workspace", _PUSH, False),
+        (ReportingSourceControl(), None, _PUSH, False),
+        (ReportingSourceControl(), "workspace", None, False),
+        (ReportingSourceControl(same_repository=False), "workspace", _PUSH, False),
+        (ReportingSourceControl(moves=False, before="abc123", pushed=_push_output(
+            "To github.com:acme/api.git\n * [new branch] feature -> feature\n"
+        )), "workspace", _PUSH, False),
+        *[(ReportingSourceControl(), "workspace", (*_PUSH, flag), False)
+          for flag in ("--dry-run", "-n", "-un", "--dry-r")],
+    ],
+)
+def test_a_reported_pull_request_is_recorded_only_when_the_forge_shows_it_is_the_runs(
+    source_control: ReportingSourceControl,
+    workspace: str | None,
+    push: Sequence[str] | None,
+    recorded: bool,
+) -> None:
+    """A step that opened its pull request in the shell has nothing recorded.
+
+    Its report is claimed when the forge agrees it is this step's work: the
+    login is shared by every run and the checkout is the agent's to arrange, so
+    what has to match is this step's own push -- of that commit, to that
+    branch, in the repository the pull request lives in.
+    """
+
+    async def scenario() -> tuple[dict[str, object], list[OpenedPullRequest]]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(reported: OpenedPullRequest) -> bool:
+            claimed.append(reported)
+            return True
+
+        broker = await _reporting_broker(
+            source_control, claim, workspace=workspace, push=push
+        )
+        answer = await broker._submit(
+            _direct_request(broker, "complete-1", "complete_step", _REPORT)
+        )
+        return answer, claimed
+
+    answer, claimed = asyncio.run(scenario())
+
+    assert answer["ok"] is recorded
+    expected = [OpenedPullRequest("acme/api", 7, "https://github.com/acme/api/pull/7")]
+    assert claimed == (expected if recorded else [])
+
+
+def test_a_reported_pull_request_another_run_holds_is_refused() -> None:
+    async def scenario() -> tuple[dict[str, object], bool]:
+        async def claim(_reported: OpenedPullRequest) -> bool:
+            return False
+
+        broker = await _reporting_broker(ReportingSourceControl(), claim)
+        answer = await broker._submit(
+            _direct_request(broker, "complete-1", "complete_step", _REPORT)
+        )
+        return answer, broker._result.done()  # type: ignore[union-attr]
+
+    answer, done = asyncio.run(scenario())
+
+    assert answer["ok"] is False
+    assert "not a pull request this run opened" in str(answer["error"])
+    assert done is False
+
+
+def test_a_completion_turned_away_as_a_duplicate_claims_nothing() -> None:
+    """The claim is made for the one accepted result, so a second (or
+    concurrent) `complete_step` cannot take another pull request with it."""
+
+    async def scenario() -> tuple[list[dict[str, object]], list[OpenedPullRequest]]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(reported: OpenedPullRequest) -> bool:
+            claimed.append(reported)
+            return True
+
+        broker = await _reporting_broker(ReportingSourceControl(), claim)
+        broker._registry._accepted[broker._agent_run_id] = object()  # type: ignore[assignment]
+        answers = list(await asyncio.gather(
+            broker._submit(_direct_request(broker, "complete-1", "complete_step", _REPORT)),
+            broker._submit(_direct_request(broker, "complete-2", "complete_step", _REPORT)),
+        ))
+        return answers, claimed
+
+    answers, claimed = asyncio.run(scenario())
+
+    assert [answer["ok"] for answer in answers] == [False, False]
+    assert all("already accepted" in str(answer["error"]) for answer in answers)
+    assert claimed == []
+
+
+def test_concurrent_completions_claim_for_only_the_accepted_one() -> None:
+    async def scenario() -> tuple[list[dict[str, object]], list[OpenedPullRequest]]:
+        claimed: list[OpenedPullRequest] = []
+
+        async def claim(reported: OpenedPullRequest) -> bool:
+            claimed.append(reported)
+            return True
+
+        broker = await _reporting_broker(ReportingSourceControl(), claim)
+        answers = list(await asyncio.gather(
+            broker._submit(_direct_request(broker, "complete-1", "complete_step", _REPORT)),
+            broker._submit(_direct_request(broker, "complete-2", "complete_step", _REPORT)),
+        ))
+        return answers, claimed
+
+    answers, claimed = asyncio.run(scenario())
+
+    assert sorted(answer["ok"] for answer in answers) == [False, True]
+    assert len(claimed) == 1
+
+
+@pytest.mark.parametrize(
+    ("remote_url", "change_request_url"),
+    [
+        ("git@github.com:acme/api.git", "https://github.com/acme/api/pull/7"),
+        ("https://github.com/Acme/API.git", "https://github.com/acme/api/pull/7"),
+        ("ssh://git@github.com/acme/api", "https://github.com/acme/api/pull/7"),
+        ("git@github.com:acme/api", "https://github.com/acme/api/pull/7"),
+        (
+            "git@gitlab.example.com:group/sub/project.git",
+            "https://gitlab.example.com/group/sub/project/-/merge_requests/3",
+        ),
+    ],
+)
+def test_a_push_names_the_project_its_change_requests_are_keyed_by(
+    remote_url: str, change_request_url: str,
+) -> None:
+    """The two readings have to agree, or a push confirms no pull request."""
+    requested = change_request(change_request_url)
+    assert requested is not None
+    assert remote_project(remote_url) == requested.project
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    ["/tmp/mirror.git", "../mirror", "git@github.com:api.git", "", "https:///api.git",
+     "https://gitlab.example.com:2222/group/repo",
+     "https://github.com:443/acme/api", "ssh://git@github.com:22/acme/api",
+     "https://github.com:invalid/acme/api"],
+)
+def test_a_remote_naming_no_forge_project_names_none(remote_url: str) -> None:
+    assert remote_project(remote_url) is None
+
+
+@pytest.mark.parametrize("rewrite", ["insteadOf", "pushInsteadOf"])
+def test_redirected_literal_url_push_cannot_claim_an_existing_pr(tmp_path, rewrite):
+    """A real redirected push changes a mirror, while the forge PR stays put."""
+    import dataclasses
+    import subprocess
+    from unittest.mock import AsyncMock
+
+    from engine.adapters.source_control.github import GitHubSourceControl
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    checkout, mirror = tmp_path / "checkout", tmp_path / "mirror.git"
+    git("init", "--bare", str(mirror))
+    git("init", "-b", "feature", str(checkout))
+    git("-C", str(checkout), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "--allow-empty", "-m", "initial")
+    sha = git("-C", str(checkout), "rev-parse", "HEAD")
+    url = "https://github.com/acme/api.git"
+    git("-C", str(checkout), "config", f"url.{mirror}.{rewrite}", url)
+
+    provider = AsyncMock()
+    provider.root_path.return_value = str(checkout)
+    adapter = GitHubSourceControl("", workspace_provider=provider)
+    adapter._api = AsyncMock(return_value=[{"ref": "refs/heads/feature", "object": {"sha": sha}}])
+
+    class RedirectedSourceControl(ReportingSourceControl):
+        async def run_git(self, workspace, arguments):
+            return await adapter.run_git(workspace, arguments)
+
+        async def branch_tips(self, project, destinations):
+            return await adapter.branch_tips(project, destinations)
+
+        async def view_change_request(self, workspace, number):
+            return dataclasses.replace(
+                await super().view_change_request(workspace, number), head_sha=sha
+            )
+
+    async def scenario():
+        claim = AsyncMock(return_value=True)
+        broker = await _reporting_broker(
+            RedirectedSourceControl(), claim, push=("push", url, "feature")
+        )
+        answer = await broker._submit(
+            _direct_request(broker, "complete-1", "complete_step", _REPORT)
+        )
+        assert answer["ok"] is False
+        claim.assert_not_awaited()
+        assert not broker._pushed
+
+    asyncio.run(scenario())
+    assert git("--git-dir", str(mirror), "rev-parse", "refs/heads/feature") == sha
+    assert adapter._api.await_count == 2
+    adapter._api.assert_called_with(
+        "GET", "/repos/acme/api/git/matching-refs/heads/feature"
+    )
+
+
+def test_concurrent_update_is_not_credited_to_noop_push():
+    from unittest.mock import AsyncMock
+
+    class ConcurrentSourceControl(ReportingSourceControl):
+        async def run_git(self, workspace, arguments):
+            if arguments[0] == "rev-parse":
+                return GitResult(0, "old123", "")
+            return await super().run_git(workspace, arguments)
+
+    async def scenario():
+        claim = AsyncMock(return_value=True)
+        broker = await _reporting_broker(ConcurrentSourceControl(before="old123"), claim)
+        answer = await broker._submit(_direct_request(broker, "complete-1", "complete_step", _REPORT))
+        assert answer["ok"] is False
+        assert not broker._pushed
+        claim.assert_not_awaited()
+
+    asyncio.run(scenario())

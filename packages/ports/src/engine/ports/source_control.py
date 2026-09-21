@@ -79,6 +79,8 @@ class ChangeRequest:
     base_ref: str
     reviews: tuple[Discussion, ...] = ()
     comments: tuple[Discussion, ...] = ()
+    #: False also covers absent forge metadata; ownership checks fail closed.
+    head_is_same_repository: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +197,14 @@ class SourceControl(Protocol):
 
     async def authenticated_login(self, repository_url: str) -> str:
         """The account name these credentials act as on this repository's forge."""
+        ...
+
+    async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
+        """Read branch SHAs through the trusted forge API, never Git transport.
+
+        `project` is the canonical change-request project key. Refuse projects
+        outside the configured forge; raise if the snapshot cannot be read.
+        """
         ...
 
     async def add_comment(

@@ -685,3 +685,49 @@ def test_alias_ports_are_bound_to_transport(monkeypatch, target, accepted):
         with pytest.raises(ValueError):
             asyncio.run(source.add_comment(url, "Private"))
         api.assert_not_awaited()
+
+
+@pytest.mark.parametrize("head_repo,base_repo,expected", [
+    ({"id": 1}, {"id": 1}, True),
+    ({"id": 2}, {"id": 1}, False),
+    (None, {"id": 1}, False),
+    ({}, {}, False),
+])
+def test_pull_request_head_repository(head_repo, base_repo, expected) -> None:
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    source._workspace_repo = AsyncMock(return_value=("acme", "api"))
+    source._api = AsyncMock(return_value={"head": {"repo": head_repo}, "base": {"repo": base_repo}})
+    source._paginated_objects = AsyncMock(return_value=[])
+    shown = asyncio.run(source.view_change_request(WORKSPACE, 7))
+    assert shown.head_is_same_repository is expected
+
+
+def test_branch_tips_reads_only_requested_refs(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    api = AsyncMock(side_effect=[[
+        {"ref": "refs/heads/feature/x", "object": {"sha": "head"}},
+        {"ref": "refs/heads/feature/xyz", "object": {"sha": "other"}},
+    ], []])
+    monkeypatch.setattr(source, "_api", api)
+    assert asyncio.run(source.branch_tips("acme/api", ("feature/x", "missing"))) == {"feature/x": "head"}
+    assert api.await_count == 2
+    assert api.call_args_list[0].args == ("GET", "/repos/acme/api/git/matching-refs/heads/feature%2Fx")
+
+
+def test_branch_tips_refuses_another_forge():
+    with pytest.raises(ValueError):
+        asyncio.run(GitHubSourceControl("").branch_tips("other.example/acme/api", ("feature",)))
+
+
+@pytest.mark.parametrize("response", [[{"ref": "refs/heads/feature"}], {"message": "unavailable"}])
+def test_branch_tips_refuses_invalid_snapshot(monkeypatch, response):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", AsyncMock(return_value=response))
+    with pytest.raises(GitHubSourceControlError):
+        asyncio.run(source.branch_tips("acme/api", ("feature",)))

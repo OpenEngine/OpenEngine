@@ -151,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     # Stub out real GitHub API calls so e2e tests work without a token.
-    # Opening a pull request answers acme/repository#7, the URL scripts report.
+    # Opening a pull request answers acme/repository#7, the URL scripts report,
+    # and viewing one, or asking who the token is, answers as engine-e2e.
     # Comment POSTs are recorded to gh.jsonl so tests can assert on them.
     gh_log = state / "gh.jsonl"
 
@@ -159,8 +160,18 @@ def main(argv: list[str] | None = None) -> int:
         if method == "POST" and path.endswith("/pulls"):
             owner, repo = path.removeprefix("/repos/").split("/")[:2]
             return {"html_url": f"https://github.com/{owner}/{repo}/pull/7"}
+        if method == "GET" and path == "/user":
+            return {"login": "engine-e2e"}
         if method == "GET" and "/pulls/" in path:
-            return {"head": {"sha": "abc1234"}, "base": {"ref": "main"}}
+            owner, repo, _, number = path.removeprefix("/repos/").split("/")[:4]
+            if path.count("/") > 5:
+                return []  # A pull request's reviews and comments.
+            return {
+                "html_url": f"https://github.com/{owner}/{repo}/pull/{number}",
+                "user": {"login": "engine-e2e"},
+                "head": {"ref": "agent/greeting", "sha": "abc1234"},
+                "base": {"ref": "main"},
+            }
         if method == "GET" and "/rules/branches/" in path:
             return []
         if method == "GET" and "/branches/" in path:

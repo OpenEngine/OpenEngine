@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Callable, Sequence
 from urllib.parse import quote, urlparse
 
@@ -65,7 +66,32 @@ class GitLabSourceControl:
         raise NotImplementedError("GitLab repository permission checks are not supported")
 
     async def authenticated_login(self, repository_url: str) -> str:
-        raise NotImplementedError("GitLab account identification is not supported")
+        username = self._str(await self._api("GET", "/user"), "username")
+        if not username: raise GitLabSourceControlError("GitLab returned no authenticated username")
+        return username
+
+    async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
+        origin = self._origin_source() if callable(self._origin_source) else self._origin_source
+        host, separator, path = project.partition("/")
+        if (
+            host != urlparse(origin).netloc.lower() or not separator
+            or not all(names_a_project_step(step) for step in path.split("/"))
+        ):
+            raise ValueError("project must be on the configured GitLab origin")
+        tips: dict[str, str] = {}
+        for name in dict.fromkeys(destinations):
+            branches = await self._list(
+                f"/projects/{quote(path, safe='')}/repository/branches",
+                {"regex": "^" + re.escape(name) + "$"}, strict=True,
+            )
+            for branch in branches:
+                if self._str(branch, "name") != name:
+                    raise GitLabSourceControlError("GitLab returned an unexpected branch")
+                sha = self._nested(branch, "commit", "id")
+                if not sha:
+                    raise GitLabSourceControlError("GitLab returned an invalid branch tip")
+                tips[name] = sha
+        return tips
 
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
         if in_reply_to_id is not None:
@@ -106,7 +132,7 @@ class GitLabSourceControl:
     async def view_change_request(self, workspace_id: WorkspaceId, number: int) -> ChangeRequest:
         project = await self._project(workspace_id); mr = await self._api("GET", f"/projects/{project}/merge_requests/{number}")
         notes = await self._list(f"/projects/{project}/merge_requests/{number}/notes")
-        return ChangeRequest(number=number, title=self._str(mr,"title"), state=self._str(mr,"state"), body=self._str(mr,"description"), author=self._nested(mr,"author","username"), url=self._str(mr,"web_url"), head_ref=self._str(mr,"source_branch"), head_sha=self._str(mr,"sha"), base_ref=self._str(mr,"target_branch"), comments=tuple(self._discussion(note) for note in notes))
+        return ChangeRequest(head_is_same_repository=mr.get("source_project_id") is not None and mr.get("source_project_id") == mr.get("target_project_id"), number=number, title=self._str(mr,"title"), state=self._str(mr,"state"), body=self._str(mr,"description"), author=self._nested(mr,"author","username"), url=self._str(mr,"web_url"), head_ref=self._str(mr,"source_branch"), head_sha=self._str(mr,"sha"), base_ref=self._str(mr,"target_branch"), comments=tuple(self._discussion(note) for note in notes))
 
     async def list_work_items(self, workspace_id: WorkspaceId, state: str = "open", labels: Sequence[str] = (), limit: int = 30) -> tuple[WorkItem, ...]:
         project = await self._project(workspace_id); issues = await self._list(f"/projects/{project}/issues", {"state": state, "labels": ",".join(labels), "per_page": min(limit,100)})
@@ -171,11 +197,15 @@ class GitLabSourceControl:
             result=await self._transport.request(*args,**kwargs)
         except GitLabTransportError as error: raise GitLabSourceControlError(str(error)) from error
         return result if isinstance(result,dict) else {}
-    async def _list(self,path: str,params: dict | None=None) -> list[dict]:
+    async def _list(self,path: str,params: dict | None=None, *, strict: bool = False) -> list[dict]:
         items: list[dict] = []
         page = 1
         while True:
             result=await self._transport.request("GET",path,params={**(params or {}), "per_page": 100, "page": page})
+            if strict and (
+                not isinstance(result, list) or any(not isinstance(item, dict) for item in result)
+            ):
+                raise GitLabSourceControlError("GitLab returned an invalid branch snapshot")
             current = [item for item in result if isinstance(item,dict)] if isinstance(result,list) else []
             items.extend(current)
             if len(current) < 100:

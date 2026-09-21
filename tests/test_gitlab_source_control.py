@@ -97,6 +97,23 @@ def test_gitlab_general_comment_returns_provenance() -> None:
     assert result.url == "https://gitlab.com/group/project/-/merge_requests/7#note_124"
 
 
+def test_gitlab_authenticated_login_asks_who_the_token_is() -> None:
+    transport = AsyncMock()
+    transport.request.return_value = {"id": 1, "username": "engine-bot"}
+    source = GitLabSourceControl("token", transport=transport)
+    assert asyncio.run(source.authenticated_login("https://gitlab.com/group/project")) == "engine-bot"
+    transport.request.assert_awaited_once_with("GET", "/user")
+
+
+@pytest.mark.parametrize("response", [{}, {"username": ""}, {"username": 7}, []])
+def test_gitlab_authenticated_login_refuses_an_unusable_answer(response: object) -> None:
+    transport = AsyncMock()
+    transport.request.return_value = response
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(RuntimeError, match="username"):
+        asyncio.run(source.authenticated_login("https://gitlab.com/group/project"))
+
+
 def test_gitlab_replies_fail_without_posting_a_flat_comment() -> None:
     transport = AsyncMock()
     source = GitLabSourceControl("token", transport=transport)
@@ -189,3 +206,40 @@ def test_gitlab_comments_stay_on_the_current_configured_origin(suffix):
     origin["url"] = "https://other.example"
     with pytest.raises(ValueError, match="configured GitLab origin"):
         asyncio.run(source.add_comment("https://gitlab.example" + suffix + "/group/project/-/merge_requests/7", "Hello"))
+
+
+@pytest.mark.parametrize("source_id,target_id,expected", [(1, 1, True), (2, 1, False), (None, 1, False), (None, None, False)])
+def test_merge_request_head_repository(source_id, target_id, expected) -> None:
+    source = GitLabSourceControl("")
+    source._project = AsyncMock(return_value="group%2Frepo")
+    source._api = AsyncMock(return_value={"source_project_id": source_id, "target_project_id": target_id})
+    source._list = AsyncMock(return_value=[])
+    shown = asyncio.run(source.view_change_request("workspace", 7))
+    assert shown.head_is_same_repository is expected
+
+
+def test_gitlab_branch_tips_reads_only_requested_branches():
+    transport = AsyncMock()
+    transport.request.side_effect = [[{"name": "feature/x", "commit": {"id": "head"}}], []]
+    source = GitLabSourceControl("token", transport=transport)
+    assert asyncio.run(source.branch_tips("gitlab.com/group/sub/project", ("feature/x", "missing"))) == {"feature/x": "head"}
+    assert transport.request.await_count == 2
+    assert transport.request.call_args_list[0].kwargs["params"] == {
+        "regex": "^feature/x$", "per_page": 100, "page": 1,
+    }
+
+
+def test_gitlab_branch_tips_refuses_another_forge():
+    with pytest.raises(ValueError):
+        asyncio.run(GitLabSourceControl("").branch_tips("other.example/group/project", ("feature",)))
+
+
+@pytest.mark.parametrize("response", [[{"name": "feature"}], {"message": "unavailable"}, [None]])
+def test_gitlab_branch_tips_refuses_invalid_snapshot(response):
+    from engine.adapters.source_control.gitlab import GitLabSourceControlError
+
+    transport = AsyncMock()
+    transport.request.return_value = response
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(GitLabSourceControlError):
+        asyncio.run(source.branch_tips("gitlab.com/group/project", ("feature",)))

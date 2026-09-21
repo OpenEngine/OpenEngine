@@ -40,7 +40,7 @@ from engine.ports.source_control import (
     WorkItem,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.change_requests import change_request, names_a_project_step
+from engine.runtime.change_requests import change_request, names_a_project_step, pull_request_url
 
 #: The branch prefix `GitWorktreeWorkspaceProvider` gives every workspace. It
 #: is Engine's bookkeeping, not anybody's proposed change, and a remote branch
@@ -220,6 +220,25 @@ class GitHubSourceControl:
             raise GitHubSourceControlError("GitHub API returned no authenticated login")
         return login
 
+    async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
+        owner, repo, _ = _pull_request_parts(
+            pull_request_url(project, 1), self._hosts | {self._transport.host}
+        )
+        tips: dict[str, str] = {}
+        for name in dict.fromkeys(destinations):
+            ref = "refs/heads/" + name
+            matches = _objects(await self._api(
+                "GET", f"/repos/{owner}/{repo}/git/matching-refs/heads/{quote(name, safe='')}"
+            ))
+            for branch in matches:
+                if _string(branch, "ref") != ref:
+                    continue
+                sha = _nested_string(branch, "object", "sha")
+                if not sha:
+                    raise GitHubSourceControlError("GitHub returned an invalid branch tip")
+                tips[name] = sha
+        return tips
+
     async def add_comment(
         self,
         pr_url: str,
@@ -306,6 +325,14 @@ class GitHubSourceControl:
             body=_string(pull, "body"),
             author=_nested_string(pull, "user", "login"),
             url=_string(pull, "html_url"),
+            head_is_same_repository=(
+                isinstance(pull.get("head"), dict)
+                and isinstance(pull["head"].get("repo"), dict)
+                and isinstance(pull.get("base"), dict)
+                and isinstance(pull["base"].get("repo"), dict)
+                and pull["head"]["repo"].get("id") is not None
+                and pull["head"]["repo"].get("id") == pull["base"]["repo"].get("id")
+            ),
             head_ref=_nested_string(pull, "head", "ref"),
             head_sha=_nested_string(pull, "head", "sha"),
             base_ref=_nested_string(pull, "base", "ref"),
