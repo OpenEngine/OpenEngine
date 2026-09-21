@@ -548,7 +548,7 @@ def test_steering_reaches_the_execution_without_restarting_the_node(build: Backe
                 f"/api/runs/{run_id}/steering", json={"message": "Rename the flag."}
             )
             events = await surface.read(run_id, "run.finished")
-            final = await surface.client.get(f"/api/runs/{run_id}")
+            final = await surface.client.get(f"/api/runs/{run_id}?includeValues=true")
             return waiting.json(), steered, events, final.json()
 
     waiting, steered, events, final = asyncio.run(scenario())
@@ -1913,3 +1913,35 @@ def test_a_body_that_is_not_json_at_all_is_still_a_400(build: Backend, body: byt
 
     assert refused.status_code == 400
     assert refused.json() == {"error": "graphId must be a non-empty string"}
+
+
+def test_polling_projects_display_values_and_full_state_is_explicit(build: Backend) -> None:
+    runtime = build(_pipeline(Ask("Proceed?")))
+    values = {
+        "workspaceId": "workspace-1",
+        "task": "large input" * 1000,
+        "internal": {"transcript": "large transcript" * 1000},
+        "result": {"pr_url": "https://example.test/pull/1", "raw": "large output" * 1000},
+        "implementation": {"summary": "Implemented", "tests": ["passed"]},
+    }
+
+    async def scenario():
+        async with _server(runtime) as surface:
+            started = await surface.client.post("/api/runs", json={"graphId": str(GRAPH), "values": values})
+            run_id = started.json()["runId"]
+            await surface.read(run_id, "approval.requested")
+            poll = await surface.client.get(f"/api/runs/{run_id}")
+            full = await surface.client.get(f"/api/runs/{run_id}?includeValues=true")
+            return poll.json(), full.json()
+
+    poll, full = asyncio.run(scenario())
+    assert poll["values"] == {
+        "workspaceId": "workspace-1",
+        "result": {"pr_url": "https://example.test/pull/1"},
+        "implementation": values["implementation"],
+    }
+    assert full["values"] == values
+    assert poll["pendingApprovals"] == full["pendingApprovals"]
+    assert len(poll["pendingApprovals"]) == 1
+    assert poll["activeExecutions"] == full["activeExecutions"]
+    assert poll["nextNodes"] == full["nextNodes"]

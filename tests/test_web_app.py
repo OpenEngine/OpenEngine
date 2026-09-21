@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import httpx
@@ -43,6 +43,7 @@ from engine.domain import (
     AgentProfile,
     AgentRunId,
     ApprovalDecision,
+    ApprovalId,
     ApprovalKind,
     Message,
     Milestone,
@@ -2466,7 +2467,7 @@ def test_creating_a_work_order_starts_the_graph() -> None:
     assert [one["runId"] for one in listed.json()["runs"]] == [str(run_id)]
 
 
-def test_graph_run_listing_carries_live_node_and_approval_state() -> None:
+def test_graph_run_listing_carries_live_node_and_approval_state(monkeypatch) -> None:
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
         "Implementation review (codex)",
@@ -2495,7 +2496,13 @@ def test_graph_run_listing_carries_live_node_and_approval_state() -> None:
                     await asyncio.sleep(0)
                 else:
                     raise AssertionError("graph never requested approval")
-                return (await client.get("/api/runs")).json()["runs"][0]
+                async def no_snapshot(_run_id):
+                    raise AssertionError("listing must not read checkpoints")
+
+                monkeypatch.setattr(runtime, "snapshot", no_snapshot)
+                for _ in range(3):
+                    row = (await client.get("/api/runs")).json()["runs"][0]
+                return row
 
     row = asyncio.run(scenario())
     assert row["graphProgress"] == {
@@ -3060,8 +3067,12 @@ class _EngineAfterARestart:
         self.resumed.append((run_id, checkpoint_id))
         return self.answers[run_id]
 
+    def topology(self, graph_id):
+        from engine.graph_runtime.topology import GraphTopology
+        return GraphTopology(graph_id, "Review", NodeId("implementation"))
+
     def graphs(self) -> tuple:
-        return ()
+        return (self.topology(GraphId("implementation-review-codex")),)
 
 
 def _restarted(
@@ -3567,3 +3578,62 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
         await runtime.aclose()
 
     asyncio.run(scenario())
+
+
+def test_graph_frontier_is_seeded_once_when_restoring_pending_approvals(monkeypatch):
+    from engine.graph_runtime.control import PendingApproval
+    from engine.graph_runtime.identity import ExecutionId
+
+    store = InMemoryStateStore()
+    snapshot = replace(
+        _graph_snapshot(RunStatus.AWAITING_APPROVAL),
+        next_nodes=(NodeId("implementation"),),
+        pending_approvals=(PendingApproval(
+            ApprovalId("approval"), ExecutionId("execution"), NodeId("implementation"),
+            ApprovalKind.COMMAND_EXECUTION,
+        ),),
+    )
+    app, runtime = _restarted(store, {snapshot.run_id: snapshot})
+
+    async def scenario():
+        await store.save(_interrupted_run())
+        async with app.router.lifespan_context(app):
+            async def no_snapshot(_run_id):
+                raise AssertionError("restored frontier must not read checkpoints on polls")
+
+            monkeypatch.setattr(runtime, "snapshot", no_snapshot)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return (await client.get("/api/runs")).json()["runs"][0]
+
+    row = asyncio.run(scenario())
+    assert row["graphProgress"] == {
+        "activeNodeIds": [],
+        "waitingNodeIds": ["implementation"],
+        "nextNodeIds": ["implementation"],
+    }
+
+
+def test_finished_run_resumed_after_restart_gets_live_frontier():
+    from engine.graph_runtime.events import EventKind, RuntimeEvent
+
+    store = InMemoryStateStore()
+    snapshot = _graph_snapshot(RunStatus.COMPLETED)
+    app, runtime = _restarted(store, {snapshot.run_id: snapshot})
+
+    async def scenario():
+        await store.save(replace(_interrupted_run(), phase=RunPhase.SUCCEEDED))
+        async with app.router.lifespan_context(app):
+            await runtime._observer(RuntimeEvent(
+                snapshot.run_id, EventKind.RUN_FORKED, {"nodes": ["implementation"]},
+            ))
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return (await client.get("/api/runs")).json()["runs"][0]
+
+    row = asyncio.run(scenario())
+    assert row["graphProgress"] == {
+        "activeNodeIds": [], "waitingNodeIds": [], "nextNodeIds": ["implementation"],
+    }

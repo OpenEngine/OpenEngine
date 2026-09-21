@@ -1509,7 +1509,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
         assert len(runs) == 1
         assert str(runs[0].workflow_id) == graph.graph_id
         assert runs[0].origin.thread_id == "1"
-        snapshot = client.get(f"/graph/api/runs/{runs[0].run_id}").json()
+        snapshot = client.get(f"/graph/api/runs/{runs[0].run_id}?includeValues=true").json()
         assert snapshot["values"]["inputs"] == {
             "implementation_runner": "codex", "review_runner": "claude",
         }
