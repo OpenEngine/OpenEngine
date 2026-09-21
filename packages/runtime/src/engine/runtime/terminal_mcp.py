@@ -12,7 +12,6 @@ import asyncio
 import dataclasses
 import json
 import logging
-import re
 import secrets
 import shlex
 import sys
@@ -35,7 +34,6 @@ from engine.ports import (
     ApprovalHandler,
     ApprovalRequest,
     CommentResult,
-    GitResult,
     McpServerConfig,
     SourceControl,
 )
@@ -614,14 +612,21 @@ class TerminalMcpBroker:
             approved = await self._approve_git(git_arguments, request_id)
             if approved is not None:
                 return approved
+            before = await self._push_snapshot(git_arguments)
             try:
                 result = await self._source_control.run_git(
                     self._workspace_id, git_arguments
                 )
             except Exception as error:
                 return {"ok": False, "error": f"could not run git: {error}"}
-            if result.ok and _git_subcommand(git_arguments) == "push":
-                await self._remember_push(result)
+            if result.ok and before is not None:
+                after = await self._push_snapshot(git_arguments)
+                if after is not None and before[0] == after[0]:
+                    self._pushed.update(
+                        _PushedBranch(after[0], branch, commit)
+                        for branch, commit in after[1].items()
+                        if before[1].get(branch) != commit
+                    )
             reported = "\n".join(part for part in (result.stdout, result.stderr) if part)
             if not result.ok:
                 return {
@@ -762,6 +767,7 @@ class TerminalMcpBroker:
         pushed = _PushedBranch(requested.project, shown.head_ref, shown.head_sha)
         if not (
             change_request(shown.url) == requested
+            and shown.head_is_same_repository
             and pushed in self._pushed
             and login
             and shown.author == login
@@ -769,30 +775,50 @@ class TerminalMcpBroker:
             return None
         return OpenedPullRequest(requested.project, requested.number, url)
 
-    async def _remember_push(self, result: GitResult) -> None:
-        """Remember what a successful `git push` put where.
+    async def _push_snapshot(
+        self, arguments: Sequence[str]
+    ) -> tuple[str, dict[str, str]] | None:
+        """Read remote tips independently before and after an explicit push.
 
-        A branch name on its own says nothing -- any run can push `feature` to
-        a remote of its own -- so what is kept is the repository the push wrote
-        to, the branch it wrote, and the commit it sent there, read back from
-        the local ref rather than from git's abbreviated report of it.
+        Push output and local refs are agent-controlled. Only a remote branch
+        that actually changes during the call can become an ownership receipt.
+        Unrecognised option forms still run, but cannot establish ownership.
         """
+        if self._pull_request_claimer is None:
+            return None
+        target = _push_target(arguments)
+        if target is None:
+            return None
+        remote, destinations = target
         assert self._source_control is not None and self._workspace_id is not None
-        for remote, source, destination in _pushed_refs(result):
+        try:
+            if remote_project(remote) is None:
+                resolved = await self._source_control.run_git(
+                    self._workspace_id, ("remote", "get-url", "--push", "--all", remote)
+                )
+                if not resolved.ok or len(resolved.stdout.splitlines()) != 1:
+                    return None
+                remote = resolved.stdout.strip()
             project = remote_project(remote)
             if project is None:
-                continue
-            try:
-                commit = await self._source_control.run_git(
-                    self._workspace_id, ("rev-parse", f"{source}^{{commit}}")
-                )
-            except Exception:
-                logger.exception("Could not read the commit pushed to %s", remote)
-                continue
-            if commit.ok and commit.stdout.strip():
-                self._pushed.add(
-                    _PushedBranch(project, destination, commit.stdout.strip())
-                )
+                return None
+            result = await self._source_control.run_git(
+                self._workspace_id, ("ls-remote", "--heads", "--", remote)
+            )
+            if not result.ok:
+                return None
+            branches: dict[str, str] = {}
+            for line in result.stdout.splitlines():
+                commit, ref = line.split("\t")
+                if not ref.startswith("refs/heads/") or not commit:
+                    return None
+                branch = ref.removeprefix("refs/heads/")
+                if branch in destinations:
+                    branches[branch] = commit
+            return project, branches
+        except Exception:
+            logger.exception("Could not read remote branches for a push")
+            return None
 
     def _claim_confirmed_pull_requests(
         self, claims: Sequence[tuple[OpenedPullRequest, str]]
@@ -1236,39 +1262,35 @@ class _PushedBranch:
     commit: str
 
 
-#: The remote a push wrote to, which git names before the refs it wrote.
-_PUSH_REMOTE = re.compile(r"^To (?P<remote>\S+)$")
-
-#: A ref `git push` updated, as it reports one: `  a..b  src -> dst` (or `*`
-#: new, `+` forced) on stderr, or `*\tsrc:dst\t[new branch]` with `--porcelain`.
-#: Up-to-date (`=`), rejected (`!`) and deleted (`-`) refs moved nothing.
-_PUSHED_REF = re.compile(
-    r"^(?: [ +*] (?:\[[^\]]+\]|\S+)\s+(?P<from>\S+) -> (?P<to>\S+)"
-    r"|[ +*]\t(?P<porcelain_from>[^\t:]+):(?P<porcelain_to>[^\t]+)\t)"
-)
-
-
-def _pushed_refs(result: GitResult) -> tuple[tuple[str, str, str], ...]:
-    """Each `(remote, source ref, branch)` a successful `git push` moved.
-
-    Read in order, since git names the remote it is writing to before the refs
-    it writes there, and both spellings of the report carry the source ref the
-    commit has to be read back from.
-    """
-    pushed: list[tuple[str, str, str]] = []
-    remote = ""
-    for line in (result.stdout + "\n" + result.stderr).splitlines():
-        destination = _PUSH_REMOTE.match(line)
-        if destination is not None:
-            remote = destination.group("remote")
+def _push_target(arguments: Sequence[str]) -> tuple[str, tuple[str, ...]] | None:
+    """Recognise explicit pushes without trusting their terminal output."""
+    if _git_subcommand(arguments) != "push":
+        return None
+    positional: list[str] = []
+    options = True
+    for argument in arguments[arguments.index("push") + 1:]:
+        if options and argument == "--":
+            options = False
+        elif options and argument.startswith("-"):
+            if argument not in {
+                "-u", "--set-upstream", "-f", "--force", "--force-with-lease",
+                "--porcelain", "--atomic", "--verbose", "-v", "--quiet", "-q",
+            } and not argument.startswith("--force-with-lease="):
+                return None
+        else:
+            positional.append(argument)
+    if len(positional) < 2:
+        return None
+    destinations: list[str] = []
+    for refspec in positional[1:]:
+        source, separator, destination = refspec.lstrip("+").partition(":")
+        destination = destination if separator else source
+        if not source or not destination or "*" in refspec:
+            return None
+        if destination.startswith("refs/") and not destination.startswith("refs/heads/"):
             continue
-        match = _PUSHED_REF.match(line)
-        if match is None or not remote:
-            continue
-        source = match.group("from") or match.group("porcelain_from")
-        branch = match.group("to") or match.group("porcelain_to")
-        pushed.append((remote, source, branch.removeprefix("refs/heads/")))
-    return tuple(pushed)
+        destinations.append(destination.removeprefix("refs/heads/"))
+    return positional[0], tuple(destinations)
 
 
 def _git_subcommand(arguments: Sequence[str]) -> str | None:

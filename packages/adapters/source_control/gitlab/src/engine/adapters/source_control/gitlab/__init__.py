@@ -108,7 +108,7 @@ class GitLabSourceControl:
     async def view_change_request(self, workspace_id: WorkspaceId, number: int) -> ChangeRequest:
         project = await self._project(workspace_id); mr = await self._api("GET", f"/projects/{project}/merge_requests/{number}")
         notes = await self._list(f"/projects/{project}/merge_requests/{number}/notes")
-        return ChangeRequest(number=number, title=self._str(mr,"title"), state=self._str(mr,"state"), body=self._str(mr,"description"), author=self._nested(mr,"author","username"), url=self._str(mr,"web_url"), head_ref=self._str(mr,"source_branch"), head_sha=self._str(mr,"sha"), base_ref=self._str(mr,"target_branch"), comments=tuple(self._discussion(note) for note in notes))
+        return ChangeRequest(head_is_same_repository=mr.get("source_project_id") is not None and mr.get("source_project_id") == mr.get("target_project_id"), number=number, title=self._str(mr,"title"), state=self._str(mr,"state"), body=self._str(mr,"description"), author=self._nested(mr,"author","username"), url=self._str(mr,"web_url"), head_ref=self._str(mr,"source_branch"), head_sha=self._str(mr,"sha"), base_ref=self._str(mr,"target_branch"), comments=tuple(self._discussion(note) for note in notes))
 
     async def list_work_items(self, workspace_id: WorkspaceId, state: str = "open", labels: Sequence[str] = (), limit: int = 30) -> tuple[WorkItem, ...]:
         project = await self._project(workspace_id); issues = await self._list(f"/projects/{project}/issues", {"state": state, "labels": ",".join(labels), "per_page": min(limit,100)})

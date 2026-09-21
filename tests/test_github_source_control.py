@@ -685,3 +685,20 @@ def test_alias_ports_are_bound_to_transport(monkeypatch, target, accepted):
         with pytest.raises(ValueError):
             asyncio.run(source.add_comment(url, "Private"))
         api.assert_not_awaited()
+
+
+@pytest.mark.parametrize("head_repo,base_repo,expected", [
+    ({"id": 1}, {"id": 1}, True),
+    ({"id": 2}, {"id": 1}, False),
+    (None, {"id": 1}, False),
+    ({}, {}, False),
+])
+def test_pull_request_head_repository(head_repo, base_repo, expected) -> None:
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    source._workspace_repo = AsyncMock(return_value=("acme", "api"))
+    source._api = AsyncMock(return_value={"head": {"repo": head_repo}, "base": {"repo": base_repo}})
+    source._paginated_objects = AsyncMock(return_value=[])
+    shown = asyncio.run(source.view_change_request(WORKSPACE, 7))
+    assert shown.head_is_same_repository is expected

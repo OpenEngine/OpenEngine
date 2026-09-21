@@ -138,6 +138,8 @@ def remote_project(remote_url: str) -> str | None:
     if "://" in remote:
         try:
             parsed = urlsplit(remote)
+            if parsed.port is not None or parsed.scheme not in ("https", "ssh"):
+                return None
         except ValueError:
             return None
         hostname, path = parsed.hostname, parsed.path

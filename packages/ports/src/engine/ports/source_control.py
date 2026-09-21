@@ -79,6 +79,8 @@ class ChangeRequest:
     base_ref: str
     reviews: tuple[Discussion, ...] = ()
     comments: tuple[Discussion, ...] = ()
+    #: False also covers absent forge metadata; ownership checks fail closed.
+    head_is_same_repository: bool = False
 
 
 @dataclass(frozen=True, slots=True)

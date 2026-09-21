@@ -306,6 +306,14 @@ class GitHubSourceControl:
             body=_string(pull, "body"),
             author=_nested_string(pull, "user", "login"),
             url=_string(pull, "html_url"),
+            head_is_same_repository=(
+                isinstance(pull.get("head"), dict)
+                and isinstance(pull["head"].get("repo"), dict)
+                and isinstance(pull.get("base"), dict)
+                and isinstance(pull["base"].get("repo"), dict)
+                and pull["head"]["repo"].get("id") is not None
+                and pull["head"]["repo"].get("id") == pull["base"]["repo"].get("id")
+            ),
             head_ref=_nested_string(pull, "head", "ref"),
             head_sha=_nested_string(pull, "head", "sha"),
             base_ref=_nested_string(pull, "base", "ref"),

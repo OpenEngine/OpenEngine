@@ -206,3 +206,13 @@ def test_gitlab_comments_stay_on_the_current_configured_origin(suffix):
     origin["url"] = "https://other.example"
     with pytest.raises(ValueError, match="configured GitLab origin"):
         asyncio.run(source.add_comment("https://gitlab.example" + suffix + "/group/project/-/merge_requests/7", "Hello"))
+
+
+@pytest.mark.parametrize("source_id,target_id,expected", [(1, 1, True), (2, 1, False), (None, 1, False), (None, None, False)])
+def test_merge_request_head_repository(source_id, target_id, expected) -> None:
+    source = GitLabSourceControl("")
+    source._project = AsyncMock(return_value="group%2Frepo")
+    source._api = AsyncMock(return_value={"source_project_id": source_id, "target_project_id": target_id})
+    source._list = AsyncMock(return_value=[])
+    shown = asyncio.run(source.view_change_request("workspace", 7))
+    assert shown.head_is_same_repository is expected

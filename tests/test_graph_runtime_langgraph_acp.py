@@ -2406,17 +2406,22 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
     url = "https://github.com/acme/repository/pull/7"
 
     class ShellOpenedSourceControl(RecordingSourceControl):
+        did_push = False
+
         async def run_git(
             self, workspace_id: WorkspaceId, arguments: Sequence[str]
         ) -> GitResult:
             if tuple(arguments[:1]) == ("push",):
+                self.did_push = True
                 return GitResult(
                     0,
                     "",
                     "To https://github.com/acme/repository.git\n"
                     " * [new branch]      agent/greeting -> agent/greeting\n",
                 )
-            return GitResult(0, "abc123\n", "")
+            if arguments[0] == "remote":
+                return GitResult(0, "https://github.com/acme/repository.git\n", "")
+            return GitResult(0, "abc123\trefs/heads/agent/greeting\n" if self.did_push else "", "")
 
         async def view_change_request(
             self, _workspace_id: WorkspaceId, number: int
@@ -2424,7 +2429,7 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
             return ChangeRequest(
                 number=number, title="Add a greeting", state="open", body="",
                 author="OpenEngineBot", url=url, head_ref="agent/greeting",
-                head_sha="abc123", base_ref="main",
+                head_sha="abc123", base_ref="main", head_is_same_repository=True,
             )
 
     class Runtime:
