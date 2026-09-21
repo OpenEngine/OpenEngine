@@ -11,7 +11,12 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ## Our Philosophy
 1. Agent Workflows are portable artifacts. That means you should be able to create a workflow, publish it, and run it in any openengine instance.
 2. Decoupled to any provider. We are provider agnostic and empower you to run your workflows on any provider, including OSS.
-3. 
+3. Headless. Rather than requiring you to work in a new web-ui or CLI, we expose workflows through MCP tools and API so you can execute graphs where you already work.
+
+## What is a graph?
+A graph, or workflow, is a series of steps that you want to automate. At our basis, we provide an execution layer for easily triggering graph executions according to your needs + schedule.
+
+**For example: ** you want to automate SDR outreach, and have the engine automatically burn up to X tokens a day doing so. All you need to do is write a graph including your decision tree (see an example, [here](./examples/graphs/sdr_outreach.py)), add it to your OE instance, and then that graph will be executed as a Workorder according to the schedule you provide. Workorders can spawn other Workorders, and all Workorders can be wrapped under one budget. 
 
 ## Getting started
 
