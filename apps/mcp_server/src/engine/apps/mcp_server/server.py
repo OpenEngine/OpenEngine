@@ -70,24 +70,30 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     @mcp.tool(annotations=ToolAnnotations(
         readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True,
     ))
-    async def create_workorder(prompt: str) -> dict[str, str]:
-        """Create and immediately execute an OE work order in the configured repository.
+    async def create_workorder(prompt: str, depends_on_run_id: str | None = None) -> dict[str, str]:
+        """Create an OE work order in the configured repository.
 
-        Returns the run ID after execution starts, without waiting for completion.
-        Each call starts new work. Scheduling is not supported.
+        Optionally set depends_on_run_id to wait for that work order to succeed.
+        Otherwise execution starts immediately. Returns the new run ID without
+        waiting for completion. Each call creates new work.
         """
         if not prompt.strip() or len(prompt) > 100_000:
             raise ValueError("prompt must contain 1–100000 characters and not be blank")
+        payload = {
+            "prompt": prompt.strip(), "repository": settings.repository,
+            "workflowId": settings.workflow,
+        }
+        if depends_on_run_id is not None:
+            if not depends_on_run_id.strip():
+                raise ValueError("depends_on_run_id must not be blank")
+            payload["dependsOnRunId"] = depends_on_run_id.strip()
         # Never retry this POST: a lost response can still mean work was started.
         async with httpx.AsyncClient(
             base_url=settings.engine_url, transport=transport, timeout=60,
             trust_env=False,
         ) as client:
             try:
-                response = await client.post("/api/runs", json={
-                    "prompt": prompt.strip(), "repository": settings.repository,
-                    "workflowId": settings.workflow,
-                })
+                response = await client.post("/api/runs", json=payload)
             except httpx.RequestError as error:
                 raise RuntimeError(
                     "OE could not confirm creation. Check the OE work-order list before retrying."

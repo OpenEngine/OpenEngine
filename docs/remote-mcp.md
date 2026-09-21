@@ -1,10 +1,12 @@
 # Create work orders through remote MCP
 
 `engine-mcp-server` exposes one Streamable HTTP tool at `/mcp`:
-`create_workorder(prompt: string) -> {"run_id": "..."}`. It calls OE's
-`POST /api/runs`, which starts the graph workflow before returning. The call
-returns when execution starts, not when agents finish. Existing workflow review
-and approval rules still apply. There are no scheduling parameters or tools.
+`create_workorder(prompt: string, depends_on_run_id?: string) -> {"run_id": "..."}`.
+It calls OE's `POST /api/runs`. Without a dependency, the graph workflow starts
+before returning. To chain work orders, pass a previous call's `run_id` as
+`depends_on_run_id`; the new work order waits until that prerequisite succeeds.
+The call returns the new run ID even while it is waiting. Existing workflow
+review and approval rules still apply. Time-based scheduling is not exposed.
 Each call creates a new work order; after a timeout, check OE before retrying.
 
 The gateway is a separate loopback process. Only its port goes through the
