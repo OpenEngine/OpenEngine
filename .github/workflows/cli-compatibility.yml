@@ -153,17 +153,28 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/compat" && mkdir -p "$RUNNER_TEMP/compat" "$RUNNER_TEMP/compat-artifacts"
 
       - name: Approve, cancel, and allow-for-session
+        shell: bash
         env:
           ENGINE_COMPAT_PROVIDER: ${{ matrix.provider }}
           ENGINE_COMPAT_VERSION: ${{ matrix.version }}
           ENGINE_COMPAT_WORKSPACE: ${{ runner.temp }}/compat
           ENGINE_COMPAT_ARTIFACTS: ${{ runner.temp }}/compat-artifacts
-          # Provider credentials. Absent, the scenarios skip rather than fail:
-          # an unauthenticated runner is a configuration fact, not a
-          # compatibility result.
+          # This workflow feeds the release gate, so local credential skips
+          # must not turn a run without live approval coverage green.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: uv run pytest tests/test_cli_compatibility.py -m compatibility -v
+        run: |
+          set -euo pipefail
+          case "$ENGINE_COMPAT_PROVIDER" in
+            codex) credential=OPENAI_API_KEY ;;
+            claude) credential=ANTHROPIC_API_KEY ;;
+            *) echo "::error::unknown compatibility provider: $ENGINE_COMPAT_PROVIDER"; exit 1 ;;
+          esac
+          if [ -z "${!credential:-}" ]; then
+            echo "::error::$credential is required for live approval coverage"
+            exit 1
+          fi
+          uv run pytest tests/test_cli_compatibility.py -m compatibility -v
 
       - name: Upload the redacted protocol transcript
         if: failure()
