@@ -690,6 +690,7 @@ source = { editable = "apps/mcp_server" }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "python-dotenv" },
     { name = "starlette" },
     { name = "uvicorn" },
@@ -698,7 +699,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
-    { name = "mcp", specifier = ">=1.26,<2" },
+    { name = "mcp", specifier = ">=1.30,<2" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "starlette", specifier = ">=0.52" },
     { name = "uvicorn", specifier = ">=0.35" },

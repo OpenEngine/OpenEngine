@@ -1,16 +1,20 @@
 """A deliberately narrow, authenticated Streamable HTTP surface."""
 
 from dataclasses import dataclass
+import re
 import secrets
 from urllib.parse import urlsplit
 
 import httpx
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from .auth import OIDCTokenVerifier, https_url
 
 
 @dataclass(frozen=True)
@@ -21,8 +25,17 @@ class Settings:
     public_url: str
     engine_url: str = "http://127.0.0.1:8000"
 
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    allowed_emails: tuple[str, ...] = ()
+    oidc_required_scopes: tuple[str, ...] = ()
+
+    @property
+    def resource_url(self) -> str:
+        return self.public_url.rstrip("/") + "/mcp"
+
     def __post_init__(self) -> None:
-        if len(self.token) < 32 or any(c.isspace() for c in self.token):
+        if (not self.oidc_issuer or self.token) and (len(self.token) < 32 or any(c.isspace() for c in self.token)):
             raise ValueError("MCP token must contain at least 32 non-whitespace characters")
         if not self.repository.strip() or not self.workflow.strip():
             raise ValueError("MCP repository and workflow are required")
@@ -31,6 +44,18 @@ class Settings:
                 or public.password or public.path not in ("", "/")
                 or public.query or public.fragment):
             raise ValueError("MCP public URL must be an HTTPS origin, without a path")
+        if self.oidc_issuer is not None:
+            if not https_url(self.oidc_issuer):
+                raise ValueError("OE_MCP_OIDC_ISSUER must be an HTTPS URL")
+            if not self.allowed_emails or any(
+                not re.fullmatch(r"[^@\s,]+@[^@\s,]+", email) for email in self.allowed_emails
+            ):
+                raise ValueError("OE_MCP_ALLOWED_EMAILS must contain a non-empty email allowlist")
+            if self.oidc_audience is not None and self.oidc_audience != self.resource_url:
+                raise ValueError("OE_MCP_OIDC_AUDIENCE must equal the public MCP resource URL")
+        if any(not re.fullmatch(r'[\x21\x23-\x5b\x5d-\x7e]+', scope)
+               for scope in self.oidc_required_scopes):
+            raise ValueError("OE_MCP_OIDC_REQUIRED_SCOPES must contain valid OAuth scope names")
         upstream = urlsplit(self.engine_url)
         if (upstream.scheme != "http" or upstream.hostname not in ("127.0.0.1", "localhost", "::1")
                 or upstream.username or upstream.password or upstream.path not in ("", "/")
@@ -44,7 +69,7 @@ class BearerAuth:
         self.expected = f"Bearer {token}".encode()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
+        if scope["type"] == "http" and scope["path"].rstrip("/") == "/mcp":
             headers = Request(scope).headers.getlist("authorization")
             if len(headers) != 1 or not secrets.compare_digest(headers[0].encode(), self.expected):
                 response = JSONResponse(
@@ -56,10 +81,37 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
-def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None) -> ASGIApp:
+class ScopeChallenge:
+    """Add scope guidance omitted by the SDK's authentication challenge."""
+
+    def __init__(self, app: ASGIApp, scopes: tuple[str, ...]) -> None:
+        self.app, self.scopes = app, scopes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_challenge(message: Message) -> None:
+            if message["type"] == "http.response.start" and message["status"] in (401, 403):
+                message["headers"] = [
+                    (name, value + (', scope="' + " ".join(self.scopes) + '"').encode()
+                     if name.lower() == b"www-authenticate" else value)
+                    for name, value in message["headers"]
+                ]
+            await send(message)
+        await self.app(scope, receive, send_challenge)
+
+
+def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None,
+               oidc_transport: httpx.AsyncBaseTransport | None = None) -> ASGIApp:
     public = urlsplit(settings.public_url)
     mcp = FastMCP(
         "OpenEngine", stateless_http=True, json_response=True,
+        token_verifier=OIDCTokenVerifier(
+            settings.oidc_issuer, settings.oidc_audience or settings.resource_url,
+            settings.allowed_emails, transport=oidc_transport,
+        ) if settings.oidc_issuer else None,
+        auth=AuthSettings(
+            issuer_url=settings.oidc_issuer, resource_server_url=settings.resource_url,
+            required_scopes=list(settings.oidc_required_scopes), validate_token_resource=True,
+        ) if settings.oidc_issuer else None,
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=[public.netloc, "127.0.0.1:*", "localhost:*", "[::1]:*"],
@@ -110,4 +162,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             raise RuntimeError("OE returned an invalid result. Check the work-order list before retrying.") from error
         return {"run_id": run_id}
 
-    return BearerAuth(mcp.streamable_http_app(), settings.token)
+    app = mcp.streamable_http_app()
+    if settings.oidc_issuer:
+        return ScopeChallenge(app, settings.oidc_required_scopes) if settings.oidc_required_scopes else app
+    return BearerAuth(app, settings.token)

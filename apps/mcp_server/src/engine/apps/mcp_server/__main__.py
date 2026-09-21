@@ -17,10 +17,15 @@ def main() -> None:
     load_dotenv(args.env_file)
     try:
         settings = Settings(
-            token=os.environ["OE_MCP_TOKEN"],
+            token=os.environ.get("OE_MCP_TOKEN", ""),
             repository=os.environ["OE_MCP_REPOSITORY"],
             workflow=os.environ["OE_MCP_WORKFLOW"],
             public_url=os.environ["OE_MCP_PUBLIC_URL"],
+            oidc_issuer=os.environ.get("OE_MCP_OIDC_ISSUER"),
+            oidc_audience=os.environ.get("OE_MCP_OIDC_AUDIENCE"),
+            allowed_emails=tuple(email.strip() for email in
+                                 os.environ.get("OE_MCP_ALLOWED_EMAILS", "").split(",") if email.strip()),
+            oidc_required_scopes=tuple(os.environ.get("OE_MCP_OIDC_REQUIRED_SCOPES", "").split()),
             engine_url=os.environ.get("OE_MCP_ENGINE_URL", "http://127.0.0.1:8000"),
         )
     except (KeyError, ValueError) as error:

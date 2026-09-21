@@ -134,3 +134,161 @@ def test_host_and_origin_validation():
 def test_invalid_configuration_fails_closed(overrides):
     with pytest.raises(ValueError):
         Settings(**{**SETTINGS.__dict__, **overrides})
+
+
+@pytest.fixture
+def oidc():
+    from dataclasses import replace
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import jwt
+    import time
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+    jwk.update(kid="test", alg="RS256", use="sig")
+    settings = replace(
+        SETTINGS, oidc_issuer="https://issuer.example", allowed_emails=("you@example.com",),
+        oidc_required_scopes=("work:create",),
+    )
+    requests = []
+    keys = [jwk]
+
+    def provider(request):
+        requests.append(request.url.path)
+        if request.url.path == "/.well-known/openid-configuration":
+            return httpx.Response(200, json={
+                "issuer": settings.oidc_issuer, "jwks_uri": "https://issuer.example/keys",
+            })
+        assert request.url.path == "/keys"
+        return httpx.Response(200, json={"keys": keys})
+
+    def token(overrides=None, signing_key=None, kid="test"):
+        claims = {
+            "iss": settings.oidc_issuer, "sub": "user-123", "aud": settings.resource_url,
+            "exp": int(time.time()) + 300, "nbf": int(time.time()) - 1,
+            "email": "YOU@example.com", "email_verified": True, "scope": "work:create",
+        }
+        claims.update(overrides or {})
+        return jwt.encode(claims, signing_key or key, algorithm="RS256", headers={"kid": kid})
+
+    return settings, httpx.MockTransport(provider), token, requests, keys
+
+
+def oauth_rpc(client, token):
+    return client.post("/mcp", headers={**HEADERS, "Authorization": f"Bearer {token}"}, json={
+        "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
+    })
+
+
+def test_oidc_acceptance_and_cache(oidc):
+    settings, transport, token, requests, _ = oidc
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        for _ in range(2):
+            response = oauth_rpc(client, token())
+            assert response.status_code == 200
+            assert response.json()["result"]["tools"][0]["name"] == "create_workorder"
+    assert requests == ["/.well-known/openid-configuration", "/keys"]
+
+
+@pytest.mark.parametrize("claims", [
+    {"email": "someone@example.com"}, {"email": None},
+    {"email_verified": False}, {"email_verified": "true"},
+    {"aud": "https://other.example/mcp"}, {"aud": [SETTINGS.resource_url]},
+    {"iss": "https://other.example"}, {"exp": 1}, {"exp": None},
+    {"nbf": 9999999999}, {"scope": []},
+])
+def test_oidc_rejects_invalid_claims(oidc, claims):
+    settings, transport, token, _, _ = oidc
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        assert oauth_rpc(client, token(claims)).status_code == 401
+
+
+def test_oidc_bad_signature_and_unknown_key(oidc):
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    settings, transport, token, _, _ = oidc
+    wrong_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        for value in (token(signing_key=wrong_key), token(kid="unknown"), "malformed", TOKEN):
+            assert oauth_rpc(client, value).status_code == 401
+
+
+def test_oidc_key_rotation(oidc):
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    settings, transport, token, requests, keys = oidc
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        assert oauth_rpc(client, token()).status_code == 200
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+        jwk.update(kid="rotated", alg="RS256")
+        keys[:] = [jwk]
+        assert oauth_rpc(client, token(signing_key=key, kid="rotated")).status_code == 200
+    assert requests.count("/keys") == 2
+
+
+def test_oidc_public_discovery_and_challenge(oidc):
+    settings, transport, token, requests, _ = oidc
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        path = "/.well-known/oauth-protected-resource/mcp"
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.json()["resource"] == settings.resource_url
+        assert response.json()["authorization_servers"] == [settings.oidc_issuer + "/"]
+        assert not requests
+        response = client.get("/mcp")
+        assert response.status_code == 401
+        challenge = response.headers["www-authenticate"]
+        assert f'resource_metadata="{settings.public_url}{path}"' in challenge
+        assert 'scope="work:create"' in challenge
+        assert oauth_rpc(client, token({"scope": ""})).status_code == 403
+        for path in ("/authorize", "/token", "/register"):
+            assert client.get(path).status_code == 404
+
+
+@pytest.mark.parametrize("overrides", [
+    {}, {"allowed_emails": ()}, {"allowed_emails": ("",)},
+    {"allowed_emails": ("   ",)}, {"oidc_issuer": ""},
+    {"oidc_issuer": "http://issuer.example"}, {"oidc_audience": "https://other.example/mcp"},
+    {"oidc_required_scopes": ('bad"scope',)},
+])
+def test_oidc_invalid_configuration(overrides):
+    from dataclasses import replace
+    with pytest.raises(ValueError):
+        replace(SETTINGS, **{"oidc_issuer": "https://issuer.example", **overrides})
+
+
+@pytest.mark.parametrize("payload", [None, [], {}, {"issuer": "https://wrong.example"}])
+def test_oidc_discovery_failure_denies_access(oidc, payload):
+    settings, _, token, _, _ = oidc
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        assert oauth_rpc(client, token()).status_code == 401
+
+
+def test_oidc_allowlist_log_contains_subject_only(oidc, caplog):
+    settings, transport, token, _, _ = oidc
+    rejected = token({"email": "someone@example.com"})
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        assert oauth_rpc(client, rejected).status_code == 401
+    assert "user-123" in caplog.text
+    assert "someone@example.com" not in caplog.text
+    assert rejected not in caplog.text
+
+
+@pytest.mark.parametrize("allowlist", [None, "", " , "])
+def test_oidc_env_requires_allowlist(monkeypatch, allowlist):
+    from engine.apps.mcp_server.__main__ import main
+
+    for name, value in {
+        "OE_MCP_TOKEN": TOKEN, "OE_MCP_REPOSITORY": "/repos/oe",
+        "OE_MCP_WORKFLOW": "workflow", "OE_MCP_PUBLIC_URL": SETTINGS.public_url,
+        "OE_MCP_OIDC_ISSUER": "https://issuer.example",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("OE_MCP_ALLOWED_EMAILS", raising=False)
+    if allowlist is not None:
+        monkeypatch.setenv("OE_MCP_ALLOWED_EMAILS", allowlist)
+    monkeypatch.setattr("sys.argv", ["engine-mcp-server", "--env-file", "/nonexistent"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
