@@ -8,6 +8,11 @@ We give you an out-of-the-box configuration to get you up and running. The out-o
 ```
 Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change 
 ```
+## Our Philosophy
+1. Agent Workflows are portable artifacts. That means you should be able to create a workflow, publish it, and run it in any openengine instance.
+2. Decoupled to any provider. We are provider agnostic and empower you to run your workflows on any provider, including OSS.
+3. 
+
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
