@@ -1,6 +1,7 @@
 """The assistant-ui server surface and its multi-chat coordination."""
 
 import asyncio
+import gzip
 import json
 import logging
 import re
@@ -11,6 +12,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.routing import Route
 
 from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
 from engine.adapters.agent_runner.codex import (
@@ -2305,6 +2308,102 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path)
     assert page.headers["cache-control"] == "no-cache"
     assert asset.status_code == 200
     assert "immutable" in asset.headers["cache-control"]
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "identity"])
+def test_web_compresses_large_json_and_static_assets(tmp_path, encoding) -> None:
+    runner = ConcurrentRunner()
+    (tmp_path / "assets").mkdir()
+    javascript = b"console.log('engine');\n" * 5000
+    (tmp_path / "assets" / "index-abc123.js").write_bytes(javascript)
+    (tmp_path / "index.html").write_text("<html>engine</html>")
+    app = create_app(_session(runner), {"test": runner}, tmp_path)
+    payload = {"messages": ["large response" * 1000]}
+
+    async def large_response(request):
+        return JSONResponse(payload, headers={"Vary": "Origin"})
+
+    app.router.routes.insert(0, Route("/api/compression-test", large_response))
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test",
+            headers={"Accept-Encoding": encoding},
+        ) as client:
+            for path, expected in [
+                ("/api/compression-test", JSONResponse(payload).body),
+                ("/assets/index-abc123.js", javascript),
+            ]:
+                async with client.stream("GET", path) as response:
+                    raw = b"".join([chunk async for chunk in response.aiter_raw()])
+                    assert response.status_code == 200
+                    if encoding == "gzip":
+                        assert response.headers["content-encoding"] == "gzip"
+                        assert gzip.decompress(raw) == expected
+                        assert len(raw) < len(expected)
+                        assert "Accept-Encoding" in response.headers["vary"]
+                    else:
+                        assert "content-encoding" not in response.headers
+                        assert raw == expected
+                    if path.startswith("/assets/"):
+                        assert "immutable" in response.headers["cache-control"]
+                    else:
+                        assert "Origin" in response.headers["vary"]
+            page = await client.get("/")
+            assert "content-encoding" not in page.headers
+            assert page.headers["cache-control"] == "no-cache"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path, media_type", [
+    ("/api/threads/test/approval-events", "text/event-stream"),
+    ("/api/runs/test/events", "text/event-stream"),
+    ("/api/threads/test/runs", "application/x-ndjson"),
+    ("/api/threads/test/runs/current", "application/x-ndjson"),
+])
+def test_web_compression_delivers_stream_chunks_immediately(path, media_type) -> None:
+    async def scenario():
+        runner = ConcurrentRunner()
+        app = create_app(_session(runner), {"test": runner})
+        delivered = asyncio.Event()
+        chunks = [b'data: {"message": "first"}\n\n', b'data: {"message": "second"}\n\n']
+        bodies = []
+
+        async def stream():
+            for chunk in chunks:
+                delivered.clear()
+                yield chunk
+                # The producer cannot continue until this chunk reaches the
+                # client. Buffered transports would conceal this regression.
+                await asyncio.wait_for(delivered.wait(), timeout=1)
+
+        async def endpoint(request):
+            return StreamingResponse(stream(), media_type=media_type)
+
+        app.router.routes.insert(0, Route(path, endpoint))
+
+        async def receive():
+            await asyncio.Event().wait()
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                assert message["status"] == 200
+                assert b"content-encoding" not in dict(message["headers"])
+            elif message["type"] == "http.response.body" and message.get("body"):
+                bodies.append(message["body"])
+                assert message["more_body"]
+                delivered.set()
+
+        await asyncio.wait_for(app({
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": path, "query_string": b"",
+            "headers": [(b"accept-encoding", b"gzip")],
+        }, receive, send), timeout=2)
+        assert bodies == chunks
+
+    asyncio.run(scenario())
 
 
 # --- graph WorkOrders (the graph entries in the dropdown) ---------------------
