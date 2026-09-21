@@ -35,6 +35,14 @@ class Settings:
         return self.public_url.rstrip("/") + "/mcp"
 
     def __post_init__(self) -> None:
+        if self.oidc_issuer is None:
+            for name, configured in (
+                ("OE_MCP_OIDC_AUDIENCE", self.oidc_audience is not None),
+                ("OE_MCP_ALLOWED_EMAILS", bool(self.allowed_emails)),
+                ("OE_MCP_OIDC_REQUIRED_SCOPES", bool(self.oidc_required_scopes)),
+            ):
+                if configured:
+                    raise ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
         if (not self.oidc_issuer or self.token) and (len(self.token) < 32 or any(c.isspace() for c in self.token)):
             raise ValueError("MCP token must contain at least 32 non-whitespace characters")
         if not self.repository.strip() or not self.workflow.strip():

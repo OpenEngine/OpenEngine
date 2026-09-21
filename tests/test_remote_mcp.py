@@ -164,13 +164,15 @@ def oidc():
         assert request.url.path == "/keys"
         return httpx.Response(200, json={"keys": keys})
 
-    def token(overrides=None, signing_key=None, kid="test"):
+    def token(overrides=None, signing_key=None, kid="test", omit=()):
         claims = {
             "iss": settings.oidc_issuer, "sub": "user-123", "aud": settings.resource_url,
             "exp": int(time.time()) + 300, "nbf": int(time.time()) - 1,
             "email": "YOU@example.com", "email_verified": True, "scope": "work:create",
         }
         claims.update(overrides or {})
+        for claim in omit:
+            claims.pop(claim, None)
         return jwt.encode(claims, signing_key or key, algorithm="RS256", headers={"kid": kid})
 
     return settings, httpx.MockTransport(provider), token, requests, keys
@@ -376,3 +378,63 @@ def test_oidc_env_requires_allowlist(monkeypatch, allowlist):
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize("value", [None, False, "true", 1, "missing"])
+def test_oidc_requires_verified_email_with_clear_log(oidc, caplog, value):
+    settings, transport, token, _, _ = oidc
+    rejected = token({"email_verified": value}, omit=("email_verified",) if value == "missing" else ())
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        assert oauth_rpc(client, rejected).status_code == 401
+    assert "email_verified must be present and boolean true" in caplog.text
+    assert "configure the identity provider" in caplog.text
+    assert "user-123" in caplog.text
+    assert "YOU@example.com" not in caplog.text
+    assert rejected not in caplog.text
+
+
+@pytest.mark.parametrize("field,value,name", [
+    ("oidc_audience", SETTINGS.resource_url, "OE_MCP_OIDC_AUDIENCE"),
+    ("oidc_audience", "", "OE_MCP_OIDC_AUDIENCE"),
+    ("allowed_emails", ("you@example.com",), "OE_MCP_ALLOWED_EMAILS"),
+    ("oidc_required_scopes", ("work:create",), "OE_MCP_OIDC_REQUIRED_SCOPES"),
+])
+def test_oidc_settings_require_issuer(field, value, name):
+    from dataclasses import replace
+
+    with pytest.raises(ValueError, match=f"{name} requires OE_MCP_OIDC_ISSUER"):
+        replace(SETTINGS, **{field: value})
+
+
+@pytest.mark.parametrize("name,value", [
+    ("OE_MCP_OIDC_AUDIENCE", SETTINGS.resource_url),
+    ("OE_MCP_ALLOWED_EMAILS", "you@example.com"),
+    ("OE_MCP_OIDC_REQUIRED_SCOPES", "work:create"),
+    ("OE_MCP_OIDC_AUDIENCE", ""),
+    ("OE_MCP_ALLOWED_EMAILS", ""),
+    ("OE_MCP_OIDC_REQUIRED_SCOPES", ""),
+])
+def test_oidc_env_without_issuer_fails_startup(monkeypatch, tmp_path, capsys, name, value):
+    from engine.apps.mcp_server.__main__ import main
+
+    for variable in (
+        "OE_MCP_OIDC_ISSUER", "OE_MCP_OIDC_AUDIENCE",
+        "OE_MCP_ALLOWED_EMAILS", "OE_MCP_OIDC_REQUIRED_SCOPES",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    for variable, setting in {
+        "OE_MCP_TOKEN": TOKEN, "OE_MCP_REPOSITORY": "/repos/oe",
+        "OE_MCP_WORKFLOW": "workflow", "OE_MCP_PUBLIC_URL": SETTINGS.public_url,
+    }.items():
+        monkeypatch.setenv(variable, setting)
+    env_file = tmp_path / "mcp.env"
+    env_file.write_text(f"{name}={value}\n")
+    monkeypatch.setattr("sys.argv", ["engine-mcp-server", "--env-file", str(env_file)])
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("Server must not start with orphaned OIDC settings")
+    monkeypatch.setattr("engine.apps.mcp_server.__main__.uvicorn.run", unexpected_run)
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+    assert f"{name} requires OE_MCP_OIDC_ISSUER" in capsys.readouterr().err
+    monkeypatch.delenv(name)

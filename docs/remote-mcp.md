@@ -173,8 +173,10 @@ as a resource server only. An external OAuth 2.1/OIDC provider handles login,
 consent, client registration, and token issuance; the gateway does not expose
 `/authorize`, `/token`, or `/register`.
 
-Leave `OE_MCP_OIDC_ISSUER` absent to keep the existing static bearer-token
-deployment unchanged. Setting it selects OIDC authentication instead; static
+Leave all OIDC settings unset to keep the existing static bearer-token
+deployment unchanged. Configuring `OE_MCP_OIDC_AUDIENCE`, `OE_MCP_ALLOWED_EMAILS`,
+or `OE_MCP_OIDC_REQUIRED_SCOPES` without `OE_MCP_OIDC_ISSUER` fails startup,
+even if the supplied environment variable is empty. Setting it selects OIDC authentication instead; static
 secrets are not accepted in that mode. Configure these values in the same private
 `~/.config/openengine/mcp.env` file and restart:
 
@@ -182,8 +184,11 @@ secrets are not accepted in that mode. Configure these values in the same privat
   issuer. The gateway discovers its OIDC metadata and JWKS over HTTPS.
 - `OE_MCP_ALLOWED_EMAILS=you@example.com`: required, non-empty comma-separated
   allowlist, compared case-insensitively. Missing or empty configuration prevents
-  startup. Access tokens must contain an allowed `email`; if `email_verified`
-  is present it must be the boolean `true`.
+  startup. Access tokens must contain an allowed `email` and `email_verified`
+  must be present and the boolean `true`. Missing, false, or non-boolean values
+  receive 401; the server log identifies the subject and explains that
+  `email_verified` must be present and boolean true. Configure the provider to
+  include verified email claims in access tokens.
 - `OE_MCP_OIDC_AUDIENCE`: defaults to `OE_MCP_PUBLIC_URL` plus `/mcp`. An explicit
   value must equal that resource URL. Configure the provider to issue JWT access
   tokens with this exact audience using the RFC 8707 `resource` parameter;

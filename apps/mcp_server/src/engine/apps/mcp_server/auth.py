@@ -84,8 +84,14 @@ class OIDCTokenVerifier:
                 options={"require": ["iss", "sub", "aud", "exp"]},
             )
             email = claims.get("email")
-            if (not isinstance(email, str) or email.casefold() not in self.emails
-                    or ("email_verified" in claims and claims["email_verified"] is not True)):
+            if claims.get("email_verified") is not True:
+                logger.warning(
+                    "OIDC rejected subject %r: email_verified must be present and boolean true; "
+                    "configure the identity provider to include verified email claims in access tokens",
+                    claims["sub"],
+                )
+                return None
+            if not isinstance(email, str) or email.casefold() not in self.emails:
                 logger.warning("OIDC allowlist rejected subject %r", claims["sub"])
                 return None
             scopes = claims.get("scope", "")
