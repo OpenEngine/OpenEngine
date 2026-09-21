@@ -20,6 +20,7 @@ const config: EngineConfig = {
   defaultAgent: "agent",
   planAgent: "planner",
   showProjects: true,
+  repositories: [{ name: ". (/srv/engine)", path: "." }],
   defaultRunner: "runner",
   workflows: [
     { id: "work-v1", name: "Work" },
@@ -110,6 +111,31 @@ describe("run display helpers", () => {
 });
 
 describe("NewWorkflowPage", () => {
+  it("defaults to the current directory when no repositories are configured", () => {
+    render(<NewWorkflowPage config={config} />);
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveValue(".");
+    expect(screen.getByRole("option", { name: ". (/srv/engine)" })).toBeInTheDocument();
+  });
+
+  it("submits the selected repository path", async () => {
+    const user = userEvent.setup();
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<NewWorkflowPage config={{ ...config, repositories: [
+      { name: "OpenEngine/OpenEngine", path: "/code/OpenEngine" },
+      { name: "n8n", path: "/code/n8n" },
+    ] }} />);
+    const selector = screen.getByRole("combobox", { name: "Repository" });
+    expect(selector).toHaveValue("/code/OpenEngine");
+    await user.selectOptions(selector, "/code/n8n");
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Create WorkOrder" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
+    const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body)).repository).toBe("/code/n8n");
+  });
+
   it("offers every configured workflow definition", () => {
     render(<NewWorkflowPage config={config} />);
 

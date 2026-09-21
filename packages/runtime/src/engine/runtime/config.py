@@ -144,6 +144,7 @@ class EngineConfig:
     claude: ClaudeConfig = ClaudeConfig()
     attribution: bool = True
     show_projects: bool = True
+    repos: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +231,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "orchestrator",
             "public_url",
             "show_projects",
+            "repos",
             "work_orders",
             "workflows",
         },
@@ -351,6 +353,10 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     return EngineConfig(
         attribution=attribution,
         show_projects=show_projects,
+        repos={
+            _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
+            for name, path in _table(document.get("repos", {}), "repos").items()
+        },
         default_branch=default_branch,
         github_client_id=github_client_id,
         github_login_client_id=_optional_nonblank_string(

@@ -140,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         runners,
         STATIC_DIRECTORY,
         workflow_catalog=catalog,
+        repos={"Test repository": args.repository},
         graph_runtime=build_graph_runtime(
             settings,
             catalog.graphs,

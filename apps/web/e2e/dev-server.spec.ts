@@ -98,7 +98,7 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
 
   await page.goto(`${devServer}/runs/new`);
   await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
-  await page.getByLabel("Repository").fill(engine.repository);
+  await page.getByLabel("Repository").selectOption(engine.repository);
   await page.getByLabel("Task prompt").fill(TASK);
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);

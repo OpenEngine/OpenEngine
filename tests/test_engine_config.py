@@ -469,3 +469,18 @@ def test_github_host_aliases_require_nonblank_string_mapping(aliases):
 def test_github_unbound_hosts_are_not_accepted():
     with pytest.raises(EngineConfigError, match="hosts"):
         parse_engine_config({"github": {"hosts": ["forge.example"]}})
+
+
+def test_repository_choices_load_from_toml(tmp_path: Path) -> None:
+    path = tmp_path / "engine.toml"
+    path.write_text('[repos]\n"OpenEngine/OpenEngine" = "~/code/OpenEngine"\nn8n = "~/code/n8n"\n')
+    assert load_engine_config(path, environ={}).config.repos == {
+        "OpenEngine/OpenEngine": "~/code/OpenEngine", "n8n": "~/code/n8n",
+    }
+    assert parse_engine_config({}).repos == {}
+
+
+@pytest.mark.parametrize("repos", [[], {"repo": ""}, {"repo": 123}, {" ": "/tmp/repo"}])
+def test_invalid_repository_choices_are_rejected(repos) -> None:
+    with pytest.raises(EngineConfigError, match="repos"):
+        parse_engine_config({"repos": repos})

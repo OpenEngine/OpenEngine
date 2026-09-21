@@ -147,7 +147,7 @@ async function verifyPersistedNavigation({
   await expect(page).toHaveURL("/runs/new");
   await expect(page.getByRole("heading", { name: "Create a WorkOrder" })).toBeVisible();
   await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
-  await page.getByLabel("Repository").fill(engine.repository);
+  await page.getByLabel("Repository").selectOption(engine.repository);
   await page.getByLabel("Task prompt").fill("Start a fresh workflow beside history.");
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);

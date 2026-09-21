@@ -31,6 +31,7 @@ export type EngineConfig = {
   /** The agent the New Project button talks to, empty when none is composed. */
   planAgent: string;
   showProjects: boolean;
+  repositories: { name: string; path: string }[];
   defaultRunner: string;
   /** Each workflow declares the inputs its creation form asks for. */
   workflows: {

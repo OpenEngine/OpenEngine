@@ -4,6 +4,12 @@ default_branch = "main"
 show_projects = false
 public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 
+# Repository names and local checkout paths offered when creating a WorkOrder.
+# Paths expand ~ and resolve relative to the server's working directory.
+[repos]
+"OpenEngine/OpenEngine" = "~/code/OpenEngine"
+"n8n" = "~/code/n8n"
+
 # Whose GitHub events this deployment answers. The secret that signs those
 # deliveries is not written here -- engine.toml is committed -- it lives in a
 # server-local `.env` beside it. See docs/github-webhooks.md.

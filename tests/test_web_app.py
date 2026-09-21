@@ -143,6 +143,25 @@ def test_web_selects_the_configured_communications_provider() -> None:
         )
 
 
+def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / "engine.toml"
+    path.write_text('[repos]\n"OpenEngine/OpenEngine" = "~/code/OpenEngine"\nn8n = "code/n8n"\n')
+    app = build_app(path)
+
+    async def ask():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return (await client.get("/api/config")).json()
+
+    assert asyncio.run(ask())["repositories"] == [
+        {"name": "OpenEngine/OpenEngine", "path": str(tmp_path / "code/OpenEngine")},
+        {"name": "n8n", "path": str(tmp_path / "code/n8n")},
+    ]
+
+
 @pytest.mark.parametrize("show_projects", [None, True, False])
 def test_the_application_can_be_built_from_configuration_alone(
     tmp_path, monkeypatch, show_projects
@@ -171,6 +190,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     answered = asyncio.run(ask())
     assert answered.status_code == 200
     assert answered.json()["showProjects"] is (show_projects is not False)
+    assert answered.json()["repositories"] == [{"name": f". ({tmp_path})", "path": "."}]
     assert answered.json()["runners"] == [
         {"id": "codex", "implementation": "CodexAgentRunner"},
         {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
