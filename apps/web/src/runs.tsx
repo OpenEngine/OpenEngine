@@ -792,6 +792,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [workflowGone, setWorkflowGone] = useState(false);
   const [error, setError] = useState("");
   const [topologyError, setTopologyError] = useState("");
+  const [topologyAttempt, setTopologyAttempt] = useState(0);
   const workflowId = baseRun?.workflowId;
   useEffect(() => {
     let cancelled = false;
@@ -799,7 +800,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
     setWorkflowGone(false);
     setTopologyError("");
     if (workflowId !== undefined) {
-      // A compiled graph is immutable: read once per workflow, not per poll.
+      // Cache successful and missing reads per workflow; retry failures on demand.
       ifPresent(getGraphTopology(workflowId)).then((value) => {
         if (cancelled) return;
         setTopology(value);
@@ -809,7 +810,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       });
     }
     return () => { cancelled = true; };
-  }, [workflowId]);
+  }, [workflowId, topologyAttempt]);
   useEffect(() => {
     let cancelled = false;
     let cursor = 0;
@@ -914,6 +915,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
       {error || topologyError ? (
         <p className="notice notice-block">
           Could not load WorkOrder: {error || topologyError}
+          {topologyError && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setTopologyAttempt((attempt) => attempt + 1)}
+            >
+              Retry loading stages
+            </button>
+          )}
         </p>
       ) : !run ? (
         <p className="state-inline">Loading WorkOrder…</p>

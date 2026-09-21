@@ -1,4 +1,4 @@
-import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -591,10 +591,48 @@ describe("RunDetailPage", () => {
       expect(screen.getByText(/no longer has/)).toBeVisible();
       expect(screen.getByRole("heading", { name: "First run" })).toBeVisible();
       expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry loading stages" })).not.toBeInTheDocument();
     } else {
       expect(screen.getByText(/Could not load WorkOrder: topology unavailable/)).toBeVisible();
       expect(screen.queryByText(/no longer has/)).not.toBeInTheDocument();
     }
+  });
+
+  it("retries a failed topology read on demand and caches the recovered topology", async () => {
+    vi.useFakeTimers();
+    let topologyReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(run());
+      if (path === "/graph/api/runs/run-1") return json({
+        runId: "run-1", graphId: "work-v1", status: "running",
+        activeExecutions: [], nextNodes: [], values: {}, pendingApprovals: [], error: "",
+      });
+      if (path === "/graph/api/graphs/work-v1") {
+        topologyReads += 1;
+        if (topologyReads === 1) return json({ error: "topology unavailable" }, { status: 502 });
+        return json({
+          graphId: "work-v1", nodes: [{ nodeId: "work", name: "Work stage", kind: "agent" }],
+        });
+      }
+      if (path.includes("/github-comments")) return json(noComments);
+      return json({ events: [] });
+    }));
+    render(<RunDetailPage runId="run-1" />);
+    await act(async () => {});
+    expect(screen.getByText(/Could not load WorkOrder: topology unavailable/)).toBeVisible();
+    expect(screen.queryByText(/no longer has/)).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry loading stages" }));
+    });
+    expect(screen.getByRole("heading", { name: "First run" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Work stage" })).toBeVisible();
+    expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry loading stages" })).not.toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(topologyReads).toBe(2);
+    expect(screen.getByRole("heading", { name: "Work stage" })).toBeVisible();
   });
 
   it("links to the workorder that created this one", async () => {
@@ -889,7 +927,7 @@ describe("RunDetailPage", () => {
 
     await screen.findByText("Implementation review (codex)");
     const stages = within(container.querySelector(".stages") as HTMLElement);
-    expect(stages.getByText("Review")).toBeVisible();
+    expect(await stages.findByText("Review")).toBeVisible();
     expect(stages.queryByText("Review (Security)")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Review (Security)" })).not.toBeVisible();
 
