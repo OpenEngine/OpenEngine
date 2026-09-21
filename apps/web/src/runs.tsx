@@ -787,10 +787,29 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [graph, setGraph] = useState<ApiGraphRun>();
   const [topology, setTopology] = useState<ApiGraphTopology>();
   const [graphEvents, setGraphEvents] = useState<ApiGraphEvent[]>([]);
-  // Set once a poll has been told there is no such graph, so the page says why
+  // Set once the topology read finds no such graph, so the page says why
   // it has no progress to show instead of drawing an empty WorkOrder.
   const [workflowGone, setWorkflowGone] = useState(false);
   const [error, setError] = useState("");
+  const [topologyError, setTopologyError] = useState("");
+  const workflowId = baseRun?.workflowId;
+  useEffect(() => {
+    let cancelled = false;
+    setTopology(undefined);
+    setWorkflowGone(false);
+    setTopologyError("");
+    if (workflowId !== undefined) {
+      // A compiled graph is immutable: read once per workflow, not per poll.
+      ifPresent(getGraphTopology(workflowId)).then((value) => {
+        if (cancelled) return;
+        setTopology(value);
+        setWorkflowGone(value === undefined);
+      }).catch((reason) => {
+        if (!cancelled) setTopologyError((reason as Error).message);
+      });
+    }
+    return () => { cancelled = true; };
+  }, [workflowId]);
   useEffect(() => {
     let cancelled = false;
     let cursor = 0;
@@ -805,19 +824,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
         const value = await api<ApiWorkflowRun>(`/api/runs/${encodeURIComponent(runId)}`);
         if (cancelled) return;
         setRun(value);
-        const [nextGraph, nextTopology, eventLog] = await Promise.all([
+        const [nextGraph, eventLog] = await Promise.all([
           ifPresent(getGraphRun(runId)),
-          ifPresent(getGraphTopology(value.workflowId)),
           getGraphEvents(runId, undefined, cursor),
         ]);
         if (cancelled) return;
         setGraph(nextGraph);
-        setTopology(nextTopology);
         if (eventLog.events.length) {
           for (const event of eventLog.events) cursor = Math.max(cursor, event.sequence);
           setGraphEvents((current) => [...current, ...eventLog.events]);
         }
-        setWorkflowGone(nextTopology === undefined);
         setError("");
       } catch (reason) {
         if (!cancelled) setError((reason as Error).message);
@@ -895,9 +911,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
   return (
     <main className="panel-scroll">
-      {error ? (
+      {error || topologyError ? (
         <p className="notice notice-block">
-          Could not load WorkOrder: {error}
+          Could not load WorkOrder: {error || topologyError}
         </p>
       ) : !run ? (
         <p className="state-inline">Loading WorkOrder…</p>

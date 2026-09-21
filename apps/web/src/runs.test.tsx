@@ -526,6 +526,77 @@ describe("RunsPage", () => {
 });
 
 describe("RunDetailPage", () => {
+  it("reads topology once while polling progresses, and again only for a changed workflow", async () => {
+    vi.useFakeTimers();
+    let currentRun = run();
+    let resolveTopology!: (response: Response) => void;
+    const pendingTopology = new Promise<Response>((resolve) => { resolveTopology = resolve; });
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(currentRun);
+      if (path === "/graph/api/runs/run-1") return json({
+        runId: "run-1", graphId: currentRun.workflowId, status: "running",
+        activeExecutions: [], nextNodes: [], values: {}, pendingApprovals: [], error: "",
+      });
+      if (path === "/graph/api/graphs/work-v1") return pendingTopology;
+      if (path === "/graph/api/graphs/release-v2") return json({
+        graphId: "release-v2", nodes: [{ nodeId: "release", name: "Release stage", kind: "agent" }],
+      });
+      if (path.includes("/github-comments")) return json(noComments);
+      return json({ events: [] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<RunDetailPage runId="run-1" />);
+    await act(async () => {});
+    expect(screen.getByRole("heading", { name: "First run" })).toBeVisible();
+
+    currentRun = run({ phase: "succeeded", terminalOutcome: "approved" });
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(screen.getByText("succeeded")).toBeVisible();
+    expect(fetch.mock.calls.filter(([path]) => path === "/api/runs/run-1")).toHaveLength(3);
+    expect(fetch.mock.calls.filter(([path]) => path === "/graph/api/graphs/work-v1")).toHaveLength(1);
+
+    await act(async () => resolveTopology(json({
+      graphId: "work-v1", nodes: [{ nodeId: "work", name: "Work stage", kind: "agent" }],
+    })));
+    expect(screen.getByRole("heading", { name: "Work stage" })).toBeVisible();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(fetch.mock.calls.filter(([path]) => path === "/graph/api/graphs/work-v1")).toHaveLength(1);
+
+    currentRun = run({ workflowId: "release-v2" });
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByRole("heading", { name: "Release stage" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Work stage" })).not.toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(fetch.mock.calls.filter(([path]) => path === "/graph/api/graphs/release-v2")).toHaveLength(1);
+  });
+
+  it.each([404, 502])("keeps topology status %s distinct across successful polls", async (status) => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(run());
+      if (path === "/graph/api/runs/run-1") return json({ error: "not found" }, { status: 404 });
+      if (path === "/graph/api/graphs/work-v1") return json({ error: "topology unavailable" }, { status });
+      if (path.includes("/github-comments")) return json(noComments);
+      return json({ events: [] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<RunDetailPage runId="run-1" />);
+    await act(async () => {});
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(fetch.mock.calls.filter(([path]) => path === "/api/runs/run-1")).toHaveLength(3);
+    expect(fetch.mock.calls.filter(([path]) => path === "/graph/api/graphs/work-v1")).toHaveLength(1);
+    if (status === 404) {
+      expect(screen.getByText(/no longer has/)).toBeVisible();
+      expect(screen.getByRole("heading", { name: "First run" })).toBeVisible();
+      expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByText(/Could not load WorkOrder: topology unavailable/)).toBeVisible();
+      expect(screen.queryByText(/no longer has/)).not.toBeInTheDocument();
+    }
+  });
+
   it("links to the workorder that created this one", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
