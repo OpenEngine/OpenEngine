@@ -33,6 +33,7 @@ class OIDCTokenVerifier:
         self.transport = transport
         self.keys: list[jwt.PyJWK] = []
         self.expires = 0.0
+        self.next_refresh = 0.0
         self.lock = asyncio.Lock()
 
     async def _refresh(self) -> None:
@@ -57,14 +58,21 @@ class OIDCTokenVerifier:
             header = jwt.get_unverified_header(token)
             if header.get("alg") not in ALGORITHMS or not isinstance(header.get("kid"), str):
                 return None
-            async with self.lock:
-                refreshed = time.monotonic() >= self.expires
-                if refreshed:
-                    await self._refresh()
-                matches = [key for key in self.keys if key.key_id == header["kid"]]
-                if not matches and not refreshed:
-                    await self._refresh()
+            matches = [key for key in self.keys if key.key_id == header["kid"]]
+            # Fresh cached keys never wait on unrelated provider network I/O.
+            if not matches or time.monotonic() >= self.expires:
+                async with self.lock:
                     matches = [key for key in self.keys if key.key_id == header["kid"]]
+                    if not matches or time.monotonic() >= self.expires:
+                        if time.monotonic() < self.next_refresh:
+                            return None
+                        try:
+                            await self._refresh()
+                        finally:
+                            # One cooldown across all kids, including failed refreshes.
+                            # Newly rotated keys may take up to a minute to be accepted.
+                            self.next_refresh = time.monotonic() + 60
+                        matches = [key for key in self.keys if key.key_id == header["kid"]]
             if len(matches) != 1:
                 return None
             key = matches[0]
@@ -73,7 +81,7 @@ class OIDCTokenVerifier:
             claims = jwt.decode(
                 token, key.key, algorithms=[key.algorithm_name],
                 issuer=self.issuer, audience=self.audience,
-                options={"require": ["iss", "sub", "aud", "exp"], "strict_aud": True},
+                options={"require": ["iss", "sub", "aud", "exp"]},
             )
             email = claims.get("email")
             if (not isinstance(email, str) or email.casefold() not in self.emails

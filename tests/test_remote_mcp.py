@@ -1,6 +1,8 @@
 """Exercise the public MCP transport, without starting real agent work."""
 
+import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -180,11 +182,15 @@ def oauth_rpc(client, token):
     })
 
 
-def test_oidc_acceptance_and_cache(oidc):
+@pytest.mark.parametrize("audience", [
+    SETTINGS.resource_url, [SETTINGS.resource_url],
+    ["https://other.example/mcp", SETTINGS.resource_url],
+])
+def test_oidc_acceptance_and_cache(oidc, audience):
     settings, transport, token, requests, _ = oidc
     with TestClient(create_app(settings, oidc_transport=transport)) as client:
         for _ in range(2):
-            response = oauth_rpc(client, token())
+            response = oauth_rpc(client, token({"aud": audience}))
             assert response.status_code == 200
             assert response.json()["result"]["tools"][0]["name"] == "create_workorder"
     assert requests == ["/.well-known/openid-configuration", "/keys"]
@@ -193,7 +199,8 @@ def test_oidc_acceptance_and_cache(oidc):
 @pytest.mark.parametrize("claims", [
     {"email": "someone@example.com"}, {"email": None},
     {"email_verified": False}, {"email_verified": "true"},
-    {"aud": "https://other.example/mcp"}, {"aud": [SETTINGS.resource_url]},
+    {"aud": "https://other.example/mcp"}, {"aud": ["https://other.example/mcp"]},
+    {"aud": [SETTINGS.resource_url + "/"]},
     {"iss": "https://other.example"}, {"exp": 1}, {"exp": None},
     {"nbf": 9999999999}, {"scope": []},
 ])
@@ -212,7 +219,16 @@ def test_oidc_bad_signature_and_unknown_key(oidc):
             assert oauth_rpc(client, value).status_code == 401
 
 
-def test_oidc_key_rotation(oidc):
+@pytest.fixture
+def oidc_clock(monkeypatch):
+    from engine.apps.mcp_server import auth
+
+    clock = [1000.0]
+    monkeypatch.setattr(auth, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    return clock
+
+
+def test_oidc_key_rotation(oidc, oidc_clock):
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
     settings, transport, token, requests, keys = oidc
@@ -222,8 +238,76 @@ def test_oidc_key_rotation(oidc):
         jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
         jwk.update(kid="rotated", alg="RS256")
         keys[:] = [jwk]
+        assert oauth_rpc(client, token(signing_key=key, kid="rotated")).status_code == 401
+        oidc_clock[0] += 60
         assert oauth_rpc(client, token(signing_key=key, kid="rotated")).status_code == 200
     assert requests.count("/keys") == 2
+
+
+@pytest.mark.parametrize("failure_path", [None, "/.well-known/openid-configuration", "/keys"])
+def test_oidc_unknown_keys_share_refresh_cooldown(oidc, oidc_clock, failure_path):
+    from engine.apps.mcp_server.auth import OIDCTokenVerifier
+
+    settings, transport, token, requests, _ = oidc
+    verifier = OIDCTokenVerifier(
+        settings.oidc_issuer, settings.resource_url, settings.allowed_emails, transport=transport,
+    )
+    attempts = []
+
+    async def provider(request):
+        attempts.append(request.url.path)
+        if request.url.path == failure_path:
+            return httpx.Response(503)
+        return await transport.handle_async_request(request)
+
+    async def check():
+        assert await verifier.verify_token(token()) is not None
+        verifier.transport = httpx.MockTransport(provider)
+        for batch in range(3):
+            if batch:
+                oidc_clock[0] += 60
+            assert all(result is None for result in await asyncio.gather(*(
+                verifier.verify_token(token(kid=f"unknown-{batch}-{i}")) for i in range(20)
+            )))
+            assert attempts.count("/.well-known/openid-configuration") == batch
+            assert attempts.count("/keys") == (0 if failure_path == "/.well-known/openid-configuration" else batch)
+            assert await verifier.verify_token(token()) is not None
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("blocked_path", ["/.well-known/openid-configuration", "/keys"])
+def test_oidc_cached_key_does_not_wait_for_refresh(oidc, oidc_clock, blocked_path):
+    from engine.apps.mcp_server.auth import OIDCTokenVerifier
+
+    settings, transport, token, _, _ = oidc
+
+    async def check():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def provider(request):
+            if request.url.path == blocked_path:
+                started.set()
+                await release.wait()
+            return await transport.handle_async_request(request)
+
+        verifier = OIDCTokenVerifier(
+            settings.oidc_issuer, settings.resource_url, settings.allowed_emails, transport=transport,
+        )
+        assert await verifier.verify_token(token()) is not None
+        verifier.transport = httpx.MockTransport(provider)
+        oidc_clock[0] += 60
+        refresh = asyncio.create_task(verifier.verify_token(token(kid="unknown")))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            assert await asyncio.wait_for(verifier.verify_token(token()), timeout=2) is not None
+            assert not refresh.done()
+        finally:
+            release.set()
+            assert await asyncio.wait_for(refresh, timeout=2) is None
+
+    asyncio.run(check())
 
 
 def test_oidc_public_discovery_and_challenge(oidc):
