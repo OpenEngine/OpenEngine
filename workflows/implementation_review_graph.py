@@ -380,6 +380,7 @@ def pipeline(
                         step_id=node_name,
                         agent_id=reviewer,
                         required_outputs=("findings",),
+                        validate_completion=ReviewNode.validate_completion,
                         repository_tools=(
                             "view_change_request",
                             "list_pipeline_status",
@@ -427,6 +428,7 @@ def pipeline(
                     create_workorder=True,
                     agent_id=runner,
                     required_outputs=("findings",),
+                    validate_completion=RerankerNode.validate_completion,
                     repository_tools=(
                         "view_change_request",
                         "list_pipeline_status",
