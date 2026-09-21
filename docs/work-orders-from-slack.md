@@ -5,6 +5,15 @@ Mention `@OpenEngineBot` to open a conversation. A greeting or test message gets
 uses its `create_workorder` tool. The host starts the configured graph workflow,
 posts its UI link, and reports progress in the same thread.
 
+For repository questions and guidance, the concierge can list directories and read
+source and documentation in the configured local checkout without starting work.
+`list_repository_files(path=".")` returns up to 200 directory entries and 4,000 characters;
+`read_repository_file(path, start_line=1)` returns up to 200 numbered lines and
+4,000 characters from UTF-8 files up to 1 MiB. Hidden paths (including `.git`),
+symlinks, and paths outside the checkout are refused. These tools only read;
+they cannot edit files, run commands, commit, push, or publish. Answers reflect
+the local checkout, which the tools do not fetch or update.
+
 ## Setup and diagnosis
 
 1. Connect the Slack app in Settings → Slack and save its signing secret.
