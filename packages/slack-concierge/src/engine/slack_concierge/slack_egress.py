@@ -27,6 +27,8 @@ from engine.single_tool_mcp import McpRequestId, PROTOCOL_VERSION as _PROTOCOL_V
 from engine.single_tool_mcp import SingleToolBroker
 from langgraph_acp.permissions import ACPPermissionOutcome, ACPPermissionRequest
 
+from .repository import REPOSITORY_TOOL_NAMES, REPOSITORY_TOOL_SPECS, RepositoryReader
+
 #: Given (repository, prompt) create a work order and return (url, run_id).
 CreateWorkorder = Callable[[str, str], Awaitable[tuple[str, str]]]
 SteerWorkorder = Callable[[str], Awaitable[tuple[str, str]]]
@@ -150,6 +152,7 @@ class ConciergeBroker(SingleToolBroker):
         self._answer_question = answer_question
         self._decide_review = decide_review
         self._default_repository = default_repository
+        self._repository = RepositoryReader(default_repository)
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
         self._credential: TextIO | None = None
@@ -214,6 +217,12 @@ class ConciergeBroker(SingleToolBroker):
             return {"ok": False, "error": "invalid concierge credential"}
         name = request.get("name")
         arguments = request.get("arguments")
+        if isinstance(name, str) and name in REPOSITORY_TOOL_NAMES:
+            try:
+                text = await asyncio.to_thread(self._repository.call, name, arguments)
+            except Exception as error:
+                return {"ok": False, "error": f"could not read repository: {error}"}
+            return {"ok": True, "text": text}
         if name == "decide_workorder_review":
             if self._decide_review is None:
                 return {"ok": False, "error": "review decisions are not enabled"}
@@ -353,7 +362,7 @@ async def _mcp_response(
         return _rpc_result(request_id, {})
     if method == "tools/list":
         return _rpc_result(request_id, {"tools": [
-            _TOOL_SPEC, *([_STEER_TOOL_SPEC] if steer_enabled else []),
+            _TOOL_SPEC, *REPOSITORY_TOOL_SPECS, *([_STEER_TOOL_SPEC] if steer_enabled else []),
             *([_RESUME_TOOL_SPEC] if resume_enabled else []),
             *([_ANSWER_TOOL_SPEC] if answers_enabled else []),
             *([_REVIEW_TOOL_SPEC] if review_decisions_enabled else []),
@@ -437,7 +446,7 @@ async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome
     """Approve only the named concierge MCP grants."""
 
     names = {f"{prefix}{name}" for prefix in ("mcp__concierge__", "concierge/")
-             for name in ("create_workorder", "steer_workorder", "resume_workorder", "answer_workorder_question", "decide_workorder_review")}
+             for name in ("create_workorder", "steer_workorder", "resume_workorder", "answer_workorder_question", "decide_workorder_review", *REPOSITORY_TOOL_NAMES)}
     if any(isinstance(value, str) and value in names
            for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
         for option in request.options:
