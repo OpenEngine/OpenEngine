@@ -252,10 +252,10 @@ async function create(
   return new URL(page.url()).pathname;
 }
 
-/** What the graph engine says about a run, which is the truth the page lags. */
+/** Full engine state for assertions on fields omitted from UI polling. */
 async function graphRun(page: Page, runUrl: string) {
   const runId = runUrl.split("/").pop() ?? "";
-  const response = await page.request.get(`/graph/api/runs/${runId}`);
+  const response = await page.request.get(`/graph/api/runs/${runId}?includeValues=true`);
   expect(response.ok()).toBe(true);
   return response.json();
 }
