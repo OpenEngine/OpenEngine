@@ -8,14 +8,13 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from engine.domain import RunId, RunState, TaskId, WorkflowId
 from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Continuation, Delivery
-from engine.graph_runtime import NodeId, RunStatus
+from engine.graph_runtime import NodeId, RunSnapshot, RunStatus
 from engine.runtime import WorkOrdersConfig
 
 #: Stands in for anything the host holds and the public must not be told.
@@ -74,13 +73,13 @@ def _graph_runtime(
     async def snapshot(asked):
         if asked == RunId(STARTED_RUN):
             # The run this fake just started, which is running by construction.
-            return SimpleNamespace(
+            return RunSnapshot(
                 run_id=asked, graph_id=GraphId(graph_id),
                 status=RunStatus.RUNNING, values={}, pending_approvals=(),
             )
         if not known_graph:
             raise UnknownGraphError(graph_id)
-        return SimpleNamespace(
+        return RunSnapshot(
             run_id=asked, graph_id=GraphId(graph_id), status=status, values={},
             pending_approvals=tuple(pending_approvals),
         )
@@ -103,7 +102,7 @@ def _graph_runtime(
     runtime.steer = AsyncMock()
     runtime.cancel = AsyncMock()
     runtime.decide = AsyncMock()
-    runtime.start = AsyncMock(return_value=SimpleNamespace(
+    runtime.start = AsyncMock(return_value=RunSnapshot(
         run_id=RunId(STARTED_RUN), graph_id=GraphId(graph_id),
         status=RunStatus.RUNNING, values={},
     ))

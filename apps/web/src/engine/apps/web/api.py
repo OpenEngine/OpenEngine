@@ -45,6 +45,7 @@ from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
+from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_ingress import GithubComment, GithubIngress, GithubMerge
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
@@ -1056,6 +1057,12 @@ def create_app(
     # graph's own sub-application serves. Built here rather than when the
     # server starts so that the observer below can be written once.
     graph_events = EventLog()
+    graph_progress: dict[RunId, GraphProgress] = {}
+
+    def seed_graph_progress(runtime: GraphRuntime, snapshot: RunSnapshot) -> None:
+        topology = runtime.topology(snapshot.graph_id)
+        if topology is not None:
+            graph_progress[snapshot.run_id] = GraphProgress(snapshot, topology)
 
     def offered_graphs() -> Mapping[str, GraphWorkflow]:
         """The graph entries a person may pick, right now.
@@ -1155,9 +1162,20 @@ def create_app(
         the graph engine's own files, and this app only holds a row for it, so
         without this the row would say "an agent is working" long after the run
         had finished or fallen over. Restarts, endings, and the name produced by
-        a naming node are copied across. The rest of what a graph says is about
-        positions inside the graph, and a row has nowhere to put it.
+        a naming node are copied across. Node and approval events also maintain
+        the small frontier projection read by the runs list.
         """
+        if event.kind is EventKind.RUN_FORKED and event.run_id not in graph_progress:
+            # Terminal rows are not restored at startup, but can be resumed later.
+            state = await session.state_store.load(event.run_id)
+            if state is not None and surface.runtime is not None:
+                seed_graph_progress(surface.runtime, RunSnapshot(
+                    run_id=event.run_id,
+                    graph_id=GraphId(str(state.workflow_id)),
+                    status=RunStatus.RUNNING,
+                ))
+        if progress := graph_progress.get(event.run_id):
+            progress.apply(event)
         await graph_events.append(event)
         await graph_notifications(event)
         if (
@@ -1254,6 +1272,7 @@ def create_app(
                         )
                     )
                     continue
+                seed_graph_progress(runtime, snapshot)
                 if snapshot.status is RunStatus.RUNNING:
                     # A restart is the only way to be here: a run that is
                     # working has a driver, and this runs before any request
@@ -1589,37 +1608,17 @@ def create_app(
         )
 
     async def list_runs(_request: Request) -> JSONResponse:
+        available = (
+            {graph.graph_id for graph in surface.runtime.graphs()}
+            if surface.runtime else set()
+        )
         runs = []
         for run in await run_reader.list():
             row = _run_json(run, listing=True)
-            # Carry only the live frontier and approval owners, not the
-            # snapshot's potentially large values.
-            if (
-                run.phase not in {"scheduled", "succeeded", "failed"}
-                and surface.runtime is not None
-            ):
-                # A row of a workflow this deployment no longer has cannot
-                # report a frontier, and the list is every WorkOrder there is:
-                # letting that refusal out would take the whole page down over
-                # one old row, rather than showing it without its progress.
-                try:
-                    snapshot = await surface.runtime.snapshot(run.run_id)
-                except UnknownGraphError:
-                    snapshot = None
-                if snapshot is not None:
-                    row["graphProgress"] = {
-                        "activeNodeIds": list(
-                            dict.fromkeys(
-                                str(one.node_id) for one in snapshot.active_executions
-                            )
-                        ),
-                        "waitingNodeIds": list(
-                            dict.fromkeys(
-                                str(one.node_id) for one in snapshot.pending_approvals
-                            )
-                        ),
-                        "nextNodeIds": [str(node) for node in snapshot.next_nodes],
-                    }
+            if run.phase not in {"scheduled", "succeeded", "failed"}:
+                progress = graph_progress.get(run.run_id)
+                if progress is not None and progress.topology.graph_id in available:
+                    row["graphProgress"] = progress.json()
             runs.append(row)
         return JSONResponse({"runs": runs})
 
@@ -1843,6 +1842,7 @@ def create_app(
                 },
                 run_id=scheduled.run_id if scheduled else None,
             )
+            seed_graph_progress(runtime, snapshot)
             if approval_policy.auto_approve:
                 topology = runtime.topology(GraphId(str(graph.graph_id)))
                 if topology is not None:
@@ -2067,6 +2067,7 @@ def create_app(
                 await cancel_graph_run(run_id)
             async with dependency_lock:
                 await session.state_store.delete_run(run_id)
+                graph_progress.pop(run_id, None)
         finally:
             async with dependency_lock:
                 deleting_runs.discard(run_id)

@@ -444,7 +444,8 @@ class SqliteGraphRuntimeStore:
 
     def events_since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]:
         rows = self._connection.execute(
-            "SELECT * FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence",
+            "SELECT run_id, kind, payload, sequence, node_id, execution_id "
+            "FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence",
             (str(run_id), cursor),
         ).fetchall()
         return tuple(RuntimeEvent(

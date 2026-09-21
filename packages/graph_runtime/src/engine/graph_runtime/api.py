@@ -117,7 +117,12 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _refusal(error)
         if run is None:
             return _error("run not found", 404)
-        return JSONResponse(_snapshot_json(run))
+        topology = runtime.topology(run.graph_id)
+        return JSONResponse(_snapshot_json(
+            run,
+            topology=topology,
+            full_values=request.query_params.get("includeValues") == "true",
+        ))
 
     async def get_checkpoints(request: Request) -> JSONResponse:
         """Every position this run has been at, including abandoned attempts.
@@ -392,7 +397,9 @@ def _topology_json(graph: GraphTopology) -> dict[str, object]:
     }
 
 
-def _snapshot_json(run: RunSnapshot) -> dict[str, object]:
+def _snapshot_json(
+    run: RunSnapshot, *, topology: GraphTopology | None = None, full_values: bool = True,
+) -> dict[str, object]:
     return {
         "runId": str(run.run_id),
         "graphId": str(run.graph_id),
@@ -402,7 +409,7 @@ def _snapshot_json(run: RunSnapshot) -> dict[str, object]:
         ],
         "nextNodes": _nodes_json(run.next_nodes),
         "checkpointId": str(run.checkpoint_id) if run.checkpoint_id else None,
-        "values": dict(run.values),
+        "values": dict(run.values) if full_values else _display_values(run.values, topology),
         "pendingApprovals": [
             _approval_json(approval) for approval in run.pending_approvals
         ],
@@ -410,6 +417,26 @@ def _snapshot_json(run: RunSnapshot) -> dict[str, object]:
         "autoApproveNodes": _nodes_json(run.auto_approve_nodes),
         "runnerOverrides": dict(run.runner_overrides),
     }
+
+
+def _display_values(
+    values: Mapping[str, object], topology: GraphTopology | None,
+) -> dict[str, object]:
+    """Keep workspace controls, stage summaries/outputs and PR links on polls.
+
+    Full channel state remains available via `?includeValues=true`.
+    """
+    nodes = (
+        {str(node.node_id) for node in topology.nodes if node.kind != "workspace"}
+        if topology else set()
+    )
+    result: dict[str, object] = {}
+    for key, value in values.items():
+        if key in nodes or key in {"workspaceId", "pr_url"}:
+            result[key] = value
+        elif isinstance(value, Mapping) and isinstance(value.get("pr_url"), str):
+            result[key] = {"pr_url": value["pr_url"]}
+    return result
 
 
 def _checkpoint_json(checkpoint: Checkpoint) -> dict[str, object]:
