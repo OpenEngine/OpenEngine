@@ -783,6 +783,66 @@ LIVE = {
 }
 
 
+def has_credentials(provider: str) -> bool:
+    """Accept CI API keys or local CLI logins, as the ACP checks do."""
+    if provider == "codex":
+        home = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser()
+        return bool(os.environ.get("OPENAI_API_KEY")) or (home / "auth.json").is_file()
+    return bool(os.environ.get("ANTHROPIC_API_KEY")) or Path(
+        "~/.claude/.credentials.json"
+    ).expanduser().is_file()
+
+
+@pytest.mark.parametrize("provider", sorted(LIVE))
+@pytest.mark.parametrize("credentials", ["missing", "empty", "api-key", "login"])
+def test_live_scenarios_require_credentials(
+    provider: str, credentials: str, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (
+        "CODEX_HOME", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+        "ENGINE_COMPAT_PROVIDER", "ENGINE_COMPAT_WORKSPACE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    key = "OPENAI_API_KEY" if provider == "codex" else "ANTHROPIC_API_KEY"
+    if credentials in {"empty", "api-key"}:
+        monkeypatch.setenv(key, "test-key" if credentials == "api-key" else "")
+    elif credentials == "login":
+        login = tmp_path / (
+            ".codex/auth.json" if provider == "codex" else ".claude/.credentials.json"
+        )
+        login.parent.mkdir()
+        login.write_text("{}")
+
+    if credentials in {"missing", "empty"}:
+        # Skip before launching even the version probe, let alone a live turn.
+        def unexpected_probe(binary):
+            pytest.fail("an unauthenticated scenario launched the CLI")
+
+        monkeypatch.setattr(f"{__name__}.installed_version", unexpected_probe)
+        with pytest.raises(pytest.skip.Exception, match=f"no {provider} credentials"):
+            test_the_approval_contract_holds_against_the_installed_cli(
+                provider, "approve", tmp_path
+            )
+    else:
+        build_fake, build_runner = FAKES[provider]
+        monkeypatch.setitem(LIVE, provider, (build_fake(tmp_path), build_runner))
+        monkeypatch.setattr(
+            f"{__name__}.live_instruction", lambda command: f"{DIRECTIVE} {command}"
+        )
+        test_the_approval_contract_holds_against_the_installed_cli(
+            provider, "approve", tmp_path
+        )
+
+
+def test_codex_credentials_respect_custom_home(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    assert not has_credentials("codex")
+    (tmp_path / "auth.json").write_text("{}")
+    assert has_credentials("codex")
+
+
 def installed_version(binary: str) -> str | None:
     """What the CLI calls itself, or None if it is not usable here."""
     if shutil.which(binary) is None:
@@ -821,6 +881,9 @@ def test_the_approval_contract_holds_against_the_installed_cli(
     only = os.environ.get("ENGINE_COMPAT_PROVIDER")
     if only and only != provider:
         pytest.skip(f"this job runs {only}, not {provider}")
+
+    if not has_credentials(provider):
+        pytest.skip(f"no {provider} credentials; CLI installation and MCP checks still run")
 
     binary, build_runner = LIVE[provider]
     version = installed_version(binary)

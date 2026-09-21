@@ -17,9 +17,8 @@ name: CLI compatibility
 on:
   workflow_dispatch:
   schedule:
-    # Early Monday, so a week's provider releases are covered before anyone
-    # depends on a green run to ship.
-    - cron: "17 9 * * 1"
+    # Monday and Thursday, so provider releases are covered twice a week.
+    - cron: "17 9 * * 1,4"
 
 permissions:
   contents: read
