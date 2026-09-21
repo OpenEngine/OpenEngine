@@ -780,8 +780,8 @@ class TerminalMcpBroker:
     ) -> tuple[str, dict[str, str]] | None:
         """Read remote tips independently before and after an explicit push.
 
-        Push output and local refs are agent-controlled. Only a remote branch
-        that actually changes during the call can become an ownership receipt.
+        Push output, local refs and Git transport configuration are agent-controlled.
+        Only a branch the forge API confirms changed can become an ownership receipt.
         Unrecognised option forms still run, but cannot establish ownership.
         """
         if self._pull_request_claimer is None:
@@ -802,20 +802,11 @@ class TerminalMcpBroker:
             project = remote_project(remote)
             if project is None:
                 return None
-            result = await self._source_control.run_git(
-                self._workspace_id, ("ls-remote", "--heads", "--", remote)
-            )
-            if not result.ok:
-                return None
-            branches: dict[str, str] = {}
-            for line in result.stdout.splitlines():
-                commit, ref = line.split("\t")
-                if not ref.startswith("refs/heads/") or not commit:
-                    return None
-                branch = ref.removeprefix("refs/heads/")
-                if branch in destinations:
-                    branches[branch] = commit
-            return project, branches
+            branches = await self._source_control.branch_tips(project)
+            return project, {
+                branch: commit for branch, commit in branches.items()
+                if branch in destinations
+            }
         except Exception:
             logger.exception("Could not read remote branches for a push")
             return None

@@ -216,3 +216,35 @@ def test_merge_request_head_repository(source_id, target_id, expected) -> None:
     source._list = AsyncMock(return_value=[])
     shown = asyncio.run(source.view_change_request("workspace", 7))
     assert shown.head_is_same_repository is expected
+
+
+def test_gitlab_branch_tips_reads_every_forge_page():
+    transport = AsyncMock()
+    transport.request.side_effect = [
+        [{"name": f"branch-{i}", "commit": {"id": str(i)}} for i in range(100)],
+        [{"name": "feature", "commit": {"id": "head"}}],
+    ]
+    source = GitLabSourceControl("token", transport=transport)
+    tips = asyncio.run(source.branch_tips("gitlab.com/group/sub/project"))
+    assert len(tips) == 101
+    assert tips["feature"] == "head"
+    transport.request.assert_called_with(
+        "GET", "/projects/group%2Fsub%2Fproject/repository/branches",
+        params={"per_page": 100, "page": 2},
+    )
+
+
+def test_gitlab_branch_tips_refuses_another_forge():
+    with pytest.raises(ValueError):
+        asyncio.run(GitLabSourceControl("").branch_tips("other.example/group/project"))
+
+
+@pytest.mark.parametrize("response", [[{"name": "feature"}], {"message": "unavailable"}, [None]])
+def test_gitlab_branch_tips_refuses_invalid_snapshot(response):
+    from engine.adapters.source_control.gitlab import GitLabSourceControlError
+
+    transport = AsyncMock()
+    transport.request.return_value = response
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(GitLabSourceControlError):
+        asyncio.run(source.branch_tips("gitlab.com/group/project"))

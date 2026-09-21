@@ -69,6 +69,25 @@ class GitLabSourceControl:
         if not username: raise GitLabSourceControlError("GitLab returned no authenticated username")
         return username
 
+    async def branch_tips(self, project: str) -> dict[str, str]:
+        origin = self._origin_source() if callable(self._origin_source) else self._origin_source
+        host, separator, path = project.partition("/")
+        if (
+            host != urlparse(origin).netloc.lower() or not separator
+            or not all(names_a_project_step(step) for step in path.split("/"))
+        ):
+            raise ValueError("project must be on the configured GitLab origin")
+        branches = await self._list(
+            f"/projects/{quote(path, safe='')}/repository/branches", strict=True
+        )
+        tips: dict[str, str] = {}
+        for branch in branches:
+            name, sha = self._str(branch, "name"), self._nested(branch, "commit", "id")
+            if not name or not sha:
+                raise GitLabSourceControlError("GitLab returned an invalid branch tip")
+            tips[name] = sha
+        return tips
+
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")
@@ -173,11 +192,15 @@ class GitLabSourceControl:
             result=await self._transport.request(*args,**kwargs)
         except GitLabTransportError as error: raise GitLabSourceControlError(str(error)) from error
         return result if isinstance(result,dict) else {}
-    async def _list(self,path: str,params: dict | None=None) -> list[dict]:
+    async def _list(self,path: str,params: dict | None=None, *, strict: bool = False) -> list[dict]:
         items: list[dict] = []
         page = 1
         while True:
             result=await self._transport.request("GET",path,params={**(params or {}), "per_page": 100, "page": page})
+            if strict and (
+                not isinstance(result, list) or any(not isinstance(item, dict) for item in result)
+            ):
+                raise GitLabSourceControlError("GitLab returned an invalid branch snapshot")
             current = [item for item in result if isinstance(item,dict)] if isinstance(result,list) else []
             items.extend(current)
             if len(current) < 100:

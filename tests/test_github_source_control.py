@@ -702,3 +702,31 @@ def test_pull_request_head_repository(head_repo, base_repo, expected) -> None:
     source._paginated_objects = AsyncMock(return_value=[])
     shown = asyncio.run(source.view_change_request(WORKSPACE, 7))
     assert shown.head_is_same_repository is expected
+
+
+def test_branch_tips_reads_every_forge_page(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    first = [{"name": f"branch-{i}", "commit": {"sha": str(i)}} for i in range(100)]
+    api = AsyncMock(side_effect=[first, [{"name": "feature", "commit": {"sha": "head"}}]])
+    monkeypatch.setattr(source, "_api", api)
+    tips = asyncio.run(source.branch_tips("acme/api"))
+    assert len(tips) == 101
+    assert tips["feature"] == "head"
+    api.assert_called_with("GET", "/repos/acme/api/branches", params={"per_page": 100, "page": 2})
+
+
+def test_branch_tips_refuses_another_forge():
+    with pytest.raises(ValueError):
+        asyncio.run(GitHubSourceControl("").branch_tips("other.example/acme/api"))
+
+
+@pytest.mark.parametrize("response", [[{"name": "feature"}], {"message": "unavailable"}])
+def test_branch_tips_refuses_invalid_snapshot(monkeypatch, response):
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", AsyncMock(return_value=response))
+    with pytest.raises(GitHubSourceControlError):
+        asyncio.run(source.branch_tips("acme/api"))

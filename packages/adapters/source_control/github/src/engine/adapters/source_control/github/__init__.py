@@ -40,7 +40,7 @@ from engine.ports.source_control import (
     WorkItem,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.change_requests import change_request, names_a_project_step
+from engine.runtime.change_requests import change_request, names_a_project_step, pull_request_url
 
 #: The branch prefix `GitWorktreeWorkspaceProvider` gives every workspace. It
 #: is Engine's bookkeeping, not anybody's proposed change, and a remote branch
@@ -219,6 +219,19 @@ class GitHubSourceControl:
         if not login:
             raise GitHubSourceControlError("GitHub API returned no authenticated login")
         return login
+
+    async def branch_tips(self, project: str) -> dict[str, str]:
+        owner, repo, _ = _pull_request_parts(
+            pull_request_url(project, 1), self._hosts | {self._transport.host}
+        )
+        branches = await self._paginated_objects(f"/repos/{owner}/{repo}/branches")
+        tips: dict[str, str] = {}
+        for branch in branches:
+            name, sha = _string(branch, "name"), _nested_string(branch, "commit", "sha")
+            if not name or not sha:
+                raise GitHubSourceControlError("GitHub returned an invalid branch tip")
+            tips[name] = sha
+        return tips
 
     async def add_comment(
         self,

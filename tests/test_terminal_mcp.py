@@ -1417,11 +1417,13 @@ class ReportingSourceControl:
             return self.pushed
         if arguments[0] == "remote":
             return GitResult(0, self.remote + "\n", "")
-        assert arguments[0] == "ls-remote"
+        raise AssertionError(f"unexpected Git transport read: {arguments}")
+
+    async def branch_tips(self, project):
         if not self.commit.ok:
-            return self.commit
+            raise RuntimeError("forge unavailable")
         tip = self.commit.stdout.strip() if self.did_push else self.before
-        return GitResult(0, f"{tip}\trefs/heads/feature\n" if tip else "", "")
+        return {"feature": tip} if tip else {}
 
     async def authenticated_login(self, _repository_url):
         return self.login
@@ -1631,3 +1633,63 @@ def test_a_push_names_the_project_its_change_requests_are_keyed_by(
 )
 def test_a_remote_naming_no_forge_project_names_none(remote_url: str) -> None:
     assert remote_project(remote_url) is None
+
+
+@pytest.mark.parametrize("rewrite", ["insteadOf", "pushInsteadOf"])
+def test_redirected_literal_url_push_cannot_claim_an_existing_pr(tmp_path, rewrite):
+    """A real redirected push changes a mirror, while the forge PR stays put."""
+    import dataclasses
+    import subprocess
+    from unittest.mock import AsyncMock
+
+    from engine.adapters.source_control.github import GitHubSourceControl
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    checkout, mirror = tmp_path / "checkout", tmp_path / "mirror.git"
+    git("init", "--bare", str(mirror))
+    git("init", "-b", "feature", str(checkout))
+    git("-C", str(checkout), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "--allow-empty", "-m", "initial")
+    sha = git("-C", str(checkout), "rev-parse", "HEAD")
+    url = "https://github.com/acme/api.git"
+    git("-C", str(checkout), "config", f"url.{mirror}.{rewrite}", url)
+
+    provider = AsyncMock()
+    provider.root_path.return_value = str(checkout)
+    adapter = GitHubSourceControl("", workspace_provider=provider)
+    adapter._api = AsyncMock(return_value=[{"name": "feature", "commit": {"sha": sha}}])
+
+    class RedirectedSourceControl(ReportingSourceControl):
+        async def run_git(self, workspace, arguments):
+            return await adapter.run_git(workspace, arguments)
+
+        async def branch_tips(self, project):
+            return await adapter.branch_tips(project)
+
+        async def view_change_request(self, workspace, number):
+            return dataclasses.replace(
+                await super().view_change_request(workspace, number), head_sha=sha
+            )
+
+    async def scenario():
+        claim = AsyncMock(return_value=True)
+        broker = await _reporting_broker(
+            RedirectedSourceControl(), claim, push=("push", url, "feature")
+        )
+        answer = await broker._submit(
+            _direct_request(broker, "complete-1", "complete_step", _REPORT)
+        )
+        assert answer["ok"] is False
+        claim.assert_not_awaited()
+        assert not broker._pushed
+
+    asyncio.run(scenario())
+    assert git("--git-dir", str(mirror), "rev-parse", "refs/heads/feature") == sha
+    assert adapter._api.await_count == 2
+    adapter._api.assert_called_with(
+        "GET", "/repos/acme/api/branches", params={"per_page": 100, "page": 1}
+    )
