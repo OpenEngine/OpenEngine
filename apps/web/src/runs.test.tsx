@@ -593,7 +593,9 @@ describe("RunDetailPage", () => {
       expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Retry loading stages" })).not.toBeInTheDocument();
     } else {
-      expect(screen.getByText(/Could not load WorkOrder: topology unavailable/)).toBeVisible();
+      expect(screen.getByText(/Could not load stages: topology unavailable/)).toBeVisible();
+      expect(screen.getByRole("heading", { name: "First run" })).toBeVisible();
+      expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
       expect(screen.queryByText(/no longer has/)).not.toBeInTheDocument();
     }
   });
@@ -620,7 +622,15 @@ describe("RunDetailPage", () => {
     }));
     render(<RunDetailPage runId="run-1" />);
     await act(async () => {});
-    expect(screen.getByText(/Could not load WorkOrder: topology unavailable/)).toBeVisible();
+    expect(screen.getByText(/Could not load stages: topology unavailable/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "First run" })).toBeVisible();
+    expect(screen.getByText("Do the work")).toBeVisible();
+    expect(screen.getByText("Run ID")).toBeVisible();
+    expect(screen.getByRole("region", { name: "WorkOrder steps" })).toBeVisible();
+    expect(screen.queryByText(/Could not load WorkOrder/)).not.toBeInTheDocument();
+    const stages = screen.getByText("Stages unavailable").closest("section")!;
+    expect(within(stages).getByText(/Could not load stages/)).toBeVisible();
+    expect(within(stages).getByRole("button", { name: "Retry loading stages" })).toBeVisible();
     expect(screen.queryByText(/no longer has/)).not.toBeInTheDocument();
 
     await act(async () => {

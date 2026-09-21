@@ -912,18 +912,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
   return (
     <main className="panel-scroll">
-      {error || topologyError ? (
+      {error ? (
         <p className="notice notice-block">
-          Could not load WorkOrder: {error || topologyError}
-          {topologyError && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setTopologyAttempt((attempt) => attempt + 1)}
-            >
-              Retry loading stages
-            </button>
-          )}
+          Could not load WorkOrder: {error}
         </p>
       ) : !run ? (
         <p className="state-inline">Loading WorkOrder…</p>
@@ -990,7 +981,18 @@ export function RunDetailPage({ runId }: { runId: string }) {
           {run.steps.length === 0 && (
             <section className="callout">
               <p className="eyebrow">Stages unavailable</p>
-              {workflowGone ? (
+              {topologyError ? (
+                <>
+                  <p>Could not load stages: {topologyError}</p>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setTopologyAttempt((attempt) => attempt + 1)}
+                  >
+                    Retry loading stages
+                  </button>
+                </>
+              ) : workflowGone ? (
                 <p>
                   This WorkOrder ran <code>{run.workflowId}</code>, a workflow
                   this deployment no longer has, so its stages cannot be loaded.
