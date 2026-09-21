@@ -2118,6 +2118,15 @@ def create_app(
         run_id = RunId(request.path_params["run_id"])
         if await session.state_store.load(run_id) is None:
             return _error("run not found", 404)
+        raw_cursor = request.query_params.get("cursor")
+        if raw_cursor is None:
+            raw_cursor = request.headers.get("last-event-id")
+        try:
+            cursor = int(raw_cursor) if raw_cursor and raw_cursor.strip() else 0
+        except ValueError:
+            return _error("cursor must be an integer", 400)
+        if cursor < 0:
+            return _error("cursor must not be negative", 400)
         return JSONResponse(
             {
                 "events": [
@@ -2127,7 +2136,7 @@ def create_app(
                         "nodeId": str(event.node_id) if event.node_id else None,
                         "payload": dict(event.payload),
                     }
-                    for event in graph_events.since(run_id)
+                    for event in graph_events.since(run_id, cursor)
                 ]
             }
         )

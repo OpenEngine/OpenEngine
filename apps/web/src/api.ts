@@ -316,7 +316,7 @@ export type ApiGraphEvent = {
   payload: Record<string, unknown>;
 };
 
-/** Everything the graph engine has said about a run so far.
+/** What the graph engine has said about a run after the supplied cursor.
  *
  *  A finite snapshot of the same feed `/graph/api/runs/{run}/events` streams,
  *  because a page that opens after an agent has finished still has to be able
@@ -324,9 +324,10 @@ export type ApiGraphEvent = {
 export function getGraphEvents(
   runId: string,
   signal?: AbortSignal,
+  cursor = 0,
 ): Promise<{ events: ApiGraphEvent[] }> {
   return api<{ events: ApiGraphEvent[] }>(
-    `/api/runs/${encodeURIComponent(runId)}/graph-events`,
+    `/api/runs/${encodeURIComponent(runId)}/graph-events${cursor ? `?cursor=${cursor}` : ""}`,
     { signal },
   );
 }

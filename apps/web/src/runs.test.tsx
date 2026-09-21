@@ -868,3 +868,38 @@ describe("RunDetailPage", () => {
   });
 
 });
+
+it("polls graph events incrementally and retains completed nodes", async () => {
+  vi.useFakeTimers();
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/api/runs/run-1") return json(run());
+    if (path === "/graph/api/runs/run-1") return json({
+      runId: "run-1", graphId: "work-v1", status: "running",
+      activeExecutions: [], nextNodes: [], values: {}, pendingApprovals: [], error: "",
+    });
+    if (path === "/graph/api/graphs/work-v1") return json({
+      graphId: "work-v1",
+      nodes: ["first", "second"].map((nodeId) => ({ nodeId, name: nodeId, kind: "agent" })),
+    });
+    if (path === "/api/runs/run-1/graph-events") return json({
+      events: [{ sequence: 3, type: "node.finished", nodeId: "first", payload: {} }],
+    });
+    if (path === "/api/runs/run-1/graph-events?cursor=3") return json({
+      events: [{ sequence: 8, type: "node.finished", nodeId: "second", payload: {} }],
+    });
+    if (path === "/api/runs/run-1/graph-events?cursor=8") return json({ events: [] });
+    return json({ error: "not found" }, { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<RunDetailPage runId="run-1" />);
+  await act(async () => {});
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(fetch).toHaveBeenCalledWith("/api/runs/run-1/graph-events?cursor=3", expect.anything());
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(fetch).toHaveBeenCalledWith("/api/runs/run-1/graph-events?cursor=8", expect.anything());
+  for (const name of ["first", "second"]) {
+    const node = screen.getByRole("heading", { name }).closest("article")!;
+    expect(within(node).getByText("completed", { selector: ".chip" })).toBeVisible();
+  }
+});
