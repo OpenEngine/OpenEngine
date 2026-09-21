@@ -24,12 +24,14 @@ def rpc(client, method, params=None):
     })
 
 
-def test_discovery_and_immediate_creation():
+@pytest.mark.parametrize("dependency", [{}, {"depends_on_run_id": None}, {"depends_on_run_id": " run-first "}])
+def test_discovery_and_creation(dependency):
     requests = []
 
     def upstream(request):
         requests.append(request)
-        return httpx.Response(201, json={"runId": "run-123", "phase": "working"})
+        phase = "scheduled" if dependency.get("depends_on_run_id") else "working"
+        return httpx.Response(201, json={"runId": "run-123", "phase": phase})
 
     with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
         initialized = rpc(client, "initialize", {
@@ -40,10 +42,11 @@ def test_discovery_and_immediate_creation():
         assert initialized.json()["result"]["serverInfo"]["name"] == "OpenEngine"
         tools = rpc(client, "tools/list").json()["result"]["tools"]
         assert [tool["name"] for tool in tools] == ["create_workorder"]
-        assert set(tools[0]["inputSchema"]["properties"]) == {"prompt"}
+        assert set(tools[0]["inputSchema"]["properties"]) == {"prompt", "depends_on_run_id"}
+        assert tools[0]["inputSchema"]["required"] == ["prompt"]
         assert tools[0]["annotations"]["idempotentHint"] is False
         result = rpc(client, "tools/call", {
-            "name": "create_workorder", "arguments": {"prompt": " Fix the bug "},
+            "name": "create_workorder", "arguments": {"prompt": " Fix the bug ", **dependency},
         }).json()["result"]
         assert not result.get("isError")
         assert result["structuredContent"] == {"run_id": "run-123"}
@@ -54,7 +57,21 @@ def test_discovery_and_immediate_creation():
     assert json.loads(requests[0].content) == {
         "prompt": "Fix the bug", "repository": "/repos/oe",
         "workflowId": "implementation-review-rerank",
+        **({"dependsOnRunId": "run-first"} if dependency.get("depends_on_run_id") else {}),
     }
+
+
+@pytest.mark.parametrize("dependency", ["", "   ", 123])
+def test_invalid_dependency_never_reaches_oe(dependency):
+    def upstream(request):
+        pytest.fail("invalid dependency reached OE")
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "create_workorder",
+            "arguments": {"prompt": "Follow up", "depends_on_run_id": dependency},
+        }).json()["result"]
+        assert result["isError"]
 
 
 @pytest.mark.parametrize("authorization", [None, "Bearer wrong"])
