@@ -1415,11 +1415,13 @@ class ReportingSourceControl:
         if "push" in arguments:
             self.did_push = self.moves
             return self.pushed
+        if arguments[0] == "rev-parse":
+            return self.commit
         if arguments[0] == "remote":
             return GitResult(0, self.remote + "\n", "")
         raise AssertionError(f"unexpected Git transport read: {arguments}")
 
-    async def branch_tips(self, project):
+    async def branch_tips(self, project, destinations):
         if not self.commit.ok:
             raise RuntimeError("forge unavailable")
         tip = self.commit.stdout.strip() if self.did_push else self.before
@@ -1661,14 +1663,14 @@ def test_redirected_literal_url_push_cannot_claim_an_existing_pr(tmp_path, rewri
     provider = AsyncMock()
     provider.root_path.return_value = str(checkout)
     adapter = GitHubSourceControl("", workspace_provider=provider)
-    adapter._api = AsyncMock(return_value=[{"name": "feature", "commit": {"sha": sha}}])
+    adapter._api = AsyncMock(return_value=[{"ref": "refs/heads/feature", "object": {"sha": sha}}])
 
     class RedirectedSourceControl(ReportingSourceControl):
         async def run_git(self, workspace, arguments):
             return await adapter.run_git(workspace, arguments)
 
-        async def branch_tips(self, project):
-            return await adapter.branch_tips(project)
+        async def branch_tips(self, project, destinations):
+            return await adapter.branch_tips(project, destinations)
 
         async def view_change_request(self, workspace, number):
             return dataclasses.replace(
@@ -1691,5 +1693,25 @@ def test_redirected_literal_url_push_cannot_claim_an_existing_pr(tmp_path, rewri
     assert git("--git-dir", str(mirror), "rev-parse", "refs/heads/feature") == sha
     assert adapter._api.await_count == 2
     adapter._api.assert_called_with(
-        "GET", "/repos/acme/api/branches", params={"per_page": 100, "page": 1}
+        "GET", "/repos/acme/api/git/matching-refs/heads/feature"
     )
+
+
+def test_concurrent_update_is_not_credited_to_noop_push():
+    from unittest.mock import AsyncMock
+
+    class ConcurrentSourceControl(ReportingSourceControl):
+        async def run_git(self, workspace, arguments):
+            if arguments[0] == "rev-parse":
+                return GitResult(0, "old123", "")
+            return await super().run_git(workspace, arguments)
+
+    async def scenario():
+        claim = AsyncMock(return_value=True)
+        broker = await _reporting_broker(ConcurrentSourceControl(before="old123"), claim)
+        answer = await broker._submit(_direct_request(broker, "complete-1", "complete_step", _REPORT))
+        assert answer["ok"] is False
+        assert not broker._pushed
+        claim.assert_not_awaited()
+
+    asyncio.run(scenario())

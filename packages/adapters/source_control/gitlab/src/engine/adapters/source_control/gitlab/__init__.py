@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Callable, Sequence
 from urllib.parse import quote, urlparse
 
@@ -69,7 +70,7 @@ class GitLabSourceControl:
         if not username: raise GitLabSourceControlError("GitLab returned no authenticated username")
         return username
 
-    async def branch_tips(self, project: str) -> dict[str, str]:
+    async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
         origin = self._origin_source() if callable(self._origin_source) else self._origin_source
         host, separator, path = project.partition("/")
         if (
@@ -77,15 +78,19 @@ class GitLabSourceControl:
             or not all(names_a_project_step(step) for step in path.split("/"))
         ):
             raise ValueError("project must be on the configured GitLab origin")
-        branches = await self._list(
-            f"/projects/{quote(path, safe='')}/repository/branches", strict=True
-        )
         tips: dict[str, str] = {}
-        for branch in branches:
-            name, sha = self._str(branch, "name"), self._nested(branch, "commit", "id")
-            if not name or not sha:
-                raise GitLabSourceControlError("GitLab returned an invalid branch tip")
-            tips[name] = sha
+        for name in dict.fromkeys(destinations):
+            branches = await self._list(
+                f"/projects/{quote(path, safe='')}/repository/branches",
+                {"regex": "^" + re.escape(name) + "$"}, strict=True,
+            )
+            for branch in branches:
+                if self._str(branch, "name") != name:
+                    raise GitLabSourceControlError("GitLab returned an unexpected branch")
+                sha = self._nested(branch, "commit", "id")
+                if not sha:
+                    raise GitLabSourceControlError("GitLab returned an invalid branch tip")
+                tips[name] = sha
         return tips
 
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:

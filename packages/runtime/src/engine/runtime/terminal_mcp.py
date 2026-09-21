@@ -612,6 +612,7 @@ class TerminalMcpBroker:
             approved = await self._approve_git(git_arguments, request_id)
             if approved is not None:
                 return approved
+            expected = await self._push_source_tips(git_arguments)
             before = await self._push_snapshot(git_arguments)
             try:
                 result = await self._source_control.run_git(
@@ -625,7 +626,7 @@ class TerminalMcpBroker:
                     self._pushed.update(
                         _PushedBranch(after[0], branch, commit)
                         for branch, commit in after[1].items()
-                        if before[1].get(branch) != commit
+                        if before[1].get(branch) != commit and expected.get(branch) == commit
                     )
             reported = "\n".join(part for part in (result.stdout, result.stderr) if part)
             if not result.ok:
@@ -775,6 +776,27 @@ class TerminalMcpBroker:
             return None
         return OpenedPullRequest(requested.project, requested.number, url)
 
+    async def _push_source_tips(self, arguments: Sequence[str]) -> dict[str, str]:
+        """Bind receipts to the commits this push names, before it runs."""
+        target = _push_target(arguments)
+        if self._pull_request_claimer is None or target is None:
+            return {}
+        assert self._source_control is not None and self._workspace_id is not None
+        tips: dict[str, str] = {}
+        try:
+            for destination, source in target[1].items():
+                result = await self._source_control.run_git(
+                    self._workspace_id,
+                    ("rev-parse", "--verify", "--end-of-options", source + "^{commit}"),
+                )
+                if not result.ok or len(result.stdout.splitlines()) != 1:
+                    return {}
+                tips[destination] = result.stdout.strip()
+        except Exception:
+            logger.exception("Could not read push source commits")
+            return {}
+        return tips
+
     async def _push_snapshot(
         self, arguments: Sequence[str]
     ) -> tuple[str, dict[str, str]] | None:
@@ -802,7 +824,7 @@ class TerminalMcpBroker:
             project = remote_project(remote)
             if project is None:
                 return None
-            branches = await self._source_control.branch_tips(project)
+            branches = await self._source_control.branch_tips(project, tuple(destinations))
             return project, {
                 branch: commit for branch, commit in branches.items()
                 if branch in destinations
@@ -1253,7 +1275,7 @@ class _PushedBranch:
     commit: str
 
 
-def _push_target(arguments: Sequence[str]) -> tuple[str, tuple[str, ...]] | None:
+def _push_target(arguments: Sequence[str]) -> tuple[str, dict[str, str]] | None:
     """Recognise explicit pushes without trusting their terminal output."""
     if _git_subcommand(arguments) != "push":
         return None
@@ -1272,7 +1294,7 @@ def _push_target(arguments: Sequence[str]) -> tuple[str, tuple[str, ...]] | None
             positional.append(argument)
     if len(positional) < 2:
         return None
-    destinations: list[str] = []
+    destinations: dict[str, str] = {}
     for refspec in positional[1:]:
         source, separator, destination = refspec.lstrip("+").partition(":")
         destination = destination if separator else source
@@ -1280,8 +1302,8 @@ def _push_target(arguments: Sequence[str]) -> tuple[str, tuple[str, ...]] | None
             return None
         if destination.startswith("refs/") and not destination.startswith("refs/heads/"):
             continue
-        destinations.append(destination.removeprefix("refs/heads/"))
-    return positional[0], tuple(destinations)
+        destinations[destination.removeprefix("refs/heads/")] = source
+    return positional[0], destinations
 
 
 def _git_subcommand(arguments: Sequence[str]) -> str | None:

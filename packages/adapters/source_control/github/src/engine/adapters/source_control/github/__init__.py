@@ -220,17 +220,23 @@ class GitHubSourceControl:
             raise GitHubSourceControlError("GitHub API returned no authenticated login")
         return login
 
-    async def branch_tips(self, project: str) -> dict[str, str]:
+    async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
         owner, repo, _ = _pull_request_parts(
             pull_request_url(project, 1), self._hosts | {self._transport.host}
         )
-        branches = await self._paginated_objects(f"/repos/{owner}/{repo}/branches")
         tips: dict[str, str] = {}
-        for branch in branches:
-            name, sha = _string(branch, "name"), _nested_string(branch, "commit", "sha")
-            if not name or not sha:
-                raise GitHubSourceControlError("GitHub returned an invalid branch tip")
-            tips[name] = sha
+        for name in dict.fromkeys(destinations):
+            ref = "refs/heads/" + name
+            matches = _objects(await self._api(
+                "GET", f"/repos/{owner}/{repo}/git/matching-refs/heads/{quote(name, safe='')}"
+            ))
+            for branch in matches:
+                if _string(branch, "ref") != ref:
+                    continue
+                sha = _nested_string(branch, "object", "sha")
+                if not sha:
+                    raise GitHubSourceControlError("GitHub returned an invalid branch tip")
+                tips[name] = sha
         return tips
 
     async def add_comment(

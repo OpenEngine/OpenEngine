@@ -199,7 +199,7 @@ class SourceControl(Protocol):
         """The account name these credentials act as on this repository's forge."""
         ...
 
-    async def branch_tips(self, project: str) -> dict[str, str]:
+    async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
         """Read branch SHAs through the trusted forge API, never Git transport.
 
         `project` is the canonical change-request project key. Refuse projects

@@ -704,29 +704,30 @@ def test_pull_request_head_repository(head_repo, base_repo, expected) -> None:
     assert shown.head_is_same_repository is expected
 
 
-def test_branch_tips_reads_every_forge_page(monkeypatch):
+def test_branch_tips_reads_only_requested_refs(monkeypatch):
     from unittest.mock import AsyncMock
 
     source = GitHubSourceControl("")
-    first = [{"name": f"branch-{i}", "commit": {"sha": str(i)}} for i in range(100)]
-    api = AsyncMock(side_effect=[first, [{"name": "feature", "commit": {"sha": "head"}}]])
+    api = AsyncMock(side_effect=[[
+        {"ref": "refs/heads/feature/x", "object": {"sha": "head"}},
+        {"ref": "refs/heads/feature/xyz", "object": {"sha": "other"}},
+    ], []])
     monkeypatch.setattr(source, "_api", api)
-    tips = asyncio.run(source.branch_tips("acme/api"))
-    assert len(tips) == 101
-    assert tips["feature"] == "head"
-    api.assert_called_with("GET", "/repos/acme/api/branches", params={"per_page": 100, "page": 2})
+    assert asyncio.run(source.branch_tips("acme/api", ("feature/x", "missing"))) == {"feature/x": "head"}
+    assert api.await_count == 2
+    assert api.call_args_list[0].args == ("GET", "/repos/acme/api/git/matching-refs/heads/feature%2Fx")
 
 
 def test_branch_tips_refuses_another_forge():
     with pytest.raises(ValueError):
-        asyncio.run(GitHubSourceControl("").branch_tips("other.example/acme/api"))
+        asyncio.run(GitHubSourceControl("").branch_tips("other.example/acme/api", ("feature",)))
 
 
-@pytest.mark.parametrize("response", [[{"name": "feature"}], {"message": "unavailable"}])
+@pytest.mark.parametrize("response", [[{"ref": "refs/heads/feature"}], {"message": "unavailable"}])
 def test_branch_tips_refuses_invalid_snapshot(monkeypatch, response):
     from unittest.mock import AsyncMock
 
     source = GitHubSourceControl("")
     monkeypatch.setattr(source, "_api", AsyncMock(return_value=response))
     with pytest.raises(GitHubSourceControlError):
-        asyncio.run(source.branch_tips("acme/api"))
+        asyncio.run(source.branch_tips("acme/api", ("feature",)))

@@ -254,7 +254,7 @@ class RecordingSourceControl:
     async def authenticated_login(self, repository_url: str) -> str:
         return "OpenEngineBot"
 
-    async def branch_tips(self, project: str) -> dict[str, str]:
+    async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
         raise AssertionError("not called")
 
     async def add_comment(
@@ -2422,11 +2422,13 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
                     "To https://github.com/acme/repository.git\n"
                     " * [new branch]      agent/greeting -> agent/greeting\n",
                 )
+            if arguments[0] == "rev-parse":
+                return GitResult(0, "abc123", "")
             if arguments[0] == "remote":
                 return GitResult(0, "https://github.com/acme/repository.git\n", "")
             raise AssertionError(f"unexpected Git transport read: {arguments}")
 
-        async def branch_tips(self, project: str) -> dict[str, str]:
+        async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
             assert project == "acme/repository"
             return {"agent/greeting": "abc123"} if self.did_push else {}
 
