@@ -63,7 +63,10 @@ function serve(events: ApiGraphEvent[], run: ApiGraphRun = graphRun(), alwaysOpe
     const path = String(input);
     if (path === `/graph/api/graphs/${run.graphId}`)
       return json({ graphId: run.graphId, nodes: [{ nodeId: NODE, alwaysOpen, runner: "codex", runners: ["codex", "claude"] }] });
-    if (path === `/api/runs/${runId}/graph-events`) return json({ events });
+    if (path.startsWith(`/api/runs/${runId}/graph-events`)) {
+      const cursor = Number(new URL(path, "http://test").searchParams.get("cursor") ?? 0);
+      return json({ events: events.filter((event) => event.sequence > cursor) });
+    }
     if (path === `/graph/api/runs/${runId}`) return json(run);
     if (path.startsWith(`/graph/api/runs/${runId}/`)) return json(run);
     return json({ error: `no route for ${path}` }, { status: 404 });
@@ -104,6 +107,33 @@ it("offers graph workspace controls in the conversation and shows refusals", asy
   expect(await screen.findByText("stop the run before changing its workspace")).toBeVisible();
   expect(screen.getByText("cd /worktrees/ws-1")).toBeVisible();
   expect(screen.getByRole("button", { name: "Detach" })).toBeEnabled();
+});
+
+it("polls after the highest sequence and keeps the earlier transcript", async () => {
+  vi.useFakeTimers();
+  const events = [
+    event({ sequence: 2, type: "transcript", payload: { role: "user", text: "First prompt." } }),
+    event({ sequence: 7, nodeId: "another-node", type: "node.finished" }),
+  ];
+  const fetch = serve(events);
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+  await act(async () => {});
+  expect(screen.getByText("First prompt.")).toBeVisible();
+  events.push(event({
+    sequence: 9, type: "transcript", payload: { role: "assistant", text: "New reply." },
+  }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(fetch).toHaveBeenCalledWith(
+    `/api/runs/${runId}/graph-events?cursor=7`, expect.anything(),
+  );
+  expect(screen.getByText("First prompt.")).toBeVisible();
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(screen.getByText("New reply.")).toBeVisible();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(fetch).toHaveBeenCalledWith(
+    `/api/runs/${runId}/graph-events?cursor=9`, expect.anything(),
+  );
+  expect(screen.getAllByText("New reply.")).toHaveLength(1);
 });
 
 describe("graphConversation", () => {

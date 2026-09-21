@@ -793,6 +793,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
+    let cursor = 0;
+    setGraphEvents([]);
     let timer: number | undefined;
     // Kept up even once the run has finished, the way the rail's list is: an
     // editable step reopens when its conversation is written to, so a page that
@@ -806,12 +808,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
         const [nextGraph, nextTopology, eventLog] = await Promise.all([
           ifPresent(getGraphRun(runId)),
           ifPresent(getGraphTopology(value.workflowId)),
-          getGraphEvents(runId),
+          getGraphEvents(runId, undefined, cursor),
         ]);
         if (cancelled) return;
         setGraph(nextGraph);
         setTopology(nextTopology);
-        setGraphEvents(eventLog.events);
+        if (eventLog.events.length) {
+          for (const event of eventLog.events) cursor = Math.max(cursor, event.sequence);
+          setGraphEvents((current) => [...current, ...eventLog.events]);
+        }
         setWorkflowGone(nextTopology === undefined);
         setError("");
       } catch (reason) {

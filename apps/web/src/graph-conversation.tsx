@@ -28,7 +28,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/utils";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceControl } from "./workspace";
 
 import {
@@ -377,23 +377,30 @@ function useGraphRun(runId: string) {
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [tick, setTick] = useState(0);
+  const position = useRef({ runId, cursor: 0 });
 
   useEffect(() => {
+    if (position.current.runId !== runId) {
+      position.current = { runId, cursor: 0 };
+      setEvents([]);
+      setLoaded(false);
+    }
     let cancelled = false;
     let timer: number | undefined;
     const load = async () => {
       try {
         const [feed, snapshot] = await Promise.all([
-          getGraphEvents(runId),
+          getGraphEvents(runId, undefined, position.current.cursor),
           readSnapshot(runId),
         ]);
         if (cancelled) return;
-        // Replaced only when it changed. The transcript is rebuilt from these,
-        // and handing the view a fresh copy of the same events once a second
-        // would redraw a conversation nobody has added to.
-        setEvents((current) =>
-          current.length === feed.events.length ? current : feed.events,
-        );
+        // Keep the same array on empty polls so the transcript is not rebuilt.
+        if (feed.events.length) {
+          for (const event of feed.events) {
+            position.current.cursor = Math.max(position.current.cursor, event.sequence);
+          }
+          setEvents((current) => [...current, ...feed.events]);
+        }
         setRun((current) => {
           // A read that did not land is not news about the run. Overwriting a
           // good snapshot with nothing would, for the second until the next

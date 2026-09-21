@@ -2867,6 +2867,59 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> 
     assert driving == []
 
 
+
+def test_graph_events_cursor_replays_only_unseen_events() -> None:
+    store = InMemoryStateStore()
+    graph = ScriptedGraph(
+        GraphId("implementation-review-codex"),
+        "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
+    )
+    app, _ = _graph_app(store, graph)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with app.router.lifespan_context(app):
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Read the code.",
+                        "repository": "acme/api",
+                    },
+                )
+                url = f"/api/runs/{created.json()['runId']}/graph-events"
+                for _ in range(200):
+                    full = (await client.get(url)).json()["events"]
+                    if any(event["type"] == "transcript" for event in full):
+                        break
+                    await asyncio.sleep(0.01)
+                assert len(full) > 1
+                for cursor in ("0", "", " "):
+                    response = await client.get(url, params={"cursor": cursor})
+                    assert response.status_code == 200
+                    assert response.json()["events"] == full
+                cursor = full[0]["sequence"]
+                response = await client.get(url, params={"cursor": cursor})
+                assert response.json()["events"] == full[1:]
+                last = full[-1]["sequence"]
+                response = await client.get(url, params={"cursor": last})
+                assert response.json()["events"] == []
+                response = await client.get(url, headers={"Last-Event-ID": str(last)})
+                assert response.json()["events"] == []
+                response = await client.get(
+                    url, params={"cursor": 0}, headers={"Last-Event-ID": str(last)}
+                )
+                assert response.json()["events"] == full
+                for cursor in ("-1", "nope", "1.5"):
+                    response = await client.get(url, params={"cursor": cursor})
+                    assert response.status_code == 400
+                    assert "cursor" in response.json()["error"]
+
+    asyncio.run(scenario())
+
+
 def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads() -> None:
     """A WorkOrder outlives the workflow it ran, and the pages have to cope.
 
