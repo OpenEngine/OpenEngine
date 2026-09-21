@@ -140,10 +140,8 @@ submit `{"type": "mcp_approval_response", "approval_request_id": request_id,
 [OpenAI remote MCP guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
 describes the approval continuation and authorization fields.
 
-This deployment uses a provisioned bearer secret; it does not implement OAuth
-discovery or a login flow. The supported connections above are GPT via the API
-and Claude Code with an explicit header. Browser connector flows requiring OAuth
-need an OAuth-capable gateway; do not disable authentication to accommodate them.
+The connections above use the provisioned bearer secret. OAuth-capable clients
+can instead use the optional external-provider configuration below.
 
 ## Verify and troubleshoot
 
@@ -167,3 +165,67 @@ unknown workflow or missing required workflow inputs; use a workflow whose
 inputs have defaults. Connection errors mean OE is unavailable or could not
 confirm creation. Inspect OE before retrying because a lost response may follow
 a successful start. The gateway never retries creation automatically.
+
+## Optional OAuth resource server
+
+The gateway supports the [MCP authorization specification, revision 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
+as a resource server only. An external OAuth 2.1/OIDC provider handles login,
+consent, client registration, and token issuance; the gateway does not expose
+`/authorize`, `/token`, or `/register`.
+
+Leave all OIDC settings unset to keep the existing static bearer-token
+deployment unchanged. Configuring `OE_MCP_OIDC_AUDIENCE`, `OE_MCP_ALLOWED_EMAILS`,
+or `OE_MCP_OIDC_REQUIRED_SCOPES` without `OE_MCP_OIDC_ISSUER` fails startup,
+even if the supplied environment variable is empty. Setting it selects OIDC authentication instead; static
+secrets are not accepted in that mode. Configure these values in the same private
+`~/.config/openengine/mcp.env` file and restart:
+
+- `OE_MCP_OIDC_ISSUER=https://YOUR-IDENTITY-PROVIDER.example`: the provider's exact
+  issuer. The gateway discovers its OIDC metadata and JWKS over HTTPS.
+- `OE_MCP_ALLOWED_EMAILS=you@example.com`: required, non-empty comma-separated
+  allowlist, compared case-insensitively. Missing or empty configuration prevents
+  startup. Access tokens must contain an allowed `email` and `email_verified`
+  must be present and the boolean `true`. Missing, false, or non-boolean values
+  receive 401; the server log identifies the subject and explains that
+  `email_verified` must be present and boolean true. Configure the provider to
+  include verified email claims in access tokens.
+- `OE_MCP_OIDC_AUDIENCE`: defaults to `OE_MCP_PUBLIC_URL` plus `/mcp`. An explicit
+  value must equal that resource URL. Configure the provider to issue JWT access
+  tokens with this exact audience using the RFC 8707 `resource` parameter;
+  an ID token or a token for another API is not suitable.
+- `OE_MCP_OIDC_REQUIRED_SCOPES=work:create`: optional space-separated scopes,
+  all of which must be granted in the access token's `scope` claim.
+
+The provider must issue asymmetrically signed JWT access tokens with a `kid`,
+`iss`, `sub`, `aud`, and `exp`. RSA, RSA-PSS, and ECDSA SHA-2 algorithms are
+supported. Signatures, issuer, expiry, and any `nbf` are verified. Signing keys
+are cached for five minutes and refreshed on an unknown key ID. Provider lookup
+or verification failures deny access.
+
+**OAuth by itself does not restrict who may authorize:** any user the identity
+provider will log in gets a valid token. The email allowlist, and an equivalent
+restriction at the provider, are the actual access control. Configure both before
+exposing the destructive `create_workorder` tool.
+
+Tailscale Funnel needs its own handler for discovery when routing by path:
+
+```sh
+tailscale funnel --bg --set-path /.well-known/oauth-protected-resource/mcp http://127.0.0.1:8765/.well-known/oauth-protected-resource/mcp
+```
+
+If using the separate HTTPS 8443 listener described above, add `--https=8443`
+to this command too. Without the discovery handler, `/.well-known/...` goes to
+the web interface and can return a 200 HTML page rather than JSON.
+
+Verify without credentials:
+
+```sh
+curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/.well-known/oauth-protected-resource/mcp
+curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp
+```
+
+Discovery must return JSON naming the resource URL and authorization server.
+The MCP endpoint must return 401 with a `WWW-Authenticate: Bearer` challenge
+containing `resource_metadata` and, when configured, `scope`. A valid token
+missing required scopes receives 403. Configure OAuth clients with the same
+public `/mcp` URL; follow the external provider's client-registration setup.
