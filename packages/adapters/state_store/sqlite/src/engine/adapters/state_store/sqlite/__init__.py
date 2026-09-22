@@ -75,16 +75,22 @@ class SQLiteStateStore:
                     raise KeyError(f"no milestone {state.milestone_id!r}")
             self._connection.execute(
                 """
-                INSERT INTO run_states (run_id, state_json, milestone_id)
-                VALUES (?, ?, ?)
+                INSERT INTO run_states (
+                    run_id, state_json, milestone_id, origin_channel, origin_thread_id
+                )
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
-                    milestone_id = excluded.milestone_id
+                    milestone_id = excluded.milestone_id,
+                    origin_channel = excluded.origin_channel,
+                    origin_thread_id = excluded.origin_thread_id
                 """,
                 (
                     state.run_id,
                     json.dumps(_state_to_dict(state)),
                     state.milestone_id,
+                    state.origin.channel if state.origin is not None else None,
+                    state.origin.thread_id if state.origin is not None else None,
                 ),
             )
 
@@ -99,6 +105,30 @@ class SQLiteStateStore:
         query += " ORDER BY sequence DESC"
         with self._lock:
             rows = self._connection.execute(query, parameters).fetchall()
+        runs: list[RunState] = []
+        for row in rows:
+            try:
+                runs.append(_state_from_dict(json.loads(row["state_json"])))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                warnings.warn(
+                    f"skipping incompatible workflow run {row['run_id']}: {error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        return tuple(runs)
+
+    async def list_runs_for_origin(
+        self, channel: str, thread_id: str
+    ) -> Sequence[RunState]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT run_id, state_json FROM run_states
+                WHERE origin_channel = ? AND origin_thread_id = ?
+                ORDER BY sequence DESC
+                """,
+                (channel, thread_id),
+            ).fetchall()
         runs: list[RunState] = []
         for row in rows:
             try:

@@ -2811,12 +2811,9 @@ def create_app(
         slack_selections[(origin.channel, origin.thread_id, origin.author)] = run_id
 
     async def concierge_find_workorders(origin: RunOrigin) -> list[RunState]:
-        linked = [
-            state for state in await session.state_store.list_runs()
-            if state.origin is not None
-            and state.origin.channel == origin.channel
-            and state.origin.thread_id == origin.thread_id
-        ]
+        linked = list(await session.state_store.list_runs_for_origin(
+            origin.channel, origin.thread_id
+        ))
 
         selected = slack_selections.get((origin.channel, origin.thread_id, origin.author))
         matches = [state for state in linked if str(state.run_id) == selected]

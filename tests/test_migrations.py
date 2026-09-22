@@ -53,7 +53,45 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("sqlite_0008",)
+    assert revision == ("36ad5285394c",)
+
+
+def test_slack_thread_lookup_migration_backfills_and_indexes_runs(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "sqlite_0008")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO run_states (run_id, state_json) VALUES (?, ?)",
+            (
+                "run-slack",
+                json.dumps({
+                    "run_id": "run-slack",
+                    "origin": {"channel": "C1", "thread_id": "17.5", "author": "U9"},
+                }),
+            ),
+        )
+        connection.commit()
+
+    upgrade(url)
+
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT origin_channel, origin_thread_id FROM run_states WHERE run_id = ?",
+            ("run-slack",),
+        ).fetchone()
+        plan = connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT state_json FROM run_states
+            WHERE origin_channel = ? AND origin_thread_id = ?
+            ORDER BY sequence DESC
+            """,
+            ("C1", "17.5"),
+        ).fetchall()
+
+    assert row == ("C1", "17.5")
+    assert any("runs_by_origin_thread" in item[3] for item in plan)
 
 
 def test_sqlite_upgrade_removes_runs_with_retired_human_review_phase(
