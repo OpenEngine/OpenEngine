@@ -2450,10 +2450,18 @@ def create_app(
         source_control_preferences or SourceControlPreferences()
     )
 
-    # The single in-flight device flow. `_active_interval` tracks the current
-    # polling interval, which grows when GitHub returns `slow_down`.
-    _active_flow: DeviceFlowState | None = None
-    _active_interval: int = 5
+    # Scope connections and pending flows to the verified browser identity.
+    # No authenticated user inherits the legacy local account's credentials.
+    _github_flows: dict[tuple[str, str], tuple[DeviceFlowState, int, str]] = {}
+
+    def _github_store(request: Request) -> GitHubCredentialStore:
+        if not github_login.configured:
+            return _credential_store
+        user = github_login._read_session(request)
+        if user is None:
+            # Session middleware normally rejects this before routing.
+            raise RuntimeError("GitHub connection requires a browser session")
+        return GitHubCredentialStore(user_id=int(user["id"]))
 
     def _is_local_request(request: Request) -> bool:
         """True when the request originates from the UI served by this process.
@@ -2495,18 +2503,18 @@ def create_app(
         """Return first 4 chars + bullets so the UI can confirm which ID is set."""
         return value[:4] + "••••••••" if len(value) > 4 else "••••••••"
 
-    def _effective_client_id() -> str:
+    def _effective_client_id(request: Request) -> str:
         """Env-var takes precedence; keychain is the fallback for UI-configured IDs."""
-        return github_client_id or _credential_store.get_client_id() or ""
+        return github_client_id or _github_store(request).get_client_id() or ""
 
     async def github_status(_request: Request) -> JSONResponse:
-        credentials = _credential_store.get_credentials()
+        credentials = _github_store(_request).get_credentials()
         now = time.time()
         connected = bool(credentials and credentials.is_usable(now))
         return JSONResponse(
             {
                 "connected": connected,
-                "clientIdConfigured": bool(_effective_client_id()),
+                "clientIdConfigured": bool(_effective_client_id(_request)),
             }
         )
 
@@ -2560,7 +2568,7 @@ def create_app(
 
     async def github_get_client_id(_request: Request) -> JSONResponse:
         # Never return the actual value — only whether one is set and its hint.
-        stored = _credential_store.get_client_id()
+        stored = _github_store(_request).get_client_id()
         if github_client_id:
             return JSONResponse(
                 {"source": github_client_id_source, "hint": _hint(github_client_id)}
@@ -2577,79 +2585,75 @@ def create_app(
         if not client_id:
             return _error("clientId is required", 400)
         try:
-            _credential_store.set_client_id(client_id)
+            _github_store(request).set_client_id(client_id)
         except GitHubAuthError as error:
             return _error(str(error), 500)
         return Response(status_code=204)
 
     async def github_connect(request: Request) -> JSONResponse:
-        nonlocal _active_flow, _active_interval
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        effective_client_id = _effective_client_id()
+        effective_client_id = _effective_client_id(request)
         if not effective_client_id:
             return _error(
                 "GitHub client ID is not configured. Enter it in Settings.", 503
             )
-        # Return the in-flight flow rather than discarding it — a second tab
-        # or a retry gets the same codes instead of racing with any polling
-        # that is still running against the first flow.
-        if _active_flow is not None:
-            return JSONResponse(
-                {
-                    "userCode": _active_flow.user_code,
-                    "verificationUri": _active_flow.verification_uri,
-                    "expiresIn": _active_flow.expires_in,
-                    "interval": _active_interval,
-                }
+        identity = _github_store(request).credential_identity
+        active = _github_flows.get(identity)
+        if active is None:
+            try:
+                flow = await start_device_flow(effective_client_id)
+            except GitHubAuthError as error:
+                return _error(str(error), 502)
+            # A concurrent tab may have started a flow while we awaited GitHub.
+            active = _github_flows.setdefault(
+                identity, (flow, flow.interval, effective_client_id)
             )
-        try:
-            _active_flow = await start_device_flow(effective_client_id)
-        except GitHubAuthError as error:
-            return _error(str(error), 502)
-        _active_interval = _active_flow.interval
+        flow, interval, _ = active
         return JSONResponse(
             {
-                "userCode": _active_flow.user_code,
-                "verificationUri": _active_flow.verification_uri,
-                "expiresIn": _active_flow.expires_in,
-                "interval": _active_interval,
+                "userCode": flow.user_code,
+                "verificationUri": flow.verification_uri,
+                "expiresIn": flow.expires_in,
+                "interval": interval,
             }
         )
 
     async def github_connect_poll(request: Request) -> JSONResponse:
-        nonlocal _active_flow, _active_interval
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        if _active_flow is None:
+        store = _github_store(request)
+        identity = store.credential_identity
+        active = _github_flows.get(identity)
+        if active is None:
             return _error(
                 "no active device flow; call POST /api/github/connect first", 409
             )
+        flow, interval, client_id = active
         try:
-            result = await poll_device_flow(
-                _effective_client_id(), _active_flow.device_code, _active_interval
-            )
+            result = await poll_device_flow(client_id, flow.device_code, interval)
         except GitHubAuthError as error:
-            _active_flow = None
+            if _github_flows.get(identity) is active:
+                _github_flows.pop(identity)
             return _error(str(error), 502)
+        if _github_flows.get(identity) is not active:
+            return _error("device flow was disconnected or replaced", 409)
         if isinstance(result, DeviceFlowComplete):
+            _github_flows.pop(identity)
             try:
-                _credential_store.set_credentials(credentials_from_device_flow(result))
+                store.set_credentials(credentials_from_device_flow(result))
             except GitHubAuthError as error:
-                _active_flow = None
                 return _error(str(error), 500)
-            _active_flow = None
             return JSONResponse({"status": "complete"})
-        # DeviceFlowPending — update the interval in case GitHub slowed us down.
-        _active_interval = result.next_interval
-        return JSONResponse({"status": "pending", "nextInterval": _active_interval})
+        _github_flows[identity] = (flow, result.next_interval, client_id)
+        return JSONResponse({"status": "pending", "nextInterval": result.next_interval})
 
     async def github_disconnect(request: Request) -> Response:
-        nonlocal _active_flow
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        _active_flow = None
-        _credential_store.delete()
+        store = _github_store(request)
+        _github_flows.pop(store.credential_identity, None)
+        store.delete()
         return Response(status_code=204)
 
     # GitLab credentials are per OAuth issuer, unlike GitHub's single public
