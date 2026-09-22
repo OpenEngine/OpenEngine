@@ -179,7 +179,7 @@ def test_the_application_can_be_built_from_configuration_alone(
         (tmp_path / "engine.toml").write_text(
             f"show_projects = {str(show_projects).lower()}\n"
         )
-    app = build_app()
+    app = build_app(tmp_path / "engine.toml" if show_projects is not None else None)
 
     async def ask() -> httpx.Response:
         async with httpx.AsyncClient(
@@ -195,8 +195,9 @@ def test_the_application_can_be_built_from_configuration_alone(
         {"id": "codex", "implementation": "CodexAgentRunner"},
         {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
     ]
-    # Composed from the working directory, exactly as `engine-web` composes it.
-    assert (tmp_path / "conversations.sqlite3").exists()
+    # Mutable state lives in the same user directory regardless of cwd.
+    assert (tmp_path / "user-data" / "conversations.sqlite3").exists()
+    assert not (tmp_path / "conversations.sqlite3").exists()
     assert app.state.milestone_scoper is not None
 
 

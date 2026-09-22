@@ -8,6 +8,11 @@ name: release gate
 # compatibility run pass, and was it recent enough to mean anything?
 
 on:
+  workflow_call:
+    inputs:
+      max_age_days:
+        type: string
+        default: "8"
   workflow_dispatch:
     inputs:
       max_age_days:

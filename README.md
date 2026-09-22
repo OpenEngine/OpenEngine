@@ -8,7 +8,12 @@ We give you an out-of-the-box configuration to get you up and running. The out-o
 ```
 Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change 
 ```
-## Getting started
+## Install a release
+
+For installation without Python, Node.js, or a source checkout, see
+[packaged release installation](docs/installation.md).
+
+## Getting started (source checkout)
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 

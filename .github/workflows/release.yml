@@ -1,0 +1,123 @@
+name: packaged release
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (X.Y.Z); empty builds a development artifact'
+        required: false
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: '0.12.7'
+  UV_PYTHON: '3.14.7'
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.15.0'
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/web run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-frontend
+          path: apps/web/dist
+  build:
+    needs: frontend
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+          - runner: macos-15
+            platform: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-frontend
+          path: apps/web/dist
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Build locked wheels and manifest
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          version="${REQUESTED_VERSION:-0.0.0.dev${GITHUB_RUN_NUMBER}}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          uv venv --python "$UV_PYTHON" "$RUNNER_TEMP/builder"
+          uv pip install --python "$RUNNER_TEMP/builder/bin/python" pip==25.3
+          "$RUNNER_TEMP/builder/bin/python" release/build.py --version "$version" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/release"
+          tar -czf "openengine-${{ matrix.platform }}.tar.gz" -C "$RUNNER_TEMP" release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openengine-${{ matrix.platform }}
+          path: openengine-*.tar.gz
+  smoke:
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+          - runner: macos-15
+            platform: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    # No checkout, setup-python, setup-node, or setup-uv: only the release exists.
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: openengine-${{ matrix.platform }}
+      - name: Install without host runtimes; test outside the release
+        shell: bash
+        run: |
+          set -eu
+          tar -xzf "openengine-${{ matrix.platform }}.tar.gz" -C "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/clean-home" "$RUNNER_TEMP/system-tools" "$RUNNER_TEMP/unrelated"
+          for tool in sh dirname uname sha256sum shasum; do
+            if command -v "$tool" >/dev/null; then ln -s "$(command -v "$tool")" "$RUNNER_TEMP/system-tools/$tool"; fi
+          done
+          export HOME="$RUNNER_TEMP/clean-home"
+          export PATH="$RUNNER_TEMP/system-tools"
+          cd "$RUNNER_TEMP/unrelated"
+          /usr/bin/env -i HOME="$HOME" PATH="$PATH" LANG=en_US.UTF-8 /bin/sh "$RUNNER_TEMP/release/install.sh"
+          case "$(uname -s)" in
+            Darwin) base="$HOME/Library/Application Support/OpenEngine" ;;
+            Linux) base="$HOME/.local/share/OpenEngine" ;;
+          esac
+          for python in "$base"/releases/*/bin/python; do
+            /usr/bin/env -i HOME="$HOME" PATH="$PATH" LANG=en_US.UTF-8 "$python" "$RUNNER_TEMP/release/smoke.py"
+          done
+  compatibility:
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-gate.yml
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [smoke, compatibility]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: openengine-*
+          merge-multiple: true
+      - name: Publish tested artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum openengine-*.tar.gz > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes openengine-*.tar.gz SHA256SUMS

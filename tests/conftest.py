@@ -23,3 +23,14 @@ def _engine_config_is_not_inherited(monkeypatch):
     """
 
     monkeypatch.delenv(CONFIG_ENVIRONMENT_VARIABLE, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _web_paths_are_isolated(monkeypatch, tmp_path):
+    import engine.apps.web.__main__ as web_main
+    for name in ("config", "data", "log"):
+        directory = tmp_path / ("user-" + name)
+        def location(d=directory):
+            d.mkdir(exist_ok=True)
+            return d
+        monkeypatch.setattr(web_main, name + "_directory", location)

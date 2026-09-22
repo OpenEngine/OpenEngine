@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib.resources import files
 import argparse
 from collections.abc import Sequence
 import os
@@ -18,7 +19,7 @@ from sqlalchemy.pool import StaticPool
 
 DatabaseKind = Literal["sqlite", "postgres"]
 StoreKind = Literal["state", "graph"]
-_MIGRATIONS = Path(__file__).resolve().parent
+_MIGRATIONS = Path(str(files("migrations")))
 
 
 def database_kind(database: str | Connection | sqlite3.Connection) -> DatabaseKind:

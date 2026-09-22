@@ -12,12 +12,16 @@ import argparse
 import os
 import sys
 from collections.abc import Callable, Sequence
+from copy import deepcopy
+from dataclasses import replace
+from importlib.resources import files
 from pathlib import Path
 
 import uvicorn
 from dotenv import dotenv_values
 from starlette.applications import Starlette
 
+from engine.apps.web.paths import config_directory, data_directory, log_directory
 from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
@@ -45,7 +49,10 @@ from engine.runtime import (
 )
 
 #: Vite's production output, served by the same process as the API.
-STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
+STATIC_DIRECTORY = Path(str(files("engine.apps.web").joinpath("static")))
+# The development server still serves Vite output before a wheel is built.
+if not STATIC_DIRECTORY.is_dir():
+    STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
 
 
 def report_wiring(settings: Settings) -> None:
@@ -53,7 +60,11 @@ def report_wiring(settings: Settings) -> None:
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
-    session = build_session(capabilities, runners, read_only_runners=read_only_runners)
+    session = build_session(
+        capabilities, runners,
+        repository=next(iter(settings.engine_config.repos.values()), None),
+        read_only_runners=read_only_runners,
+    )
     print(
         describe_loaded_config(
             LoadedEngineConfig(config=settings.engine_config, path=settings.config_path)
@@ -94,6 +105,8 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
     return Settings(
         engine_config=loaded.config,
         config_path=loaded.path,
+        sqlite_path=str(data_directory() / "conversations.sqlite3"),
+        graph_state_directory=str(data_directory() / "graph-state"),
         github_client_id=os.environ.get(
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
@@ -117,7 +130,7 @@ def _webhook_secret_reader(webhook: GitHubWebhookConfig | None) -> Callable[[], 
 
 
 def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None:
-    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else config_directory()) / ".env"
     values = dotenv_values(secret_file, interpolate=False)
     client_id = os.environ.get(
         "ENGINE_GITHUB_LOGIN_CLIENT_ID", loaded.config.github_login_client_id
@@ -146,7 +159,7 @@ def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
     startup rather than silently admitting nothing.
     """
 
-    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else config_directory()) / ".env"
 
     def read() -> str:
         if "ENGINE_SERVICE_TOKEN" in os.environ:
@@ -175,14 +188,22 @@ def read_configuration(
     and because "what a restart is for" has to be one list: the development
     server watches exactly what this function reads.
     """
-    loaded = load_engine_config(config_path)
+    selected = config_path or os.environ.get("ENGINE_CONFIG")
+    if selected is not None:
+        selected = Path(selected).absolute()
+    loaded = load_engine_config(selected, cwd=config_directory())
+    directory = loaded.workflows_directory
+    if directory is None:
+        directory = Path(str(files("engine.apps.web").joinpath("workflows")))
+        if not directory.is_dir():
+            directory = Path(__file__).resolve().parents[6] / "workflows"
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(
-            loaded.workflows_directory,
+            directory,
             session_config=claude_session_config_for(settings),
         )
-        if loaded.workflows_directory is not None
+        if directory.is_dir() or loaded.workflows_directory is not None
         else None
     )
     return loaded, catalog
@@ -203,7 +224,11 @@ def compose_app(
     )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
-    session = build_session(capabilities, runners, read_only_runners=read_only_runners)
+    session = build_session(
+        capabilities, runners,
+        repository=next(iter(settings.engine_config.repos.values()), None),
+        read_only_runners=read_only_runners,
+    )
     # The runtime for the workflows in the configured directory. It
     # is `None` when that directory holds no graphs, and then the interface
     # offers none of them.
@@ -251,11 +276,12 @@ def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the OpenEngine web interface.")
     parser.add_argument("--config", help="read Engine settings from this TOML file")
+    parser.add_argument("--port", type=int, default=8000, help="loopback HTTP port (default: 8000)")
     parser.add_argument("--check", action="store_true", help="report wiring and exit")
     args = parser.parse_args(argv)
     try:
         loaded, workflow_catalog = read_configuration(args.config)
-        settings = _settings(loaded)
+        settings = replace(_settings(loaded), port=args.port)
         if args.check:
             _github_login_config(loaded)
             _service_token_reader(loaded)
@@ -265,8 +291,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
+    logging_config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    logging_config["handlers"]["file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "filename": str(log_directory() / "engine-web.log"),
+        "maxBytes": 5_000_000, "backupCount": 3, "encoding": "utf-8",
+        "formatter": "default",
+    }
+    logging_config["root"] = {"handlers": ["file"], "level": "INFO"}
+    logging_config["loggers"]["uvicorn"]["handlers"].append("file")
+    logging_config["loggers"]["uvicorn.access"]["handlers"].append("file")
     print(describe_loaded_config(loaded))
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    uvicorn.run(app, host=settings.host, port=settings.port, log_config=logging_config)
     return 0
 
 

@@ -96,7 +96,7 @@ class Settings:
     Frozen so one immutable settings value can be shared by the server wiring.
     """
 
-    host: str = "localhost"
+    host: str = "127.0.0.1"
     port: int = 8000
     codex_binary: str = "codex"
     codex_sandbox: str = "read-only"
@@ -558,7 +558,7 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 def build_session(
     capabilities: Capabilities,
     runners: Mapping[str, AgentRunner],
-    repository: str = ".",
+    repository: str | None = None,
     read_only_runners: Mapping[str, AgentRunner] | None = None,
 ) -> AgentSession:
     """Conversations, over the capabilities this process composed.
