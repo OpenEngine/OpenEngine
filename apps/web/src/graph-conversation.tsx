@@ -28,7 +28,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/utils";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { WorkspaceControl } from "./workspace";
 
 import {
@@ -544,6 +544,8 @@ export function GraphConversationPage({
   workOrderName?: string;
 }) {
   const { events, run, error, loaded, refresh, setRun } = useGraphRun(runId);
+  const [headerExpanded, setHeaderExpanded] = useState(false);
+  const headerDetailsId = useId();
   const [steerError, setSteerError] = useState("");
   const [topology, setTopology] = useState<ApiGraphTopology>();
   const graphId = run?.graphId;
@@ -725,45 +727,59 @@ export function GraphConversationPage({
   return (
     <main className="panel">
       <header className="panel-head panel-head-workflow panel-head-graph">
-        <div className="panel-head-copy">
-          <p className="eyebrow">{phaseLabel(nodeId)}</p>
-          <h1>{workOrderName || "WorkOrder"}</h1>
-          <p className="lede">
-            {working
-              ? "This node's agent is working. What you send reaches the turn it is in the middle of."
-              : "A WorkOrder node owns this transcript."}
-          </p>
+        <div className="graph-header-mobile">
+          <span className="eyebrow">{phaseLabel(nodeId)}</span>
+          <button
+            type="button"
+            className="btn"
+            aria-expanded={headerExpanded}
+            aria-controls={headerDetailsId}
+            onClick={() => setHeaderExpanded((expanded) => !expanded)}
+          >
+            {headerExpanded ? "Collapse header" : "Expand header"}
+          </button>
         </div>
-        <div className="panel-head-controls">
-          {node?.runner && (
+        <div id={headerDetailsId} className="graph-header-details" data-expanded={headerExpanded}>
+          <div className="panel-head-copy">
+            <p className="eyebrow">{phaseLabel(nodeId)}</p>
+            <h1>{workOrderName || "WorkOrder"}</h1>
+            <p className="lede">
+              {working
+                ? "This node's agent is working. What you send reaches the turn it is in the middle of."
+                : "A WorkOrder node owns this transcript."}
+            </p>
+          </div>
+          <div className="panel-head-controls">
+            {node?.runner && (
+              <label className="field">
+                <span>Runner</span>
+                <select
+                  aria-label="Runner"
+                  className="field-box"
+                  value={runner}
+                  disabled={!run || runnerBusy || retryBusy}
+                  onChange={(event) => void chooseRunner(event.target.value)}
+                >
+                  {runners.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+                <span className="micro">Applies the next time this node starts.</span>
+                {runnerError && <span className="field-error">{runnerError}</span>}
+              </label>
+            )}
             <label className="field">
-              <span>Runner</span>
-              <select
-                aria-label="Runner"
-                className="field-box"
-                value={runner}
-                disabled={!run || runnerBusy || retryBusy}
-                onChange={(event) => void chooseRunner(event.target.value)}
-              >
-                {runners.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
-              <span className="micro">Applies the next time this node starts.</span>
-              {runnerError && <span className="field-error">{runnerError}</span>}
+              <span>Approvals</span>
+              <span className="field-box auto-approve-control">
+                <input
+                  type="checkbox"
+                  checked={run?.autoApproveNodes?.includes(nodeId) ?? false}
+                  disabled={!run || autoApproveBusy}
+                  onChange={(event) => void chooseAutoApprove(event.target.checked)}
+                />
+                <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
+              </span>
+              {autoApproveError && <span className="field-error">{autoApproveError}</span>}
             </label>
-          )}
-          <label className="field">
-            <span>Approvals</span>
-            <span className="field-box auto-approve-control">
-              <input
-                type="checkbox"
-                checked={run?.autoApproveNodes?.includes(nodeId) ?? false}
-                disabled={!run || autoApproveBusy}
-                onChange={(event) => void chooseAutoApprove(event.target.checked)}
-              />
-              <span>{autoApproveBusy ? "Saving…" : "Auto-approve"}</span>
-            </span>
-            {autoApproveError && <span className="field-error">{autoApproveError}</span>}
-          </label>
+          </div>
         </div>
       </header>
       {error && <p className="notice notice-block">{error}</p>}
