@@ -555,9 +555,16 @@ test("a graph run waiting on a person says so, and can be answered", async ({
   await expect(step(page, "Implementation")).toContainText(IMPLEMENTED);
   await expect(step(page, "Impact analysis")).toContainText(IMPACT_ASSESSMENT);
 
-  // The reranker's comment left the process the way a real one would, through
+  // The review and impact comments left the process the way real ones would, through
   // `gh` -- which here records rather than commenting on somebody's repository.
-  expect(readFileSync(engine.ghLog, "utf-8")).toContain(REVIEWED);
+  const comments = readFileSync(engine.ghLog, "utf-8").trim().split("\n")
+    .map((line) => JSON.parse(line));
+  for (const body of [REVIEWED, IMPACT_ASSESSMENT]) {
+    expect(comments).toContainEqual({
+      path: "/repos/acme/repository/issues/7/comments",
+      body,
+    });
+  }
 
   // What a person is shown, and what they press. Pressing one of these is the
   // only thing in the browser that can end a run.
