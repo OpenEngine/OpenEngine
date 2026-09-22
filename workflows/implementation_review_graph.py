@@ -167,7 +167,11 @@ IMPACT_ANALYSIS_PROMPT = (
     "untested behavior is safe. Give evidence for UI/product and architectural "
     "scope, complexity, sensitive components, test coverage and blind spots, "
     "and human setup or deployment work.\n\n"
-    "Call complete_step with impact_level set to exactly Green, Orange, or Red "
+    "Before completing, use add_comment to post one general comment on pull "
+    "request {pr_url} with your impact analysis results. Include the color "
+    "label and emoji, your rationale and evidence, testing gaps, and required "
+    "human actions. Then call complete_step with impact_level set to exactly "
+    "Green, Orange, or Red "
     "and impact_rationale containing your evidence and required human actions. "
     "Include the color label and emoji and the rationale in the summary.\n\n"
     "Original task:\n{task}\n\nImplementation report:\n{implementation}\n\n"
@@ -467,6 +471,7 @@ def pipeline(
                     validate_completion=_validate_impact_analysis,
                     repository_tools=(
                         "view_change_request", "list_pipeline_status", "get_job_logs",
+                        "add_comment",
                     ),
                 ),
             ),

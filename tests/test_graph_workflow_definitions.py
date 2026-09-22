@@ -610,7 +610,9 @@ def test_impact_analysis_rejects_then_accepts_corrected_assessment(
     monkeypatch, level, invalid_outputs, error,
 ):
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock
     from engine.domain import RunId
+    from engine.ports import CommentResult
     from engine.graph_runtime_langgraph import terminal_mcp
     from engine.runtime.terminal_mcp import TerminalMcpBroker
     from tests.test_terminal_mcp import _request
@@ -628,13 +630,38 @@ def test_impact_analysis_rejects_then_accepts_corrected_assessment(
     monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
 
     async def scenario():
+        pr_url = "https://github.com/acme/api/pull/42"
+        source_control = SimpleNamespace(add_comment=AsyncMock(
+            return_value=CommentResult(123, f"{pr_url}#issuecomment-123"),
+        ))
+        store = SimpleNamespace(
+            pull_requests=AsyncMock(return_value=(("acme/api", 42),)),
+            remember_comment=AsyncMock(),
+        )
         execution = SimpleNamespace(
-            run_id=RunId("run"), execution_id="impact", runtime=SimpleNamespace(
-                source_control=object(),
+            run_id=RunId("run"), execution_id="impact", node_id=module.IMPACT_ANALYSIS,
+            runtime=SimpleNamespace(
+                source_control=source_control, store=store,
             ),
         )
         async with binding({"workspaceId": "workspace"}, execution, None):
             broker, = brokers
+            premature = await broker._submit(_request(broker, "premature", "complete_step", {
+                "outcome": "success", "summary": f"{level}: assessment",
+                "outputs": {"impact_level": level, "impact_rationale": "Evidence"},
+            }))
+            assert premature["ok"] is False
+            assert "comment" in premature["error"]
+            assert not broker._result.done()
+            comment = f"{level}: assessment\n\nEvidence and required human actions"
+            posted = await broker._submit(_request(broker, "comment", "add_comment", {
+                "pr_url": pr_url, "comment": comment,
+            }))
+            assert posted["ok"] is True
+            source_control.add_comment.assert_awaited_once_with(
+                pr_url, comment, None, None, None,
+            )
+            store.remember_comment.assert_awaited_once()
             rejected = await broker._submit(_request(broker, 1, "complete_step", {
                 "outcome": "success", "summary": "Assessment",
                 "outputs": invalid_outputs,
@@ -667,6 +694,7 @@ def test_impact_analysis_receives_final_evidence_and_selected_review_runner():
     assert binding.required_outputs == ("impact_level", "impact_rationale")
     assert binding.repository_tools == (
         "view_change_request", "list_pipeline_status", "get_job_logs",
+        "add_comment",
     )
     prompt = node.prompt({
         "task": "Repair saving", "pr_url": "https://example.com/pull/42",
@@ -676,5 +704,6 @@ def test_impact_analysis_receives_final_evidence_and_selected_review_runner():
     for evidence in ("Repair saving", "https://example.com/pull/42", "Fixed saving",
                      '"passed": true', "Remaining finding",
                      "Green 🟢", "Orange 🟠", "Red 🔴",
+                     "use add_comment to post one general comment",
                      "must not be merged without a human"):
         assert evidence in prompt
