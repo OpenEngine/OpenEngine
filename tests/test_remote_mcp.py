@@ -319,7 +319,7 @@ def test_oidc_public_discovery_and_challenge(oidc):
         response = client.get(path)
         assert response.status_code == 200
         assert response.json()["resource"] == settings.resource_url
-        assert response.json()["authorization_servers"] == [settings.oidc_issuer + "/"]
+        assert response.json()["authorization_servers"] == [settings.oidc_issuer]
         assert not requests
         response = client.get("/mcp")
         assert response.status_code == 401
