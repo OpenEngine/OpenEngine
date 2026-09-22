@@ -49,10 +49,9 @@ GITHUB_BOT_LOGIN=... uv run engine-web
 ```
 
 `GITHUB_BOT_LOGIN` is the GitHub account Engine posts as, whose own comments are
-never answered. Set it whenever Engine authenticates with a personal access
-token belonging to a machine user: such an account is an ordinary user and
-usually a collaborator, so without this it would answer itself in a loop. A
-GitHub app is recognised by its user type and needs no setting.
+never answered. This setting is optional: when unset, Engine resolves the login
+using its authenticated GitHub credentials. Set it only to override that lookup.
+A GitHub app is also recognised by its user type.
 
 ## What the route does with a delivery
 
@@ -108,13 +107,15 @@ are not answered.
 
 ## Starting work from an issue assignment
 
-Set `GITHUB_BOT_LOGIN=OpenEngineBot` (or your Engine account's login) and
-subscribe the webhook to `issues`. Assigning an open issue to that account
+Subscribe the webhook to `issues`. Engine uses `GITHUB_BOT_LOGIN` when set,
+or resolves its account from its authenticated GitHub credentials otherwise.
+If no login can be resolved, Engine logs a warning and returns 503 so the
+delivery can be retried. Assigning an open issue to that account
 starts a work order using `work_orders.workflow`, or the sole available workflow
 when no default is configured. The issue title, body, and URL become the task,
 including an instruction to close the issue in the resulting PR body.
 
-Only `assigned` events targeting the configured account are accepted; matching
+Only `assigned` events targeting the resolved account are accepted; matching
 is case-insensitive. The assigning user must have repository write access.
 Ordinary issue comments, other assignees, and closed issues do not start work.
 The run uses the issue's repository, without claiming a pull request or sending
