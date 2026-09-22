@@ -208,6 +208,7 @@ def compose_app(
         milestone_scoper=build_milestone_scoper(settings),
         work_orders=loaded.config.work_orders,
         show_projects=loaded.config.show_projects,
+        repos=loaded.config.repos,
     )
 
 

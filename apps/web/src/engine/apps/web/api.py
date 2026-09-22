@@ -1043,6 +1043,7 @@ def create_app(
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     show_projects: bool = True,
+    repos: Mapping[str, str] | None = None,
     utilization: UtilizationService | None = None,
     milestone_scoper: MilestoneScoping | None = None,
     concierge_provider: ACPAgentProvider | None = None,
@@ -1599,6 +1600,10 @@ def create_app(
                 ),
                 "defaultRunner": session.default_runner,
                 "showProjects": show_projects,
+                "repositories": [
+                    {"name": name, "path": str(Path(path).expanduser().resolve())}
+                    for name, path in (repos or {}).items()
+                ] or [{"name": f". ({Path.cwd()})", "path": "."}],
                 # Only the graphs this process can actually start are here --
                 # see `offered_graphs` -- because an entry nobody could run
                 # would be a choice that fails after it was made. Their

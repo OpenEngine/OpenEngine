@@ -345,7 +345,7 @@ export function NewWorkflowPage({
   const [prompt, setPrompt] = useState(
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
   );
-  const [repository, setRepository] = useState(".");
+  const [repository, setRepository] = useState(config.repositories[0]?.path ?? ".");
   const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -416,12 +416,15 @@ export function NewWorkflowPage({
         </label>
         <label>
           <span>Repository</span>
-          <input
+          <select
             required
             value={repository}
             onChange={(event) => setRepository(event.target.value)}
-            placeholder="owner/repository or local path"
-          />
+          >
+            {config.repositories.map((repo) => (
+              <option key={repo.name} value={repo.path}>{repo.name}</option>
+            ))}
+          </select>
         </label>
         {!!selected?.inputs?.length && (
           <details className="workflow-inputs" open>

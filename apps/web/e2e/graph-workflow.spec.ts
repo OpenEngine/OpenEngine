@@ -245,7 +245,7 @@ async function create(
 ): Promise<string> {
   await page.goto("/runs/new");
   await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
-  await page.getByLabel("Repository").fill(repository);
+  await page.getByLabel("Repository").selectOption(repository);
   await page.getByLabel("Task prompt").fill(prompt);
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
@@ -288,7 +288,7 @@ test("a graph workflow accepts independent stage runners", async ({
   await expect(review).toHaveValue("codex");
   await shot(page, testInfo, "1 the beta choice");
 
-  await page.getByLabel("Repository").fill(engine.repository);
+  await page.getByLabel("Repository").selectOption(engine.repository);
   await page.getByLabel("Task prompt").fill(TASK);
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
