@@ -29,7 +29,7 @@ class Finding:
     description: str
     """1-3 followup lines about what it is and why it's bad."""
     facet: str = ""
-    """Which review facet produced this: security, bugs, performance, conciseness."""
+    """Which review facet produced this: security, bugs, performance, conciseness, dryness."""
     agent: str = ""
     """Which agent produced this: codex, claude."""
     file: str | None = None
@@ -103,7 +103,7 @@ class ReviewFacet:
     """Whether this facet uses the elevated (larger) model tier."""
 
 
-#: The four review facets. Security uses a larger model; the rest use the
+#: The review facets. Security uses a larger model; the rest use the
 #: default tier.
 REVIEW_FACETS: tuple[ReviewFacet, ...] = (
     ReviewFacet(
@@ -148,6 +148,22 @@ REVIEW_FACETS: tuple[ReviewFacet, ...] = (
             "function, overly verbose patterns that have a simpler equivalent in "
             "the language or framework, and any code that could be removed without "
             "changing behavior."
+        ),
+    ),
+    ReviewFacet(
+        id="dryness",
+        name="DRYness & code duplication",
+        focus=(
+            "Check the changes for DRY (Don't Repeat Yourself) violations and code "
+            "duplication. Search the repository beyond the changed files for "
+            "existing helpers, utilities, and equivalent logic that the change "
+            "could reuse. Look for duplicated business rules and repeated logic "
+            "introduced by the change, both within the diff and against existing "
+            "code. Report actionable duplication with the changed location and "
+            "the existing equivalent's path, explaining what should be reused or "
+            "consolidated and why. Do not flag unrelated pre-existing duplication "
+            "or recommend abstractions for merely similar code with different "
+            "responsibilities."
         ),
     ),
 )

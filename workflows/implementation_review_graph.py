@@ -2,10 +2,11 @@
 
     workspace -> naming -> implementation -> ci-check -> [review facets] -> reranker -> impact-analysis -> human-review
 
-The review stage fans out to four parallel reviewers, each examining the
+The review stage fans out to five parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
-conciseness).  Their findings are collected by a *reranker* that aggressively
-squashes noise and posts the survivors as PR comments with lineage.
+conciseness, DRYness & code duplication). Their findings are collected by a
+*reranker* that aggressively squashes noise and posts the survivors as PR
+comments with lineage.
 Surviving findings go back to implementation for one automatic fix-and-review
 cycle before impact analysis and human review.
 """
@@ -287,7 +288,7 @@ def _after_ci(state: dict[str, Any]) -> str | list[Send]:
 
 
 def _fan_out_reviews(state: dict[str, Any]) -> list[Send]:
-    """Dispatch the implementation to all four review facets in parallel."""
+    """Dispatch the implementation to all review facets in parallel."""
     return [Send(_review_node_name(facet.id), state) for facet in REVIEW_FACETS]
 
 
