@@ -7,9 +7,9 @@ from urllib.parse import urlsplit
 
 import httpx
 from mcp.server.auth.settings import AuthSettings
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import ToolAnnotations
+from mcp_types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -110,8 +110,8 @@ class ScopeChallenge:
 def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None,
                oidc_transport: httpx.AsyncBaseTransport | None = None) -> ASGIApp:
     public = urlsplit(settings.public_url)
-    mcp = FastMCP(
-        "OpenEngine", stateless_http=True, json_response=True,
+    mcp = MCPServer(
+        "OpenEngine",
         token_verifier=OIDCTokenVerifier(
             settings.oidc_issuer, settings.oidc_audience or settings.resource_url,
             settings.allowed_emails, transport=oidc_transport,
@@ -120,15 +120,10 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             issuer_url=settings.oidc_issuer, resource_server_url=settings.resource_url,
             required_scopes=list(settings.oidc_required_scopes), validate_token_resource=True,
         ) if settings.oidc_issuer else None,
-        transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=True,
-            allowed_hosts=[public.netloc, "127.0.0.1:*", "localhost:*", "[::1]:*"],
-            allowed_origins=[settings.public_url.rstrip("/")],
-        ),
     )
 
     @mcp.tool(annotations=ToolAnnotations(
-        readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True,
+        read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True,
     ))
     async def create_workorder(prompt: str, depends_on_run_id: str | None = None) -> dict[str, str]:
         """Create an OE work order in the configured repository.
@@ -170,7 +165,14 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             raise RuntimeError("OE returned an invalid result. Check the work-order list before retrying.") from error
         return {"run_id": run_id}
 
-    app = mcp.streamable_http_app()
+    app = mcp.streamable_http_app(
+        stateless_http=True, json_response=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[public.netloc, "127.0.0.1:*", "localhost:*", "[::1]:*"],
+            allowed_origins=[settings.public_url.rstrip("/")],
+        ),
+    )
     if settings.oidc_issuer:
         return ScopeChallenge(app, settings.oidc_required_scopes) if settings.oidc_required_scopes else app
     return BearerAuth(app, settings.token)
