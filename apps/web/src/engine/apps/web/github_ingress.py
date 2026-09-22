@@ -6,8 +6,7 @@ enqueues, and acknowledges rather than waiting for the work: a reply that
 arrived late would otherwise be indistinguishable from a second copy of the
 same comment.
 
-Two kinds of delivery are read: a comment, which is somebody asking for
-something, and a merge, which is somebody accepting the work.
+Comments and issue assignments ask for work; merges accept the work.
 """
 from __future__ import annotations
 
@@ -79,6 +78,45 @@ class GithubMerge:
     merged_by: str
     """Whoever merged. A merge with no person behind it is not read at all."""
     url: str
+
+
+@dataclass(frozen=True)
+class GithubAssignment:
+    """An issue assigned to the configured Engine account."""
+
+    repository: str
+    number: int
+    assignee: str
+    sender: str
+    title: str
+    body: str
+    url: str
+
+
+def assignment_from_payload(
+    event: str, payload: Mapping[str, object], *, self_login: str = ""
+) -> GithubAssignment | None:
+    if event != "issues" or payload.get("action") != "assigned" or not self_login:
+        return None
+    issue, repository = payload.get("issue"), payload.get("repository")
+    assignee, sender = payload.get("assignee"), payload.get("sender")
+    if not all(isinstance(item, dict) for item in (issue, repository, assignee, sender)):
+        return None
+    login = assignee.get("login")
+    if not isinstance(login, str) or login.lower() != self_login.lower():
+        return None
+    if "pull_request" in issue or issue.get("state") != "open":
+        return None
+    number, full_name, actor = issue.get("number"), repository.get("full_name"), sender.get("login")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        return None
+    if not isinstance(full_name, str) or not full_name or not isinstance(actor, str) or not actor:
+        return None
+    return GithubAssignment(
+        repository=full_name, number=number, assignee=login, sender=actor,
+        title=str(issue.get("title") or ""), body=str(issue.get("body") or ""),
+        url=str(issue.get("html_url") or ""),
+    )
 
 
 def verify_signature(webhook_secret: str, signature: str, body: bytes) -> bool:
@@ -221,6 +259,7 @@ class GithubIngress:
         repository: str = "",
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
+        handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
         self_login: Callable[[], str] = lambda: "",
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
@@ -232,13 +271,14 @@ class GithubIngress:
         self._self_login = self_login
         self._handle = handle
         self._handle_merge = handle_merge
+        self._handle_assignment = handle_assignment
         self._verify_signature = verify_signature
         self._max_body_bytes = max_body_bytes
         # Where a comment's progress is written down for the web UI. Recording
         # is bookkeeping and never a reason to refuse a delivery, so a missing
         # log is a deployment with no panel rather than a failure here.
         self._activity = activity
-        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubMerge]] = (
+        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubMerge | GithubAssignment]] = (
             asyncio.Queue(maxsize=capacity)
         )
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
@@ -307,6 +347,13 @@ class GithubIngress:
         full queue, or no handler wired. Those are the cases where a failed
         delivery GitHub can redeliver beats a 200 that loses the comment.
         """
+        assignment = assignment_from_payload(event, payload, self_login=self._self_login())
+        if assignment is not None:
+            return self._enqueue(
+                assignment, "assigned issue",
+                ("issues", f"{assignment.repository.lower()}#{assignment.number}"),
+                wired=self._handle_assignment is not None,
+            )
         comment = comment_from_payload(event, payload, self_login=self._self_login())
         if comment is not None:
             return self._enqueue(
@@ -330,7 +377,7 @@ class GithubIngress:
 
     def _enqueue(
         self,
-        delivery: GithubComment | GithubMerge,
+        delivery: GithubComment | GithubMerge | GithubAssignment,
         subject: str,
         identity: tuple[str, str],
         *,
@@ -378,6 +425,9 @@ class GithubIngress:
                     if self._activity is not None:
                         self._activity.started(delivery)
                     await self._handle(delivery)
+                elif isinstance(delivery, GithubAssignment):
+                    assert self._handle_assignment is not None
+                    await self._handle_assignment(delivery)
                 else:
                     assert self._handle_merge is not None
                     await self._handle_merge(delivery)

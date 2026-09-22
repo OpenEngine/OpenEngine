@@ -572,3 +572,75 @@ def test_signed_deliveries_only_queue_for_the_configured_repository(event, repos
     assert [c.repository for c in handled] == (
         ["acme/api"] if repository.lower() == "acme/api" else []
     )
+
+
+def _assigned_issue(**issue) -> dict:
+    return {
+        "action": "assigned",
+        "repository": {"full_name": "acme/api"},
+        "assignee": {"login": "OpenEngineBot"},
+        "sender": {"login": "maintainer"},
+        "issue": dict(number=7, state="open", title="Fix the bug", body="Reproduction steps",
+                      html_url="https://github.com/acme/api/issues/7", **issue),
+    }
+
+
+def test_assignment_reads_issue_and_assigning_actor():
+    from engine.apps.web.github_ingress import assignment_from_payload
+
+    assigned = assignment_from_payload("issues", _assigned_issue(), self_login="openenginebot")
+    assert assigned is not None
+    assert (assigned.repository, assigned.number, assigned.assignee, assigned.sender) == (
+        "acme/api", 7, "OpenEngineBot", "maintainer")
+    assert (assigned.title, assigned.body) == ("Fix the bug", "Reproduction steps")
+
+
+@pytest.mark.parametrize("change", [
+    {"action": "opened"}, {"action": "unassigned"},
+    {"assignee": {"login": "someone"}}, {"assignee": None}, {"sender": {}},
+    {"issue": {"number": True, "state": "open"}},
+    {"issue": {"number": 7, "state": "closed"}},
+    {"issue": {"number": 7, "state": "open", "pull_request": {}}},
+])
+def test_other_assignments_are_ignored(change):
+    from engine.apps.web.github_ingress import assignment_from_payload
+
+    assert assignment_from_payload(
+        "issues", dict(_assigned_issue(), **change), self_login="OpenEngineBot",
+    ) is None
+
+
+def test_assignments_require_configured_login():
+    from engine.apps.web.github_ingress import assignment_from_payload
+
+    assert assignment_from_payload("issues", _assigned_issue()) is None
+
+
+def test_assignment_queue_deduplicates_and_retries_failures():
+    async def scenario():
+        calls = []
+
+        async def handle(assignment):
+            calls.append(assignment)
+            if len(calls) == 1:
+                raise RuntimeError("temporarily unavailable")
+
+        ingress = GithubIngress(repository="acme/api", self_login=lambda: "OpenEngineBot",
+                                handle_assignment=handle)
+        try:
+            assert ingress.accept("issues", _assigned_issue())
+            assert ingress.accept("issues", _assigned_issue())
+            await ingress.drain()
+            assert len(calls) == 1
+            assert ingress.accept("issues", _assigned_issue())
+            await ingress.drain()
+            assert ingress.accept("issues", _assigned_issue())
+            await ingress.drain()
+            assert len(calls) == 2
+            assert ingress.accept("issues", dict(_assigned_issue(), repository={"full_name": "other/repo"}))
+            await ingress.drain()
+            assert len(calls) == 2
+        finally:
+            await ingress.close()
+
+    asyncio.run(scenario())
