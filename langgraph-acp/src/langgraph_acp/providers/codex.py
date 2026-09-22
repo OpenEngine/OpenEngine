@@ -37,29 +37,14 @@ from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
 from langgraph_acp.permissions import ACPPermissionHandler
 
-#: The ACP adapter for Codex, run without a global install.
-#:
-#: Unpinned, which is a deliberate exemption from the policy `cli-versions.json`
-#: states for the provider CLIs, not an oversight. That policy pins so a red
-#: compatibility run names a version somebody can reinstall; the cost of a pin
-#: here is different, because the adapter ships the Codex it drives. Pinning
-#: would freeze both halves against a service that keeps moving -- model
-#: retirements and auth changes arrive from the far side, where no pin helps --
-#: and this repository has no `cli-versions.yml` equivalent that would notice
-#: the pin going stale.
-#:
-#: What that exemption costs: a new major lands in production without a diff.
-#: What limits it: the `agents over ACP` job in `cli-compatibility.yml` runs the
-#: adapter on a schedule and records the version `npx` resolved, so a break
-#: names a version even though this line does not.
-#:
-#: An installation that wants the pin takes it, and gives up the above:
-#: `CodexACPProvider(command=["npx", "--yes", "@agentclientprotocol/codex-acp@1.9.0"])`.
+# Upgrade deliberately and pass the adapter contract check in test_adapter_compatibility.py.
+CODEX_ACP_VERSION = "1.13.0"
+
 # Windows CreateProcess needs the npm command shim extension.
 CODEX_ACP_COMMAND = (
     "npx.cmd" if os.name == "nt" else "npx",
     "--yes",
-    "@agentclientprotocol/codex-acp",
+    f"@agentclientprotocol/codex-acp@{CODEX_ACP_VERSION}",
 )
 
 

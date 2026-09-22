@@ -8,7 +8,13 @@ from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
 from langgraph_acp.permissions import ACPPermissionHandler
 
-CLAUDE_ACP_COMMAND = ("npx", "--yes", "@agentclientprotocol/claude-agent-acp")
+# Upgrade deliberately and pass the adapter contract check in test_adapter_compatibility.py.
+CLAUDE_ACP_VERSION = "0.81.0"
+CLAUDE_ACP_COMMAND = (
+    "npx",
+    "--yes",
+    f"@agentclientprotocol/claude-agent-acp@{CLAUDE_ACP_VERSION}",
+)
 
 
 @dataclass(frozen=True, slots=True)

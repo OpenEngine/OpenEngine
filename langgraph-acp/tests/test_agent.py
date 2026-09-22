@@ -21,6 +21,8 @@ from langgraph_acp import (
     StdioACPProvider,
     default_registry,
 )
+from langgraph_acp.providers.claude import CLAUDE_ACP_VERSION
+from langgraph_acp.providers.codex import CODEX_ACP_VERSION
 
 
 def test_codex_resolves_to_a_provider() -> None:
@@ -89,7 +91,7 @@ def test_codex_is_reached_through_its_acp_adapter() -> None:
     assert CODEX_ACP_COMMAND == (
         "npx.cmd" if os.name == "nt" else "npx",
         "--yes",
-        "@agentclientprotocol/codex-acp",
+        f"@agentclientprotocol/codex-acp@{CODEX_ACP_VERSION}",
     )
     assert CodexACPProvider().command == CODEX_ACP_COMMAND
     assert isinstance(CodexACPProvider(), ACPAgentProvider)
@@ -99,7 +101,7 @@ def test_claude_is_reached_through_its_acp_adapter() -> None:
     assert CLAUDE_ACP_COMMAND == (
         "npx",
         "--yes",
-        "@agentclientprotocol/claude-agent-acp",
+        f"@agentclientprotocol/claude-agent-acp@{CLAUDE_ACP_VERSION}",
     )
     assert ClaudeACPProvider().command == CLAUDE_ACP_COMMAND
     assert isinstance(ClaudeACPProvider(), ACPAgentProvider)
