@@ -3553,6 +3553,7 @@ def create_app(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         self_login=lambda: github_bot_login,
+        authenticated_login=github_posting_login,
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
         handle_assignment=github_create_workorder,

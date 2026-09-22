@@ -610,7 +610,7 @@ def test_other_assignments_are_ignored(change):
     ) is None
 
 
-def test_assignments_require_configured_login():
+def test_assignment_parser_requires_resolved_login():
     from engine.apps.web.github_ingress import assignment_from_payload
 
     assert assignment_from_payload("issues", _assigned_issue()) is None
@@ -644,3 +644,70 @@ def test_assignment_queue_deduplicates_and_retries_failures():
             await ingress.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("configured, resolved, expected", [
+    ("", "openenginebot", 1), ("", "someone", 0), ("OpenEngineBot", "someone", 1),
+])
+def test_assignment_webhook_resolves_login(configured, resolved, expected):
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    handled = []
+    lookup = AsyncMock(return_value=resolved)
+    ingress = GithubIngress(
+        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+        self_login=lambda: configured, authenticated_login=lookup,
+        handle_assignment=_record(handled),
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    body = json.dumps(_assigned_issue()).encode()
+    with TestClient(app) as client:
+        response = client.post("/events", content=body,
+                               headers=dict(_signed(body), **{"x-github-event": "issues"}))
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert response.status_code == 200
+    assert len(handled) == expected
+    if configured:
+        lookup.assert_not_awaited()
+    else:
+        lookup.assert_awaited_once_with("acme/api")
+
+
+@pytest.mark.parametrize("failure", [None, "", RuntimeError("lookup failed"), TimeoutError()])
+def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    lookup = None if failure is None else AsyncMock(
+        side_effect=failure if isinstance(failure, Exception) else None,
+        return_value="",
+    )
+    handled = []
+    ingress = GithubIngress(
+        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+        authenticated_login=lookup, handle_assignment=_record(handled),
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    body = json.dumps(_assigned_issue()).encode()
+    with TestClient(app) as client:
+        response = client.post("/events", content=body,
+                               headers=dict(_signed(body), **{"x-github-event": "issues"}))
+        assert response.status_code == 503
+        assert not handled
+        assert any(record.levelname == "WARNING" and "self-login" in record.message
+                   for record in caplog.records)
+        if lookup is not None:
+            lookup.side_effect = None
+            lookup.return_value = "OpenEngineBot"
+            response = client.post("/events", content=body,
+                                   headers=dict(_signed(body), **{"x-github-event": "issues"}))
+            assert response.status_code == 200
+            client.portal.call(ingress.drain)
+            assert len(handled) == 1
+        client.portal.call(ingress.close)

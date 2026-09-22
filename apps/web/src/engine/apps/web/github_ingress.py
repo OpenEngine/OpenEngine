@@ -261,6 +261,7 @@ class GithubIngress:
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
         self_login: Callable[[], str] = lambda: "",
+        authenticated_login: Callable[[str], Awaitable[str]] | None = None,
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
@@ -269,6 +270,7 @@ class GithubIngress:
         self._webhook_secret = webhook_secret
         self._repository = repository
         self._self_login = self_login
+        self._authenticated_login = authenticated_login
         self._handle = handle
         self._handle_merge = handle_merge
         self._handle_assignment = handle_assignment
@@ -338,16 +340,45 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
-        return Response(status_code=200 if self.accept(event, payload) else 503)
+        self_login = self._self_login()
+        if (
+            event == "issues" and payload.get("action") == "assigned"
+            and not self_login and self._authenticated_login is not None
+            and self._repository
+        ):
+            try:
+                # Leave time to acknowledge within GitHub's ten-second deadline.
+                async with asyncio.timeout(5):
+                    self_login = await self._authenticated_login(self._repository)
+            except Exception:
+                log.warning(
+                    "a GitHub assigned issue was delivered but the self-login lookup failed; "
+                    "refusing the delivery",
+                    exc_info=True,
+                )
+                return Response(status_code=503)
+        return Response(
+            status_code=200 if self.accept(event, payload, self_login=self_login) else 503
+        )
 
-    def accept(self, event: str, payload: Mapping[str, object]) -> bool:
+    def accept(
+        self, event: str, payload: Mapping[str, object], *, self_login: str | None = None,
+    ) -> bool:
         """Whether the delivery is settled -- queued, or deliberately ignored.
 
         False when there is nothing to queue into or nowhere to queue it: a
-        full queue, or no handler wired. Those are the cases where a failed
-        delivery GitHub can redeliver beats a 200 that loses the comment.
+        full queue, no handler wired, or an unresolved assignment login. A failed
+        delivery GitHub can redeliver beats a 200 that loses the work.
         """
-        assignment = assignment_from_payload(event, payload, self_login=self._self_login())
+        if self_login is None:
+            self_login = self._self_login()
+        if event == "issues" and payload.get("action") == "assigned" and not self_login:
+            log.warning(
+                "a GitHub assigned issue was delivered but no self-login could be resolved; "
+                "refusing the delivery rather than acknowledging and dropping it"
+            )
+            return False
+        assignment = assignment_from_payload(event, payload, self_login=self_login)
         if assignment is not None:
             return self._enqueue(
                 assignment, "assigned issue",
