@@ -454,6 +454,17 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     files, so a graph this repository could not actually run fails this.
     """
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
+    # engine.toml commits this deployment's real GitHub login client id and
+    # callback URL, completed by a secret that stays out of the file, this
+    # test, and CI -- wherever it is picked up from (a developer's own
+    # server-local .env included). Blanking all three of the config's login
+    # values here through their env overrides, rather than touching
+    # engine.toml or supplying any secret, keeps this test -- which is about
+    # the workflow dropdown, not login -- unauthenticated the way it was
+    # before login was configured.
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
     monkeypatch.chdir(tmp_path)
     app = build_app()
 
@@ -494,6 +505,13 @@ def test_every_composition_root_still_starts(
     # The interface has no exit code to check. Building the app is what
     # `engine-web` does before it serves anything, so building it is the test.
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
+    # See the matching comment above: blank all three of the committed and
+    # locally-supplied login values through their env overrides so this
+    # composition root starts the same unauthenticated way it did before
+    # login was configured, without touching engine.toml or needing a secret.
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
     assert build_app() is not None
 
 
