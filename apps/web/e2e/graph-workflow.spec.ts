@@ -421,6 +421,7 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
     "Review (Bugs & task adherence)",
     "Review (Performance)",
     "Review (Conciseness)",
+    "Review (DRYness & code duplication)",
     "Reranker",
     "Impact analysis",
   ]);

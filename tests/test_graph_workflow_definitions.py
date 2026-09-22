@@ -168,6 +168,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "review-bugs",
         "review-performance",
         "review-conciseness",
+        "review-dryness",
         "reranker",
         "impact-analysis",
         "human-review",
@@ -181,6 +182,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review (Bugs & task adherence)",
         "Review (Performance)",
         "Review (Conciseness)",
+        "Review (DRYness & code duplication)",
         "Reranker",
         "Impact analysis",
         "Human review",
@@ -195,16 +197,18 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review",
         "Review",
         "Review",
+        "Review",
         "",
         "",
     ]
-    # The kinds: a checkout, eight agents (implementation + 4 reviewers +
+    # The kinds: a checkout, nine agents (implementation + 5 reviewers +
     # reranker + naming + impact analysis), and the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
         "workspace",
         "agent",
         "agent",
         "tool",
+        "agent",
         "agent",
         "agent",
         "agent",
@@ -221,6 +225,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         False,
         True,
         False,
+        True,
         True,
         True,
         True,
@@ -291,7 +296,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 8
+    assert len(agents) == 9
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
