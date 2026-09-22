@@ -50,9 +50,8 @@ from langgraph_acp import (
 
 pytestmark = pytest.mark.compatibility
 
-#: What the adapter is expected to call itself. Checked rather than assumed:
-#: `npx --yes` installs whatever the registry hands it, and a package that
-#: resolves to something else is the drift this file exists to catch.
+#: What the pinned adapter is expected to call itself. Check this on upgrades
+#: so a package that resolves to something else is caught as protocol drift.
 CODEX_ADAPTER = "@agentclientprotocol/codex-acp"
 
 
