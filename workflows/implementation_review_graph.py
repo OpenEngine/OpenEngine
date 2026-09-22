@@ -71,9 +71,10 @@ AGENTS = agent_registry([CodexACPProvider(), ClaudeACPProvider()])
 #: elevated tier handles security, where missing something costs more.
 #:
 #: Claude reviewers are sonnet-sized by default, opus-sized for security.
+#: Tier aliases intentionally track the current Claude model of each size.
 #: Codex reviewers are terra-sized by default, sol-sized for security.
 REVIEW_MODELS: dict[str, dict[str, str]] = {
-    "claude": {"default": "claude-sonnet-5", "elevated": "claude-opus-5"},
+    "claude": {"default": "sonnet", "elevated": "opus"},
     "codex": {"default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
 }
 
