@@ -1033,6 +1033,7 @@ def create_app(
     github_client_id: str = "",
     github_client_id_source: str = "configuration",
     github_login_config: GitHubLoginConfig | None = None,
+    service_token: Callable[[], str] = lambda: "",
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
@@ -3615,7 +3616,7 @@ def create_app(
         readings = await _utilization.refresh(tuple(runners))
         return JSONResponse(utilization_json(readings))
 
-    github_login = GitHubLogin(github_login_config)
+    github_login = GitHubLogin(github_login_config, service_token)
     routes = [
         *github_login.routes(),
         Route("/api/config", config),

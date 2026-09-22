@@ -1,6 +1,6 @@
 """A deliberately narrow, authenticated Streamable HTTP surface."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 import secrets
 from urllib.parse import urlsplit
@@ -24,6 +24,9 @@ class Settings:
     workflow: str
     public_url: str
     engine_url: str = "http://127.0.0.1:8000"
+    # Presented to OE on `POST /api/runs` when OE requires GitHub login. Separate
+    # from `token`: a client's credential for the gateway never reaches OE.
+    engine_token: str = field(default="", repr=False)
 
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
@@ -45,6 +48,11 @@ class Settings:
                     raise ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
         if (not self.oidc_issuer or self.token) and (len(self.token) < 32 or any(c.isspace() for c in self.token)):
             raise ValueError("MCP token must contain at least 32 non-whitespace characters")
+        if self.engine_token:
+            if len(self.engine_token) < 32 or any(c.isspace() for c in self.engine_token):
+                raise ValueError("OE_MCP_ENGINE_TOKEN must contain at least 32 non-whitespace characters")
+            if self.engine_token == self.token:
+                raise ValueError("OE_MCP_ENGINE_TOKEN must differ from OE_MCP_TOKEN")
         if not self.repository.strip() or not self.workflow.strip():
             raise ValueError("MCP repository and workflow are required")
         public = urlsplit(self.public_url)
@@ -107,6 +115,25 @@ class ScopeChallenge:
         await self.app(scope, receive, send_challenge)
 
 
+def engine_login_problem(settings: Settings, *, transport: httpx.BaseTransport | None = None) -> str | None:
+    """Why this gateway could not create work orders in OE, if that is knowable now.
+
+    OE with GitHub login enabled rejects `POST /api/runs` without a service
+    token; catching that at startup beats a 401 on the first tool call. An
+    unreachable OE is not a problem here: the gateway may start first.
+    """
+    if settings.engine_token:
+        return None
+    try:
+        with httpx.Client(base_url=settings.engine_url, transport=transport, timeout=5, trust_env=False) as client:
+            status = client.get("/api/auth/github/status").json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if isinstance(status, dict) and status.get("loginRequired") is True:
+        return "OE requires GitHub login; set OE_MCP_ENGINE_TOKEN to OE's ENGINE_SERVICE_TOKEN"
+    return None
+
+
 def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None,
                oidc_transport: httpx.AsyncBaseTransport | None = None) -> ASGIApp:
     public = urlsplit(settings.public_url)
@@ -152,8 +179,9 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             base_url=settings.engine_url, transport=transport, timeout=60,
             trust_env=False,
         ) as client:
+            headers = {"Authorization": f"Bearer {settings.engine_token}"} if settings.engine_token else {}
             try:
-                response = await client.post("/api/runs", json=payload)
+                response = await client.post("/api/runs", json=payload, headers=headers)
             except httpx.RequestError as error:
                 raise RuntimeError(
                     "OE could not confirm creation. Check the OE work-order list before retrying."
