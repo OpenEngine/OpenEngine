@@ -223,7 +223,6 @@ def _app(
     graph_runtime=None,
     github_comment_handler=None,
     github_webhook_secret="",
-    github_bot_login="",
     approval_policy=None,
 ):
     from engine.apps.web.api import create_app
@@ -262,7 +261,6 @@ def _app(
         github_comment_handler=github_comment_handler,
         github_webhook_secret=lambda: github_webhook_secret,
         github_repository="acme/api",
-        github_bot_login=github_bot_login,
     ), capabilities, slack_store
 
 def _mention_graph():

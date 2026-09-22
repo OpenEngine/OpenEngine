@@ -625,19 +625,19 @@ def test_assignment_queue_deduplicates_and_retries_failures():
             if len(calls) == 1:
                 raise RuntimeError("temporarily unavailable")
 
-        ingress = GithubIngress(repository="acme/api", self_login=lambda: "OpenEngineBot",
-                                handle_assignment=handle)
+        ingress = GithubIngress(repository="acme/api", handle_assignment=handle)
         try:
-            assert ingress.accept("issues", _assigned_issue())
-            assert ingress.accept("issues", _assigned_issue())
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
             await ingress.drain()
             assert len(calls) == 1
-            assert ingress.accept("issues", _assigned_issue())
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
             await ingress.drain()
-            assert ingress.accept("issues", _assigned_issue())
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
             await ingress.drain()
             assert len(calls) == 2
-            assert ingress.accept("issues", dict(_assigned_issue(), repository={"full_name": "other/repo"}))
+            assert ingress.accept("issues", dict(_assigned_issue(), repository={"full_name": "other/repo"}),
+                                  self_login="OpenEngineBot")
             await ingress.drain()
             assert len(calls) == 2
         finally:
@@ -646,10 +646,8 @@ def test_assignment_queue_deduplicates_and_retries_failures():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("configured, resolved, expected", [
-    ("", "openenginebot", 1), ("", "someone", 0), ("OpenEngineBot", "someone", 1),
-])
-def test_assignment_webhook_resolves_login(configured, resolved, expected):
+@pytest.mark.parametrize("resolved, expected", [("openenginebot", 1), ("someone", 0)])
+def test_assignment_webhook_resolves_login(resolved, expected):
     from unittest.mock import AsyncMock
     from starlette.applications import Starlette
     from starlette.routing import Route
@@ -659,7 +657,7 @@ def test_assignment_webhook_resolves_login(configured, resolved, expected):
     lookup = AsyncMock(return_value=resolved)
     ingress = GithubIngress(
         repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
-        self_login=lambda: configured, authenticated_login=lookup,
+        authenticated_login=lookup,
         handle_assignment=_record(handled),
     )
     app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
@@ -671,10 +669,7 @@ def test_assignment_webhook_resolves_login(configured, resolved, expected):
         client.portal.call(ingress.close)
     assert response.status_code == 200
     assert len(handled) == expected
-    if configured:
-        lookup.assert_not_awaited()
-    else:
-        lookup.assert_awaited_once_with("acme/api")
+    lookup.assert_awaited_once_with("acme/api")
 
 
 @pytest.mark.parametrize("failure", [None, "", RuntimeError("lookup failed"), TimeoutError()])
