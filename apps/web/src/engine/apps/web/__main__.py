@@ -30,7 +30,7 @@ from engine.apps.web.composition import (
     claude_session_config_for,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
-from engine.apps.web.github_login import GitHubLoginConfig
+from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
 from engine.apps.web.source_control import SourceControlPreferences
@@ -137,6 +137,31 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
         raise EngineConfigError(str(error)) from error
 
 
+def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
+    """How the login middleware reads `ENGINE_SERVICE_TOKEN`, per request.
+
+    Read like the login client secret: the process environment first, then the
+    server-local `.env` beside `engine.toml`, never TOML. A reader so rotating
+    the file takes effect without a restart; a value set now but invalid fails
+    startup rather than silently admitting nothing.
+    """
+
+    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+
+    def read() -> str:
+        if "ENGINE_SERVICE_TOKEN" in os.environ:
+            return os.environ["ENGINE_SERVICE_TOKEN"]
+        values = dotenv_values(secret_file, interpolate=False)
+        return values.get("ENGINE_SERVICE_TOKEN") or ""
+
+    token = read()
+    if token and not valid_service_token(token):
+        raise EngineConfigError(
+            "ENGINE_SERVICE_TOKEN must contain at least 32 non-whitespace characters"
+        )
+    return read
+
+
 def _github_client_id_source() -> str:
     return "environment" if "GITHUB_CLIENT_ID" in os.environ else "configuration"
 
@@ -198,6 +223,7 @@ def compose_app(
         github_client_id=settings.github_client_id,
         github_client_id_source=_github_client_id_source(),
         github_login_config=github_login_config,
+        service_token=_service_token_reader(loaded),
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
         github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
@@ -232,6 +258,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = _settings(loaded)
         if args.check:
             _github_login_config(loaded)
+            _service_token_reader(loaded)
             report_wiring(settings)
             return 0
         app = compose_app(loaded, workflow_catalog)

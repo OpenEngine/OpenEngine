@@ -37,6 +37,25 @@ session checks and retain Slack signature verification. The frontend rechecks
 session status every 30 seconds and unmounts the app if the session is invalid.
 Repository permission checks (#302) remain separate work.
 
+## Service token for the MCP gateway
+
+The [remote MCP gateway](remote-mcp.md) creates work orders server to server
+and cannot hold a browser session. Set `ENGINE_SERVICE_TOKEN` in the same
+server-local `.env` (or the process environment, which takes precedence) and
+give the gateway the same value as `OE_MCP_ENGINE_TOKEN`:
+
+```sh
+openssl rand -hex 32
+```
+
+The middleware accepts `Authorization: Bearer <token>` in place of a session
+only for `POST /api/runs`; every other protected route still requires login.
+The token must have at least 32 non-whitespace characters; a shorter value
+fails startup. Like the client secret, it is never read from TOML and is reread
+on each request, so rotating it in `.env` needs no restart (update the
+gateway's value and restart the gateway). Leaving it unset admits no service
+requests.
+
 Login state and the PKCE verifier live in a signed, HttpOnly browser cookie that expires after ten minutes;
 abandoned logins reserve no server slots. Replay protection relies on GitHub
 consuming authorization codes once and binding them to the PKCE verifier.

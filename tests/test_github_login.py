@@ -456,3 +456,92 @@ def test_login_retry_preserves_destination(flow, error):
     with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
         response = callback(client, state, code="good")
     assert response.headers["location"] == destination
+
+
+# --- service token ------------------------------------------------------------
+
+SERVICE_TOKEN = "service-token-" * 3
+
+
+def _service_app(token=SERVICE_TOKEN):
+    from starlette.responses import JSONResponse as _J
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), lambda: token)
+    routes = flow.routes() + [
+        Route("/api/runs", lambda _r: _J({"runId": "run-1"}, status_code=201), methods=["GET", "POST"]),
+        Route("/api/runs/{run_id}", lambda _r: _J({"ok": True}), methods=["POST"]),
+        Route("/api/data", lambda _r: _J({"ok": True}), methods=["GET", "POST"]),
+    ]
+    return TestClient(flow.middleware(Starlette(routes=routes)), base_url="https://engine.test")
+
+
+def test_service_token_admits_run_creation():
+    client = _service_app()
+    response = client.post("/api/runs", json={}, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
+    assert response.status_code == 201
+
+
+@pytest.mark.parametrize("method, path", [
+    ("GET", "/api/runs"), ("POST", "/api/runs/run-1"), ("POST", "/api/data"), ("GET", "/api/data"),
+])
+def test_service_token_admits_nothing_else(method, path):
+    client = _service_app()
+    response = client.request(method, path, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize("authorization", [
+    None, "Bearer wrong-" + SERVICE_TOKEN, SERVICE_TOKEN, f"Basic {SERVICE_TOKEN}",
+])
+def test_service_token_rejects_missing_or_wrong_header(authorization):
+    client = _service_app()
+    headers = {"Authorization": authorization} if authorization else {}
+    assert client.post("/api/runs", json={}, headers=headers).status_code == 401
+
+
+@pytest.mark.parametrize("configured", ["", "short", "has whitespace " * 3])
+def test_unset_or_invalid_service_token_admits_nothing(configured):
+    client = _service_app(configured)
+    response = client.post("/api/runs", json={}, headers={"Authorization": f"Bearer {configured}"})
+    assert response.status_code == 401
+
+
+def test_service_token_rotation_takes_effect_per_request():
+    current = {"token": SERVICE_TOKEN}
+    from starlette.responses import JSONResponse as _J
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), lambda: current["token"])
+    routes = [Route("/api/runs", lambda _r: _J({}, status_code=201), methods=["POST"])]
+    client = TestClient(flow.middleware(Starlette(routes=routes)), base_url="https://engine.test")
+    assert client.post("/api/runs", headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}).status_code == 201
+    current["token"] = "rotated-token-" * 3
+    assert client.post("/api/runs", headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}).status_code == 401
+    assert client.post("/api/runs", headers={"Authorization": f"Bearer {current['token']}"}).status_code == 201
+
+
+def test_service_token_reader_prefers_environment_and_rereads_file(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from engine.apps.web.__main__ import _service_token_reader
+
+    monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
+    loaded = SimpleNamespace(path=tmp_path / "engine.toml")
+    env = tmp_path / ".env"
+    env.write_text(f"ENGINE_SERVICE_TOKEN={SERVICE_TOKEN}\n")
+    read = _service_token_reader(loaded)
+    assert read() == SERVICE_TOKEN
+    env.write_text("ENGINE_SERVICE_TOKEN=rotated-token-rotated-token-rotated\n")
+    assert read() == "rotated-token-rotated-token-rotated"
+    monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "from-environment-" * 2)
+    assert read() == "from-environment-" * 2
+
+
+def test_invalid_service_token_fails_startup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from engine.apps.web.__main__ import _service_token_reader
+    from engine.runtime import EngineConfigError
+
+    monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "short")
+    with pytest.raises(EngineConfigError, match="ENGINE_SERVICE_TOKEN"):
+        _service_token_reader(SimpleNamespace(path=tmp_path / "engine.toml"))
