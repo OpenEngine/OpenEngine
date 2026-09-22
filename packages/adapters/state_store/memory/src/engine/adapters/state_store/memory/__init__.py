@@ -86,6 +86,18 @@ class InMemoryStateStore:
             states = [state for state in states if state.milestone_id == milestone_id]
         return tuple(reversed(states))
 
+    async def list_runs_for_origin(
+        self, channel: str, thread_id: str
+    ) -> Sequence[RunState]:
+        with self._lock:
+            states = [
+                state for state in self._states.values()
+                if state.origin is not None
+                and state.origin.channel == channel
+                and state.origin.thread_id == thread_id
+            ]
+        return tuple(reversed(states))
+
     async def delete_run(self, run_id: RunId) -> bool:
         with self._lock:
             return self._states.pop(run_id, None) is not None

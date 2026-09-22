@@ -2950,20 +2950,26 @@ def create_app(
         ))
         return link.url if link else "", str(state.run_id)
 
+    slack_selections: dict[tuple[str, str, str], str] = {}
+
+    async def concierge_select_workorder(origin: RunOrigin, run_id: str) -> None:
+        slack_selections[(origin.channel, origin.thread_id, origin.author)] = run_id
+
     async def concierge_find_workorders(origin: RunOrigin) -> list[RunState]:
-        return [
-            state for state in await session.state_store.list_runs()
-            if state.origin is not None
-            and state.origin.channel == origin.channel
-            and state.origin.thread_id == origin.thread_id
-        ]
+        linked = list(await session.state_store.list_runs_for_origin(
+            origin.channel, origin.thread_id
+        ))
+
+        selected = slack_selections.get((origin.channel, origin.thread_id, origin.author))
+        matches = [state for state in linked if str(state.run_id) == selected]
+        return matches or linked
 
     async def concierge_controlled_workorder(origin: RunOrigin) -> RunState:
         linked = await concierge_find_workorders(origin)
         if len(linked) != 1:
             raise RuntimeError(
                 "this thread has no work order" if not linked else
-                "this thread has multiple work orders; use the WorkOrder page to select one"
+                "this thread has multiple work orders; ask which WorkOrder ID the message applies to in Slack"
             )
         state = linked[0]
         assert state.origin is not None
@@ -2976,113 +2982,102 @@ def create_app(
             )
         return state
 
-    async def concierge_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+    async def concierge_snapshot(origin: RunOrigin) -> tuple[RunState, GraphRuntime, RunSnapshot]:
         state = await concierge_controlled_workorder(origin)
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("graph WorkOrders are not running in this process")
-        try:
-            await runtime.steer(
-                state.run_id, f"Slack instruction from <@{origin.author}>:\n{prompt}"
-            )
-        except GraphRuntimeError as error:
-            raise RuntimeError(str(error)) from error
+        snapshot = await runtime.snapshot(state.run_id)
+        if snapshot is None:
+            raise RuntimeError("the WorkOrder is unavailable")
+        return state, runtime, snapshot
+
+    def concierge_result(state: RunState) -> tuple[str, str]:
         link = run_notifier.work_order_link(state)
         return link.url if link else "", str(state.run_id)
 
-    async def concierge_resume_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
-        state = await concierge_controlled_workorder(origin)
-        definition = state.workflow_definition or catalog.get(state.workflow_id)
-        if definition is None:
-            raise RuntimeError("the stored step workflow is unavailable")
-        instances = await session.state_store.list_instances(workflow_run_id=state.run_id)
-        candidates = [
-            instance for instance in instances
-            if instance.workflow_step_id is not None
-            and isinstance(step := definition.step(instance.workflow_step_id), AgentStep)
-            and step.editable and step.workspace_access.value == "write"
-        ]
-        if len(candidates) != 1:
-            raise RuntimeError("no unique editable implementation to resume; select a conversation on the WorkOrder page")
-        thread = await service.get(candidates[0].instance_id)
-        if thread is None:
-            raise RuntimeError("the implementation conversation is unavailable")
-        await continue_workflow(
-            thread, f"Slack follow-up from <@{origin.author}>:\n{prompt}", resume_only=True,
+    async def concierge_steer_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+        state, runtime, snapshot = await concierge_snapshot(origin)
+        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+            raise RuntimeError("this WorkOrder has stopped; use resume_workorder for follow-up work")
+        if any(one.kind is ApprovalKind.USER_INPUT for one in snapshot.pending_approvals):
+            raise RuntimeError("answer the pending question or review in Slack first")
+        await runtime.steer(
+            state.run_id, f"Slack instruction from <@{origin.author}>:\n{prompt}",
+            node_id=_reentry_node(runtime, snapshot),
         )
-        link = run_notifier.work_order_link(state)
-        return link.url if link else "", str(state.run_id)
+        return concierge_result(state)
+
+    async def concierge_resume_workorder(origin: RunOrigin, prompt: str) -> tuple[str, str]:
+        state, runtime, snapshot = await concierge_snapshot(origin)
+        if snapshot.pending_approvals:
+            raise RuntimeError("answer the pending question or review in Slack first")
+        if snapshot.status not in (RunStatus.COMPLETED, RunStatus.FAILED):
+            raise RuntimeError("this WorkOrder is still running; use steer_workorder")
+        node = _reentry_node(runtime, snapshot)
+        if node is None:
+            raise RuntimeError("the workflow has no unique implementation to resume; please clarify the target")
+        await runtime.steer(
+            state.run_id, f"Slack follow-up from <@{origin.author}>:\n{prompt}", node_id=node,
+        )
+        return concierge_result(state)
 
     async def concierge_find_questions(origin: RunOrigin) -> list[dict]:
         linked = await concierge_find_workorders(origin)
-        if len(linked) != 1 or linked[0].phase is not RunPhase.RUNNING_AGENT:
+        if len(linked) != 1 or surface.runtime is None:
             return []
-        state = linked[0]
-        if state.current_agent_run_id is None:
+        snapshot = await surface.runtime.snapshot(linked[0].run_id)
+        if snapshot is None:
             return []
         return [
-            {"approval_id": str(record.approval_id), "questions": json.loads(record.questions)}
-            for record in await session.state_store.list_approvals(agent_run_id=state.current_agent_run_id)
-            if record.is_pending and record.kind is ApprovalKind.USER_INPUT and record.questions
+            {"approval_id": str(record.approval_id), "tool_name": record.tool_name,
+             "questions": [{"id": "reply", "question": record.reason}],
+             "command": record.command}
+            for record in snapshot.pending_approvals
+            if record.kind is ApprovalKind.USER_INPUT
         ]
 
     async def concierge_answer_question(
         origin: RunOrigin, approval_id: str, answers: dict[str, list[str]],
     ) -> tuple[str, str]:
-        state = await concierge_controlled_workorder(origin)
-        lock = workflow_restart_locks.setdefault(state.run_id, asyncio.Lock())
-        async with lock:
-            state = await session.state_store.load(state.run_id)
-            record = await session.state_store.load_approval(ApprovalId(approval_id))
-            if (
-                state is None or state.phase is not RunPhase.RUNNING_AGENT
-                or record is None or not record.is_pending
-                or record.kind is not ApprovalKind.USER_INPUT or not record.questions
-                or record.agent_run_id != state.current_agent_run_id
-            ):
-                raise RuntimeError("this question is not pending for the active WorkOrder")
-            instance = await session.state_store.load_instance(record.instance_id)
-            if instance is None or instance.workflow_run_id != state.run_id:
-                raise RuntimeError("this question belongs to another WorkOrder")
-            await service.answer_question(
-                record.instance_id, record.approval_id,
-                tuple(UserInputAnswer(question_id=key, answers=tuple(values)) for key, values in answers.items()),
-                state.current_agent_run_id,
-            )
-        link = run_notifier.work_order_link(state)
-        return link.url if link else "", str(state.run_id)
+        state, runtime, snapshot = await concierge_snapshot(origin)
+        pending = next((one for one in snapshot.pending_approvals
+                        if str(one.approval_id) == approval_id
+                        and one.kind is ApprovalKind.USER_INPUT
+                        and one.tool_name != HUMAN_REVIEW_TOOL), None)
+        if pending is None or set(answers) != {"reply"}:
+            raise RuntimeError("this question is not pending for the WorkOrder")
+        await runtime.steer(
+            state.run_id,
+            f"Slack answer from <@{origin.author}>:\n" + "\n".join(answers["reply"]),
+            execution_id=pending.execution_id,
+        )
+        await runtime.decide(state.run_id, pending.approval_id, ApprovalDecision.ACCEPT)
+        return concierge_result(state)
 
     async def concierge_decide_review(
         origin: RunOrigin, approved: bool, summary: str,
     ) -> tuple[str, str]:
-        state = await concierge_controlled_workorder(origin)
-        lock = workflow_restart_locks.setdefault(state.run_id, asyncio.Lock())
-        async with lock:
-            state = await session.state_store.load(state.run_id)
-            if (
-                state is None
-                or state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
-                or state.current_step_id is None
-            ):
-                raise RuntimeError("this WorkOrder is not awaiting a review decision")
-            try:
-                next_state = await workflow_executor.complete_human_review(
-                    HumanReviewCompleted(
-                        run_id=state.run_id,
-                        step_id=state.current_step_id,
-                        approved=approved,
-                        summary=summary,
-                    )
-                )
-            except WorkflowExecutionError as error:
-                raise RuntimeError(str(error)) from error
-            if next_state.phase is RunPhase.RUNNING_AGENT:
-                track_workflow(
-                    state.run_id,
-                    asyncio.create_task(workflow_executor.resume_agent_step(state.run_id)),
-                )
-        link = run_notifier.work_order_link(state)
-        return link.url if link else "", str(state.run_id)
+        state, runtime, snapshot = await concierge_snapshot(origin)
+        pending = [one for one in snapshot.pending_approvals
+                   if one.kind is ApprovalKind.USER_INPUT and one.tool_name == HUMAN_REVIEW_TOOL]
+        if len(pending) != 1:
+            raise RuntimeError("this WorkOrder is not awaiting a unique review decision")
+        if approved:
+            if summary:
+                await runtime.steer(state.run_id, summary, execution_id=pending[0].execution_id)
+            await runtime.decide(state.run_id, pending[0].approval_id, ApprovalDecision.ACCEPT)
+        else:
+            node = _reentry_node(runtime, snapshot)
+            if node is None:
+                raise RuntimeError("the workflow has no unique implementation to resume; please clarify the target")
+            # Targeted steering records the feedback and forks implementation,
+            # settling the old review without cancelling the WorkOrder.
+            await runtime.steer(
+                state.run_id,
+                f"Slack requested changes from <@{origin.author}>:\n{summary}", node_id=node,
+            )
+        return concierge_result(state)
 
     slack_concierge = SlackConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
@@ -3091,6 +3086,11 @@ def create_app(
         turn_finished=concierge_turn_finished,
         find_workorders=concierge_find_workorders,
         steer_workorder=concierge_steer_workorder,
+        resume_workorder=concierge_resume_workorder,
+        select_workorder=concierge_select_workorder,
+        find_questions=concierge_find_questions,
+        answer_question=concierge_answer_question,
+        decide_review=concierge_decide_review,
     )
     _slack_comms = SlackCommunications(_slack_store)
     slack_ingress = SlackIngress(

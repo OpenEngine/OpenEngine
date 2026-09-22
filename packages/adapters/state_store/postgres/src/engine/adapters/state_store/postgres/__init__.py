@@ -47,6 +47,11 @@ class PostgresStateStore:
     ) -> Sequence[RunState]:
         raise NotImplementedError("Postgres reads land with the state-store ticket")
 
+    async def list_runs_for_origin(
+        self, channel: str, thread_id: str
+    ) -> Sequence[RunState]:
+        raise NotImplementedError("Postgres reads land with the state-store ticket")
+
     async def delete_run(self, run_id: RunId) -> bool:
         raise NotImplementedError("Postgres writes land with the state-store ticket")
 

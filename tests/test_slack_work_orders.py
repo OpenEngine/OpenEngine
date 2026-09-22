@@ -1287,7 +1287,8 @@ def test_ingress_filters_messages_and_bounds_queue():
     asyncio.run(scenario())
 
 
-def test_ingress_does_not_query_workorders_for_a_bot_message():
+@pytest.mark.parametrize("bot_marker", [{"bot_id": "B"}, {"bot_profile": {"id": "B"}}])
+def test_ingress_does_not_query_workorders_for_a_bot_message(bot_marker):
     """Progress posts come back through Slack Events and must be cheap to ignore."""
     from engine.slack_concierge import SlackIngress
     from starlette.applications import Starlette
@@ -1314,7 +1315,7 @@ def test_ingress_does_not_query_workorders_for_a_bot_message():
     app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
     payload = {"type": "event_callback", "event": {
         "type": "message", "channel": "C", "thread_ts": "1", "ts": "2",
-        "user": "BOT", "bot_id": "B", "text": "progress update",
+        "user": "BOT", "text": "progress update", **bot_marker,
     }}
     with TestClient(app) as client:
         response = client.post("/events", json=payload)

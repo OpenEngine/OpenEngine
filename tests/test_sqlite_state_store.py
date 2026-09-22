@@ -325,6 +325,28 @@ def test_a_work_order_and_its_conversations_survive_reopening(tmp_path) -> None:
     assert instances[0].conversation_id == "review-conversation"
 
 
+def test_list_runs_for_origin_returns_only_the_linked_thread(tmp_path) -> None:
+    store = SQLiteStateStore(tmp_path / "runs.sqlite3")
+    linked = RunState(
+        run_id=RunId("run-linked"), task_id=TaskId("task-linked"),
+        workflow_id=WorkflowId("workflow"),
+        origin=RunOrigin(channel="C1", thread_id="17.5", author="U9"),
+    )
+    unrelated = RunState(
+        run_id=RunId("run-unrelated"), task_id=TaskId("task-unrelated"),
+        workflow_id=WorkflowId("workflow"),
+        origin=RunOrigin(channel="C1", thread_id="18.0", author="U9"),
+    )
+    try:
+        asyncio.run(store.save(linked))
+        asyncio.run(store.save(unrelated))
+        runs = asyncio.run(store.list_runs_for_origin("C1", "17.5"))
+    finally:
+        store.close()
+
+    assert runs == (linked,)
+
+
 def test_a_row_this_build_cannot_read_is_skipped_rather_than_hiding_the_rest(
     tmp_path,
 ) -> None:
