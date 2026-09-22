@@ -47,7 +47,7 @@ from uuid import uuid4
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
-from engine.apps.web.github_ingress import GithubComment, GithubIngress, GithubMerge
+from engine.apps.web.github_ingress import GithubAssignment, GithubComment, GithubIngress, GithubMerge
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -3331,9 +3331,39 @@ def create_app(
             )
         return posting_login[repository]
 
+    async def github_create_workorder(assignment: GithubAssignment) -> None:
+        """An assignment is an explicit request to implement the issue."""
+        delivery = urlsplit(assignment.url)
+        found = change_request(delivery._replace(
+            path=f"/{assignment.repository}/pull/{assignment.number}", query="", fragment="",
+        ).geturl())
+        if found is None:
+            return
+        repository = found.project
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            may_write = await session.capabilities.source_control.can_write_repository(
+                pull_request_url(repository, assignment.number), assignment.sender,
+            )
+        if not may_write:
+            return
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        if surface.runtime is None:
+            raise RuntimeError("could not start a work order: graph runtime unavailable")
+        # Like PR-started runs, omit the chat origin: GitHub channels cannot
+        # receive progress through the Slack communications adapter.
+        await start_graph_run(
+            surface.runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=(f"Implement issue #{assignment.number}: {assignment.title}\n\n"
+                    f"{assignment.body}\n\nIssue: {assignment.url}\n"
+                    f"Include Fixes #{assignment.number} in the pull request body."),
+            repository=repository, milestone_id=None,
+        )
+
     async def github_concierge_turn(comment: GithubComment) -> None:
-        # Issue-driven work orders are not supported. PR conversation comments
-        # and inline review replies both belong to an existing work order.
+        # Issue comments do not start work; only assignment events do.
         if not comment.is_pull_request:
             github_activity.ignored("not a pull request")
             return
@@ -3519,6 +3549,7 @@ def create_app(
         self_login=lambda: github_bot_login,
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
+        handle_assignment=github_create_workorder,
         activity=github_activity,
     )
 

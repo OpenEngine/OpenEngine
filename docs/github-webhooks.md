@@ -1,14 +1,13 @@
 # GitHub webhooks
 
-Engine reads two things from GitHub over a signed webhook: comments, which are
-somebody asking for something, and merges, which are somebody accepting the
-work. The route only exists once something is wired to act on a delivery, so
+Engine reads comments, issue assignments, and merges from GitHub over a signed
+webhook. Comments and assignments request work; merges accept it. The route only exists once something is wired to act on a delivery, so
 configure the webhook after that is in place: an endpoint that accepted
 deliveries it could never act on would collect failures until GitHub disabled
 the hook.
 
 Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, subscribe it to the
-`issue_comment`, `pull_request_review_comment`, and `pull_request` events, and
+`issue_comment`, `pull_request_review_comment`, `issues`, and `pull_request` events, and
 give it a secret.
 
 ## Naming the repository
@@ -106,6 +105,25 @@ there.
 The agent reading the comment decides only whether it is asking for a change at
 all; a comment that asks for nothing reaches no work order. Comments on issues
 are not answered.
+
+## Starting work from an issue assignment
+
+Set `GITHUB_BOT_LOGIN=OpenEngineBot` (or your Engine account's login) and
+subscribe the webhook to `issues`. Assigning an open issue to that account
+starts a work order using `work_orders.workflow`, or the sole available workflow
+when no default is configured. The issue title, body, and URL become the task,
+including an instruction to close the issue in the resulting PR body.
+
+Only `assigned` events targeting the configured account are accepted; matching
+is case-insensitive. The assigning user must have repository write access.
+Ordinary issue comments, other assignees, and closed issues do not start work.
+The run uses the issue's repository, without claiming a pull request or sending
+progress to Slack. No concierge model turn is needed: assignment itself requests
+implementation.
+
+Repeated assignments and redeliveries for the same issue are deduplicated in
+the bounded ingress memory. Failed handling can be retried by redelivery. As
+with comment ingress, this deduplication does not survive a process restart.
 
 ## Merging as the human review
 

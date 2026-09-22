@@ -1201,3 +1201,45 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
     assert Delivery(attempted=True).announcement() == UNDELIVERED
     # Never asked for: a comment that wanted no change.
     assert Delivery().announcement() == NOT_FORWARDED
+
+
+@pytest.mark.parametrize("may_write", [True, False])
+def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True)
+    communications = RecordingCommunications()
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        github_bot_login="OpenEngineBot", graph_runtime=opened,
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=may_write))
+    object.__setattr__(capabilities, "source_control", source)
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        source.can_write_repository.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/7", "maintainer")
+        if may_write:
+            runtime.start.assert_awaited_once()
+            inputs = runtime.start.await_args.args[1]
+            assert inputs["repository"] == "acme/api"
+            assert "Fix the bug" in inputs["task"]
+            assert "Reproduction steps" in inputs["task"]
+            assert "https://github.com/acme/api/issues/7" in inputs["task"]
+            assert "Fixes #7" in inputs["task"]
+            runs = client.portal.call(capabilities.state_store.list_runs)
+            assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
+        else:
+            runtime.start.assert_not_awaited()
+        runtime.store.claim_pull_request.assert_not_awaited()
+    assert not provider.clients
+    assert not communications.posts
