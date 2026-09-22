@@ -9,6 +9,9 @@ which constructs the same application again in every fresh child process.
 """
 
 import argparse
+from importlib.resources import files
+import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -19,6 +22,7 @@ from dotenv import dotenv_values
 from starlette.applications import Starlette
 
 from engine.apps.web.api import create_app
+from engine.apps.web.paths import config_directory, data_directory, log_directory
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
@@ -45,7 +49,10 @@ from engine.runtime import (
 )
 
 #: Vite's production output, served by the same process as the API.
-STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
+STATIC_DIRECTORY = Path(str(files("engine.apps.web").joinpath("static")))
+# Vite output remains available to the source development loop.
+if not STATIC_DIRECTORY.is_dir():
+    STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
 
 
 def report_wiring(settings: Settings) -> None:
@@ -92,6 +99,8 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
     """Apply deployment overrides to the immutable TOML configuration."""
 
     return Settings(
+        sqlite_path=str(data_directory() / "conversations.sqlite3"),
+        graph_state_directory=str(data_directory() / "graph-state"),
         engine_config=loaded.config,
         config_path=loaded.path,
         github_client_id=os.environ.get(
@@ -117,7 +126,7 @@ def _webhook_secret_reader(webhook: GitHubWebhookConfig | None) -> Callable[[], 
 
 
 def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None:
-    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else config_directory()) / ".env"
     values = dotenv_values(secret_file, interpolate=False)
     client_id = os.environ.get(
         "ENGINE_GITHUB_LOGIN_CLIENT_ID", loaded.config.github_login_client_id
@@ -150,14 +159,26 @@ def read_configuration(
     and because "what a restart is for" has to be one list: the development
     server watches exactly what this function reads.
     """
-    loaded = load_engine_config(config_path)
+    # Installed startup never reads an incidental engine.toml from the cwd.
+    selected = config_path or os.environ.get("ENGINE_CONFIG")
+    if selected is None:
+        default = config_directory() / "engine.toml"
+        selected = default if default.is_file() else None
+    loaded = (load_engine_config(selected) if selected is not None
+              else LoadedEngineConfig())
+    directory = loaded.workflows_directory
+    if directory is None:
+        directory = Path(str(files("engine.apps.web").joinpath("default_workflows")))
+        if not directory.is_dir():
+            # Editable developer installs retain the canonical workflow sources.
+            directory = Path(__file__).resolve().parents[6] / "workflows"
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(
-            loaded.workflows_directory,
+            directory,
             session_config=claude_session_config_for(settings),
         )
-        if loaded.workflows_directory is not None
+        if directory.is_dir() or loaded.workflows_directory is not None
         else None
     )
     return loaded, catalog
@@ -238,6 +259,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
+    handler = RotatingFileHandler(log_directory() / "engine-web.log",
+                                  maxBytes=5_000_000, backupCount=3)
+    logging.getLogger().addHandler(handler)
     print(describe_loaded_config(loaded))
     uvicorn.run(app, host=settings.host, port=settings.port)
     return 0

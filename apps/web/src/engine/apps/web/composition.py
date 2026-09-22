@@ -96,7 +96,7 @@ class Settings:
     Frozen so one immutable settings value can be shared by the server wiring.
     """
 
-    host: str = "localhost"
+    host: str = "127.0.0.1"
     port: int = 8000
     codex_binary: str = "codex"
     codex_sandbox: str = "read-only"

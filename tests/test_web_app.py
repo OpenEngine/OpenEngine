@@ -173,12 +173,15 @@ def test_the_application_can_be_built_from_configuration_alone(
     when `main` assembles it would leave `engine-dev` reloading into nothing.
     """
     monkeypatch.chdir(tmp_path)
-
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
     if show_projects is not None:
         (tmp_path / "engine.toml").write_text(
             f"show_projects = {str(show_projects).lower()}\n"
         )
+        monkeypatch.setenv("ENGINE_CONFIG", str(tmp_path / "engine.toml"))
     app = build_app()
 
     async def ask() -> httpx.Response:
@@ -195,8 +198,9 @@ def test_the_application_can_be_built_from_configuration_alone(
         {"id": "codex", "implementation": "CodexAgentRunner"},
         {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
     ]
-    # Composed from the working directory, exactly as `engine-web` composes it.
-    assert (tmp_path / "conversations.sqlite3").exists()
+    from engine.apps.web.paths import data_directory
+    assert (data_directory() / "conversations.sqlite3").exists()
+    assert not (tmp_path / "conversations.sqlite3").exists()
     assert app.state.milestone_scoper is not None
 
 

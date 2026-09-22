@@ -1,5 +1,7 @@
 # OpenEngine
 
+For installation without a source checkout, see [release installation](docs/installation.md).
+
 OpenEngine is a graph execution engine that meets you where you work.
 
 ![](docs/images/oe_land.png)

@@ -1,0 +1,92 @@
+name: installable release
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/web run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-frontend
+          path: apps/web/dist
+  release:
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-frontend
+          path: apps/web/dist
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.9.28'
+      - name: Assemble release
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          version="0.0.0+${SOURCE_SHA}"
+          case "$SOURCE_REF" in refs/tags/v*) version="${SOURCE_REF#refs/tags/v}";; esac
+          uv run --no-project --python 3.12.12 release/build.py --version "$version" --commit "$SOURCE_SHA" --output "$RUNNER_TEMP/release"
+      - name: Install and test with checkout unavailable and no language tools on PATH
+        run: |
+          mv "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE.hidden"
+          trap '/bin/mv "$GITHUB_WORKSPACE.hidden" "$GITHUB_WORKSPACE"' EXIT
+          cd "$RUNNER_TEMP"
+          mkdir clean-home tools
+          # Only installer prerequisites are exposed. No Python, Node, npm, uv or agents.
+          for tool in sh uname dirname pwd mkdir cp grep sha256sum shasum ln; do
+            location=$(command -v "$tool" || true)
+            if [ -n "$location" ]; then ln -s "$location" "tools/$tool"; fi
+          done
+          export HOME="$RUNNER_TEMP/clean-home"
+          unset PYTHONPATH ENGINE_CONFIG XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
+          export PATH="$RUNNER_TEMP/tools"
+          /bin/sh "$RUNNER_TEMP/release/install.sh"
+          "$HOME/.local/share/openengine/runtime/env/bin/python" "$RUNNER_TEMP/release/smoke.py"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Browser test tooling
+        run: |
+          npm --prefix apps/web ci
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/browsers" npm --prefix apps/web exec -- playwright install --with-deps chromium
+      - name: Installed frontend communicates with the API
+        run: |
+          export HOME="$RUNNER_TEMP/clean-home"
+          unset ENGINE_CONFIG PYTHONPATH XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
+          cd "$RUNNER_TEMP"
+          "$HOME/.local/bin/engine-web" > browser-server.log 2>&1 &
+          server=$!
+          trap 'kill "$server"; cat browser-server.log' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:8000/api/config >/dev/null; then break; fi
+            sleep 1
+          done
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/browsers" node "$GITHUB_WORKSPACE/release/browser.cjs"
+      - name: Archive tested release
+        run: tar -czf "$RUNNER_TEMP/openengine-${{ matrix.target }}.tar.gz" -C "$RUNNER_TEMP/release" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openengine-${{ matrix.target }}
+          path: ${{ runner.temp }}/openengine-*.tar.gz

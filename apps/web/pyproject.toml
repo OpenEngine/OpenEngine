@@ -70,3 +70,8 @@ engine-adapter-source-control-gitlab = { workspace = true }
 engine-adapter-state-store-sqlite = { workspace = true }
 engine-adapter-workflow-runtime-temporal = { workspace = true }
 engine-adapter-workspace-provider-git-worktree = { workspace = true }
+
+# Build inputs remain canonical in the checkout; wheels carry their own copies.
+[tool.hatch.build.targets.wheel.force-include]
+"dist" = "engine/apps/web/static"
+"../../workflows" = "engine/apps/web/default_workflows"
