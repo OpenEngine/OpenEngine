@@ -82,7 +82,7 @@ class GithubMerge:
 
 @dataclass(frozen=True)
 class GithubAssignment:
-    """An issue assigned to the configured Engine account."""
+    """An issue assigned to the authenticated Engine account."""
 
     repository: str
     number: int
@@ -212,7 +212,7 @@ def merge_from_payload(
     App all hold write access and none of them has read anything. So a merge
     whose actor is a bot is refused here rather than allowed to release a gate
     nobody read the diff for. Engine's own merge is refused here only when
-    ``self_login`` is configured; the handler checks it again against the
+    ``self_login`` is supplied; the handler checks it again against the
     login Engine's credentials resolve to, which needs the forge.
     """
     if event != MERGE_EVENT or payload.get("action") != "closed":
@@ -260,7 +260,6 @@ class GithubIngress:
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
-        self_login: Callable[[], str] = lambda: "",
         authenticated_login: Callable[[str], Awaitable[str]] | None = None,
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
@@ -269,7 +268,6 @@ class GithubIngress:
     ) -> None:
         self._webhook_secret = webhook_secret
         self._repository = repository
-        self._self_login = self_login
         self._authenticated_login = authenticated_login
         self._handle = handle
         self._handle_merge = handle_merge
@@ -340,10 +338,10 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
-        self_login = self._self_login()
+        self_login = ""
         if (
             event == "issues" and payload.get("action") == "assigned"
-            and not self_login and self._authenticated_login is not None
+            and self._authenticated_login is not None
             and self._repository
         ):
             try:
@@ -362,7 +360,7 @@ class GithubIngress:
         )
 
     def accept(
-        self, event: str, payload: Mapping[str, object], *, self_login: str | None = None,
+        self, event: str, payload: Mapping[str, object], *, self_login: str = "",
     ) -> bool:
         """Whether the delivery is settled -- queued, or deliberately ignored.
 
@@ -370,8 +368,6 @@ class GithubIngress:
         full queue, no handler wired, or an unresolved assignment login. A failed
         delivery GitHub can redeliver beats a 200 that loses the work.
         """
-        if self_login is None:
-            self_login = self._self_login()
         if event == "issues" and payload.get("action") == "assigned" and not self_login:
             log.warning(
                 "a GitHub assigned issue was delivered but no self-login could be resolved; "
@@ -385,13 +381,13 @@ class GithubIngress:
                 ("issues", f"{assignment.repository.lower()}#{assignment.number}"),
                 wired=self._handle_assignment is not None,
             )
-        comment = comment_from_payload(event, payload, self_login=self._self_login())
+        comment = comment_from_payload(event, payload, self_login=self_login)
         if comment is not None:
             return self._enqueue(
                 comment, "comment", (comment.event, comment.comment_id),
                 wired=self._handle is not None,
             )
-        merged = merge_from_payload(event, payload, self_login=self._self_login())
+        merged = merge_from_payload(event, payload, self_login=self_login)
         if merged is not None:
             # By the pull request rather than by a delivery id: what is acted on
             # is that this pull request is merged, which happens once, and a

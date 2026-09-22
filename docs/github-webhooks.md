@@ -44,14 +44,10 @@ arrives.
 
 ## The account Engine posts as
 
-```bash
-GITHUB_BOT_LOGIN=... uv run engine-web
-```
-
-`GITHUB_BOT_LOGIN` is the GitHub account Engine posts as, whose own comments are
-never answered. This setting is optional: when unset, Engine resolves the login
-using its authenticated GitHub credentials. Set it only to override that lookup.
-A GitHub app is also recognised by its user type.
+Engine resolves its account using its authenticated GitHub credentials. That
+identity is used to match issue assignments and ignore Engine's own comments
+and merges. No bot-login environment variable is needed. A GitHub app is also
+recognised by its user type.
 
 ## What the route does with a delivery
 
@@ -107,8 +103,8 @@ are not answered.
 
 ## Starting work from an issue assignment
 
-Subscribe the webhook to `issues`. Engine uses `GITHUB_BOT_LOGIN` when set,
-or resolves its account from its authenticated GitHub credentials otherwise.
+Subscribe the webhook to `issues`. Engine resolves its account from its
+authenticated GitHub credentials.
 If no login can be resolved, Engine logs a warning and returns 503 so the
 delivery can be retried. Assigning an open issue to that account
 starts a work order using `work_orders.workflow`, or the sole available workflow
