@@ -1170,6 +1170,15 @@ select:disabled { cursor: default; }
 
 .detail-head { display: grid; gap: 18px; padding: 26px var(--gutter) 30px; }
 .detail-title { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; justify-content: space-between; }
+.detail-title > div { min-width: 0; max-width: 100%; }
+.workorder-prompt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  height: 8rem;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.workorder-prompt[data-expanded="true"] { height: auto; }
 .detail-title h1 {
   max-width: 24ch;
   font-size: clamp(28px, 3.4vw, 48px);
