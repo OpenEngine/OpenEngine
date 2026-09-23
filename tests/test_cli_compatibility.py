@@ -346,15 +346,15 @@ class Chat:
                 )
                 # Keep provider text private, but make known setup failures actionable.
                 errors = [str(event["error"]) for event in events if "error" in event]
+                diagnostic_text = json.dumps(events).lower()
                 error_kinds = sorted({
                     kind
-                    for error in errors
                     for phrase, kind in (
                         ("authentication required", "authentication"),
                         ("credit balance is too low", "billing"),
                         ("insufficient_quota", "billing"),
                     )
-                    if phrase in error.lower()
+                    if phrase in diagnostic_text
                 })
                 self.transcript.note(
                     f"{stage}: ended before approval",
@@ -523,6 +523,8 @@ SCENARIOS: dict[str, Callable] = {
     (409, '{"error":"private response"}', None),
     (200, '{"type":"error","error":"Authentication required: private response"}\n', "authentication"),
     (200, '{"type":"error","error":"Credit balance is too low: private response"}\n', "billing"),
+    (200, '{"type":"content","content":"Credit balance is too low: private response"}\n'
+          '{"type":"error","error":"CLI exited 1"}\n', "billing"),
     (200, '{"type":"done","content":"private response"}\n', None),
 ])
 def test_completed_turn_without_approval_fails_promptly_and_redacts_errors(status, body, kind):
