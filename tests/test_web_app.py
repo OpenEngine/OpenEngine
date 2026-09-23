@@ -3609,6 +3609,45 @@ def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() ->
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(("proposer", "expected"), [
+    ("github:7:bob", "github:7:bob"),
+    (None, "github:42:alice"),
+])
+def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) -> None:
+    """Whoever clicks Start does not replace the proposer as requester."""
+    graph = _review_graph()
+    store = InMemoryStateStore()
+    app = _graph_app_over(
+        store, ScriptedGraphRuntime(graph), graph,
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+    )
+
+    async def scenario():
+        await store.save(RunState(
+            run_id=RunId("run-proposed"), task_id=TaskId("task-proposed"),
+            workflow_id=WorkflowId(str(graph.graph_id)), phase=RunPhase.SCHEDULED,
+            name="Proposed work", prompt="Do the work", repository=".",
+            requester=proposer,
+        ))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://engine.test"
+        ) as client:
+            async with app.app.router.lifespan_context(app.app):
+                return await client.post("/api/runs/run-proposed/start")
+
+    with patch.object(
+        GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
+    ):
+        started = asyncio.run(scenario())
+
+    assert started.status_code == 200, started.text
+    assert started.json()["requester"] == expected
+    assert asyncio.run(store.load(RunId("run-proposed"))).requester == expected
+
+
 def test_agent_created_workorder_links_to_its_creator() -> None:
     from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
     from engine.domain import AgentRunId

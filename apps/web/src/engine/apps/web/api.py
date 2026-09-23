@@ -2012,7 +2012,9 @@ def create_app(
                 surface.runtime, graph, inputs=inputs, prompt=state.prompt,
                 repository=repository, milestone_id=state.milestone_id,
                 scheduled=state, origin=state.origin,
-                requester=_web_requester(request),
+                # The proposer stays the requester; whoever clicks Start only
+                # names a row that recorded nobody.
+                requester=state.requester or _web_requester(request),
             )
             run = await run_reader.get(state.run_id)
             assert run is not None
