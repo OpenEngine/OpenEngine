@@ -7,7 +7,7 @@ A WorkOrder is one task run through a workflow. It is where the actual work happ
 
 Each WorkOrder gets its own git worktree and branch, and ends with a pull request waiting on your decision. Its page shows every stage, each agent's conversation, and anything waiting on you.
 
-<div className="placeholder">Screenshot: a WorkOrder page with its stages and pull request</div>
+![A WorkOrder awaiting human review, with its stages and the Approve and Reject buttons](/img/screenshots/workorder-page.png)
 
 ## Creating a WorkOrder
 
@@ -19,7 +19,7 @@ Each WorkOrder gets its own git worktree and branch, and ends with a pull reques
 | Pull request | Comment asking for a change. A running WorkOrder is steered; otherwise a new one starts. |
 | MCP | Call `create_workorder(prompt)` on the [remote MCP server](https://github.com/OpenEngine/OpenEngine/blob/main/docs/remote-mcp.md). |
 
-<div className="placeholder">Screenshot: the Create a WorkOrder form</div>
+![The Create a WorkOrder form, with Codex implementing and Claude reviewing](/img/screenshots/workorder-create.png)
 
 Describe what should change and what success looks like. The task is the implementation agent's entire brief.
 
@@ -42,5 +42,3 @@ Security reviews use the larger tier, since a missed finding there costs the mos
 - **Approve.** Tool calls your approval policy doesn't cover wait for you in the conversation.
 - **Decide.** At human review, approve or request changes. Merging the pull request also counts as approval.
 - **Resume.** Ask for follow-up fixes after it finishes. The same branch and conversation continue.
-
-<div className="placeholder">Screenshot: the human review panel</div>
