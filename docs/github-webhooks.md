@@ -104,7 +104,8 @@ are not answered.
 ## Starting work from an issue assignment
 
 Subscribe the webhook to `issues`. Engine resolves its account from its
-authenticated GitHub credentials.
+authenticated GitHub credentials; `GITHUB_BOT_LOGIN` is not required and does
+not override that identity.
 If no login can be resolved, Engine logs a warning and returns 503 so the
 delivery can be retried. Assigning an open issue to that account
 starts a work order using `work_orders.workflow`, or the sole available workflow

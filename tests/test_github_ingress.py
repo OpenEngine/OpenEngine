@@ -647,12 +647,13 @@ def test_assignment_queue_deduplicates_and_retries_failures():
 
 
 @pytest.mark.parametrize("resolved, expected", [("openenginebot", 1), ("someone", 0)])
-def test_assignment_webhook_resolves_login(resolved, expected):
+def test_assignment_webhook_resolves_login_without_bot_login(monkeypatch, resolved, expected):
     from unittest.mock import AsyncMock
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
 
+    monkeypatch.delenv("GITHUB_BOT_LOGIN", raising=False)
     handled = []
     lookup = AsyncMock(return_value=resolved)
     ingress = GithubIngress(
@@ -673,12 +674,13 @@ def test_assignment_webhook_resolves_login(resolved, expected):
 
 
 @pytest.mark.parametrize("failure", [None, "", RuntimeError("lookup failed"), TimeoutError()])
-def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
+def test_assignment_without_resolved_login_warns_and_can_retry(monkeypatch, caplog, failure):
     from unittest.mock import AsyncMock
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
 
+    monkeypatch.delenv("GITHUB_BOT_LOGIN", raising=False)
     lookup = None if failure is None else AsyncMock(
         side_effect=failure if isinstance(failure, Exception) else None,
         return_value="",

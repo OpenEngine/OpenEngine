@@ -1198,10 +1198,15 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
 
 
 @pytest.mark.parametrize("may_write", [True, False])
-def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
+@pytest.mark.parametrize("bot_login", [None, "", "stale-bot-login"])
+def test_assigning_issue_to_engine_starts_workorder(tmp_path, monkeypatch, may_write, bot_login):
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
 
+    if bot_login is None:
+        monkeypatch.delenv("GITHUB_BOT_LOGIN", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_BOT_LOGIN", bot_login)
     runtime, opened = _graph_runtime()
     provider = FakeACPProvider(create=True)
     communications = RecordingCommunications()
