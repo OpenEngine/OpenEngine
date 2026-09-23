@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 
 import {
   api,
@@ -781,6 +781,27 @@ async function ifPresent<T>(read: Promise<T>): Promise<T | undefined> {
   }
 }
 
+function WorkOrderPrompt({ prompt }: { prompt: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  return (
+    <div className="workorder-prompt">
+      <p id={id} className="lede workorder-prompt-text" data-expanded={expanded}>
+        {prompt}
+      </p>
+      <button
+        type="button"
+        className="btn"
+        aria-controls={id}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        {expanded ? "Show less" : "Show full prompt"}
+      </button>
+    </div>
+  );
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
   // Read here rather than inside the panel so the strip's link and the panel
   // it scrolls to are two views of one answer: the link is only offered when
@@ -928,10 +949,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
               ← All WorkOrders
             </a>
             <div className="detail-title">
-              <div>
+              <div className="workorder-heading">
                 <p className="eyebrow">{run.workflowName}</p>
                 <h1>{run.name}</h1>
-                <p className="lede">{run.taskPrompt}</p>
+                <WorkOrderPrompt key={run.runId} prompt={run.taskPrompt} />
               </div>
               <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
                 {runStatusLabel(run)}
