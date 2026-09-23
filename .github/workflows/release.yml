@@ -42,11 +42,12 @@ jobs:
       (github.event_name == 'pull_request' || needs.release-please.outputs.created == 'true')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -66,10 +67,22 @@ jobs:
             dist/openengine-*.tar.gz
             dist/release-manifest.json
           if-no-files-found: error
+
+  upload-release:
+    needs: [release-please, bundle]
+    if: github.event_name == 'push' && needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-bundle
+          path: dist
       # GITHUB_TOKEN-created tags do not trigger another workflow. Upload here.
       - name: Attach application assets to the release
-        if: needs.release-please.outputs.created == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
         run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json --clobber
