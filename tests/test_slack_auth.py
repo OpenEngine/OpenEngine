@@ -431,9 +431,20 @@ def test_successful_slack_mutation_invalidates_pending_oauth_flow(tmp_path, oper
     store.set_token.assert_not_called()
 
 
-def test_progress_edits_timestamped_history_without_overwriting_agent_messages():
+@pytest.mark.parametrize(
+    ("server_timezone", "month", "local_hour", "zone"),
+    [("America/Denver", 1, "05", "MST"), ("America/Denver", 9, "06", "MDT"),
+     ("UTC", 9, "12", "UTC")],
+)
+def test_progress_edits_timestamped_history_without_overwriting_agent_messages(
+    monkeypatch, server_timezone, month, local_hour, zone,
+):
     import asyncio
+    import time
     from datetime import datetime, timezone
+
+    if not hasattr(time, "tzset"):
+        pytest.skip("requires time.tzset to configure the server timezone")
 
     store = MagicMock(spec=SlackCredentialStore)
     store.token.return_value = "xoxb-token"
@@ -445,7 +456,7 @@ def test_progress_edits_timestamped_history_without_overwriting_agent_messages()
     async def scenario():
         slack = SlackCommunications(store)
         for index, state in enumerate(states):
-            clock.now.return_value = datetime(2026, 9, 23, 12, index, tzinfo=timezone.utc)
+            clock.now.return_value = datetime(2026, month, 23, 12, index, tzinfo=timezone.utc)
             await slack.post("C12345678", Message(f"*{state}* started.", links, progress=True),
                              "run-42", thread_id="1")
             if index == 0:
@@ -462,14 +473,20 @@ def test_progress_edits_timestamped_history_without_overwriting_agent_messages()
          patch("engine.adapters.communications.slack.datetime") as clock:
         client = client_type.return_value.__aenter__.return_value
         client.post = AsyncMock(return_value=response)
-        asyncio.run(scenario())
+        try:
+            with monkeypatch.context() as timezone_env:
+                timezone_env.setenv("TZ", server_timezone)
+                time.tzset()
+                asyncio.run(scenario())
+        finally:
+            time.tzset()
 
     calls = client.post.await_args_list
     assert [call.args[0].rsplit("/", 1)[-1] for call in calls] == [
         "chat.postMessage", "chat.postMessage", "chat.update", "chat.update",
         "chat.postMessage", "chat.update", "chat.postMessage",
     ]
-    history = "\n".join(f"*{state}* started. (12:0{index}:00 UTC)"
+    history = "\n".join(f"*{state}* started. ({local_hour}:0{index}:00 {zone})"
                         for index, state in enumerate(states))
     assert calls[3].kwargs["json"] == {
         "channel": "C12345678", "ts": "123.456",
