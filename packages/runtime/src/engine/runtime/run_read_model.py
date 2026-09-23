@@ -33,6 +33,7 @@ class WorkflowRunView:
     failure_reason: str = ""
     parent_run_id: RunId | None = None
     depends_on_run_id: RunId | None = None
+    requester: str | None = None
 
 
 class RunReader:
@@ -81,6 +82,7 @@ class RunReader:
             failure_reason=state.failure_reason,
             parent_run_id=state.parent_run_id,
             depends_on_run_id=state.depends_on_run_id,
+            requester=state.requester,
         )
 
 

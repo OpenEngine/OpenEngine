@@ -44,6 +44,8 @@ class RunOrigin:
     channel: str = ""
     thread_id: str = ""
     author: str = ""
+    requester: str = ""
+    """``author`` qualified by provider, as `RunState.requester` records it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +69,8 @@ class RunState:
     depends_on_run_id: RunId | None = None
     """Immediate prerequisite; only successful completion releases this work."""
     inputs: dict[str, str] = field(default_factory=dict)
+    requester: str | None = None
+    """Who started this work, as ``github:<id>:<login>`` or ``slack:<team>:<user>``."""
 
     @property
     def is_terminal(self) -> bool:

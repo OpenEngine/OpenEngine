@@ -595,6 +595,25 @@ def test_assignment_reads_issue_and_assigning_actor():
     assert (assigned.title, assigned.body) == ("Fix the bug", "Reproduction steps")
 
 
+def test_requesters_carry_the_github_account_id():
+    from engine.apps.web.github_ingress import (
+        assignment_from_payload, comment_from_payload, github_requester,
+    )
+
+    assigned = assignment_from_payload(
+        "issues", dict(_assigned_issue(), sender={"login": "maintainer", "id": 7}),
+        self_login="openenginebot",
+    )
+    comment = comment_from_payload(
+        "issue_comment", _issue_comment(user={"login": "someone", "id": 9, "type": "User"}),
+    )
+    assert assigned is not None and comment is not None
+    assert github_requester(assigned.sender_id, assigned.sender) == "github:7:maintainer"
+    assert github_requester(comment.author_id, comment.author) == "github:9:someone"
+    # Without an id there is no stable identity to record.
+    assert github_requester(0, "someone") is None
+
+
 @pytest.mark.parametrize("change", [
     {"action": "opened"}, {"action": "unassigned"},
     {"assignee": {"login": "someone"}}, {"assignee": None}, {"sender": {}},

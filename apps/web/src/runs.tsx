@@ -76,6 +76,14 @@ export function runStatusLabel(run: ApiWorkflowRunListing) {
   return phaseLabel(run.phase);
 }
 
+/** A stored requester (`github:<id>:<login>`, `slack:<team>:<user>`) as a
+ *  person reads it: the account name and where it is from. */
+export function requesterLabel(requester: string) {
+  const [provider, , account] = requester.split(":");
+  const source = { github: "GitHub", slack: "Slack" }[provider];
+  return account && source ? `${account} (${source})` : requester;
+}
+
 /** How loudly a run's phase should read. Failure is the only thing that gets
  *  the accent; a run still moving is ink, and one not started yet is a rule. */
 export function phaseAccent(phase: string): "flame" | "quiet" | undefined {
@@ -962,6 +970,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
           <StatStrip>
             <Stat label="Run ID" value={run.runId} />
             <Stat label="Repository" value={run.repository} />
+            {run.requester && (
+              <Stat label="Requested by" value={requesterLabel(run.requester)} />
+            )}
             {run.parentRunId && (
               <Stat label="Created by" value={
                 <a href={`/runs/${encodeURIComponent(run.parentRunId)}`}>

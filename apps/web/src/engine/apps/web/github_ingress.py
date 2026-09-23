@@ -67,6 +67,8 @@ class GithubComment:
     is_pull_request: bool = False
     #: The review comment this one answers, for a reply inside a review thread.
     in_reply_to_id: str = ""
+    #: GitHub's numeric id for ``author``, which outlives a renamed login.
+    author_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,7 @@ class GithubAssignment:
     title: str
     body: str
     url: str
+    sender_id: int = 0
 
 
 def assignment_from_payload(
@@ -116,7 +119,18 @@ def assignment_from_payload(
         repository=full_name, number=number, assignee=login, sender=actor,
         title=str(issue.get("title") or ""), body=str(issue.get("body") or ""),
         url=str(issue.get("html_url") or ""),
+        sender_id=_account_id(sender),
     )
+
+
+def github_requester(account_id: int, login: str) -> str | None:
+    """The provider-qualified identity a work order records as its requester."""
+    return f"github:{account_id}:{login}" if account_id > 0 and login else None
+
+
+def _account_id(user: Mapping[str, object]) -> int:
+    value = user.get("id")
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def verify_signature(webhook_secret: str, signature: str, body: bytes) -> bool:
@@ -191,6 +205,7 @@ def comment_from_payload(
             or isinstance(subject.get("pull_request"), dict)
         ),
         in_reply_to_id=str(in_reply_to) if isinstance(in_reply_to, (int, str)) else "",
+        author_id=_account_id(user),
     )
 
 

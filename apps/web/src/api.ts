@@ -228,6 +228,8 @@ export type ApiWorkflowRunListing = {
 export type ApiWorkflowRun = ApiWorkflowRunListing & {
   taskPrompt: string;
   failureReason: string;
+  /** Who started it, as `github:<id>:<login>` or `slack:<team>:<user>`. */
+  requester?: string | null;
 };
 
 /** A WorkOrder as its page draws it: the row, with the stages, frontier and
