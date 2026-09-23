@@ -1532,10 +1532,12 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
         channel, message, thread = notifications[0]
         assert (channel, thread) == ("C", "1")
         assert message.mention == ("" if ending == "finished" else "U")
+        assert message.progress == (ending == "finished")
         assert any(str(runs[0].run_id) in link.url for link in message.links)
         pr_links = [link.url for link in message.links if link.label == "View pull request"]
         assert pr_links == ([pr_url] if ending == "human_review" and pr_url else [])
-        assert any(message.text == "*work* started." for _, message, _ in communications.posts)
+        assert any(message.text == "*work* started." and message.progress
+                   for _, message, _ in communications.posts)
     assert any(message.links for _, message, _ in communications.posts)
 
 

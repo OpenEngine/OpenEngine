@@ -429,3 +429,95 @@ def test_successful_slack_mutation_invalidates_pending_oauth_flow(tmp_path, oper
     assert response.status_code == 204
     assert callback.status_code == 400
     store.set_token.assert_not_called()
+
+
+def test_progress_edits_timestamped_history_without_overwriting_agent_messages():
+    import asyncio
+    from datetime import datetime, timezone
+
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": True, "ts": "123.456"}
+    links = (MessageLink("View work order", "https://example.com/runs/run-42"),)
+    states = ["CI check", "Review (Security)", "Review (Bugs & task adherence)"]
+
+    async def scenario():
+        slack = SlackCommunications(store)
+        for index, state in enumerate(states):
+            clock.now.return_value = datetime(2026, 9, 23, 12, index, tzinfo=timezone.utc)
+            await slack.post("C12345678", Message(f"*{state}* started.", links, progress=True),
+                             "run-42", thread_id="1")
+            if index == 0:
+                await slack.post("C12345678", Message("Implemented the requested fix."),
+                                 "run-42", thread_id="1")
+        await slack.post("C12345678", Message("Review complete and ready for your decision.",
+                                              links, mention="U123"), "run-42", thread_id="1")
+        await slack.post("C12345678", Message("Work order finished.", links, progress=True),
+                         "run-42", thread_id="1")
+        await slack.post("C12345678", Message("Another run started.", progress=True),
+                         "run-43", thread_id="1")
+
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type, \
+         patch("engine.adapters.communications.slack.datetime") as clock:
+        client = client_type.return_value.__aenter__.return_value
+        client.post = AsyncMock(return_value=response)
+        asyncio.run(scenario())
+
+    calls = client.post.await_args_list
+    assert [call.args[0].rsplit("/", 1)[-1] for call in calls] == [
+        "chat.postMessage", "chat.postMessage", "chat.update", "chat.update",
+        "chat.postMessage", "chat.update", "chat.postMessage",
+    ]
+    history = "\n".join(f"*{state}* started. (12:0{index}:00 UTC)"
+                        for index, state in enumerate(states))
+    assert calls[3].kwargs["json"] == {
+        "channel": "C12345678", "ts": "123.456",
+        "text": history + "\n<https://example.com/runs/run-42|View work order>",
+    }
+    assert calls[4].kwargs["json"]["text"].startswith(
+        "<@U123> Review complete and ready for your decision.")
+    assert calls[5].kwargs["json"]["text"].startswith(history + "\nWork order finished.")
+    assert calls[6].kwargs["json"]["thread_ts"] == "1"
+
+
+def test_progress_cache_evicts_least_recently_updated_history():
+    import asyncio
+
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = {"ok": True, "ts": "123.456"}
+
+    async def scenario():
+        slack = SlackCommunications(store)
+
+        async def progress(run_id, text):
+            await slack.post("C12345678", Message(text, progress=True),
+                             run_id, thread_id="1")
+
+        await progress("run-1", "First started")
+        await progress("run-2", "Second started")
+        await progress("run-1", "First continued")
+        await progress("run-3", "Third started")
+        assert len(slack._progress) == 2
+        assert ("C12345678", "1", "run-2") not in slack._progress
+        await progress("run-1", "First finished")
+        retained = client.post.await_args.kwargs["json"]
+        assert "ts" in retained
+        assert all(state in retained["text"] for state in (
+            "First started", "First continued", "First finished"))
+
+        await progress("run-2", "Second resumed")
+        restarted = client.post.await_args.kwargs["json"]
+        assert client.post.await_args.args[0].endswith("chat.postMessage")
+        assert restarted["thread_ts"] == "1"
+        assert "Second started" not in restarted["text"]
+        assert "Second resumed" in restarted["text"]
+        assert len(slack._progress) == 2
+
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type, \
+         patch("engine.adapters.communications.slack._MAX_PROGRESS_MESSAGES", 2):
+        client = client_type.return_value.__aenter__.return_value
+        client.post = AsyncMock(return_value=response)
+        asyncio.run(scenario())
