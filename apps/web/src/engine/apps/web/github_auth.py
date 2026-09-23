@@ -32,8 +32,8 @@ from engine.apps.web.oauth_credentials import (
     optional_int,
 )
 
-#: The keyring service name and username used for every installation.  One
-#: machine, one token -- this is a single-user local tool.
+#: Legacy keys are used only for local mode without browser authentication.
+#: Authenticated UI users get separate entries keyed by stable GitHub user ID.
 _KEYRING_SERVICE = "openengine"
 _KEYRING_USERNAME = "github-token"
 _KEYRING_CLIENT_ID_USERNAME = "github-client-id"
@@ -110,8 +110,12 @@ class GitHubCredentialStore(OAuthCredentialStore):
     vanish on restart, so failing loudly is the right behaviour.
     """
 
-    def __init__(self) -> None:
-        super().__init__(_KEYRING_SERVICE, _KEYRING_USERNAME)
+    def __init__(self, user_id: int | None = None) -> None:
+        if user_id is not None and (isinstance(user_id, bool) or user_id <= 0):
+            raise ValueError("GitHub user ID must be positive")
+        suffix = f":user:{user_id}" if user_id is not None else ""
+        super().__init__(_KEYRING_SERVICE, _KEYRING_USERNAME + suffix)
+        self._client_id_username = _KEYRING_CLIENT_ID_USERNAME + suffix
 
     def _check_backend(self) -> None:
         try:
@@ -122,17 +126,17 @@ class GitHubCredentialStore(OAuthCredentialStore):
     def get_client_id(self) -> str | None:
         """Return the stored OAuth client ID, or None when nothing is saved."""
         try:
-            return keyring.get_password(_KEYRING_SERVICE, _KEYRING_CLIENT_ID_USERNAME)
+            return keyring.get_password(_KEYRING_SERVICE, self._client_id_username)
         except keyring.errors.NoKeyringError:
             return None
 
     def set_client_id(self, client_id: str) -> None:
         self._check_backend()
-        keyring.set_password(_KEYRING_SERVICE, _KEYRING_CLIENT_ID_USERNAME, client_id)
+        keyring.set_password(_KEYRING_SERVICE, self._client_id_username, client_id)
 
     def delete_client_id(self) -> None:
         try:
-            keyring.delete_password(_KEYRING_SERVICE, _KEYRING_CLIENT_ID_USERNAME)
+            keyring.delete_password(_KEYRING_SERVICE, self._client_id_username)
         except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
             pass
 

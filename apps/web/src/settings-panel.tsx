@@ -535,6 +535,11 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="settings-panel-body">
         <section className="settings-section">
           <h2 className="settings-section-title">GitHub</h2>
+          <p className="settings-status settings-status-muted">
+            Agent pull requests and comments use the server’s configured worker
+            account. Changing your personal connection below leaves that account
+            unchanged.
+          </p>
 
           <fieldset className="settings-provider-choice">
             <legend className="settings-label">Source control provider</legend>
