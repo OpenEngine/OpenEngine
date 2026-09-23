@@ -45,7 +45,9 @@ from engine.runtime import (
 )
 
 #: Vite's production output, served by the same process as the API.
-STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
+STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
+if not STATIC_DIRECTORY.is_dir():
+    STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
 
 
 def report_wiring(settings: Settings) -> None:
