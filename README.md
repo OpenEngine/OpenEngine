@@ -1,5 +1,8 @@
 # OpenEngine
 
+For a standalone release without Python, Node.js, or a checkout, see [installation](docs/installation.md).
+
+
 OpenEngine is a graph execution engine that meets you where you work.
 
 ![](docs/images/oe_land.png)
@@ -8,7 +11,7 @@ We give you an out-of-the-box configuration to get you up and running. The out-o
 ```
 Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change 
 ```
-## Getting started
+## Development setup
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 

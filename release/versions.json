@@ -1,0 +1,5 @@
+{
+  "python": "3.12.12",
+  "uv": "0.12.7",
+  "platforms": ["Darwin-arm64", "Linux-x86_64"]
+}

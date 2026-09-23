@@ -4,8 +4,8 @@ version = "0.0.0"
 description = "Workspace Provider capability backed by local git worktrees."
 requires-python = ">=3.11"
 # Depends on the runtime (and through it ports + domain). Worktree management
-# shells out to Git and needs no third-party Python dependency.
-dependencies = ["engine-runtime"]
+# shells out to Git; platformdirs selects a stable per-user workspace root.
+dependencies = ["engine-runtime", "platformdirs>=4"]
 
 [build-system]
 requires = ["hatchling"]

@@ -9,6 +9,8 @@ which constructs the same application again in every fresh child process.
 """
 
 import argparse
+import logging
+from logging.handlers import RotatingFileHandler
 from importlib.resources import files
 import os
 import sys
@@ -17,6 +19,7 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import dotenv_values
+from platformdirs import user_config_path, user_data_path, user_log_path
 from starlette.applications import Starlette
 
 from engine.apps.web.api import create_app
@@ -98,7 +101,15 @@ def report_wiring(settings: Settings) -> None:
 def _settings(loaded: LoadedEngineConfig) -> Settings:
     """Apply deployment overrides to the immutable TOML configuration."""
 
+    data = Path(
+        os.environ.get("ENGINE_DATA_DIR", user_data_path("openengine"))
+    ).expanduser().resolve()
+    data.mkdir(parents=True, exist_ok=True)
     return Settings(
+        port=int(os.environ.get("ENGINE_PORT", "8000")),
+        sqlite_path=str(data / "conversations.sqlite3"),
+        graph_state_directory=str(data / "graph-state"),
+        workspace_root=str(data / "workspaces"),
         engine_config=loaded.config,
         config_path=loaded.path,
         github_client_id=os.environ.get(
@@ -124,7 +135,7 @@ def _webhook_secret_reader(webhook: GitHubWebhookConfig | None) -> Callable[[], 
 
 
 def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None:
-    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else user_config_path("openengine")) / ".env"
     values = dotenv_values(secret_file, interpolate=False)
     client_id = os.environ.get(
         "ENGINE_GITHUB_LOGIN_CLIENT_ID", loaded.config.github_login_client_id
@@ -153,7 +164,7 @@ def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
     startup rather than silently admitting nothing.
     """
 
-    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else user_config_path("openengine")) / ".env"
 
     def read() -> str:
         if "ENGINE_SERVICE_TOKEN" in os.environ:
@@ -182,15 +193,18 @@ def read_configuration(
     and because "what a restart is for" has to be one list: the development
     server watches exactly what this function reads.
     """
-    loaded = load_engine_config(config_path)
+    # Installed startup must not execute configuration from an arbitrary cwd.
+    if config_path is not None or os.environ.get("ENGINE_CONFIG"):
+        loaded = load_engine_config(config_path)
+    else:
+        default = user_config_path("openengine") / "engine.toml"
+        loaded = load_engine_config(default) if default.is_file() else LoadedEngineConfig()
     settings = _settings(loaded)
-    catalog = (
-        load_workflow_catalog(
-            loaded.workflows_directory,
-            session_config=claude_session_config_for(settings),
-        )
-        if loaded.workflows_directory is not None
-        else None
+    directory = loaded.workflows_directory or Path(
+        str(files("engine.apps.web").joinpath("workflows"))
+    )
+    catalog = load_workflow_catalog(
+        directory, session_config=claude_session_config_for(settings)
     )
     return loaded, catalog
 
@@ -209,7 +223,15 @@ def compose_app(
     )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
-    session = build_session(capabilities, runners, read_only_runners=read_only_runners)
+    repository = loaded.config.work_orders.repository
+    if repository:
+        selected = Path(repository).expanduser()
+        base = loaded.path.parent if loaded.path else user_config_path("openengine")
+        repository = str((base / selected).resolve())
+    session = build_session(
+        capabilities, runners, repository=repository or None,
+        read_only_runners=read_only_runners,
+    )
     # The runtime for the workflows in the configured directory. It
     # is `None` when that directory holds no graphs, and then the interface
     # offers none of them.
@@ -240,7 +262,10 @@ def compose_app(
         milestone_scoper=build_milestone_scoper(settings),
         work_orders=loaded.config.work_orders,
         show_projects=loaded.config.show_projects,
-        repos=loaded.config.repos,
+        repos={
+            name: str(((loaded.path.parent if loaded.path else user_config_path("openengine")) / Path(path).expanduser()).resolve())
+            for name, path in loaded.config.repos.items()
+        },
     )
 
 
@@ -271,8 +296,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
+    logs = user_log_path("openengine")
+    logs.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(logs / "engine-web.log", maxBytes=5_000_000, backupCount=3)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+    # Uvicorn owns its logging configuration; include the same file sink.
+    from copy import deepcopy
+    from uvicorn.config import LOGGING_CONFIG
+
+    log_config = deepcopy(LOGGING_CONFIG)
+    log_config["handlers"]["file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "filename": str(logs / "engine-web.log"),
+        "maxBytes": 5_000_000,
+        "backupCount": 3,
+        "formatter": "default",
+    }
+    log_config["loggers"]["uvicorn"]["handlers"].append("file")
     print(describe_loaded_config(loaded))
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    uvicorn.run(app, host=settings.host, port=settings.port, log_config=log_config)
     return 0
 
 

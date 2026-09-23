@@ -1428,12 +1428,14 @@ def test_slack_signature_auth_with_github_login_enabled(tmp_path, valid_signatur
         assert response.status_code == 401
 
 
-def test_checked_in_slack_repository_is_current_checkout():
+def test_checked_in_configuration_has_no_deployment_repository():
     from pathlib import Path
     import tomllib
 
     config = tomllib.loads((Path(__file__).resolve().parents[1] / "engine.toml").read_text())
-    assert config["work_orders"]["repository"] == "."
+    assert not config.get("work_orders", {}).get("repository")
+    assert not config.get("repos")
+    assert not config.get("public_url")
 
 
 @pytest.mark.parametrize("ending", ("finished", "human_review", "failed"))
@@ -1448,8 +1450,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     from langgraph.graph import START, END, StateGraph
     from pathlib import Path
 
-    configured = load_engine_config(Path(__file__).resolve().parents[1] / "engine.toml")
-    assert configured.config.work_orders.workflow == "implementation-review-rerank"
+    configured = WorkOrdersConfig(repository=str(tmp_path), workflow="implementation-review-rerank")
     builder = StateGraph(State)
     builder.add_node("work", lambda state: {"received": state["inputs"], "pr_url": pr_url})
     builder.add_edge(START, "work")
@@ -1493,7 +1494,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     provider = FakeACPProvider(create=True)
     communications = RecordingCommunications()
     app, capabilities, _ = _app(
-        tmp_path, communications, configured.config.work_orders,
+        tmp_path, communications, configured,
         WorkflowCatalog.from_graphs((graph,)), provider=provider,
         graph_runtime=runtime_before_row(),
     )

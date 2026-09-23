@@ -1,0 +1,66 @@
+name: standalone release
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.14.0'
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/web run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-frontend
+          path: apps/web/src/engine/apps/web/static
+  artifacts:
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: Linux-x86_64
+          - os: macos-15
+            platform: Darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.12.7'
+          python-version: '3.12.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-frontend
+          path: apps/web/src/engine/apps/web/static
+      - name: Build native release
+        shell: bash
+        run: |
+          version="0.0.0.dev${GITHUB_RUN_NUMBER}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          uv run --no-project --python 3.12.12 release/build.py --version "$version" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/release"
+      - name: Smoke test without source checkout or host development tools
+        shell: bash
+        run: |
+          cp release/smoke.py "$RUNNER_TEMP/smoke.py"
+          python=$(uv python find 3.12.12)
+          cd "$RUNNER_TEMP"
+          mv "$GITHUB_WORKSPACE" "$RUNNER_TEMP/hidden-checkout"
+          trap 'mv "$RUNNER_TEMP/hidden-checkout" "$GITHUB_WORKSPACE"' EXIT
+          "$python" smoke.py "$RUNNER_TEMP/release" "$RUNNER_TEMP/smoke-result.json"
+      - name: Archive tested bundle
+        run: tar -czf "$RUNNER_TEMP/openengine-${{ matrix.platform }}.tar.gz" -C "$RUNNER_TEMP" release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openengine-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/openengine-${{ matrix.platform }}.tar.gz
+            ${{ runner.temp }}/smoke-result.json

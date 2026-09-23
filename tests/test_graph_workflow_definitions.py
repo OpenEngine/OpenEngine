@@ -76,7 +76,8 @@ def definition_module():
     By path because `workflows/` is a directory of definitions, not a package.
     That is the point of it: a deployment swaps the directory, not an import.
     """
-    path = WORKFLOWS / "implementation_review_graph.py"
+    from importlib.resources import files
+    path = Path(str(files("engine.apps.web").joinpath("workflows/implementation_review_graph.py")))
     spec = importlib.util.spec_from_file_location("_implementation_review_graph", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
