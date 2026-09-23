@@ -419,7 +419,7 @@ def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
-    payload = _issue_comment()
+    payload = _issue_comment(1, "@OpenEngineBot hello")
     payload["issue"]["pull_request"] = {}
     if failure == "reply":
         source_control.add_comment.side_effect = [RuntimeError("GitHub unavailable"), None]
@@ -571,8 +571,10 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
 
 @pytest.mark.parametrize("host", ["github.com", "forge.example:8443"])
 @pytest.mark.parametrize("absent", ["no-run", "unknown-graph", "finished"])
-def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent, host):
-    """Steering is for a run that is working; otherwise the comment is new work.
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+@pytest.mark.parametrize("mention", ["@oPeNeNgInEbOt", "", "@OpenEngineBot-other", "@someone"])
+def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, host, event, mention):
+    """Only an explicit mention can start work when no run is listening.
 
     Which of the two a comment gets is the host's to decide, and it decides
     from the provenance row written when the pull request was opened and from
@@ -580,7 +582,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
     which is a stranger's text. A pull request opened by hand has no row at
     all; one whose work order has finished, or whose graph is no longer
     registered, has nothing left listening to steer. In all three, a comment
-    asking for a change is asking for work nobody is doing.
+    asking for a change must mention Engine before it can start new work.
     """
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
@@ -607,15 +609,24 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source_control)
 
-    payload = _issue_comment(1, "new workorder please")
+    payload = _issue_comment(1, f"{mention} new workorder please")
     payload["issue"]["pull_request"] = {}
     payload["comment"]["html_url"] = f"https://{host}/acme/api/issues/7#c"
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=dict(
-            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+            github_signed(body), **{"x-github-event": event})).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         runtime.steer.assert_not_awaited()
+        if mention != "@oPeNeNgInEbOt":
+            runtime.start.assert_not_awaited()
+            runtime.store.claim_pull_request.assert_not_awaited()
+            assert not provider.clients
+            source_control.add_comment.assert_not_awaited()
+            assert not client.portal.call(capabilities.state_store.list_runs)
+            return
         # Started on the repository the comment arrived from, which is where
         # the pull request is, rather than the configured default.
         assert runtime.start.await_args.args[1] == {
@@ -640,7 +651,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         pr_url,
         f"Started work order `{STARTED_RUN}` for this pull request. "
         f"https://engine.example/runs/{STARTED_RUN}",
-        in_reply_to_id=None,
+        in_reply_to_id=1 if event == "pull_request_review_comment" else None,
     )
     source_control.can_write_repository.assert_awaited_once_with(pr_url, payload["comment"]["user"]["login"])
     source_control.authenticated_login.assert_awaited_once_with(f"https://{host}/acme/api")
@@ -673,7 +684,8 @@ def test_a_second_comment_steers_the_work_order_the_first_one_started(tmp_path):
         authenticated_login=AsyncMock(return_value="OpenEngineBot")))
 
     def deliver(client, comment_id):
-        payload = _issue_comment(comment_id, "new workorder please")
+        mention = "@OpenEngineBot " if comment_id == 1 else ""
+        payload = _issue_comment(comment_id, f"{mention}new workorder please")
         payload["issue"]["pull_request"] = {}
         body = json.dumps(payload).encode()
         return client.post("/api/github/events", content=body, headers=dict(
@@ -726,7 +738,7 @@ def test_a_start_that_does_not_win_the_claim_leaves_no_run_behind(tmp_path, clai
         authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source_control)
 
-    payload = _issue_comment(1, "new workorder please")
+    payload = _issue_comment(1, "@OpenEngineBot new workorder please")
     payload["issue"]["pull_request"] = {}
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
@@ -824,7 +836,7 @@ def test_github_asks_who_it_posts_as_only_once(tmp_path):
     object.__setattr__(capabilities, "source_control", source_control)
 
     def deliver(client, comment_id, login):
-        payload = _issue_comment(comment_id, "look at this")
+        payload = _issue_comment(comment_id, "@OpenEngineBot look at this")
         payload["issue"]["pull_request"] = {}
         payload["comment"]["user"]["login"] = login
         body = json.dumps(payload).encode()

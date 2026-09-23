@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import (
     AsyncIterator,
@@ -3409,9 +3410,8 @@ def create_app(
         # ingress treats like any other failure -- the comment is forgotten and
         # can be redelivered -- so a slow forge costs a retry, not the queue.
         async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-            if comment.author.lower() == (
-                await github_posting_login(comment.repository)
-            ).lower():
+            login = await github_posting_login(comment.repository)
+            if comment.author.lower() == login.lower():
                 # GitHub logins are case-insensitive, so the comparison is too.
                 github_activity.ignored("posted by Engine itself")
                 return
@@ -3440,6 +3440,20 @@ def create_app(
                 f"{comment.author} cannot write to {comment.repository}"
             )
             return
+        mentioned = bool(login and re.search(
+            rf"(?<![\w@-])@{re.escape(login)}(?![\w-])", comment.body, re.IGNORECASE,
+        ))
+        if not mentioned:
+            run_id = await github_run_for_pull_request(comment.repository, comment.number)
+            snapshot = None
+            if run_id is not None and surface.runtime is not None:
+                try:
+                    snapshot = await surface.runtime.snapshot(run_id)
+                except UnknownGraphError:
+                    pass
+            if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+                github_activity.ignored("no active work order and Engine was not @mentioned")
+                return
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":
             thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"

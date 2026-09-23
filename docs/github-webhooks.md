@@ -89,7 +89,9 @@ from the conversation — and asks the graph engine what it is doing now:
 - running, or waiting on a person: the request is steered into that run, and
   the reply names it.
 - finished, failed, no longer registered, or never recorded at all — a pull
-  request opened by hand has no such run: a work order is started for the
+  request opened by hand has no such run: only comments that explicitly
+  @mention Engine's GitHub account are processed. Other comments are ignored
+  without a reply. An actionable mention starts a work order for the
   repository the comment arrived from, on the workflow named by
   `work_orders.workflow`, and the reply says a work order was started.
 
