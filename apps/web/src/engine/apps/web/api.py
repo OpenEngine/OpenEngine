@@ -2948,7 +2948,7 @@ def create_app(
         _pending_announcements.append((
             origin,
             CommunicationsMessage(
-                f"Started a work order on `{repository}`. I will report progress here.",
+                "Started a work order on the current project. I will report progress here.",
                 (link,) if link else (), mention=origin.author,
             ),
             state, ready,
