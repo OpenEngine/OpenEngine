@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111111" />
+    <title>Workflows — OpenEngine docs</title>
+    <meta name="description" content="A workflow is a LangGraph graph that models your software development lifecycle. Every WorkOrder runs through one." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body>
+    <header class="masthead full">
+      <div class="wrap">
+        <a class="brand" href="/"><img src="/favicon.svg" alt="" /><span>OpenEngine</span></a>
+        <nav>
+          <a href="/docs/" aria-current="page">Docs</a>
+          <a class="nav-cta" href="mailto:hello@openengine.sh">Contact Us</a>
+        </nav>
+      </div>
+    </header>
+
+    <div class="docs">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div><span class="eyebrow">Getting started</span><ul><li><a href="/docs/">Overview</a></li></ul></div>
+          <div><span class="eyebrow">Concepts</span><ul><li><a href="/docs/workflows/" aria-current="page">Workflows</a></li><li><a href="/docs/workorders/">WorkOrders</a></li><li><a href="/docs/integrations/">Integrations</a></li></ul></div>
+        </nav>
+      </aside>
+      <main class="doc">
+        <p class="eyebrow">Concepts</p>
+        <h1>Workflows</h1>
+        <p class="lede">
+          A workflow is a LangGraph graph that models your software development lifecycle. Every WorkOrder runs through one.
+        </p>
+
+        <p>
+          Each node is a stage: a checkout, an agent writing code, a reviewer, a CI check, a person signing off. Edges
+          are the handoffs between stages, including loops back when something fails. Workflows are Python files in
+          your repository's <code>workflows/</code> directory, so changes to your process get reviewed like any other code.
+        </p>
+
+        <h2 id="shipped">The shipped workflow</h2>
+        <p>
+          <a href="https://github.com/OpenEngine/OpenEngine/blob/main/workflows/implementation_review_graph.py"><code>implementation_review_graph.py</code></a>
+          is the workflow OpenEngine uses to build itself:
+        </p>
+        <ol class="flow">
+          <li><span class="step">workspace</span></li><li class="arrow">→</li>
+          <li><span class="step">naming</span></li><li class="arrow">→</li>
+          <li><span class="step">implementation</span></li><li class="arrow">→</li>
+          <li><span class="step">ci-check</span></li><li class="arrow">→</li>
+          <li><span class="step">5 reviewers</span></li><li class="arrow">→</li>
+          <li><span class="step">reranker</span></li><li class="arrow">→</li>
+          <li><span class="step">impact-analysis</span></li><li class="arrow">→</li>
+          <li><span class="step hot">human-review</span></li>
+        </ol>
+        <ul>
+          <li>A CI failure goes back to implementation to fix.</li>
+          <li>Five reviewers run in parallel: security, bugs &amp; task adherence, performance, conciseness, and duplication.</li>
+          <li>The reranker drops noise and duplicates, then posts what's left as pull request comments.</li>
+          <li>Surviving findings go back to implementation for one fix-and-review round.</li>
+          <li>Impact analysis rates the change Green, Orange or Red and posts its reasoning on the pull request.</li>
+          <li>The run stops at human review until you approve or reject.</li>
+        </ul>
+
+        <h2 id="add-a-reviewer">Example: add a security reviewer</h2>
+        <p>
+          Say every change must be checked for server-side request forgery. Add a review facet, and the fan-out,
+          the reranker and the model tiers pick it up automatically:
+        </p>
+<pre><code><span class="k">from</span> engine.graph_runtime_langgraph.components <span class="k">import</span> REVIEW_FACETS, ReviewFacet
+
+SSRF = ReviewFacet(
+    id=<span class="s">"ssrf"</span>,
+    name=<span class="s">"SSRF"</span>,
+    focus=(
+        <span class="s">"Flag any outbound request whose URL, host, or port can be influenced "</span>
+        <span class="s">"by user input without an allowlist. Include redirects and webhooks."</span>
+    ),
+    elevated=<span class="k">True</span>,  <span class="c"># review with the larger model tier</span>
+)
+
+FACETS = (*REVIEW_FACETS, SSRF)</code></pre>
+        <p>
+          Then replace <code>REVIEW_FACETS</code> with <code>FACETS</code> in the workflow file. From then on, every
+          WorkOrder runs the SSRF reviewer alongside the other five.
+        </p>
+
+        <h2 id="minimal">Example: a minimal workflow</h2>
+        <p>Implement a task, then wait for a person. Save it in <code>workflows/</code> and it shows up in the workflow picker.</p>
+<pre><code><span class="k">from</span> engine.adapters.workspace_provider.git_worktree <span class="k">import</span> (
+    DEFAULT_ROOT_DIRECTORY, GitWorktreeWorkspaceProvider,
+)
+<span class="k">from</span> engine.graph_runtime_langgraph <span class="k">import</span> State, TerminalMcpServer, agent_registry, graph_workflow
+<span class="k">from</span> engine.graph_runtime_langgraph.components <span class="k">import</span> (
+    ACPNode, HumanReviewNode, WorkspaceNode, checkout,
+)
+<span class="k">from</span> langgraph.graph <span class="k">import</span> END, START, StateGraph
+<span class="k">from</span> langgraph_acp.providers <span class="k">import</span> ClaudeACPProvider
+
+AGENTS = agent_registry([ClaudeACPProvider()])
+
+
+<span class="k">@graph_workflow</span>(id=<span class="s">"implement-and-sign-off"</span>, name=<span class="s">"Implement and sign off"</span>)
+<span class="k">def</span> workflow():
+    builder = StateGraph(State)
+    builder.add_node(<span class="s">"workspace"</span>, WorkspaceNode(
+        provider=GitWorktreeWorkspaceProvider(DEFAULT_ROOT_DIRECTORY),
+        base_ref=<span class="s">"origin/main"</span>,
+    ))
+    builder.add_node(<span class="s">"implementation"</span>, ACPNode(
+        agent=<span class="s">"claude"</span>,
+        registry=AGENTS,
+        cwd=checkout,
+        prompt=<span class="k">lambda</span> state: <span class="s">f"Implement this and open a pull request:\n{state.get('task')}"</span>,
+        mcp_server_bindings=(
+            TerminalMcpServer(
+                step_id=<span class="s">"implementation"</span>,
+                agent_id=<span class="s">"claude"</span>,
+                create_workorder=<span class="k">True</span>,
+                required_outputs=(<span class="s">"pr_url"</span>,),
+                repository_tools=(<span class="s">"git_subcommand"</span>, <span class="s">"open_pull_request"</span>),
+            ),
+        ),
+        output_key=<span class="s">"implementation"</span>,
+        graph_node_name=<span class="s">"Implementation"</span>,
+    ))
+    builder.add_node(<span class="s">"human-review"</span>, HumanReviewNode())
+
+    builder.add_edge(START, <span class="s">"workspace"</span>)
+    builder.add_edge(<span class="s">"workspace"</span>, <span class="s">"implementation"</span>)
+    builder.add_edge(<span class="s">"implementation"</span>, <span class="s">"human-review"</span>)
+    builder.add_edge(<span class="s">"human-review"</span>, END)
+    <span class="k">return</span> builder</code></pre>
+
+        <h2 id="components">Building blocks</h2>
+        <table>
+          <thead><tr><th>Node</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>WorkspaceNode</code></td><td>Creates an isolated git worktree for the run.</td></tr>
+            <tr><td><code>NameNode</code></td><td>Gives the run a short display name.</td></tr>
+            <tr><td><code>ACPNode</code></td><td>Runs a coding agent (Claude Code or Codex) over ACP.</td></tr>
+            <tr><td><code>CICheck</code></td><td>Waits for CI and reports pass or fail.</td></tr>
+            <tr><td><code>ReviewNode</code></td><td>A read-only reviewer for one facet. Returns findings.</td></tr>
+            <tr><td><code>RerankerNode</code></td><td>Merges findings, drops noise, posts comments.</td></tr>
+            <tr><td><code>HumanReviewNode</code></td><td>Stops the run until a person decides.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Anything else is plain LangGraph: conditional edges, <code>Send</code> for fan-out, your own node functions.
+          Declare creation-time options, such as which runner implements, with <code>WorkflowInput</code>.
+        </p>
+
+        <h2 id="config">Configuration</h2>
+<pre><code><span class="c"># engine.toml</span>
+[workflows]
+directory = <span class="s">"workflows"</span>
+
+[work_orders]
+workflow = <span class="s">"implementation-review-rerank"</span>  <span class="c"># default for Slack and GitHub</span></code></pre>
+        <nav class="pager"><a href="/docs/">← Overview</a><a href="/docs/workorders/">WorkOrders →</a></nav>
+      </main>
+    </div>
+  </body>
+</html>

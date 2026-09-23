@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111111" />
+    <title>Integrations — OpenEngine docs</title>
+    <meta name="description" content="Start, follow and approve work from Slack and GitHub, without opening OpenEngine." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body>
+    <header class="masthead full">
+      <div class="wrap">
+        <a class="brand" href="/"><img src="/favicon.svg" alt="" /><span>OpenEngine</span></a>
+        <nav>
+          <a href="/docs/" aria-current="page">Docs</a>
+          <a class="nav-cta" href="mailto:hello@openengine.sh">Contact Us</a>
+        </nav>
+      </div>
+    </header>
+
+    <div class="docs">
+      <aside class="sidebar">
+        <nav aria-label="Documentation">
+          <div><span class="eyebrow">Getting started</span><ul><li><a href="/docs/">Overview</a></li></ul></div>
+          <div><span class="eyebrow">Concepts</span><ul><li><a href="/docs/workflows/">Workflows</a></li><li><a href="/docs/workorders/">WorkOrders</a></li><li><a href="/docs/integrations/" aria-current="page">Integrations</a></li></ul></div>
+        </nav>
+      </aside>
+      <main class="doc">
+        <p class="eyebrow">Concepts</p>
+        <h1>Integrations</h1>
+        <p class="lede">
+          Start, follow and approve work from Slack and GitHub, without opening OpenEngine.
+        </p>
+
+        <h2 id="slack">Slack</h2>
+        <p>
+          Mention <code>@OpenEngineBot</code> in a channel and ask for a change. It starts a WorkOrder and the thread
+          becomes its home: progress, questions and the review request all post there.
+        </p>
+        <figure>
+          <img src="/assets/screenshots/slack-mention.png" alt="A Slack message mentioning @OpenEngine with a failing CI log, asking it to resolve the failure" />
+          <figcaption>Paste a failure, mention the bot. The work happens in the thread.</figcaption>
+        </figure>
+        <figure>
+          <img src="/assets/screenshots/slack-thread.png" alt="The OpenEngine bot reporting a completed review, then resuming the WorkOrder when asked to change direction" />
+          <figcaption>Review ready, then redirected with one reply.</figcaption>
+        </figure>
+        <ul>
+          <li><strong>Ask about the code.</strong> The bot can read your repository and answer questions without starting work.</li>
+          <li><strong>Steer in the thread.</strong> Reply with a correction and it reaches the agent that's working.</li>
+          <li><strong>Answer questions.</strong> When an agent needs input, the question and its choices post in the thread.</li>
+          <li><strong>Decide in the thread.</strong> Reply <code>approve</code> or <code>request changes: …</code> when the review is ready.</li>
+          <li><strong>Follow up.</strong> Ask for more fixes after it finishes and the same WorkOrder resumes.</li>
+        </ul>
+        <p>
+          Only the person who started a WorkOrder, and anyone listed in <code>slack_operators</code>, can steer or
+          decide it. Everyone else can join the discussion.
+        </p>
+<pre><code><span class="c"># engine.toml</span>
+public_url = <span class="s">"https://engine.example"</span>
+
+[communications]
+provider = <span class="s">"slack"</span>
+channel = <span class="s">"C0123456789"</span>
+
+[work_orders]
+workflow = <span class="s">"implementation-review-rerank"</span>
+slack_operators = [<span class="s">"U01234567"</span>]</code></pre>
+        <p>
+          Connect the app in <strong>Settings → Slack</strong>, then point Slack's Events URL at
+          <code>&lt;public_url&gt;/api/slack/events</code>. Full setup:
+          <a href="https://github.com/OpenEngine/OpenEngine/blob/main/docs/work-orders-from-slack.md">work-orders-from-slack.md</a>.
+        </p>
+
+        <h2 id="github">GitHub</h2>
+        <p>
+          OpenEngine opens the pull request, and the rest of the review happens on it. Reviewers post inline
+          comments, and impact analysis posts a Green, Orange or Red rating with its reasoning.
+        </p>
+        <figure>
+          <div class="placeholder">Screenshot: reviewer comments and the impact rating on a pull request</div>
+        </figure>
+        <ul>
+          <li><strong>Comment to steer.</strong> A request on the pull request goes to the WorkOrder working on it. If none is running, a new one starts.</li>
+          <li><strong>Assign to start.</strong> Assign an issue to the bot account and it becomes a WorkOrder that closes the issue.</li>
+          <li><strong>Merge to approve.</strong> A person merging the pull request approves the WorkOrder's human review.</li>
+        </ul>
+        <p>
+          Only comments from owners, members and collaborators are acted on. Merges by bots and merge queues don't
+          count as approval.
+        </p>
+<pre><code><span class="c"># engine.toml</span>
+[github]
+repository = <span class="s">"owner/name"</span>
+
+<span class="c"># .env beside engine.toml, never committed</span>
+ENGINE_GITHUB_WEBHOOK_SECRET=...</code></pre>
+        <p>
+          Connect GitHub from the Settings panel, then point a webhook at <code>&lt;public_url&gt;/api/github/events</code>
+          for <code>issue_comment</code>, <code>pull_request_review_comment</code>, <code>issues</code> and
+          <code>pull_request</code>. Full setup:
+          <a href="https://github.com/OpenEngine/OpenEngine/blob/main/docs/github-webhooks.md">github-webhooks.md</a>.
+        </p>
+        <nav class="pager"><a href="/docs/workorders/">← WorkOrders</a><span></span></nav>
+      </main>
+    </div>
+  </body>
+</html>
