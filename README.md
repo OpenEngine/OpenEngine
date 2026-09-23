@@ -29,6 +29,17 @@ uv run \
   --all-packages \
   engine-web
 ```
+The production service defaults to `http://127.0.0.1:4364`. Verify its identity
+and readiness after startup:
+```bash
+curl --fail http://127.0.0.1:4364/api/health
+# {"service":"openengine","version":"0.0.0","ready":true,"api_version":1}
+```
+`version` is the installed `engine-web` package version. Health returns HTTP 503
+until startup completes, if the configured graph runtime cannot open, or during
+shutdown; otherwise it returns HTTP 200. This public endpoint requires no browser
+login and does not check external provider credentials.
+
 While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev
@@ -73,8 +84,8 @@ no server configuration is required beyond the step below.
 2. Fill in the form (device flow does not use the callback URL, but GitHub
    requires one):
    - **Application name:** `OpenEngine`
-   - **Homepage URL:** `http://localhost:8000`
-   - **Authorization callback URL:** `http://localhost:8000`
+   - **Homepage URL:** `http://localhost:4364`
+   - **Authorization callback URL:** `http://localhost:4364`
 3. Click **Register application**
 4. On the app page, check **Enable Device Flow** and click **Update application**
 5. Copy the **Client ID** (looks like `Ov23liXXXXXXXXXX`)

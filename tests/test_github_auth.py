@@ -596,7 +596,7 @@ class TestCsrfGuard:
             ),
         ):
             resp = self._post(
-                app, "/api/github/connect", origin="http://localhost:8000"
+                app, "/api/github/connect", origin="http://localhost:4364"
             )
         assert resp.status_code != 403
 

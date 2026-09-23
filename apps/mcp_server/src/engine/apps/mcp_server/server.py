@@ -23,7 +23,7 @@ class Settings:
     repository: str
     workflow: str
     public_url: str
-    engine_url: str = "http://127.0.0.1:8000"
+    engine_url: str = "http://127.0.0.1:4364"
 
     oidc_issuer: str | None = None
     oidc_audience: str | None = None

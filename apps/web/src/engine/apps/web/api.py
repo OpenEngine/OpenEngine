@@ -39,6 +39,7 @@ from collections.abc import (
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
@@ -1316,8 +1317,20 @@ def create_app(
                 # recovered, and none of them may stop the server from serving.
                 log.exception("could not restore graph WorkOrder %s", state.run_id)
 
+    ready = False
+    service_version = version("engine-web")
+
+    async def health(_request: Request) -> JSONResponse:
+        return JSONResponse(
+            {"service": "openengine", "version": service_version,
+             "ready": ready, "api_version": 1},
+            status_code=200 if ready else 503,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        nonlocal ready
         async with AsyncExitStack() as opened:
             opened.push_async_callback(slack_ingress.close)
             opened.push_async_callback(github_concierge.close)
@@ -1381,7 +1394,11 @@ def create_app(
                         await asyncio.gather(dependency_task, return_exceptions=True)
 
                     opened.push_async_callback(stop_dependencies)
-            yield
+            ready = graph_runtime is None or surface.runtime is not None
+            try:
+                yield
+            finally:
+                ready = False
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
@@ -3581,6 +3598,7 @@ def create_app(
 
     github_login = GitHubLogin(github_login_config)
     routes = [
+        Route("/api/health", health),
         *github_login.routes(),
         Route("/api/config", config),
         Route("/api/github/status", github_status),

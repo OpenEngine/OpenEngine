@@ -97,7 +97,7 @@ class Settings:
     """
 
     host: str = "localhost"
-    port: int = 8000
+    port: int = 4364
     codex_binary: str = "codex"
     codex_sandbox: str = "read-only"
     """What a turn nobody is watching may do: read, and nothing else.

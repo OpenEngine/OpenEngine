@@ -295,3 +295,24 @@ def test_every_manifest_in_the_workspace_is_watched_for_that() -> None:
     assert dev.REPO_ROOT / "apps/web/package.json" in watched
     assert dev.REPO_ROOT / "packages/domain/pyproject.toml" in watched
     assert dev.REPO_ROOT / "packages/adapters/agent_runner/codex/pyproject.toml" in watched
+
+
+@pytest.mark.parametrize("explicit_port", [None, 8123])
+def test_dev_keeps_its_port_independent_of_production(monkeypatch, explicit_port):
+    from engine.runtime import EngineConfig
+
+    monkeypatch.setattr(dev, "read_configuration", lambda _: (
+        SimpleNamespace(config=EngineConfig(), path=None), None
+    ))
+    probes = []
+    monkeypatch.setattr(dev, "chosen_port", lambda host, port: probes.append(port) or port)
+    commands = []
+    monkeypatch.setattr(dev, "start", lambda name, command, env: commands.append(command))
+    monkeypatch.setattr(dev, "describe_loaded_config", lambda _: "test config")
+    monkeypatch.setattr(dev, "watch_dependencies", lambda *_: None)
+    monkeypatch.setattr(dev, "supervise", lambda *_: 0)
+    args = ["--no-web"] + ([] if explicit_port is None else ["--port", str(explicit_port)])
+    assert dev.main(args) == 0
+    command = commands[0]
+    assert command[command.index("--port") + 1] == str(explicit_port or 8000)
+    assert probes == ([8000] if explicit_port is None else [])

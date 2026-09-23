@@ -31,7 +31,7 @@ def main() -> None:
             allowed_emails=tuple(email.strip() for email in
                                  os.environ.get("OE_MCP_ALLOWED_EMAILS", "").split(",") if email.strip()),
             oidc_required_scopes=tuple(os.environ.get("OE_MCP_OIDC_REQUIRED_SCOPES", "").split()),
-            engine_url=os.environ.get("OE_MCP_ENGINE_URL", "http://127.0.0.1:8000"),
+            engine_url=os.environ.get("OE_MCP_ENGINE_URL", "http://127.0.0.1:4364"),
         )
     except (KeyError, ValueError) as error:
         parser.error(str(error))

@@ -146,7 +146,7 @@ triggers.
 ```bash
 uv run engine-dev              # both tiers; open the address Vite prints
 uv run engine-dev --no-web     # API only, reloading; for backend-only work
-uv run engine-dev --build      # serve built dist from :8000, production shape
+uv run engine-dev --build      # serve built dist from :8000, with development reload
 ```
 
 `--config`, `--port` and `--web-port` are there for the cases that need them.
@@ -220,3 +220,6 @@ subprocesses are not:
 2. Restart deferral while runs are in flight — only if phase 1's caveat is
    actually felt.
 3. The same treatment for `engine-worker` and `engine-control-server`.
+
+Production `engine-web` defaults to port 4364. `engine-dev` deliberately keeps
+port 8000 (or a free port) and its Vite proxy; explicit `--port` values are preserved.

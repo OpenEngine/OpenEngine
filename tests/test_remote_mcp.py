@@ -54,7 +54,7 @@ def test_discovery_and_creation(dependency):
         assert result["structuredContent"] == {"run_id": "run-123"}
     assert len(requests) == 1
     assert requests[0].method == "POST"
-    assert str(requests[0].url) == "http://127.0.0.1:8000/api/runs"
+    assert str(requests[0].url) == "http://127.0.0.1:4364/api/runs"
     assert "authorization" not in requests[0].headers
     assert json.loads(requests[0].content) == {
         "prompt": "Fix the bug", "repository": "/repos/oe",

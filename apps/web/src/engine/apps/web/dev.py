@@ -408,7 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
 
-    settings = Settings(engine_config=loaded.config, config_path=loaded.path)
+    settings = Settings(engine_config=loaded.config, config_path=loaded.path, port=8000)
     port = args.port if args.port is not None else chosen_port(settings.host, settings.port)
     api_url = f"http://{settings.host}:{port}"
 

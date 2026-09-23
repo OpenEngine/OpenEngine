@@ -259,6 +259,7 @@ class GitHubLogin:
 # Paths under /api/ that must remain accessible without a session cookie so
 # the login flow itself can work.
 _AUTH_EXEMPT = frozenset({
+    "/api/health",  # Public service identity and readiness; no user data.
     f"{_PATH}/login",
     f"{_PATH}/callback",
     f"{_PATH}/status",
