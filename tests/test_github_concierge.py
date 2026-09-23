@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from engine.domain import RunId, RunState, TaskId, WorkflowId
+from engine.domain import RunId, RunOrigin, RunState, TaskId, WorkflowId
 from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Continuation, Delivery
 from engine.graph_runtime import NodeId, RunSnapshot, RunStatus
 from engine.runtime import WorkOrdersConfig
@@ -1298,6 +1298,11 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
             assert "Fixes #7" in inputs["task"]
             runs = client.portal.call(capabilities.state_store.list_runs)
             assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
+            # Progress is reported back to the issue, addressed to the assigner.
+            assert runs[0].origin == RunOrigin(
+                channel="github:acme/api", thread_id="issue/7",
+                author="maintainer", requester=runs[0].requester or "",
+            )
         else:
             runtime.start.assert_not_awaited()
             assert "ignored an assignment of #7 from maintainer, who cannot write to acme/api" \
