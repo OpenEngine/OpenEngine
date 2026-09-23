@@ -1310,3 +1310,49 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
         runtime.store.claim_pull_request.assert_not_awaited()
     assert not provider.clients
     assert not communications.posts
+
+
+def test_issue_progress_withholds_run_details_and_reports_a_resume(tmp_path, monkeypatch):
+    """The issue is public: a failure's error and an approval's reason can hold
+    paths, command output, or secrets, so they stay behind the work order link.
+    A resume is an update too, and is reported there like the others."""
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    from engine.apps.web.github_communications import GithubCommunications
+    from engine.graph_runtime import EventKind, RuntimeEvent
+
+    posted = AsyncMock(return_value="41")
+    monkeypatch.setattr(GithubCommunications, "post", posted)
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    ))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        observe = runtime.observe.call_args.args[0]
+        for kind, payload in (
+            (EventKind.APPROVAL_REQUESTED, {"toolName": "bash", "reason": "run [x](https://evil) @team"}),
+            (EventKind.RUN_FAILED, {"error": "token ghp_secret in /Users/me/.env"}),
+            (EventKind.RUN_FORKED, {}),
+        ):
+            client.portal.call(observe, RuntimeEvent(
+                run_id=RunId(STARTED_RUN), kind=kind, payload=payload,
+            ))
+
+    texts = [call.args[1].text for call in posted.await_args_list]
+    assert "*Workflow* needs your approval." in texts
+    assert "Work order failed." in texts
+    assert "Work order resumed." in texts
+    assert not any("secret" in text or "evil" in text or "@team" in text for text in texts)
+    assert all(call.args[0] == "github:acme/api" for call in posted.await_args_list)

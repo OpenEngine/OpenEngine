@@ -1158,13 +1158,21 @@ def create_app(
         )
         node = topology.node(event.node_id) if topology and event.node_id else None
         label = node.name if node else str(event.node_id or "Workflow")
+        # A GitHub issue is public. Errors, tool-supplied approval reasons and
+        # agent transcript text can hold local paths, command output, or
+        # secrets, and arbitrary Markdown, so they stay behind the work order link.
+        public = state.origin.channel.startswith(GITHUB_CHANNEL_PREFIX)
         if event.kind is EventKind.RUN_FORKED:
             graph_agent_reports.discard(state.run_id)
-            return
-        if event.kind is EventKind.TRANSCRIPT:
+            if not public:
+                return
+            # Chat surfaces answer the resume request themselves; the issue
+            # timeline has no other record that the run picked back up.
+            text = "Work order resumed."
+        elif event.kind is EventKind.TRANSCRIPT:
             # Assistant role alone is not authorship: human/tool nodes also
             # narrate their work in the UI. Their notifications are lifecycle-owned.
-            if node is None or node.kind != "agent":
+            if public or node is None or node.kind != "agent":
                 return
             if event.payload.get("role", "assistant") != "assistant":
                 return
@@ -1189,11 +1197,17 @@ def create_app(
                 if isinstance(pr_url, str) and pr_url.strip():
                     links.append(MessageLink("View pull request", pr_url))
             else:
-                text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
+                text = (
+                    f"*{label}* needs your approval." if public
+                    else f"*{label}* needs your approval: {event.payload.get('reason', '')}"
+                )
             mention = True
         elif event.kind is EventKind.RUN_FAILED:
             graph_agent_reports.discard(state.run_id)
-            text = f"Work order failed: {event.payload.get('error', 'Unknown error')}"
+            text = (
+                "Work order failed." if public
+                else f"Work order failed: {event.payload.get('error', 'Unknown error')}"
+            )
             mention = True
         elif event.kind is EventKind.RUN_FINISHED:
             if state.run_id in graph_agent_reports:
@@ -1204,19 +1218,20 @@ def create_app(
             link = run_notifier.work_order_link(state)
             if link:
                 links.append(link)
-            if state.origin.channel.startswith(GITHUB_CHANNEL_PREFIX) and not any(
+            if public and not any(
                 existing.label == "View pull request" for existing in links
             ):
                 # The issue timeline is the run's history, so every update
                 # carries the pull request once the run has opened one.
-                read = getattr(getattr(surface.runtime, "store", None), "pull_request_for_run", None)
-                opened = await read(state.run_id) if read is not None else None
+                opened = await github_pull_request_for_run(str(state.run_id))
                 if opened is not None:
                     links.append(MessageLink("View pull request", pull_request_url(*opened)))
             try:
                 await run_notifier.deliver(
                     state, text, links=links, mention=mention,
-                    progress=event.kind in (EventKind.NODE_STARTED, EventKind.RUN_FINISHED),
+                    progress=event.kind in (
+                        EventKind.NODE_STARTED, EventKind.RUN_FINISHED, EventKind.RUN_FORKED,
+                    ),
                 )
             except Exception:
                 # Exceptions may contain credentials or request bodies. Record
@@ -1224,7 +1239,8 @@ def create_app(
                 await graph_events.append(RuntimeEvent(
                     run_id=state.run_id, kind=EventKind.NOTIFICATION_FAILED,
                     node_id=event.node_id, execution_id=event.execution_id,
-                    payload={"error": "Slack notification could not be delivered.",
+                    payload={"error": "GitHub issue comment could not be posted." if public
+                             else "Slack notification could not be delivered.",
                              "eventKind": event.kind.value},
                 ))
 
