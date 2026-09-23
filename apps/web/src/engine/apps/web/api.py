@@ -47,7 +47,9 @@ from uuid import uuid4
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
-from engine.apps.web.github_ingress import GithubAssignment, GithubComment, GithubIngress, GithubMerge
+from engine.apps.web.github_ingress import (
+    GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReopen,
+)
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -3431,7 +3433,7 @@ def create_app(
             text=comment.body, comment_id=comment.comment_id,
         ))
 
-    async def github_merge_approves_workorder(merged: GithubMerge) -> None:
+    async def github_merge_approves_workorder(merged: GithubMerge | GithubReopen) -> None:
         """Merging a pull request is a person accepting its work order, and
         closing it unmerged is one rejecting it.
 
@@ -3455,6 +3457,21 @@ def create_app(
         merge until it asks for one. Anything that does go wrong raises, so the
         delivery can be redelivered rather than silently losing the approval.
         """
+        if isinstance(merged, GithubReopen):
+            # The pull request is open again, so a close still waiting for the
+            # review is no longer anybody's verdict on it.
+            for run_id, kept in list(merges_awaiting_review.items()):
+                if (
+                    not kept.merged
+                    and kept.number == merged.number
+                    and kept.repository.lower() == merged.repository.lower()
+                ):
+                    merges_awaiting_review.pop(run_id, None)
+                    log.info(
+                        "%s#%s was reopened, so work order %s's human review waits "
+                        "for a person again", merged.repository, merged.number, run_id,
+                    )
+            return
         runtime = surface.runtime
         if runtime is None:
             return

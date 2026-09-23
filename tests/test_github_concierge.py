@@ -854,10 +854,10 @@ def _human_review(approval_id="approval-1", tool_name="human_review"):
     )
 
 
-def _merged(client, number=7, repository="acme/api", **pull_request):
+def _merged(client, number=7, repository="acme/api", action="closed", **pull_request):
     from test_github_ingress import _merged_pull_request, _signed as github_signed
 
-    payload = _merged_pull_request(number, **pull_request)
+    payload = dict(_merged_pull_request(number, **pull_request), action=action)
     payload["repository"]["full_name"] = repository
     body = json.dumps(payload).encode()
     return client.post("/api/github/events", content=body, headers=dict(
@@ -1015,6 +1015,32 @@ def test_a_merge_before_the_review_is_requested_answers_it_when_it_is(tmp_path):
     runtime.decide.assert_awaited_once_with(
         RunId("existing"), ApprovalId("approval-1"), ApprovalDecision.ACCEPT
     )
+
+
+def test_a_close_withdrawn_by_a_reopen_before_the_review_decides_nothing(tmp_path):
+    """A close held for a review not yet requested is dropped when the pull
+    request is reopened: it is open again, so the close is nobody's verdict."""
+    from starlette.testclient import TestClient
+
+    from engine.graph_runtime import EventKind, RuntimeEvent
+
+    pending = []
+    runtime, opened = _graph_runtime(pending_approvals=pending)
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        assert _merged(client, merged=False, merged_by=None).status_code == 200
+        assert _merged(client, action="reopened").status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+        pending[:] = [_human_review()]
+        observe = runtime.observe.call_args.args[0]
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId("existing"), kind=EventKind.APPROVAL_REQUESTED,
+            payload={"approvalId": "approval-1", "toolName": "human_review"},
+        ))
+
+    assert runtime.decide.await_count == 0
 
 
 def test_an_approving_review_decides_nothing(tmp_path):

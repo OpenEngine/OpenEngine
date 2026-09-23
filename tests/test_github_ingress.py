@@ -14,8 +14,11 @@ import pytest
 
 from engine.apps.web.github_ingress import (
     GithubIngress,
+    GithubMerge,
+    GithubReopen,
     comment_from_payload,
     merge_from_payload,
+    reopen_from_payload,
     verify_signature,
 )
 
@@ -348,6 +351,36 @@ def test_a_merge_is_handled_once_however_often_it_is_delivered() -> None:
         assert ingress.accept("pull_request", _merged_pull_request(number=8))
         await ingress.drain()
         assert [m.number for m in merges] == [7, 8]
+        await ingress.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_reopened_pull_request_is_read() -> None:
+    reopened = reopen_from_payload(
+        "pull_request", dict(_merged_pull_request(merged=False), action="reopened")
+    )
+    assert reopened == GithubReopen(repository="acme/api", number=7)
+    assert reopen_from_payload("pull_request", _merged_pull_request()) is None
+
+
+def test_a_close_after_a_reopen_is_handled_again() -> None:
+    """Close, reopen, close: the second close is a verdict, not a duplicate."""
+
+    async def scenario():
+        handled = []
+        ingress = GithubIngress(
+            repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+            handle=_record([]), handle_merge=_record(handled),
+        )
+        closed = _merged_pull_request(merged=False, merged_by=None)
+        reopened = dict(closed, action="reopened")
+        for payload in (closed, reopened, closed, reopened):
+            assert ingress.accept("pull_request", payload)
+        await ingress.drain()
+        assert [type(delivery) for delivery in handled] == [
+            GithubMerge, GithubReopen, GithubMerge, GithubReopen,
+        ]
         await ingress.close()
 
     asyncio.run(scenario())

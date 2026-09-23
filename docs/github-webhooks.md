@@ -163,6 +163,8 @@ does not skip that step. The run still reaches its review and it is shown as
 usual; the merge that already answered it is recorded as soon as it does. The
 merge is held in memory until then, so a restart in between leaves the review
 for the web UI.
+A close held this way is dropped if the pull request is reopened first: it is
+open again, so the close is no longer anybody's verdict on it.
 
 ## Watching what arrives
 

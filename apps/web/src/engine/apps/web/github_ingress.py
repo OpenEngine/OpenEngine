@@ -86,6 +86,14 @@ class GithubMerge:
 
 
 @dataclass(frozen=True)
+class GithubReopen:
+    """A pull request reopened after a close, which withdraws that close's verdict."""
+
+    repository: str
+    number: int
+
+
+@dataclass(frozen=True)
 class GithubAssignment:
     """An issue assigned to the configured Engine account."""
 
@@ -199,6 +207,26 @@ def comment_from_payload(
     )
 
 
+def reopen_from_payload(event: str, payload: Mapping[str, object]) -> GithubReopen | None:
+    """The reopen in a delivery, or ``None`` for anything that is not one.
+
+    Whoever reopened is not checked: this decides nothing, it only says the
+    pull request is open again, so an earlier close is no longer its verdict.
+    """
+    if event != MERGE_EVENT or payload.get("action") != "reopened":
+        return None
+    pull_request = payload.get("pull_request")
+    repository = payload.get("repository")
+    if not isinstance(pull_request, dict) or not isinstance(repository, dict):
+        return None
+    full_name, number = repository.get("full_name"), pull_request.get("number")
+    if not isinstance(full_name, str) or not full_name:
+        return None
+    if not isinstance(number, int) or isinstance(number, bool):
+        return None
+    return GithubReopen(repository=full_name, number=number)
+
+
 def merge_from_payload(
     event: str, payload: Mapping[str, object], *, self_login: str = ""
 ) -> GithubMerge | None:
@@ -268,7 +296,7 @@ class GithubIngress:
         webhook_secret: Callable[[], str] = lambda: "",
         repository: str = "",
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
-        handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
+        handle_merge: Callable[[GithubMerge | GithubReopen], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
         self_login: Callable[[], str] = lambda: "",
         capacity: int = 256,
@@ -288,7 +316,7 @@ class GithubIngress:
         # is bookkeeping and never a reason to refuse a delivery, so a missing
         # log is a deployment with no panel rather than a failure here.
         self._activity = activity
-        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubMerge | GithubAssignment]] = (
+        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubMerge | GithubReopen | GithubAssignment]] = (
             asyncio.Queue(maxsize=capacity)
         )
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
@@ -376,9 +404,21 @@ class GithubIngress:
             # what is acted on is that this pull request is merged, or closed,
             # and a second delivery saying so again asks for nothing new.
             verdict = "merged" if merged.merged else "closed"
+            pull = f"{merged.repository.lower()}#{merged.number}"
+            # Until it is reopened again: the reopen after this close is news.
+            self._seen.pop((MERGE_EVENT, f"{pull}/reopened"), None)
             return self._enqueue(
-                merged, f"{verdict} pull request",
-                (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}/{verdict}"),
+                merged, f"{verdict} pull request", (MERGE_EVENT, f"{pull}/{verdict}"),
+                wired=self._handle_merge is not None,
+            )
+        reopened = reopen_from_payload(event, payload)
+        if reopened is not None:
+            pull = f"{reopened.repository.lower()}#{reopened.number}"
+            # A pull request can be closed, reopened and closed again, and the
+            # second close is a verdict of its own rather than a duplicate.
+            self._seen.pop((MERGE_EVENT, f"{pull}/closed"), None)
+            return self._enqueue(
+                reopened, "reopened pull request", (MERGE_EVENT, f"{pull}/reopened"),
                 wired=self._handle_merge is not None,
             )
         # Nothing to do with this delivery, whether or not a handler is
@@ -388,7 +428,7 @@ class GithubIngress:
 
     def _enqueue(
         self,
-        delivery: GithubComment | GithubMerge | GithubAssignment,
+        delivery: GithubComment | GithubMerge | GithubReopen | GithubAssignment,
         subject: str,
         identity: tuple[str, str],
         *,
