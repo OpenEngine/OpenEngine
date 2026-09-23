@@ -66,22 +66,20 @@ reports `loginRequired: false`; starting the OAuth flow returns 503.
 
 ## Agent GitHub identity
 
-Agent GitHub API actions use the deployment's `GITHUB_TOKEN` (or the
-`github_token` configuration value), in both the web and worker composition
-roots. Provision this credential for the dedicated OpenEngine worker account.
-The account owning that credential is the PR/comment author; naming a token a
-service token does not turn a personal account into a bot. Restart the process
-after changing it. This is separate from `ENGINE_SERVICE_TOKEN`, which permits
-incoming MCP requests and cannot authenticate to GitHub.
+Agent GitHub API actions in the web composition use only the host's `gh auth`
+login: the account shown by `gh auth status` for the OS user that runs the web
+process. That account is the PR/comment author. Both GitHub choices in Settings
+(**GH CLI** and **GitHub OAuth**) route agent actions through `gh`; GitLab
+routing is unchanged. Neither the browser login, a Settings device-flow token,
+nor `GITHUB_TOKEN` is used for agent actions. OpenEngine removes
+`GITHUB_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` from the environment it passes to
+`gh`, so an engine setting cannot override the CLI login. `GH_TOKEN` remains
+`gh`'s own setting and is honored. The worker composition still uses its
+configured `GITHUB_TOKEN`.
 
-There is no fallback to a Settings device-flow token or `gh auth` credentials,
-even if Settings selects **GH CLI**. An absent or invalid service credential
-cannot silently switch to a personal account. Deployments previously relying
-on those personal credentials must configure the worker credential. GitLab
-routing is unchanged. Git commits still use Git's author/committer configuration
-and configured agent attribution; pushes still use the host's Git credential
-helper or SSH credentials. Configure those separately for the worker account.
-The GitHub API token is deliberately not passed to Git subprocesses.
+Git commits still use Git's author/committer configuration and configured
+agent attribution; pushes still use the host's Git credential helper or SSH
+credentials (`gh auth setup-git` makes Git use the same login).
 
 Browser login requests `read:user` and only creates a session cookie. The
 separate Settings device flow stores repository connection credentials in the
@@ -93,11 +91,10 @@ user. Authenticated users never inherit the legacy `github-token` entry: they
 must reconnect. Local mode without browser login retains the legacy entry.
 These UI connection credentials do not authorize agent GitHub API actions.
 
-The web `--check` wiring report identifies the service credential source and
-whether it is configured, without printing the secret. Both composition roots
-log the same information at startup (a warning when absent). Successful PR
-creation logs the returned URL, GitHub's actual author login, and transport at
-INFO level. Enable INFO logging to retain this audit evidence.
+The web `--check` wiring report shows whether `gh` is authenticated and as
+which account. Successful PR creation logs the returned URL, GitHub's actual
+author login, and transport at INFO level. Enable INFO logging to retain this
+audit evidence.
 
 For graph runs served by the web app, `compose_app` passes its composed
 `source_control` to `build_graph_runtime`; terminal MCP resolves that runtime

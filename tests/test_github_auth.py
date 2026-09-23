@@ -297,24 +297,23 @@ class TestRefreshAccessToken:
 
 
 @pytest.mark.parametrize("provider", [None, "github-oauth", "gh-cli"])
-@pytest.mark.parametrize("service_token", ["worker-token", ""])
-def test_agent_pr_uses_only_service_credentials(
-    tmp_path, monkeypatch, caplog, provider, service_token
-):
+def test_agent_pr_uses_only_the_gh_cli_login(tmp_path, monkeypatch, caplog, provider):
+    """Agents act as `gh auth`, never as a UI connection or GITHUB_TOKEN."""
     from engine.apps.web.composition import Settings, build_capabilities
     from engine.apps.web.source_control import SourceControlPreferences
-    from engine.adapters.source_control.github import GitHubSourceControlError
 
     saved = {}
     monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
     monkeypatch.setattr(keyring, "get_password", lambda s, u: saved.get((s, u)))
     monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
+    monkeypatch.setenv("GITHUB_TOKEN", "engine-token")
+    monkeypatch.setenv("GITHUB_ENTERPRISE_TOKEN", "engine-enterprise-token")
     preferences = SourceControlPreferences(tmp_path / "preferences.json")
     if provider:
         preferences.set(provider)
     caplog.set_level(logging.INFO)
     capabilities = build_capabilities(Settings(
-        github_token=service_token,
+        github_token="engine-token",
         sqlite_path=str(tmp_path / "state.sqlite3"),
         source_control_preferences=preferences if provider else None,
     ))
@@ -322,26 +321,36 @@ def test_agent_pr_uses_only_service_credentials(
     adapter = source._providers[provider] if provider else source
     monkeypatch.setattr(adapter, "_root_path", AsyncMock(return_value=str(tmp_path)))
     monkeypatch.setattr(adapter, "_repo_coords", AsyncMock(return_value=("acme", "api")))
-    requests = []
-
-    def respond(request):
-        requests.append(request)
-        return httpx.Response(201, json={
-            "html_url": "https://github.com/acme/api/pull/42",
-            "user": {"login": "openengine-worker"},
-        })
-
-    real_client = httpx.AsyncClient
     monkeypatch.setattr(
         "engine.adapters.source_control.github.transports.httpx.AsyncClient",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+        MagicMock(side_effect=AssertionError("agent PRs must not call the REST API directly")),
+    )
+    launches = []
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self, _input):
+            return (
+                b'{"html_url": "https://github.com/acme/api/pull/42",'
+                b' "user": {"login": "openengine-worker"}}',
+                b"",
+            )
+
+    async def launch(*argv, **kwargs):
+        launches.append((argv, kwargs["env"]))
+        return Process()
+
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.asyncio.create_subprocess_exec",
+        launch,
     )
 
     async def open_pr():
         return await source.request_review("workspace", "agent/fix", "main", "fix: bug", "body")
 
-    # Establish behavior before login, then complete an actual UI device flow.
-    asyncio.run(open_pr())
+    # Before and after a Settings device flow, the agent still acts as `gh`.
+    assert asyncio.run(open_pr()) == "https://github.com/acme/api/pull/42"
     from starlette.testclient import TestClient
     app = _make_github_app(tmp_path)
     with TestClient(app) as client, patch(
@@ -354,28 +363,18 @@ def test_agent_pr_uses_only_service_credentials(
         assert client.post("/api/github/connect").status_code == 200
         assert client.post("/api/github/connect/poll").json() == {"status": "complete"}
     assert GitHubCredentialStore().get() == "personal-token"
-    asyncio.run(open_pr())
-    assert [r.headers.get("Authorization") for r in requests] == [
-        f"Bearer {service_token}" if service_token else None,
-    ] * 2
-    assert "composition=web github_identity=service" in caplog.text
-    assert "author=openengine-worker" in caplog.text
-    assert "worker-token" not in caplog.text
-    assert "personal-token" not in caplog.text
+    assert asyncio.run(open_pr()) == "https://github.com/acme/api/pull/42"
 
-    # An invalid service credential cannot refresh or fall back to the UI token.
-    requests.clear()
-    def reject(request):
-        requests.append(request)
-        return httpx.Response(401, json={"message": "Bad credentials"})
-    monkeypatch.setattr(
-        "engine.adapters.source_control.github.transports.httpx.AsyncClient",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(reject), **kwargs),
-    )
-    with pytest.raises((GitHubSourceControlError, RuntimeError), match="Bad credentials"):
-        asyncio.run(open_pr())
-    assert len(requests) == 1
-    assert GitHubCredentialStore().get() == "personal-token"
+    assert len(launches) == 2
+    for argv, env in launches:
+        assert argv[:2] == ("gh", "api")
+        assert "GITHUB_TOKEN" not in env
+        assert "GITHUB_ENTERPRISE_TOKEN" not in env
+        assert not any("token" in argument.lower() for argument in argv)
+    assert "composition=web github_identity=gh-cli" in caplog.text
+    assert "author=openengine-worker" in caplog.text
+    assert "engine-token" not in caplog.text
+    assert "personal-token" not in caplog.text
 
 
 def test_oauth_lifecycle_log_never_contains_token_material(caplog) -> None:
