@@ -181,8 +181,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       .then(({ connected }) => {
         setConnection({ phase: connected ? "connected" : "disconnected" });
       })
-      .catch(() => {
-        setConnection({ phase: "disconnected" });
+      .catch((error) => {
+        setConnection({ phase: "error", message: String(error) });
       });
     loadClientId();
     getSourceControlProvider().then((status) => {

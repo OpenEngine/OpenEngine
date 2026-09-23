@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 import httpx
 import keyring
+from engine.apps.web.oauth_lock import credential_lock
 from engine.apps.web.oauth_credentials import (
     OAuthCredentialError,
     OAuthCredentialStore,
@@ -262,6 +263,65 @@ async def refresh_access_token(client_id: str, refresh_token: str) -> StoredCred
     )
 
 
+async def connection_is_valid(store: GitHubCredentialStore, client_id: str) -> bool:
+    """Validate a Settings connection, rotating its token under the shared lock."""
+    async with credential_lock(*store.credential_identity) as acquired:
+        if not acquired:
+            raise GitHubAuthError("GitHub connection is busy; try again")
+        credentials = store.get_credentials()
+        if credentials is None or not credentials.is_usable():
+            return False
+
+        async def valid(token: str) -> bool:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(
+                        "https://api.github.com/user",
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github+json",
+                        },
+                    )
+            except httpx.HTTPError as error:
+                raise GitHubAuthError("Could not check GitHub connection") from error
+            if response.status_code == 401:
+                return False
+            if response.is_error:
+                raise GitHubAuthError(
+                    f"GitHub returned {response.status_code} while checking connection"
+                )
+            return True
+
+        now = time.time()
+        expired = credentials.expires_at is not None and credentials.expires_at <= now
+        if not expired and await valid(credentials.access_token):
+            return store.get_credentials() == credentials
+        if store.get_credentials() != credentials:
+            return False  # Disconnected or reconnected while GitHub was responding.
+        if not client_id or not credentials.refresh_token or (
+            credentials.refresh_token_expires_at is not None
+            and credentials.refresh_token_expires_at <= now
+        ):
+            return False
+        try:
+            refreshed = await refresh_access_token(client_id, credentials.refresh_token)
+        except GitHubRefreshTokenInvalidError:
+            if store.get_credentials() == credentials:
+                store.delete()
+            return False
+        if store.get_credentials() != credentials:
+            return False
+        try:
+            store.set_credentials(refreshed)
+        except (GitHubAuthError, keyring.errors.KeyringError) as error:
+            # The old refresh token was consumed; it must not be retried.
+            store.delete()
+            raise GitHubAuthError(
+                "Could not save refreshed GitHub credentials; reconnect in Settings"
+            ) from error
+        return await valid(refreshed.access_token) and store.get_credentials() == refreshed
+
+
 def credentials_from_device_flow(result: DeviceFlowComplete) -> StoredCredentials:
     """Convert Device Flow's relative expiry values to durable timestamps."""
     now = time.time()
@@ -282,6 +342,7 @@ __all__ = [
     "GitHubCredentialStore",
     "GitHubRefreshTokenInvalidError",
     "StoredCredentials",
+    "connection_is_valid",
     "credentials_from_device_flow",
     "poll_device_flow",
     "refresh_access_token",

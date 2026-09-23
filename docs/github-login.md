@@ -92,6 +92,11 @@ Logging out or renaming an account does not transfer its connection to another
 user. Authenticated users never inherit the legacy `github-token` entry: they
 must reconnect. Local mode without browser login retains the legacy entry.
 These UI connection credentials do not authorize agent GitHub API actions.
+Settings checks the saved token with GitHub and refreshes expired or rejected
+access tokens when a usable refresh token and client ID are available. Revoked
+or unrefreshable connections require reconnecting; temporary GitHub failures
+report an error without discarding credentials. The deployment's worker token
+is configured separately and must be replaced manually if expired or revoked.
 
 The web `--check` wiring report identifies the service credential source and
 whether it is configured, without printing the secret. Both composition roots

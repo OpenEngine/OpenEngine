@@ -586,7 +586,7 @@ class TestCsrfGuard:
         )
         assert resp.status_code == 204
 
-    def test_status_is_exempt_from_csrf_guard(self, tmp_path):
+    def test_status_refresh_rejects_cross_origin_requests(self, tmp_path):
         from starlette.testclient import TestClient
 
         app = _make_github_app(tmp_path)
@@ -594,7 +594,7 @@ class TestCsrfGuard:
             resp = client.get(
                 "/api/github/status", headers={"origin": "https://evil.example.com"}
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -758,6 +758,7 @@ def test_browser_users_have_isolated_credentials_and_device_flows(tmp_path, monk
     config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback")
     login = GitHubLogin(config)
     monkeypatch.setattr("engine.apps.web.api.GitHubLogin", lambda *_: login)
+    monkeypatch.setattr("engine.apps.web.api.connection_is_valid", AsyncMock(side_effect=lambda store, _: bool(store.get())))
     app = _make_github_app(tmp_path, client_id="", login_config=config)
     start = AsyncMock(side_effect=[
         DeviceFlowState("alice-device", "alice-code", "https://github.com/login/device", 900, 5),
@@ -793,3 +794,132 @@ def test_browser_users_have_isolated_credentials_and_device_flows(tmp_path, monk
     assert GitHubCredentialStore(user_id=2).get() is None
     assert GitHubCredentialStore().get() == "legacy-personal-token"
     assert GitHubCredentialStore(user_id=1).credential_identity != GitHubCredentialStore(user_id=2).credential_identity
+
+
+@pytest.fixture
+def github_connection(tmp_path, monkeypatch):
+    saved = {}
+    monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: saved.get((s, u)))
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
+    monkeypatch.setattr(keyring, "delete_password", lambda s, u: saved.pop((s, u), None))
+    monkeypatch.setattr("engine.apps.web.oauth_lock.user_state_path", lambda _: tmp_path)
+    store = GitHubCredentialStore()
+    requests = []
+    responses = []
+
+    def respond(request):
+        requests.append(request)
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.apps.web.github_auth.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    return store, requests, responses
+
+
+@pytest.mark.parametrize("expired", [True, False])
+def test_settings_refreshes_expired_or_rejected_tokens(tmp_path, github_connection, expired):
+    from starlette.testclient import TestClient
+
+    store, requests, responses = github_connection
+    store.set_credentials(StoredCredentials("old", "refresh", 1 if expired else None))
+    if not expired:
+        responses.append(httpx.Response(401))
+    responses.extend([
+        httpx.Response(200, json={"access_token": "new", "refresh_token": "rotated", "expires_in": 3600}),
+        httpx.Response(200, json={"login": "octocat"}),
+    ])
+    with TestClient(_make_github_app(tmp_path)) as client:
+        response = client.get("/api/github/status")
+    assert response.json() == {"connected": True, "clientIdConfigured": True}
+    assert store.get_credentials().refresh_token == "rotated"
+    assert store.get_credentials().expires_at > 1
+    assert requests[-1].headers["Authorization"] == "Bearer new"
+    refresh = next(r for r in requests if r.method == "POST")
+    assert b"client_id=test-client-id" in refresh.content
+    assert b"refresh_token=refresh" in refresh.content
+
+
+@pytest.mark.parametrize("credentials,client_id,responses", [
+    (StoredCredentials("expired", "refresh", 1), "", []),
+    (StoredCredentials("expired", "refresh", 1, 2), "cid", []),
+    (StoredCredentials("expired", expires_at=1), "cid", []),
+    (StoredCredentials("revoked"), "cid", [httpx.Response(401)]),
+    (StoredCredentials("expired", "revoked-refresh", 1), "cid", [httpx.Response(200, json={"error": "bad_refresh_token"})]),
+])
+def test_settings_does_not_report_unusable_tokens_connected(tmp_path, github_connection, credentials, client_id, responses):
+    from starlette.testclient import TestClient
+
+    store, requests, queued = github_connection
+    store.set_credentials(credentials)
+    queued.extend(responses)
+    with TestClient(_make_github_app(tmp_path, client_id=client_id)) as client:
+        assert client.get("/api/github/status").json()["connected"] is False
+    assert len(requests) == len(responses)
+    if credentials.refresh_token == "revoked-refresh":
+        assert store.get() is None
+
+
+@pytest.mark.parametrize("expired", [True, False])
+@pytest.mark.parametrize("failure", [httpx.Response(503), httpx.ConnectError("offline")])
+def test_settings_preserves_credentials_on_provider_failure(tmp_path, github_connection, expired, failure):
+    from starlette.testclient import TestClient
+
+    store, _, responses = github_connection
+    credentials = StoredCredentials("access", "refresh", 1 if expired else None)
+    store.set_credentials(credentials)
+    responses.append(failure)
+    with TestClient(_make_github_app(tmp_path)) as client:
+        assert client.get("/api/github/status").status_code == 502
+    assert store.get_credentials() == credentials
+
+
+def test_concurrent_settings_checks_rotate_only_once(github_connection):
+    from engine.apps.web.github_auth import connection_is_valid
+
+    store, requests, responses = github_connection
+    store.set_credentials(StoredCredentials("expired", "refresh", 1))
+    responses.extend([
+        httpx.Response(200, json={"access_token": "new", "refresh_token": "rotated", "expires_in": 3600}),
+        httpx.Response(200), httpx.Response(200),
+    ])
+
+    async def check():
+        return await asyncio.gather(connection_is_valid(store, "cid"), connection_is_valid(store, "cid"))
+
+    assert asyncio.run(check()) == [True, True]
+    assert sum(r.method == "POST" for r in requests) == 1
+
+
+def test_disconnect_during_refresh_does_not_restore_credentials(github_connection, monkeypatch):
+    from engine.apps.web.github_auth import connection_is_valid
+
+    store, _, _ = github_connection
+    store.set_credentials(StoredCredentials("expired", "refresh", 1))
+
+    async def refresh(*_):
+        store.delete()
+        return StoredCredentials("new", "rotated")
+
+    monkeypatch.setattr("engine.apps.web.github_auth.refresh_access_token", refresh)
+    assert asyncio.run(connection_is_valid(store, "cid")) is False
+    assert store.get() is None
+
+
+def test_failed_refresh_persistence_does_not_reuse_consumed_token(github_connection, monkeypatch):
+    from engine.apps.web.github_auth import connection_is_valid
+
+    store, requests, responses = github_connection
+    store.set_credentials(StoredCredentials("expired", "refresh", 1))
+    responses.append(httpx.Response(200, json={"access_token": "new", "refresh_token": "rotated"}))
+    monkeypatch.setattr(store, "set_credentials", MagicMock(side_effect=GitHubAuthError("locked")))
+    with pytest.raises(GitHubAuthError, match="reconnect"):
+        asyncio.run(connection_is_valid(store, "cid"))
+    assert asyncio.run(connection_is_valid(store, "cid")) is False
+    assert len(requests) == 1

@@ -54,6 +54,7 @@ from engine.apps.web.github_auth import (
     DeviceFlowState,
     GitHubAuthError,
     GitHubCredentialStore,
+    connection_is_valid,
     credentials_from_device_flow,
     poll_device_flow,
     start_device_flow,
@@ -2470,8 +2471,8 @@ def create_app(
         arbitrary pages. Checking the Origin header against localhost is a
         lightweight CSRF guard appropriate for a local tool; it stops a
         cross-origin page from silently disconnecting the user's token or
-        initiating a new device flow. GET /api/github/status is read-only and
-        exempt.
+        initiating a new device flow. Status checks may rotate credentials and
+        use the same guard.
         """
         origin = request.headers.get("origin", "")
         if not origin:
@@ -2508,13 +2509,17 @@ def create_app(
         return github_client_id or _github_store(request).get_client_id() or ""
 
     async def github_status(_request: Request) -> JSONResponse:
-        credentials = _github_store(_request).get_credentials()
-        now = time.time()
-        connected = bool(credentials and credentials.is_usable(now))
+        if not _is_local_request(_request):
+            return _error("forbidden", 403)
+        client_id = _effective_client_id(_request)
+        try:
+            connected = await connection_is_valid(_github_store(_request), client_id)
+        except GitHubAuthError as error:
+            return _error(str(error), 502)
         return JSONResponse(
             {
                 "connected": connected,
-                "clientIdConfigured": bool(_effective_client_id(_request)),
+                "clientIdConfigured": bool(client_id),
             }
         )
 

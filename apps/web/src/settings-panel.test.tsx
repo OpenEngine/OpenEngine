@@ -54,6 +54,16 @@ describe("SettingsPanel Slack connection", () => {
     vi.spyOn(window, "open").mockImplementation(() => null);
   });
 
+  it("shows GitHub connection check errors", async () => {
+    vi.mocked(api.getGitHubClientId).mockResolvedValue({ source: "environment", hint: "test" });
+    vi.mocked(api.getSourceControlProvider).mockResolvedValue({
+      provider: "github-oauth", autoSelected: false,
+    });
+    vi.mocked(api.getGitHubStatus).mockRejectedValue(new Error("GitHub status unavailable"));
+    render(<SettingsPanel onClose={vi.fn()} />);
+    expect(await screen.findByText("Error: GitHub status unavailable")).toBeVisible();
+  });
+
   it("shows an error when polling Slack status fails", async () => {
     vi.mocked(api.getSlackStatus)
       .mockResolvedValueOnce({ configured: true, connected: false })
