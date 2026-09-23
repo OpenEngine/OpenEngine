@@ -62,10 +62,6 @@ def report_wiring(settings: Settings) -> None:
     print(f"openengine web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
-    print(
-        "  source_control GitHub identity: service; credential=settings.github_token; "
-        f"configured={bool(settings.github_token)} (no personal fallback)"
-    )
     print(f"agents: {', '.join(sorted(session.profiles))}")
     print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
     print(
@@ -202,6 +198,7 @@ def compose_app(
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
         settings,
+        credential_store=credential_store,
         slack_credential_store=slack_credential_store,
     )
     runners = build_runners(settings)

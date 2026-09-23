@@ -195,12 +195,6 @@ class GitHubSourceControl:
         url = response.get("html_url", "")
         if not url:
             raise GitHubSourceControlError("GitHub API returned no pull-request URL")
-        logging.getLogger(__name__).info(
-            "GitHub pull request created url=%s author=%s transport=%s",
-            url,
-            _nested_string(response, "user", "login") or "unknown",
-            type(self._transport).__name__,
-        )
         return url
 
     async def can_write_repository(self, pr_url: str, username: str) -> bool:

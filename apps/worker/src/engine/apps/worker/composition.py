@@ -7,7 +7,6 @@ state). Sharing them now would couple two deployables that should be free to
 move independently.
 """
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,11 +47,6 @@ class Settings:
 def build_capabilities(settings: Settings) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    logging.getLogger(__name__).log(
-        logging.INFO if settings.github_token else logging.WARNING,
-        "source_control composition=worker github_identity=service credential=settings.github_token configured=%s",
-        bool(settings.github_token),
-    )
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host, task_queue=settings.task_queue),
         source_control=GitHubSourceControl(
