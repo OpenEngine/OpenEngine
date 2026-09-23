@@ -52,7 +52,8 @@ from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_ingress import (
-    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_requester,
+    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_co_author,
+    github_requester,
 )
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -1943,6 +1944,8 @@ def create_app(
         # Read before taking the lock, so a slow scrape does not hold up every
         # other WorkOrder being created, deleted or scoped meanwhile.
         usage = await runner_usage() if LEAST_UTILIZED in (inputs or {}).values() else {}
+        # Resolved before the lock: a Slack requester costs a Slack request.
+        co_author = await _co_author(requester)
         async with dependency_lock:
             if depends_on_run_id is not None:
                 prerequisite = await session.state_store.load(depends_on_run_id)
@@ -1975,6 +1978,7 @@ def create_app(
                     "task": prompt,
                     "repository": repository,
                     **({"inputs": inputs} if inputs else {}),
+                    **({"coAuthor": co_author} if co_author else {}),
                 },
                 run_id=scheduled.run_id if scheduled else None,
             )
@@ -2621,6 +2625,21 @@ def create_app(
         """The signed-in GitHub account, or ``None`` without one to name."""
         user = github_login._read_session(request) if github_login.configured else None
         return github_requester(int(user["id"]), str(user["login"])) if user else None
+
+    async def _co_author(requester: str | None) -> str:
+        """Who the WorkOrder's commits credit as co-author, or empty for nobody.
+
+        A Slack requester is credited only when their profile email can be
+        read; GitHub shows the commit as theirs only if they verified it.
+        """
+        provider, _, rest = (requester or "").partition(":")
+        if provider != "slack":
+            return github_co_author(requester)
+        identity = await _slack_comms.user_identity(rest.partition(":")[2])
+        if identity is None:
+            return ""
+        name, email = (re.sub(r"[<>\s]+", " ", part).strip() for part in identity)
+        return f"{name} <{email}>" if name and email and " " not in email else ""
 
     def _is_local_request(request: Request) -> bool:
         """True when the request originates from the UI served by this process.

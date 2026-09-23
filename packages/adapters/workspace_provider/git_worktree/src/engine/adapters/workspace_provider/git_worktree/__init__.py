@@ -9,6 +9,7 @@ human, whether or not a worktree is currently sitting on it.
 """
 
 import asyncio
+import shlex
 from pathlib import Path
 from uuid import uuid4
 
@@ -39,12 +40,18 @@ class GitWorktreeWorkspaceProvider:
     def __init__(self, root_directory: str) -> None:
         self._root_directory = Path(root_directory).resolve()
 
-    async def provision(self, repository: str, base_ref: str) -> Workspace:
+    async def provision(
+        self, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
         workspace_id = WorkspaceId(f"ws-{uuid4().hex[:12]}")
         repository_root = await _repository_root(repository)
         resolved_base = await _resolve_base(repository_root, base_ref)
         return await self._checkout(
-            workspace_id, repository_root, base_ref, resolved_base=resolved_base
+            workspace_id,
+            repository_root,
+            base_ref,
+            resolved_base=resolved_base,
+            co_author=co_author,
         )
 
     async def root_path(self, workspace_id: WorkspaceId) -> str:
@@ -62,7 +69,12 @@ class GitWorktreeWorkspaceProvider:
         )
 
     async def attach(
-        self, workspace_id: WorkspaceId, repository: str, base_ref: str
+        self,
+        workspace_id: WorkspaceId,
+        repository: str,
+        base_ref: str,
+        *,
+        co_author: str = "",
     ) -> Workspace:
         repository_root = await _repository_root(repository)
         root_path = self._path_for(workspace_id)
@@ -74,7 +86,9 @@ class GitWorktreeWorkspaceProvider:
                 base_ref=base_ref,
                 ref=_branch_for(workspace_id),
             )
-        return await self._checkout(workspace_id, repository_root, base_ref)
+        return await self._checkout(
+            workspace_id, repository_root, base_ref, co_author=co_author
+        )
 
     async def detach(self, workspace_id: WorkspaceId) -> None:
         root_path = self._path_for(workspace_id)
@@ -117,6 +131,7 @@ class GitWorktreeWorkspaceProvider:
         base_ref: str,
         *,
         resolved_base: str | None = None,
+        co_author: str = "",
     ) -> Workspace:
         """Put a worktree at this workspace's path, on this workspace's branch."""
         root_path = self._path_for(workspace_id)
@@ -140,6 +155,8 @@ class GitWorktreeWorkspaceProvider:
                 str(root_path),
                 resolved_base or base_ref,
             )
+        if co_author:
+            await _credit(root_path, co_author)
         return Workspace(
             workspace_id=workspace_id,
             root_path=str(root_path),
@@ -274,6 +291,50 @@ async def _snapshot(root_path: Path) -> None:
         "--message",
         SNAPSHOT_MESSAGE,
     )
+
+
+async def _credit(root_path: Path, co_author: str) -> None:
+    """Name ``co_author`` in a `Co-authored-by` trailer on every commit here.
+
+    A `commit-msg` hook rather than an instruction to the agent, because a
+    prompt cannot promise a trailer. The hook lives in this worktree's own git
+    directory and only this worktree's config points at it, so the repository's
+    other checkouts are untouched and removing the worktree removes the hook.
+    Pointing `core.hooksPath` here hides the repository's own hooks, so each one
+    present now is forwarded to, the repository's `commit-msg` included.
+    `addIfDifferent` keeps amends and rebases from repeating the trailer.
+    """
+    name = " ".join(co_author.split())
+    path = str(root_path)
+    original = (root_path / await _git(path, "rev-parse", "--git-path", "hooks")).resolve()
+    hooks = Path(await _git(path, "rev-parse", "--absolute-git-dir")) / "engine-hooks"
+    hooks.mkdir(exist_ok=True)
+    if original != hooks and original.is_dir():
+        for hook in original.iterdir():
+            if hook.name != "commit-msg" and _executable(hook):
+                _write_hook(hooks / hook.name, f"exec {shlex.quote(str(hook))} \"$@\"\n")
+    forward = shlex.quote(str(original / "commit-msg"))
+    trailer = shlex.quote(f"Co-authored-by: {name}")
+    _write_hook(
+        hooks / "commit-msg",
+        # An empty message is left empty, so git still aborts the commit.
+        'if git stripspace --strip-comments < "$1" | grep -q .; then\n'
+        "  git interpret-trailers --in-place --if-exists addIfDifferent "
+        f'--trailer {trailer} "$1" || exit\n'
+        "fi\n"
+        f'if [ -x {forward} ]; then exec {forward} "$@"; fi\n',
+    )
+    await _git(path, "config", "extensions.worktreeConfig", "true")
+    await _git(path, "config", "--worktree", "core.hooksPath", str(hooks))
+
+
+def _executable(path: Path) -> bool:
+    return path.is_file() and not path.name.endswith(".sample") and path.stat().st_mode & 0o111 != 0
+
+
+def _write_hook(path: Path, body: str) -> None:
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(0o755)
 
 
 async def _configured(root_path: Path, setting: str) -> bool:

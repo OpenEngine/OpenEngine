@@ -34,6 +34,9 @@ CHECKOUT = "workspace"
 #: Where the run's repository is read from, when the node is not told one.
 REPOSITORY = "repository"
 
+#: Who to credit as co-author on the checkout's commits, as `Name <email>`.
+CO_AUTHOR = "coAuthor"
+
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceNode:
@@ -65,7 +68,9 @@ class WorkspaceNode:
         execution = current_execution()
         repository = self.repository or str(state.get(REPOSITORY) or ".")
         await execution.say(f"Checking {repository} out at {self.base_ref}.")
-        workspace = await self.provider.provision(repository, self.base_ref)
+        workspace = await self.provider.provision(
+            repository, self.base_ref, co_author=str(state.get(CO_AUTHOR) or "")
+        )
         # Checked here rather than left for whoever reads the state, so the
         # complaint names the provider that answered rather than the node three
         # steps later that could not work anywhere. A provider is somebody
@@ -118,6 +123,7 @@ def checkout(state: Mapping[str, object]) -> str:
 
 __all__ = [
     "CHECKOUT",
+    "CO_AUTHOR",
     "REPOSITORY",
     "NoWorkingDirectoryError",
     "WorkspaceNode",

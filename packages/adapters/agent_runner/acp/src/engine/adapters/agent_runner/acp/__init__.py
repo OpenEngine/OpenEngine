@@ -114,7 +114,8 @@ CODEX_SANDBOXES = tuple(SANDBOX_POLICIES)
 
 NO_ATTRIBUTION_INSTRUCTIONS = (
     "Do not add AI attribution to commits or pull requests, including "
-    "Co-authored-by trailers or generated-by notices."
+    "Co-authored-by trailers or generated-by notices. Keep any "
+    "Co-authored-by trailer naming a person; the host adds it."
 )
 
 #: How ACP's stop reasons read as the port's. Anything unlisted is a stop.
