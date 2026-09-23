@@ -658,6 +658,56 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, h
     assert not communications.posts
 
 
+@pytest.mark.parametrize("reuse_session", [False, True])
+def test_unmentioned_comment_cannot_start_work_if_run_finishes_during_turn(tmp_path, reuse_session):
+    from dataclasses import replace
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+    )
+    source_control = MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    def deliver(client, comment_id, text):
+        payload = _issue_comment(comment_id, text)
+        payload["issue"]["pull_request"] = {}
+        body = json.dumps(payload).encode()
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    with TestClient(app) as client:
+        if reuse_session:
+            # A prior mention must not authorize later comments in this session.
+            deliver(client, 1, "@OpenEngineBot new workorder please")
+            runtime.steer.assert_awaited_once()
+            runtime.steer.reset_mock()
+            source_control.add_comment.reset_mock()
+        active = client.portal.call(runtime.snapshot, RunId("existing"))
+        runtime.snapshot.reset_mock()
+        runtime.snapshot.side_effect = [active, replace(active, status=RunStatus.COMPLETED)]
+        deliver(client, 2, "new workorder please")
+        assert runtime.snapshot.await_count == 2
+        assert len(provider.clients) == 1
+        runtime.start.assert_not_awaited()
+        runtime.steer.assert_not_awaited()
+        runtime.store.claim_pull_request.assert_not_awaited()
+        assert not client.portal.call(capabilities.state_store.list_runs)
+        source_control.add_comment.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/7", UNDELIVERED, in_reply_to_id=None,
+        )
+
+
 def test_a_second_comment_steers_the_work_order_the_first_one_started(tmp_path):
     """One work order per pull request, however many comments arrive.
 

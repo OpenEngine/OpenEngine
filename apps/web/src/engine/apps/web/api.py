@@ -3265,7 +3265,9 @@ def create_app(
         link = run_notifier.work_order_link(state) if state is not None else None
         return Continuation(url=link.url if link else "", run_id=str(run_id))
 
-    async def github_continue_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+    async def github_continue_workorder(
+        origin: RunOrigin, prompt: str, allow_start: bool,
+    ) -> Continuation:
         """Reach this pull request's work order, and write down what happened.
 
         The recording is here rather than inside the two branches below
@@ -3276,14 +3278,16 @@ def create_app(
         sign anything went wrong.
         """
         try:
-            reached = await _github_reach_workorder(origin, prompt)
+            reached = await _github_reach_workorder(origin, prompt, allow_start)
         except Exception as failure:
             github_activity.dispatch_failed(str(failure) or type(failure).__name__)
             raise
         github_activity.dispatched(reached.run_id, started_run=reached.started)
         return reached
 
-    async def _github_reach_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+    async def _github_reach_workorder(
+        origin: RunOrigin, prompt: str, allow_start: bool,
+    ) -> Continuation:
         """Steer the work order this pull request already has, or start one.
 
         Which of the two happens is the host's to decide, not the agent's: it
@@ -3293,7 +3297,7 @@ def create_app(
         opened by hand, or by a run that has since finished or lost its graph
         -- has no execution to steer, and steering one would either raise or
         reach nothing; a comment asking for a change there is a request for
-        work, so it gets a work order.
+        work, so it gets a work order only if the comment mentioned Engine.
         """
         repository = origin.channel.removeprefix("github:")
         number = int(origin.thread_id.partition("/review/")[0])
@@ -3316,6 +3320,10 @@ def create_app(
                 # A saved work order can outlive the graph it was started from.
                 snapshot = None
         if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+            if not allow_start:
+                raise RuntimeError(
+                    "no active work order and Engine was not @mentioned"
+                )
             reached = await github_start_workorder(
                 store, repository, number, prompt, replacing=run_id,
                 requester=origin.requester or None,
@@ -3463,7 +3471,7 @@ def create_app(
                 author=comment.author,
                 requester=github_requester(comment.author_id, comment.author) or "",
             ),
-            text=comment.body, comment_id=comment.comment_id,
+            text=comment.body, comment_id=comment.comment_id, allow_start=mentioned,
         ))
 
     async def github_merge_approves_workorder(merged: GithubMerge) -> None:
