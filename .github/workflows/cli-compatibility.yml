@@ -2,7 +2,7 @@ name: CLI compatibility
 
 # The live half of the approval tests: real `codex` and `claude` binaries, real
 # bidirectional protocol, real approve / cancel / allow-for-session decisions,
-# against every release pinned in `.github/cli-versions.json`.
+# against the three latest stable releases of each CLI, resolved on every run.
 #
 # Deliberately not a pull-request check. Everything here depends on somebody
 # else's authentication, rate limits, model behaviour, and uptime, so a red run
@@ -37,61 +37,31 @@ env:
   ENGINE_COMPAT_TURN_TIMEOUT: "300"
 
 jobs:
-  manifest:
-    name: read the pinned releases
+  releases:
+    name: resolve the latest three stable releases
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
       - id: matrix
-        name: Read the pinned releases
+        name: Resolve and record exact CLI versions
         shell: bash
         run: |
           set -euo pipefail
-          matrix=$(jq -c '{include: [
-            (.codex[]   | {provider: "codex",  package: "@openai/codex",            version: .}),
-            (.claude[]  | {provider: "claude", package: "@anthropic-ai/claude-code", version: .})
-          ]}' .github/cli-versions.json)
-          if [ "$matrix" = '{"include":[]}' ]; then
-            echo "::error::.github/cli-versions.json pins no releases at all; there is nothing to test"
-            exit 1
-          fi
+          matrix=$(python3 scripts/cli_compatibility_matrix.py)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          jq -r 'def listed: if length == 0 then "none" else join(", ") end;
-                 "pinned: codex \(.codex | listed) · claude \(.claude | listed)"' \
-            .github/cli-versions.json >> "$GITHUB_STEP_SUMMARY"
-
-  pinned:
-    name: the matrix is fully pinned
-    # Its own job, and not one the cells depend on: an incomplete manifest
-    # should read as "we are not testing what we said we would" while whatever
-    # *is* pinned still runs and reports. `cli-versions.yml` proposes the
-    # change that fixes it; nothing edits the manifest automatically.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Every provider pins the full set
-        shell: bash
-        run: |
-          set -euo pipefail
-          wanted=$(jq -r '.policy.versions' .github/cli-versions.json)
-          incomplete=$(jq -r --argjson wanted "$wanted" \
-            'to_entries[] | select(.key | test("^(codex|claude)$"))
-             | select((.value | length) != $wanted)
-             | "\(.key) pins \(.value | length) of \($wanted)"' \
-            .github/cli-versions.json)
-          if [ -n "$incomplete" ]; then
-            echo "::error::the compatibility matrix is not fully pinned: $incomplete"
-            echo "::error::run the 'CLI version manifest' workflow, then review and merge the manifest change"
-            exit 1
-          fi
+          echo "$matrix" | jq -r '.include[] | "- \(.provider): `\(.package)@\(.version)`"' >> "$GITHUB_STEP_SUMMARY"
 
   compatibility:
     name: ${{ matrix.provider }} ${{ matrix.version }}
-    needs: manifest
+    needs: releases
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -99,7 +69,7 @@ jobs:
       # regression, and an old release failing is a fact worth seeing next to a
       # new one passing.
       fail-fast: false
-      matrix: ${{ fromJSON(needs.manifest.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.releases.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
 
