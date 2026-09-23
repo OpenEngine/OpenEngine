@@ -1040,7 +1040,6 @@ def create_app(
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
-    github_bot_login: str = "",
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
@@ -3338,20 +3337,16 @@ def create_app(
         repository*, and an unkeyed cache would quietly hand the first
         repository's answer to the second one's comments.
 
-        ``GITHUB_BOT_LOGIN`` is optional and usually unset, and a token held by
-        a machine user posts comments that look like anybody else's: without
-        knowing who this process posts as, the concierge answers its own reply
-        and then answers that, forever. The credentials themselves are the
+        A token held by a machine user posts comments that look like anybody
+        else's: without knowing who this process posts as, the concierge answers
+        its own reply and then answers that, forever. The credentials themselves are the
         authority on this, so they are asked rather than configured. A failure
         to answer propagates: the turn is retried on redelivery instead of
         replying into a loop this process cannot recognise.
         """
         if repository not in posting_login:
-            posting_login[repository] = (
-                github_bot_login
-                or await session.capabilities.source_control.authenticated_login(
-                    pull_request_url(repository, 1).rsplit("/pull/", 1)[0]
-                )
+            posting_login[repository] = await session.capabilities.source_control.authenticated_login(
+                pull_request_url(repository, 1).rsplit("/pull/", 1)[0]
             )
         return posting_login[repository]
 
@@ -3369,6 +3364,13 @@ def create_app(
                 pull_request_url(repository, assignment.number), assignment.sender,
             )
         if not may_write:
+            log.info(
+                "ignored an assignment of #%s from %s, who cannot write to %s",
+                assignment.number, assignment.sender, repository,
+            )
+            github_activity.ignored(
+                f"{assignment.sender} cannot write to {repository}"
+            )
             return
         graph = _mentioned_workflow()
         if graph is None:
@@ -3465,9 +3467,9 @@ def create_app(
 
         `merge_from_payload` has already refused a bot's merge. Engine's own is
         refused here, against the login its credentials resolve to: a machine
-        user's token merges as an ordinary `User`, and `GITHUB_BOT_LOGIN` is
-        usually unset. Anybody else who merged is a person GitHub let write to
-        the repository -- the same permission the comment path calls
+        user's token merges as an ordinary `User`. Anybody else who merged is
+        a person GitHub let write to the repository -- the same permission the
+        comment path calls
         `can_write_repository` to establish, here proven by the merge itself.
 
         A merge that decides nothing is not a failure: a pull request opened by
@@ -3572,7 +3574,7 @@ def create_app(
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
-        self_login=lambda: github_bot_login,
+        authenticated_login=github_posting_login,
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
         handle_assignment=github_create_workorder,
