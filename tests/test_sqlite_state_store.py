@@ -423,3 +423,24 @@ def test_scheduled_dependency_and_inputs_survive_reopening(tmp_path) -> None:
         assert asyncio.run(store.load(state.run_id)) == state
     finally:
         store.close()
+
+
+def test_requester_survives_reopening(tmp_path) -> None:
+    path = tmp_path / "requester.sqlite3"
+    state = RunState(
+        run_id=RunId("asked"), task_id=TaskId("task"),
+        workflow_id=WorkflowId("workflow"), requester="github:42:alice",
+    )
+    store = SQLiteStateStore(path)
+    asyncio.run(store.save(state))
+    store.close()
+    store = SQLiteStateStore(path)
+    try:
+        assert asyncio.run(store.load(state.run_id)) == state
+        assert [run.requester for run in asyncio.run(store.list_runs())] == ["github:42:alice"]
+    finally:
+        store.close()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT requester FROM run_states").fetchall() == [
+            ("github:42:alice",)
+        ]

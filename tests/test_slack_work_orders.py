@@ -1675,3 +1675,29 @@ def test_concierge_bridge_can_read_credential_and_list_tools() -> None:
         assert not credential.exists()
 
     asyncio.run(scenario())
+
+def test_ingress_qualifies_the_author_by_workspace():
+    from engine.slack_concierge import SlackIngress
+
+    async def scenario():
+        messages = []
+
+        class Concierge:
+            def has_thread(self, channel, thread_id):
+                return False
+
+            async def handle(self, message):
+                messages.append(message)
+
+            async def close(self):
+                pass
+
+        ingress = SlackIngress(Concierge(), capacity=1)
+        ingress.accept({"type": "event_callback", "team_id": "T1", "event": dict(
+            type="app_mention", channel="C1", user="U1", ts="1700.0001", text="hi")})
+        await ingress.drain()
+        await ingress.close()
+        return messages
+
+    (message,) = asyncio.run(scenario())
+    assert (message.origin.author, message.origin.requester) == ("U1", "slack:T1:U1")

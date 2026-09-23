@@ -1,6 +1,7 @@
 """Durable workflow-run and conversation persistence backed by SQLite."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 import json
 from pathlib import Path
@@ -60,9 +61,10 @@ class SQLiteStateStore:
     async def load(self, run_id: RunId) -> RunState | None:
         with self._lock:
             row = self._connection.execute(
-                "SELECT state_json FROM run_states WHERE run_id = ?", (run_id,)
+                "SELECT state_json, requester FROM run_states WHERE run_id = ?",
+                (run_id,),
             ).fetchone()
-        return _state_from_dict(json.loads(row["state_json"])) if row else None
+        return _state_from_row(row) if row else None
 
     async def save(self, state: RunState) -> None:
         with self._lock, self._connection:
@@ -76,14 +78,16 @@ class SQLiteStateStore:
             self._connection.execute(
                 """
                 INSERT INTO run_states (
-                    run_id, state_json, milestone_id, origin_channel, origin_thread_id
+                    run_id, state_json, milestone_id, origin_channel, origin_thread_id,
+                    requester
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
                     milestone_id = excluded.milestone_id,
                     origin_channel = excluded.origin_channel,
-                    origin_thread_id = excluded.origin_thread_id
+                    origin_thread_id = excluded.origin_thread_id,
+                    requester = excluded.requester
                 """,
                 (
                     state.run_id,
@@ -91,13 +95,14 @@ class SQLiteStateStore:
                     state.milestone_id,
                     state.origin.channel if state.origin is not None else None,
                     state.origin.thread_id if state.origin is not None else None,
+                    state.requester,
                 ),
             )
 
     async def list_runs(
         self, milestone_id: MilestoneId | None = None
     ) -> Sequence[RunState]:
-        query = "SELECT run_id, state_json FROM run_states"
+        query = "SELECT run_id, state_json, requester FROM run_states"
         parameters: tuple[object, ...] = ()
         if milestone_id is not None:
             query += " WHERE milestone_id = ?"
@@ -108,7 +113,7 @@ class SQLiteStateStore:
         runs: list[RunState] = []
         for row in rows:
             try:
-                runs.append(_state_from_dict(json.loads(row["state_json"])))
+                runs.append(_state_from_row(row))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 warnings.warn(
                     f"skipping incompatible workflow run {row['run_id']}: {error}",
@@ -123,7 +128,7 @@ class SQLiteStateStore:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT run_id, state_json FROM run_states
+                SELECT run_id, state_json, requester FROM run_states
                 WHERE origin_channel = ? AND origin_thread_id = ?
                 ORDER BY sequence DESC
                 """,
@@ -132,7 +137,7 @@ class SQLiteStateStore:
         runs: list[RunState] = []
         for row in rows:
             try:
-                runs.append(_state_from_dict(json.loads(row["state_json"])))
+                runs.append(_state_from_row(row))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 warnings.warn(
                     f"skipping incompatible workflow run {row['run_id']}: {error}",
@@ -788,6 +793,13 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
             else None
         ),
     }
+
+
+def _state_from_row(row: sqlite3.Row) -> RunState:
+    # The requester lives in its own column rather than in state_json.
+    return replace(
+        _state_from_dict(json.loads(row["state_json"])), requester=row["requester"]
+    )
 
 
 def _state_from_dict(value: dict[str, object]) -> RunState:

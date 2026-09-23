@@ -104,8 +104,12 @@ class SlackIngress:
             return False
         raw_text = str(event.get("text", ""))
         text = re.sub(r"<@[^>]+>", "", raw_text).strip()
+        team = event.get("team") or payload.get("team_id")
         message = IncomingMessage(
-            RunOrigin(channel=channel, thread_id=thread, author=author),
+            RunOrigin(
+                channel=channel, thread_id=thread, author=author,
+                requester=f"slack:{team}:{author}" if isinstance(team, str) and team else "",
+            ),
             text or "Hello", message_ts=ts, raw_text=raw_text,
             mentioned_users=tuple(re.findall(r"<@([^>|]+)(?:\|[^>]+)?>", raw_text)),
             event_type=kind,

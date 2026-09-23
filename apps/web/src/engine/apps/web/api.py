@@ -47,7 +47,9 @@ from uuid import uuid4
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
-from engine.apps.web.github_ingress import GithubAssignment, GithubComment, GithubIngress, GithubMerge
+from engine.apps.web.github_ingress import (
+    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_requester,
+)
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -1766,6 +1768,7 @@ def create_app(
             ),
             policy=ScopingPolicy(rules=(message,)),
         )
+        requester = _web_requester(request)
         # Independent proposals wait for explicit dispatch; dependent proposals
         # start when their prerequisite succeeds.
         definition = _mentioned_workflow()
@@ -1799,6 +1802,7 @@ def create_app(
                     prompt=prompt,
                     repository=work_orders.repository,
                     depends_on_run_id=RunId(str(spec.dependencies[0])) if spec.dependencies else None,
+                    requester=requester,
                 ))
         dependencies_changed.set()
         return JSONResponse(_scoping_plan_json(plan))
@@ -1816,6 +1820,7 @@ def create_app(
         defer_notifications: bool = False,
         parent_run_id: RunId | None = None,
         depends_on_run_id: RunId | None = None,
+        requester: str | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1833,11 +1838,16 @@ def create_app(
 
         Declared inputs are validated before starting and carried in graph state.
 
+        ``requester`` is who asked; a scheduled row keeps its own when none is
+        given.
+
         The engine is an argument rather than something read here, because
         having one is what made this graph offerable in the first place: a
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
+        if requester is None and scheduled is not None:
+            requester = scheduled.requester
         async with dependency_lock:
             if depends_on_run_id is not None:
                 prerequisite = await session.state_store.load(depends_on_run_id)
@@ -1851,7 +1861,7 @@ def create_app(
                         milestone_id=milestone_id, phase=RunPhase.SCHEDULED,
                         prompt=prompt, repository=repository, origin=origin,
                         parent_run_id=parent_run_id, depends_on_run_id=depends_on_run_id,
-                        inputs=inputs,
+                        inputs=inputs, requester=requester,
                     )
                     await session.state_store.save(state)
                     # Recheck after saving to cover completion racing with creation.
@@ -1891,6 +1901,7 @@ def create_app(
                 parent_run_id=scheduled.parent_run_id if scheduled else parent_run_id,
                 depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
                 inputs=inputs,
+                requester=requester,
             )
             await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
@@ -1936,7 +1947,7 @@ def create_app(
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=parent.repository,
             milestone_id=parent.milestone_id, parent_run_id=parent.run_id,
-            depends_on_run_id=depends_on_run_id,
+            depends_on_run_id=depends_on_run_id, requester=parent.requester,
         )
         link = run_notifier.work_order_link(state)
         return link.url if link else f"/runs/{state.run_id}", str(state.run_id)
@@ -2001,6 +2012,7 @@ def create_app(
                 surface.runtime, graph, inputs=inputs, prompt=state.prompt,
                 repository=repository, milestone_id=state.milestone_id,
                 scheduled=state, origin=state.origin,
+                requester=_web_requester(request),
             )
             run = await run_reader.get(state.run_id)
             assert run is not None
@@ -2046,6 +2058,7 @@ def create_app(
                 repository=repository,
                 milestone_id=milestone_id,
                 depends_on_run_id=RunId(dependency_value) if dependency_value else None,
+                requester=_web_requester(request),
             )
         except ValueError as error:
             return _error(str(error), 400)
@@ -2470,6 +2483,11 @@ def create_app(
             # Session middleware normally rejects this before routing.
             raise RuntimeError("GitHub connection requires a browser session")
         return GitHubCredentialStore(user_id=int(user["id"]))
+
+    def _web_requester(request: Request) -> str | None:
+        """The signed-in GitHub account, or ``None`` without one to name."""
+        user = github_login._read_session(request) if github_login.configured else None
+        return github_requester(int(user["id"]), str(user["login"])) if user else None
 
     def _is_local_request(request: Request) -> bool:
         """True when the request originates from the UI served by this process.
@@ -2948,6 +2966,7 @@ def create_app(
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
             milestone_id=None, origin=origin, defer_notifications=True,
+            requester=origin.requester or None,
         )
         link = run_notifier.work_order_link(state)
         return link.url if link else "", str(state.run_id)
@@ -3131,7 +3150,7 @@ def create_app(
 
     async def github_start_workorder(
         store: GithubProvenance | None, repository: str, number: int, prompt: str,
-        *, replacing: RunId | None,
+        *, replacing: RunId | None, requester: str | None = None,
     ) -> Continuation:
         """Start a work order for a pull request that has no run in flight.
 
@@ -3176,7 +3195,7 @@ def create_app(
             runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            milestone_id=None,
+            milestone_id=None, requester=requester,
         )
         url = pull_request_url(repository, number)
         try:
@@ -3296,6 +3315,7 @@ def create_app(
         if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
             reached = await github_start_workorder(
                 store, repository, number, prompt, replacing=run_id,
+                requester=origin.requester or None,
             )
         else:
             reached = await github_steer_workorder(run_id, prompt)
@@ -3362,6 +3382,7 @@ def create_app(
                     f"{assignment.body}\n\nIssue: {assignment.url}\n"
                     f"Include Fixes #{assignment.number} in the pull request body."),
             repository=repository, milestone_id=None,
+            requester=github_requester(assignment.sender_id, assignment.sender),
         )
 
     async def github_concierge_turn(comment: GithubComment) -> None:
@@ -3424,6 +3445,7 @@ def create_app(
             origin=RunOrigin(
                 channel=f"github:{comment.repository}", thread_id=thread_id,
                 author=comment.author,
+                requester=github_requester(comment.author_id, comment.author) or "",
             ),
             text=comment.body, comment_id=comment.comment_id,
         ))
@@ -3913,6 +3935,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         return result
     result["taskPrompt"] = run.task_prompt
     result["failureReason"] = run.failure_reason
+    result["requester"] = run.requester
     return result
 
 
