@@ -298,10 +298,12 @@ class TestRefreshAccessToken:
 
 @pytest.mark.parametrize("provider", [None, "github-oauth", "gh-cli"])
 @pytest.mark.parametrize("service_token", ["worker-token", ""])
+@pytest.mark.parametrize("browser_login", [False, True])
 def test_agent_pr_uses_only_service_credentials(
-    tmp_path, monkeypatch, caplog, provider, service_token
+    tmp_path, monkeypatch, caplog, provider, service_token, browser_login
 ):
     from engine.apps.web.composition import Settings, build_capabilities
+    from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
     from engine.apps.web.source_control import SourceControlPreferences
     from engine.adapters.source_control.github import GitHubSourceControlError
 
@@ -343,17 +345,28 @@ def test_agent_pr_uses_only_service_credentials(
     # Establish behavior before login, then complete an actual UI device flow.
     asyncio.run(open_pr())
     from starlette.testclient import TestClient
-    app = _make_github_app(tmp_path)
-    with TestClient(app) as client, patch(
+    login_config = (
+        GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback")
+        if browser_login else None
+    )
+    login = GitHubLogin(login_config)
+    monkeypatch.setattr("engine.apps.web.api.GitHubLogin", lambda *_: login)
+    app = _make_github_app(tmp_path, login_config=login_config)
+    personal_store = GitHubCredentialStore(user_id=123 if browser_login else None)
+    with TestClient(app, base_url="https://engine.test") as client, patch(
         "engine.apps.web.api.start_device_flow",
         AsyncMock(return_value=DeviceFlowState("device", "code", "https://github.com/login/device", 900, 5)),
     ), patch(
         "engine.apps.web.api.poll_device_flow",
         AsyncMock(return_value=DeviceFlowComplete("personal-token", "personal-refresh")),
     ):
+        if browser_login:
+            client.cookies.set("engine_session", login._make_session_cookie(123, "personal"))
         assert client.post("/api/github/connect").status_code == 200
         assert client.post("/api/github/connect/poll").json() == {"status": "complete"}
-    assert GitHubCredentialStore().get() == "personal-token"
+    assert personal_store.get() == "personal-token"
+    if browser_login:
+        assert GitHubCredentialStore().get() is None
     asyncio.run(open_pr())
     assert [r.headers.get("Authorization") for r in requests] == [
         f"Bearer {service_token}" if service_token else None,
@@ -375,7 +388,7 @@ def test_agent_pr_uses_only_service_credentials(
     with pytest.raises((GitHubSourceControlError, RuntimeError), match="Bad credentials"):
         asyncio.run(open_pr())
     assert len(requests) == 1
-    assert GitHubCredentialStore().get() == "personal-token"
+    assert personal_store.get() == "personal-token"
 
 
 def test_oauth_lifecycle_log_never_contains_token_material(caplog) -> None:
