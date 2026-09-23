@@ -139,7 +139,9 @@ class ACPClient(Protocol):
         ticket, and inventing half of it here would only have to be undone.
 
         `session_config` carries provider extension metadata in ACP `_meta`,
-        such as Claude SDK options under `claudeCode.options`.
+        such as Claude SDK options under `claudeCode.options`. Its `mode` and
+        `model` entries are also applied with `session/set_config_option` once
+        the session is open, and a value the agent refuses fails the session.
         Omitted when the caller has nothing to say; present entries are the
         adapter's to interpret or ignore.
         """

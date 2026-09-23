@@ -9,10 +9,16 @@ Behaviour is chosen by command-line flags so one script can play every agent a
 test needs -- one that cannot resume, one that asks permission, one that dies
 mid-request. Every message it receives is appended to `$FAKE_AGENT_LOG`, which
 is how a test asserts on what was *sent* rather than only on what came back.
+
+`--run-directive` is the one that does something: it runs the shell command
+named after the last `run:` in the prompt, in the session's working directory,
+once the client has allowed it. That is what lets an approval be asserted on
+the file it did or did not create, rather than on the answer that was sent.
 """
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +28,15 @@ PERMISSION_REQUEST_ID = 9001
 READ_FILE_REQUEST_ID = 9002
 
 SESSION_ID = "sess_fake_1"
+
+#: What `--run-directive` reads the command from: the text after the last one.
+DIRECTIVE = "run:"
+
+#: The working directory each session was opened in, for `--run-directive`.
+WORKING_DIRECTORIES: dict[str, str] = {}
+
+#: Commands allowed with `allow_always`, which this process does not ask again.
+ALWAYS_ALLOWED: set[str] = set()
 
 
 def send(message: dict[str, Any]) -> None:
@@ -101,6 +116,103 @@ def capabilities(options: set[str]) -> dict[str, Any]:
         "authMethods": [{"id": "oauth", "name": "Log in"}],
         "_futureCapability": "kept in raw",
     }
+
+
+def run_directive(message_id: Any, params: dict[str, Any]) -> None:
+    """Ask to run the prompt's `run:` command, and run it only if allowed.
+
+    Refused, the turn ends without running anything; allowed for good, the same
+    command is not asked about again by this process -- which is all an agent's
+    own "always" can remember, and why a grant has to outlive the process
+    somewhere else.
+    """
+    prompt = "".join(
+        str(block.get("text", ""))
+        for block in params.get("prompt") or ()
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+    lines = [line for line in prompt.splitlines() if DIRECTIVE in line]
+    if not lines:
+        fail(message_id, -32602, f"no {DIRECTIVE!r} directive in the prompt")
+        return
+    command = lines[-1].split(DIRECTIVE, 1)[1].strip()
+    call = {
+        "toolCallId": "call_run",
+        "title": command,
+        "kind": "execute",
+        "rawInput": {"command": command},
+    }
+    update({"sessionUpdate": "tool_call", "status": "pending", **call})
+    if command not in ALWAYS_ALLOWED:
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": PERMISSION_REQUEST_ID,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": SESSION_ID,
+                    "toolCall": call,
+                    "options": [
+                        {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
+                        {
+                            "optionId": "allow-always",
+                            "name": "Yes, always",
+                            "kind": "allow_always",
+                        },
+                        {"optionId": "reject-once", "name": "No", "kind": "reject_once"},
+                    ],
+                },
+            }
+        )
+        while True:
+            reply = receive()
+            if reply is None:
+                return
+            if reply.get("id") == PERMISSION_REQUEST_ID:
+                break
+        outcome = (reply.get("result") or {}).get("outcome") or {}
+        chosen = outcome.get("optionId") if outcome.get("outcome") == "selected" else None
+        if chosen not in ("allow-once", "allow-always"):
+            update(
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "Stopped, as asked."},
+                }
+            )
+            respond(
+                message_id,
+                {"stopReason": "end_turn" if chosen else "cancelled"},
+            )
+            return
+        if chosen == "allow-always":
+            ALWAYS_ALLOWED.add(command)
+    done = subprocess.run(
+        command,
+        shell=True,
+        cwd=WORKING_DIRECTORIES.get(SESSION_ID) or None,
+        capture_output=True,
+        text=True,
+    )
+    update(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call_run",
+            "status": "completed" if done.returncode == 0 else "failed",
+            "content": [
+                {
+                    "type": "content",
+                    "content": {"type": "text", "text": done.stdout + done.stderr},
+                }
+            ],
+        }
+    )
+    update(
+        {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "Ran it."},
+        }
+    )
+    respond(message_id, {"stopReason": "end_turn"})
 
 
 def run_turn(message_id: Any, options: set[str]) -> None:
@@ -194,6 +306,9 @@ def main() -> int:
             if "--nameless-session" in options:
                 respond(message_id, {})
             else:
+                cwd = (message.get("params") or {}).get("cwd")
+                if isinstance(cwd, str):
+                    WORKING_DIRECTORIES[SESSION_ID] = cwd
                 respond(message_id, {"sessionId": SESSION_ID})
         elif method == "session/set_config_option":
             if message.get("params", {}).get("value") == "unavailable":
@@ -219,6 +334,8 @@ def main() -> int:
                     "this session is over quota",
                     {"reason": "quota exhausted", "body": "x" * 4000},
                 )
+            elif "--run-directive" in options:
+                run_directive(message_id, message.get("params") or {})
             else:
                 run_turn(message_id, options)
         elif method == "session/cancel":

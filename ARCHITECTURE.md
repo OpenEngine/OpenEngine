@@ -119,6 +119,7 @@ Executes a configured agent.
 
 Implementations might include:
 
+ACP agents -- Codex and Claude Code, reached through langgraph-acp (what chat and the workflows use)
 Codex CLI
 Claude Code CLI
 Other coding CLIs

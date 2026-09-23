@@ -15,11 +15,7 @@ import pytest
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
-from engine.adapters.agent_runner.claude_code import ClaudeCodeAgentRunner
-from engine.adapters.agent_runner.codex import (
-    INTERACTIVE_APPROVAL_POLICY,
-    CodexAgentRunner,
-)
+from engine.adapters.agent_runner.acp import ACPAgentRunner
 from engine.adapters.communications.slack import SlackCommunications
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
@@ -192,8 +188,8 @@ def test_the_application_can_be_built_from_configuration_alone(
     assert answered.json()["showProjects"] is (show_projects is not False)
     assert answered.json()["repositories"] == [{"name": f". ({tmp_path})", "path": "."}]
     assert answered.json()["runners"] == [
-        {"id": "codex", "implementation": "CodexAgentRunner"},
-        {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
+        {"id": "codex", "implementation": "ACPAgentRunner"},
+        {"id": "claude", "implementation": "ACPAgentRunner"},
     ]
     # Composed from the working directory, exactly as `engine-web` composes it.
     assert (tmp_path / "conversations.sqlite3").exists()
@@ -220,53 +216,75 @@ def test_milestone_scoper_uses_the_configured_codex_provider() -> None:
     assert milestone_scoper.scoper.timeout_seconds == 42
 
 
-def test_web_offers_one_interactive_runner_per_cli() -> None:
+def _claude_options(runner: ACPAgentRunner) -> dict:
+    return runner.session_config_for(PROFILES[CODER])["claudeCode"]["options"]
+
+
+def test_web_offers_one_interactive_runner_per_agent() -> None:
     runners = build_runners(Settings())
 
     assert tuple(runners) == ("codex", "claude")
-    assert isinstance(runners["codex"], CodexAgentRunner)
-    assert isinstance(runners["claude"], ClaudeCodeAgentRunner)
+    assert isinstance(runners["codex"], ACPAgentRunner)
+    assert isinstance(runners["claude"], ACPAgentRunner)
+    assert runners["codex"].provider.name == "codex"
+    assert runners["claude"].provider.name == "claude"
     # Which of them pause is what decides whether a run brokers approvals, so
     # it is read off the port rather than off the class name.
     assert isinstance(runners["codex"], InteractiveAgentRunner)
     assert isinstance(runners["claude"], InteractiveAgentRunner)
 
 
-def test_the_runner_nobody_is_watching_stays_read_only(tmp_path) -> None:
-    """One class serves both callers now, so the sandbox is the whole difference.
+def test_no_composition_root_builds_a_cli_runner(tmp_path) -> None:
+    """Chat, review, and the unattended runner all reach their agent over ACP."""
+    from engine.apps.control_server.composition import (
+        Settings as ControlServerSettings,
+    )
+    from engine.apps.control_server.composition import (
+        build_capabilities as build_control_server,
+    )
+    from engine.apps.worker.composition import Settings as WorkerSettings
+    from engine.apps.worker.composition import build_capabilities as build_worker
 
-    `build_runners` widens it because someone is there to approve; the port
-    implementation a non-interactive caller reaches for has nobody to ask, and
-    must not have been widened along with it.
-    """
     capabilities = build_capabilities(Settings(sqlite_path=str(tmp_path / "c.sqlite3")))
     try:
-        argv = capabilities.agent_runner.command_line(PROFILES[CODER])
+        web = capabilities.agent_runner
+    finally:
+        capabilities.state_store.close()
+    runners = (
+        web,
+        *build_runners(Settings()).values(),
+        *build_read_only_runners(Settings()).values(),
+        build_control_server(ControlServerSettings()).agent_runner,
+        build_worker(WorkerSettings()).agent_runner,
+    )
+
+    assert all(isinstance(runner, ACPAgentRunner) for runner in runners)
+
+
+def test_the_runner_nobody_is_watching_stays_on_the_strictest_preset(tmp_path) -> None:
+    """The port implementation a non-interactive caller reaches has nobody to
+    ask, and runs under codex-acp's preset that asks before leaving the tree."""
+    capabilities = build_capabilities(Settings(sqlite_path=str(tmp_path / "c.sqlite3")))
+    try:
+        runner = capabilities.agent_runner
     finally:
         capabilities.state_store.close()
 
-    assert argv[argv.index("--sandbox") + 1] == "read-only"
+    assert runner.provider.name == "codex"
+    assert runner.provider.env["INITIAL_AGENT_MODE"] == "read-only"
 
 
 def test_interactive_runners_may_do_what_the_user_approves() -> None:
     """A gate is only a gate if what it lets through can then happen."""
     runners = build_runners(Settings())
 
-    codex_argv = runners["codex"].command_line(PROFILES[CODER])
-    claude_argv = runners["claude"].interactive_command_line(PROFILES[CODER])
-    preapproved = claude_argv[
-        claude_argv.index("--allowedTools") + 1 : claude_argv.index("--input-format")
-    ]
-
-    # Codex: writable inside the worktree, and stopping to ask before it would
-    # step outside one.
-    assert codex_argv[codex_argv.index("--sandbox") + 1] == "workspace-write"
-    assert INTERACTIVE_APPROVAL_POLICY == "on-request"
+    # Codex: writable inside the worktree, and stopping to ask a person before
+    # it would step outside one -- never a model approving on their behalf.
+    assert runners["codex"].provider.env["INITIAL_AGENT_MODE"] == "read-only"
     # Claude: reads run unattended, everything else reaches the user.
-    assert preapproved == ["Read", "Glob", "Grep"]
-    assert "Bash" not in preapproved
-    assert "Edit" not in preapproved
-    assert claude_argv[claude_argv.index("--permission-prompt-tool") + 1] == "stdio"
+    options = _claude_options(runners["claude"])
+    assert options["allowedTools"] == ["Read", "Glob", "Grep"]
+    assert "tools" not in options
 
 
 def test_the_configured_policy_builds_the_interactive_claude_runner() -> None:
@@ -282,29 +300,18 @@ def test_the_configured_policy_builds_the_interactive_claude_runner() -> None:
             allow=(ApprovalCapability.READ, ApprovalCapability.EDIT, ApprovalCapability.BASH)
         )
     )
-    argv = build_runners(Settings(engine_config=granted))["claude"].command_line(
-        PROFILES[CODER]
-    )
+    options = _claude_options(build_runners(Settings(engine_config=granted))["claude"])
 
-    preapproved = argv[argv.index("--allowedTools") + 1 :]
-    assert preapproved == ["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit"]
-    assert "Bash" not in preapproved
+    assert options["allowedTools"] == ["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit"]
+    assert "Bash" not in options["allowedTools"]
 
 
-def test_the_interactive_codex_sandbox_is_not_narrowed_by_the_policy() -> None:
-    """A sandbox is a ceiling, not a preapproval.
+def test_the_interactive_codex_preset_is_not_widened_by_the_policy() -> None:
+    """Codex's policy is applied to its requests, not to its preset."""
+    auto = EngineConfig(approvals=ApprovalConfig(auto_approve=True))
+    runner = build_runners(Settings(engine_config=auto))["codex"]
 
-    A capability absent from `allow` is one nobody has ruled on, so a person may
-    still allow it mid-turn -- and a sandbox narrowed before the turn started
-    would refuse the write they just approved. Codex's policy is applied to its
-    requests instead.
-    """
-    reads_only = EngineConfig(approvals=ApprovalConfig(allow=(ApprovalCapability.READ,)))
-    argv = build_runners(Settings(engine_config=reads_only))["codex"].command_line(
-        PROFILES[CODER]
-    )
-
-    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert runner.provider.env["INITIAL_AGENT_MODE"] == "read-only"
 
 
 def test_engine_config_styles_every_claude_runner_this_process_offers() -> None:
@@ -315,9 +322,8 @@ def test_engine_config_styles_every_claude_runner_this_process_offers() -> None:
     )
 
     for build in (build_runners, build_read_only_runners):
-        argv = build(settings)["claude"].command_line(PROFILES[CODER])
-        settings_document = json.loads(argv[argv.index("--settings") + 1])
-        assert settings_document["outputStyle"] == "Concise"
+        options = _claude_options(build(settings)["claude"])
+        assert options["settings"]["outputStyle"] == "Concise"
 
 
 def test_engine_config_produces_claude_session_config_for_acp_runners() -> None:
@@ -340,11 +346,11 @@ def test_default_engine_config_produces_no_session_config() -> None:
 
 
 def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -> None:
-    """Half of the Plan button's difference from New chat: the argv.
+    """Half of the Plan button's difference from New chat: the tool set.
 
-    Same provider the user picked, same conversation machinery, and a command
-    line without the tools to change the checkout it is reading -- a property of
-    what the composition hands the planner rather than of its instructions.
+    Same provider the user picked, same conversation machinery, and a tool set
+    without the tools to change the checkout it is reading -- a property of what
+    the composition hands the planner rather than of its instructions.
 
     Only half, and the docstring says so deliberately: this proves the planner
     is *handed* less, not that it is *held* to less. A provider asking anyway
@@ -373,17 +379,16 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
     finally:
         capabilities.state_store.close()
 
-    planner_argv = planner.command_line(PLANNER)
-    coder_argv = coder.command_line(PROFILES[CODER])
+    planner_options = planner.session_config_for(PLANNER)["claudeCode"]["options"]
+    coder_options = coder.session_config_for(PROFILES[CODER])["claudeCode"]["options"]
 
-    assert planner_argv[planner_argv.index("--allowedTools") + 1 :] == [
-        "Read",
-        "Glob",
-        "Grep",
-    ]
-    assert "Edit" in coder_argv[coder_argv.index("--allowedTools") + 1 :]
-    codex_argv = session.runner_for(PLANNER.agent_id, "codex").command_line(PLANNER)
-    assert codex_argv[codex_argv.index("--sandbox") + 1] == "read-only"
+    assert planner_options["tools"] == ["Read", "Glob", "Grep"]
+    assert planner_options["allowedTools"] == ["Read", "Glob", "Grep"]
+    assert "tools" not in coder_options
+    assert "Edit" in coder_options["allowedTools"]
+    codex = session.runner_for(PLANNER.agent_id, "codex")
+    assert codex is not session.runner_for(CODER, "codex")
+    assert codex.provider.env["INITIAL_AGENT_MODE"] == "read-only"
 
 
 def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:

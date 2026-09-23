@@ -25,14 +25,14 @@ and each is something a test run must not share or send anywhere:
 | --- | --- |
 | a fixture git repository, and a bare `origin` beside it | conversations and runs make worktrees of it, and a run bases its worktree on `origin/main` |
 | a SQLite file under the test's own directory | one test's chats must not be another's |
-| scripted `codex` and `claude` executables | a model is the one part of this that cannot be asserted on |
+| a scripted ACP agent behind the `codex` and `claude` runners | a model is the one part of this that cannot be asserted on |
 | a `gh` that records instead of commenting | the reviewer leaves its findings on a pull request, and that is somebody's repository |
 
-The fake CLIs are `tests/provider_fakes.py`, shared with the pytest tier that
-runs the approval contract against them. They are not mocks of our adapters:
-they are real subprocesses speaking Codex's app-server JSON-RPC and Claude
-Code's stream-JSON control protocol, and they really run the commands they are
-allowed to run. What a turn says and does comes from a JSON script the test
+The fake is `tests/provider_fakes.py`'s ACP agent, which both chat runners
+launch in place of the Codex and Claude ACP adapters. It is not a mock of our
+adapter: it is a real subprocess speaking ACP, asking permission over
+`session/request_permission`, and it really runs the commands it is allowed to
+run. What a turn says and does comes from a JSON script the test
 writes:
 
 ```ts
@@ -56,8 +56,8 @@ a title turn, a retry, or a second conversation cannot knock a script out of
 step. The first matching scenario wins, which matters for a workflow: the
 reviewer is quoted the original task, so its prompt contains the implementation
 scenario's word too, and the one only a reviewer can match has to be listed
-first. A turn run without the approval transport -- the runtime naming a chat or
-a workflow -- is answered with `title` instead of a scenario.
+first. A turn that is the runtime naming a chat or a workflow is answered with
+`title` instead of a scenario.
 
 Graph workflow scenarios use fake ACP agents and the run-bound MCP tools. The
 harness rebuilds the shipped graph with those agents through `graph_for`.

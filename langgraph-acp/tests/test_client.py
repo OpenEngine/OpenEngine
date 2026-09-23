@@ -558,6 +558,20 @@ async def test_model_is_selected_through_acp_after_open(tmp_path: Path, resume: 
 
 
 @asyncio_test
+async def test_a_requested_mode_is_applied_before_the_model(tmp_path: Path) -> None:
+    """A mode the client pins outranks whatever the agent's own settings name."""
+    log = tmp_path / "sent.jsonl"
+    async with connected(log=log) as client:
+        await client.new_session(session_config={"model": "gpt-5.6-terra", "mode": "default"})
+    applied = [
+        (message["params"]["configId"], message["params"]["value"])
+        for message in sent(log)
+        if message.get("method") == "session/set_config_option"
+    ]
+    assert applied == [("mode", "default"), ("model", "gpt-5.6-terra")]
+
+
+@asyncio_test
 async def test_unavailable_model_fails_instead_of_using_the_default() -> None:
     async with connected() as client:
         with pytest.raises(ACPSessionError, match="Unknown model"):

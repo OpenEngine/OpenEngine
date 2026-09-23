@@ -81,6 +81,10 @@ CLIENT_CAPABILITIES: JSONObject = {
     "terminal": False,
 }
 
+#: `session_config` keys applied as ACP config options once a session is open,
+#: in this order: the mode first, so the model is chosen within it.
+SESSION_CONFIG_OPTIONS = ("mode", "model")
+
 #: ACP session updates, mapped onto this package's event vocabulary. Anything
 #: absent here reaches the consumer as `acp.raw` rather than being dropped;
 #: filling the table in -- tool completion, message completion -- is the
@@ -272,19 +276,22 @@ class StdioACPClient:
     async def _configure_model(
         self, session_id: str, session_config: Mapping[str, JSONValue] | None
     ) -> None:
-        # Model selection is an ACP operation, not a session/new extension.
-        # Apply it again after load so resumed reviewers keep their requested tier.
-        if session_config and "model" in session_config:
-            await self.call(
-                "session/set_config_option",
-                {
-                    "sessionId": session_id,
-                    "configId": "model",
-                    "value": session_config["model"],
-                },
-                session_id=session_id,
-                failure=ACPSessionError,
-            )
+        # Model and mode selection are ACP operations, not session/new
+        # extensions. Apply them again after load so resumed reviewers keep
+        # their requested tier, and a session its client pinned to a mode is not
+        # handed back in whatever mode the agent's own settings name.
+        for config_id in SESSION_CONFIG_OPTIONS:
+            if session_config and config_id in session_config:
+                await self.call(
+                    "session/set_config_option",
+                    {
+                        "sessionId": session_id,
+                        "configId": config_id,
+                        "value": session_config[config_id],
+                    },
+                    session_id=session_id,
+                    failure=ACPSessionError,
+                )
 
     async def close(self) -> None:
         if self._closed:
