@@ -47,6 +47,7 @@ class RunNotifier:
         *,
         links: Iterable[MessageLink] = (),
         mention: bool = False,
+        progress: bool = False,
     ) -> None:
         """Say something in this run's thread, if it has one.
 
@@ -59,7 +60,7 @@ class RunNotifier:
         there is somebody to tell.
         """
         try:
-            await self.deliver(state, text, links=links, mention=mention)
+            await self.deliver(state, text, links=links, mention=mention, progress=progress)
         except Exception:
             logger.exception("could not report progress for run %s", state.run_id)
 
@@ -70,6 +71,7 @@ class RunNotifier:
         *,
         links: Iterable[MessageLink] = (),
         mention: bool = False,
+        progress: bool = False,
     ) -> None:
         """Say something in this run's thread, and let a failure through.
 
@@ -86,6 +88,7 @@ class RunNotifier:
                 text,
                 tuple(links),
                 origin.author if mention and origin.author else "",
+                progress=progress,
             ),
             state,
         )

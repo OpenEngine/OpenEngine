@@ -1152,6 +1152,7 @@ def create_app(
                 links.append(link)
             await run_notifier.announce(
                 state, text, links=links, mention=mention,
+                progress=event.kind in (EventKind.NODE_STARTED, EventKind.RUN_FINISHED),
             )
 
     async def graph_notifications(event: RuntimeEvent) -> None:
