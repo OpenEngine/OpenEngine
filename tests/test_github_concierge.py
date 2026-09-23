@@ -897,6 +897,23 @@ def test_merging_a_pull_request_approves_its_work_orders_review(tmp_path):
     )
 
 
+def test_closing_a_pull_request_unmerged_rejects_its_work_orders_review(tmp_path):
+    from starlette.testclient import TestClient
+
+    from engine.domain import ApprovalDecision, ApprovalId
+
+    runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
+    app = _merge_app(tmp_path, opened)
+
+    with TestClient(app) as client:
+        assert _merged(client, merged=False, merged_by=None).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    runtime.decide.assert_awaited_once_with(
+        RunId("existing"), ApprovalId("approval-1"), ApprovalDecision.CANCEL
+    )
+
+
 def test_a_merge_is_acted_on_once_however_often_it_is_delivered(tmp_path):
     from starlette.testclient import TestClient
 
@@ -921,8 +938,6 @@ def test_a_merge_is_acted_on_once_however_often_it_is_delivered(tmp_path):
         ({"merged_by": {"login": "github-merge-queue[bot]", "type": "Bot"}}, "a bot merged"),
         # A merge Engine cannot attribute to a person is not a review.
         ({"merged_by": None}, "GitHub named nobody"),
-        # Closing without merging says the work was abandoned, not judged.
-        ({"merged": False}, "it was closed unmerged"),
     ],
 )
 def test_a_merge_that_decides_nothing_leaves_the_review_waiting(tmp_path, pull_request, why):

@@ -53,6 +53,7 @@ def _merged_pull_request(number: int = 7, **pull_request) -> dict:
             **pull_request,
         ),
         "repository": {"full_name": "acme/api"},
+        "sender": {"login": "maintainer", "type": "User"},
     }
 
 
@@ -139,13 +140,40 @@ def test_a_merged_pull_request_is_read() -> None:
     assert (merged.repository, merged.number) == ("acme/api", 7)
     assert merged.merged_by == "maintainer"
     assert merged.url == "https://github.com/acme/api/pull/7"
+    assert merged.merged
+
+
+def test_a_pull_request_closed_unmerged_is_read_as_a_rejection() -> None:
+    """GitHub names no `merged_by` for a close, so who closed it is the sender."""
+    payload = _merged_pull_request(merged=False, merged_by=None)
+    payload["sender"] = {"login": "reviewer", "type": "User"}
+    closed = merge_from_payload("pull_request", payload)
+    assert closed is not None
+    assert (closed.repository, closed.number, closed.merged_by) == ("acme/api", 7, "reviewer")
+    assert not closed.merged
+
+
+@pytest.mark.parametrize(
+    "sender",
+    [
+        # A stale-branch sweeper or Engine's own account has judged nothing.
+        {"login": "stale[bot]", "type": "Bot"},
+        {"login": "openengine-bot", "type": "User"},
+        None,
+        {"login": "", "type": "User"},
+    ],
+)
+def test_a_close_by_somebody_who_may_not_decide_is_ignored(sender) -> None:
+    payload = dict(_merged_pull_request(merged=False, merged_by=None), sender=sender)
+    assert merge_from_payload(
+        "pull_request", payload, self_login="OpenEngine-Bot"
+    ) is None
 
 
 @pytest.mark.parametrize(
     ("event", "payload"),
     [
-        # Closed without merging: the work was abandoned, not accepted.
-        ("pull_request", _merged_pull_request(merged=False)),
+        # GitHub always says whether a closed pull request merged.
         ("pull_request", _merged_pull_request(merged=None)),
         # Anything else in a pull request's lifecycle decides nothing.
         ("pull_request", dict(_merged_pull_request(), action="opened")),
@@ -330,8 +358,10 @@ def test_a_merge_is_refused_while_nothing_is_wired_to_act_on_it() -> None:
         repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=_record([]),
     )
     assert not ingress.accept("pull_request", _merged_pull_request())
-    # A pull request closed without merging is settled either way.
-    assert ingress.accept("pull_request", _merged_pull_request(merged=False))
+    # Closing without merging is a verdict too, so it is not dropped either.
+    assert not ingress.accept("pull_request", _merged_pull_request(merged=False))
+    # Anything else in a pull request's lifecycle is settled either way.
+    assert ingress.accept("pull_request", dict(_merged_pull_request(), action="opened"))
 
 
 def test_a_merge_from_another_repository_is_ignored() -> None:

@@ -6,7 +6,8 @@ enqueues, and acknowledges rather than waiting for the work: a reply that
 arrived late would otherwise be indistinguishable from a second copy of the
 same comment.
 
-Comments and issue assignments ask for work; merges accept the work.
+Comments and issue assignments ask for work; merges accept the work, and
+closing a pull request unmerged rejects it.
 """
 from __future__ import annotations
 
@@ -32,8 +33,8 @@ log = logging.getLogger(__name__)
 COMMENT_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
 
 #: The delivery kind a merge arrives as. A pull request's whole lifecycle lands
-#: on this event -- opened, labelled, synchronized, closed -- and only a close
-#: that merged is read here. Anything else is acknowledged and dropped, as is
+#: on this event -- opened, labelled, synchronized, closed -- and only a close,
+#: merged or not, is read here. Anything else is acknowledged and dropped, as is
 #: any other event: a GitHub app subscribed to more than Engine reads is a
 #: configuration this route tolerates rather than an error it reports.
 MERGE_EVENT = "pull_request"
@@ -71,13 +72,17 @@ class GithubComment:
 
 @dataclass(frozen=True)
 class GithubMerge:
-    """A pull request that has just been merged, as this process reads it."""
+    """A pull request that has just been closed, as this process reads it.
+
+    Merged is a person accepting the work; closed unmerged is one rejecting it.
+    """
 
     repository: str
     number: int
     merged_by: str
-    """Whoever merged. A merge with no person behind it is not read at all."""
+    """Whoever merged or closed. A close with no person behind it is not read."""
     url: str
+    merged: bool = True
 
 
 @dataclass(frozen=True)
@@ -197,21 +202,22 @@ def comment_from_payload(
 def merge_from_payload(
     event: str, payload: Mapping[str, object], *, self_login: str = ""
 ) -> GithubMerge | None:
-    """The merge in a delivery, or ``None`` for anything that is not one.
+    """The merge or close in a delivery, or ``None`` for anything that is not one.
 
-    A pull request closed without merging decides nothing -- the work was
-    abandoned, not accepted -- so ``merged`` is what is read rather than the
-    action alone. A merge is the point the work order's pull request is
-    actually closed out; an approving review is not, since the branch can take
-    more commits and another round of review after one.
+    A merge accepts the work and a close without merging rejects it, so
+    ``merged`` is read alongside the action. Either is the point the work
+    order's pull request is actually closed out; an approving review is not,
+    since the branch can take more commits and another round of review after
+    one.
 
-    Who merged is checked as strictly as who commented, and for the reason the
+    Who closed is checked as strictly as who commented, and for the reason the
     ``human_review`` gate exists. The gate asks for a person to look at the
     diff, and write access is not that property: a merge queue, an auto-merge
     firing when CI turns green, a Dependabot-style app, or Engine's own GitHub
     App all hold write access and none of them has read anything. So a merge
     whose actor is a bot is refused here rather than allowed to release a gate
-    nobody read the diff for. Engine's own merge is refused here only when
+    nobody read the diff for, and so is a bot's close -- a stale-branch sweeper
+    has judged nothing either. Engine's own merge is refused here only when
     ``self_login`` is configured; the handler checks it again against the
     login Engine's credentials resolve to, which needs the forge.
     """
@@ -221,14 +227,17 @@ def merge_from_payload(
     repository = payload.get("repository")
     if not isinstance(pull_request, dict) or not isinstance(repository, dict):
         return None
-    if pull_request.get("merged") is not True:
+    merged = pull_request.get("merged")
+    if not isinstance(merged, bool):
         return None
-    merged_by = pull_request.get("merged_by")
-    if not isinstance(merged_by, dict) or merged_by.get("type") == "Bot":
-        # No account at all is refused with the bots: a merge Engine cannot
+    # GitHub names who merged on the pull request; who closed it unmerged is
+    # only the delivery's sender.
+    actor = pull_request.get("merged_by") if merged else payload.get("sender")
+    if not isinstance(actor, dict) or actor.get("type") == "Bot":
+        # No account at all is refused with the bots: a close Engine cannot
         # attribute to a person is not a person having reviewed the work.
         return None
-    login = merged_by.get("login")
+    login = actor.get("login")
     if not isinstance(login, str) or not login:
         return None
     if self_login and login.lower() == self_login.lower():
@@ -246,6 +255,7 @@ def merge_from_payload(
         number=number,
         merged_by=login,
         url=str(pull_request.get("html_url") or ""),
+        merged=merged,
     )
 
 
@@ -362,12 +372,13 @@ class GithubIngress:
             )
         merged = merge_from_payload(event, payload, self_login=self._self_login())
         if merged is not None:
-            # By the pull request rather than by a delivery id: what is acted on
-            # is that this pull request is merged, which happens once, and a
-            # second delivery saying so again asks for nothing new.
+            # By the pull request and its verdict rather than by a delivery id:
+            # what is acted on is that this pull request is merged, or closed,
+            # and a second delivery saying so again asks for nothing new.
+            verdict = "merged" if merged.merged else "closed"
             return self._enqueue(
-                merged, "merged pull request",
-                (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}"),
+                merged, f"{verdict} pull request",
+                (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}/{verdict}"),
                 wired=self._handle_merge is not None,
             )
         # Nothing to do with this delivery, whether or not a handler is

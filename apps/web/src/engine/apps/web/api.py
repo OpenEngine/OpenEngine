@@ -1102,8 +1102,8 @@ def create_app(
     run_reader = RunReader(session.state_store, catalog)
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
-    # A pull request merged while its work order was still working towards its
-    # human review. GitHub sends the merge once, so it is kept until the run
+    # A pull request merged or closed while its work order was still working
+    # towards its human review. GitHub sends the close once, so it is kept until the run
     # asks for that review rather than dropped for having arrived early.
     merges_awaiting_review: dict[RunId, GithubMerge] = {}
     graph_notification_lock = asyncio.Lock()
@@ -1206,7 +1206,7 @@ def create_app(
                 await github_accept_merged_review(event.run_id)
             except Exception:
                 log.exception(
-                    "could not accept the human review of work order %s from its merge",
+                    "could not decide the human review of work order %s from its pull request",
                     event.run_id,
                 )
         phase = GRAPH_EVENT_PHASES.get(event.kind)
@@ -3432,15 +3432,15 @@ def create_app(
         ))
 
     async def github_merge_approves_workorder(merged: GithubMerge) -> None:
-        """Merging a pull request is a person accepting its work order.
+        """Merging a pull request is a person accepting its work order, and
+        closing it unmerged is one rejecting it.
 
-        The same decision as the Accept button on the WorkOrder page, made
-        where the reviewer already is: merging is the one event that closes out
-        a work order's pull request, and somebody who has read the diff and
-        merged it has reviewed the run. Asking them to say so a second time in
-        another tab is asking for a click that says nothing new. Rejecting
-        stays the web UI's: closing a pull request without merging says the
-        work was abandoned, not that it was judged.
+        The same decision as the Accept and Reject buttons on the WorkOrder
+        page, made where the reviewer already is: closing is the one event that
+        closes out a work order's pull request, and somebody who has read the
+        diff and merged or closed it has reviewed the run. Asking them to say so
+        a second time in another tab is asking for a click that says nothing
+        new.
 
         `merge_from_payload` has already refused a bot's merge. Engine's own is
         refused here, against the login its credentials resolve to: a machine
@@ -3461,7 +3461,7 @@ def create_app(
         run_id = await github_run_for_pull_request(merged.repository, merged.number)
         if run_id is None:
             log.info(
-                "%s#%s was merged, but no work order opened it",
+                "%s#%s was closed, but no work order opened it",
                 merged.repository, merged.number,
             )
             return
@@ -3470,13 +3470,13 @@ def create_app(
         except UnknownGraphError:
             # A saved work order can outlive the graph it was started from.
             log.info(
-                "%s#%s was merged, but work order %s can no longer be run",
+                "%s#%s was closed, but work order %s can no longer be run",
                 merged.repository, merged.number, run_id,
             )
             return
         if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
             log.info(
-                "%s#%s was merged, but work order %s has already stopped",
+                "%s#%s was closed, but work order %s has already stopped",
                 merged.repository, merged.number, run_id,
             )
             return
@@ -3487,17 +3487,18 @@ def create_app(
             engine_login = await github_posting_login(merged.repository)
         if merged.merged_by.lower() == engine_login.lower():
             log.info(
-                "%s#%s was merged by Engine itself, which is not a review",
+                "%s#%s was closed by Engine itself, which is not a review",
                 merged.repository, merged.number,
             )
             return
         # Kept before looking for the review, so one requested while this looks
-        # still finds the merge waiting for it.
+        # still finds the verdict waiting for it. A later close replaces an
+        # earlier one: a pull request reopened and merged is the last word.
         merges_awaiting_review[run_id] = merged
         await github_accept_merged_review(run_id)
 
     async def github_accept_merged_review(run_id: RunId) -> None:
-        """Answer a work order's human review with the merge kept for it.
+        """Answer a work order's human review with the merge or close kept for it.
 
         Called when the merge arrives and again when the run asks for its
         review, whichever comes second finding both halves: a pull request can
@@ -3526,26 +3527,29 @@ def create_app(
         )
         if pending is None:
             log.info(
-                "%s#%s was merged before work order %s asked for its human review; "
-                "the merge will answer it when it does",
+                "%s#%s was closed before work order %s asked for its human review; "
+                "that will answer it when it does",
                 merged.repository, merged.number, run_id,
             )
             return
         merges_awaiting_review.pop(run_id, None)
+        decision = ApprovalDecision.ACCEPT if merged.merged else ApprovalDecision.CANCEL
         try:
-            await runtime.decide(run_id, pending.approval_id, ApprovalDecision.ACCEPT)
+            await runtime.decide(run_id, pending.approval_id, decision)
         except (UnknownApprovalError, ApprovalNotPendingError):
             # Somebody decided it between the snapshot and here -- the web UI,
             # or a cancellation. The verdict is already recorded; a second one
             # is not owed.
             log.info(
-                "%s#%s was merged, but work order %s had already been decided",
+                "%s#%s was closed, but work order %s had already been decided",
                 merged.repository, merged.number, run_id,
             )
             return
         log.info(
-            "%s merging %s#%s accepted the human review of work order %s",
-            merged.merged_by, merged.repository, merged.number, run_id,
+            "%s %s %s#%s, which %s the human review of work order %s",
+            merged.merged_by, "merging" if merged.merged else "closing",
+            merged.repository, merged.number,
+            "accepted" if merged.merged else "rejected", run_id,
         )
 
     github_ingress = GithubIngress(

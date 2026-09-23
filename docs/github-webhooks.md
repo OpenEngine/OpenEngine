@@ -1,7 +1,8 @@
 # GitHub webhooks
 
 Engine reads comments, issue assignments, and merges from GitHub over a signed
-webhook. Comments and assignments request work; merges accept it. The route only exists once something is wired to act on a delivery, so
+webhook. Comments and assignments request work; merges accept it, and closing
+a pull request without merging rejects it. The route only exists once something is wired to act on a delivery, so
 configure the webhook after that is in place: an endpoint that accepted
 deliveries it could never act on would collect failures until GitHub disabled
 the hook.
@@ -132,9 +133,9 @@ reject what it did. Merging its pull request is that acceptance: the run's
 human review is approved, exactly as pressing Accept on the WorkOrder page
 would have done, and the run carries on. Somebody who has read the diff and
 merged it has reviewed the run, and being asked to say so again in another tab
-is being asked for a click that says nothing new. Rejecting is still the web
-UI's: closing a pull request without merging says the work was abandoned, not
-that it was judged.
+is being asked for a click that says nothing new. Closing the pull request
+without merging is, the same way, the rejection: the review is rejected as
+pressing Reject would have done.
 
 Merging rather than approving, because merging is the one event that closes
 out a work order's pull request. An approving review means one reviewer signed
@@ -149,6 +150,9 @@ anything. A merge GitHub attributes to no account at all is ignored with them.
 What is left is a person, and GitHub only accepts a merge from one who can
 write to the repository — the same permission a commenter has to hold — so the
 merge is its own proof of it.
+A close is held to the same rule, read from the delivery's sender: a
+stale-branch bot or Engine's own account closing a pull request has judged
+nothing.
 
 A merge with no verdict to record is acknowledged and ignored: a pull request
 opened by hand, and one whose work order has already stopped. So is a review
