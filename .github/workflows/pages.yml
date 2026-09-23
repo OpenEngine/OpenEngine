@@ -1,11 +1,9 @@
 name: pages
 
-# Publishes site/ to GitHub Pages, which serves it at https://openengine.sh.
-# The custom domain lives in Settings -> Pages; site/CNAME records it in the
+# Builds the Docusaurus site in site/ and publishes it to GitHub Pages, which
+# serves it at https://openengine.sh.
+# The custom domain lives in Settings -> Pages; site/static/CNAME records it in the
 # repository as well, so the domain is visible from a checkout.
-#
-# Changing the WAITLIST_ENDPOINT variable does not push a commit, so a deploy
-# that picks up a new one is a manual `workflow_dispatch` run.
 
 on:
   push:
@@ -36,38 +34,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Inject the waitlist endpoint
-        # Kept out of the repository so the form provider can be changed, or a
-        # spammed endpoint rotated, without a commit. Set it as a repository
-        # variable named WAITLIST_ENDPOINT (Settings -> Secrets and variables ->
-        # Actions -> Variables). Left unset, the page tells visitors to email
-        # instead of posting submissions nowhere.
-        env:
-          WAITLIST_ENDPOINT: ${{ vars.WAITLIST_ENDPOINT }}
-        run: |
-          if [ -z "${WAITLIST_ENDPOINT}" ]; then
-            echo "::warning::WAITLIST_ENDPOINT is not set; the form will fall back to a mailto prompt"
-            exit 0
-          fi
-          # Python rather than sed: the value is a URL full of slashes, and a
-          # literal replace cannot be broken by whatever punctuation it holds.
-          python3 - <<'PY'
-          import html, os, pathlib
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
 
-          page = pathlib.Path("site/index.html")
-          endpoint = html.escape(os.environ["WAITLIST_ENDPOINT"].strip(), quote=True)
-          text = page.read_text(encoding="utf-8")
-          if "__WAITLIST_ENDPOINT__" not in text:
-              raise SystemExit("placeholder __WAITLIST_ENDPOINT__ is missing from site/index.html")
-          page.write_text(text.replace("__WAITLIST_ENDPOINT__", endpoint), encoding="utf-8")
-          print("waitlist endpoint injected")
-          PY
+      - name: Build
+        working-directory: site
+        run: |
+          npm ci
+          npm run build
 
       - uses: actions/configure-pages@v6
 
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: site/build
 
       - id: deploy
         uses: actions/deploy-pages@v5
