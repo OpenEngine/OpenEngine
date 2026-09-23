@@ -1102,6 +1102,7 @@ def create_app(
     run_reader = RunReader(session.state_store, catalog)
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
+    deferred_graph_notifications: dict[RunId, RunOrigin] = {}
     # A pull request merged while its work order was still working towards its
     # human review. GitHub sends the merge once, so it is kept until the run
     # asks for that review rather than dropped for having arrived early.
@@ -1163,7 +1164,7 @@ def create_app(
             return
         async with graph_notification_lock:
             state = await session.state_store.load(event.run_id)
-            if state is None:
+            if state is None or event.run_id in deferred_graph_notifications:
                 pending_graph_notifications.setdefault(event.run_id, []).append(event)
                 return
             for pending in pending_graph_notifications.pop(event.run_id, []):
@@ -1812,6 +1813,7 @@ def create_app(
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
         scheduled: RunState | None = None,
+        defer_notifications: bool = False,
         parent_run_id: RunId | None = None,
         depends_on_run_id: RunId | None = None,
     ) -> RunState:
@@ -1864,6 +1866,10 @@ def create_app(
                 },
                 run_id=scheduled.run_id if scheduled else None,
             )
+            # Register before saving the row: earlier events already wait for
+            # the row, and later ones must wait for the concierge reply too.
+            if defer_notifications and origin is not None:
+                deferred_graph_notifications[snapshot.run_id] = origin
             seed_graph_progress(runtime, snapshot)
             if approval_policy.auto_approve:
                 topology = runtime.topology(GraphId(str(graph.graph_id)))
@@ -1889,8 +1895,9 @@ def create_app(
             await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
         async with graph_notification_lock:
-            for event in pending_graph_notifications.pop(state.run_id, []):
-                await notify_graph_event(state, event)
+            if state.run_id not in deferred_graph_notifications:
+                for event in pending_graph_notifications.pop(state.run_id, []):
+                    await notify_graph_event(state, event)
         # A very short run can be over before the row above exists, and the
         # ending it announced would then have had nothing to land on -- leaving
         # a WorkOrder that claims to be working forever. So the engine is asked
@@ -2794,9 +2801,7 @@ def create_app(
     _slack_store = slack_credential_store or SlackCredentialStore()
     _slack_state: str | None = None
     _slack_redirect_uri: str | None = None
-    # The way back into a chat thread, for the one message this app sends
-    # itself: the reply that says a mention became a work order. Everything
-    # after that is the executor's, which builds its own from the same port.
+    # Concierge replies and graph progress share the same Slack transport.
     run_notifier = RunNotifier(session.capabilities.communications, public_url)
 
     def _signing_secret() -> str:
@@ -2914,27 +2919,26 @@ def create_app(
         _slack_redirect_uri = None
         return Response(status_code=204)
 
-    _pending_announcements: list[tuple[RunOrigin, CommunicationsMessage, RunState, asyncio.Event]] = []
-
     async def concierge_reply(origin: RunOrigin, text: str) -> None:
         await run_notifier.post(origin, CommunicationsMessage(text, mention=origin.author))
 
     async def concierge_turn_finished(origin: RunOrigin) -> None:
-        for pending in list(_pending_announcements):
-            ann_origin, ann_msg, ann_state, ready = pending
-            if (ann_origin.channel, ann_origin.thread_id) != (origin.channel, origin.thread_id):
-                continue
-            _pending_announcements.remove(pending)
-            try:
-                await run_notifier.post(ann_origin, ann_msg, ann_state)
-            finally:
-                # A failed reply or announcement must not strand an accepted run.
-                ready.set()
+        # Release after the concierge reply, or when the turn fails so an
+        # accepted work order can still report progress.
+        # Serialize the flush with live events so new progress cannot overtake it.
+        async with graph_notification_lock:
+            for run_id, run_origin in list(deferred_graph_notifications.items()):
+                if (run_origin.channel, run_origin.thread_id) != (origin.channel, origin.thread_id):
+                    continue
+                del deferred_graph_notifications[run_id]
+                state = await session.state_store.load(run_id)
+                for event in pending_graph_notifications.pop(run_id, []):
+                    if state is not None:
+                        await notify_graph_event(state, event)
 
     async def concierge_create_workorder(
         origin: RunOrigin, repository: str, prompt: str,
     ) -> tuple[str, str]:
-        ready = asyncio.Event()
         graph = _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
@@ -2943,17 +2947,9 @@ def create_app(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            milestone_id=None, origin=origin,
+            milestone_id=None, origin=origin, defer_notifications=True,
         )
         link = run_notifier.work_order_link(state)
-        _pending_announcements.append((
-            origin,
-            CommunicationsMessage(
-                "Started a work order on the current project. I will report progress here.",
-                (link,) if link else (), mention=origin.author,
-            ),
-            state, ready,
-        ))
         return link.url if link else "", str(state.run_id)
 
     slack_selections: dict[tuple[str, str, str], str] = {}

@@ -946,6 +946,7 @@ class FakeACPProvider:
         fail=False,
         create=False,
         fail_after_create=False,
+        after_create=None,
         steer=False,
         resume=False,
         answer=False,
@@ -955,6 +956,7 @@ class FakeACPProvider:
         self.text, self.fail, self.create = text, fail, create
         self.clients = []
         self.fail_after_create = fail_after_create
+        self.after_create = after_create
         self.steer = steer
         self.resume = resume
         self.answer = answer
@@ -979,6 +981,8 @@ class FakeACPProvider:
                 if provider.create and "new workorder" in prompt:
                     self.results = await call_mcp(self.config, calls=provider.calls)
                     self.result = self.results[-1]
+                    if provider.after_create is not None:
+                        await provider.after_create(self.result["structuredContent"]["run_id"])
                     if provider.fail_after_create:
                         raise RuntimeError("failed after accepting work")
                 if provider.steer and "follow the system theme" in prompt:
@@ -1201,17 +1205,15 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, fail_after_c
         m for _, m, _ in communications.posts
         if m.text.startswith("Started a work order")
     ]
-    assert len(announcements) == 1
-    assert announcements[0].links
-    assert any(m.links for _, m, _ in communications.posts)
+    assert not announcements
+    assert any(m.progress and m.links for _, m, _ in communications.posts)
     assert all(thread == "1" for _, _, thread in communications.posts)
-    # The work-order announcement (with the link) must follow the conversational
-    # reply so that messages appear in the expected order in the thread.
-    texts = [m.text for _, m, _ in communications.posts]
     if not fail_after_create:
-        assert texts.index(provider.text) < texts.index(announcements[0].text), (
-            "announcement with link should appear after the conversational reply"
-        )
+        messages = [m for _, m, _ in communications.posts]
+        # The greeting uses the same reply text; compare with the creation reply.
+        replies = [i for i, m in enumerate(messages) if m.text == provider.text]
+        assert len(replies) == 2
+        assert replies[-1] < next(i for i, m in enumerate(messages) if m.progress)
 
 
 def test_concierge_uses_real_langgraph_acp_session(tmp_path):
@@ -1480,17 +1482,21 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     async def runtime_before_row():
         async with sqlite_runtime((graph,), tmp_path / "graph") as runtime:
             start = runtime.start
+            async def wait_for_ending(run_id):
+                async with asyncio.timeout(10):
+                    while (await runtime.snapshot(RunId(run_id))).status is RunStatus.RUNNING:
+                        await asyncio.sleep(0.01)
             async def start_and_wait(*args, **kwargs):
                 run = await start(*args, **kwargs)
-                async with asyncio.timeout(10):
-                    while (await runtime.snapshot(run.run_id)).status is RunStatus.RUNNING:
-                        await asyncio.sleep(0.01)
+                await wait_for_ending(run.run_id)
                 return await runtime.snapshot(run.run_id)
             if before_row:
                 runtime.start = start_and_wait
+            # Also force events after the row exists but before the reply.
+            provider.after_create = wait_for_ending
             yield runtime
 
-    provider = FakeACPProvider(create=True)
+    provider = FakeACPProvider(create=True, text="Created the work order.")
     communications = RecordingCommunications()
     app, capabilities, _ = _app(
         tmp_path, communications, configured.config.work_orders,
@@ -1538,7 +1544,12 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
         assert pr_links == ([pr_url] if ending == "human_review" and pr_url else [])
         assert any(message.text == "*work* started." and message.progress
                    for _, message, _ in communications.posts)
-    assert any(message.links for _, message, _ in communications.posts)
+    messages = [message for _, message, _ in communications.posts]
+    assert messages[0].text == provider.text
+    assert messages[1].text == "*work* started."
+    assert messages[1].progress
+    assert any(link.label == "View work order" for link in messages[1].links)
+    assert not any(m.text.startswith("Started a work order") for m in messages)
 
 
 def test_an_auto_approved_request_is_not_announced(tmp_path) -> None:
