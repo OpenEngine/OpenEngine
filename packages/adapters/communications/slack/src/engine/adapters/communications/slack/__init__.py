@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ _UPDATE_MESSAGE_URL = "https://slack.com/api/chat.update"
 _POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 _REACTIONS_ADD_URL = "https://slack.com/api/reactions.add"
 _LIST_CONVERSATIONS_URL = "https://slack.com/api/conversations.list"
+_MAX_PROGRESS_MESSAGES = 256
 
 
 class SlackAuthError(RuntimeError):
@@ -125,7 +127,7 @@ class SlackCommunications:
 
     def __init__(self, credential_store: SlackCredentialStore) -> None:
         self._credential_store = credential_store
-        self._progress: dict[tuple[str, str, str], tuple[str, str]] = {}
+        self._progress: OrderedDict[tuple[str, str, str], tuple[str, str]] = OrderedDict()
         self._progress_lock = asyncio.Lock()
 
     async def post(
@@ -189,6 +191,11 @@ class SlackCommunications:
         message_id = str(body.get("ts", ""))
         if progress and message_id:
             self._progress[key] = (message_id, history)
+            self._progress.move_to_end(key)
+            # The adapter receives no run-deletion events. Bound retained
+            # histories, keeping the most recently updated indicators.
+            if len(self._progress) > _MAX_PROGRESS_MESSAGES:
+                self._progress.popitem(last=False)
         return message_id
 
     @staticmethod
