@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1198,10 +1199,11 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
 
 
 @pytest.mark.parametrize("may_write", [True, False])
-def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
+def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog):
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
 
+    caplog.set_level(logging.INFO, logger="engine.apps.web.api")
     runtime, opened = _graph_runtime()
     provider = FakeACPProvider(create=True)
     communications = RecordingCommunications()
@@ -1236,6 +1238,8 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
             assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
         else:
             runtime.start.assert_not_awaited()
+            assert "ignored an assignment of #7 from maintainer, who cannot write to acme/api" \
+                in caplog.messages
         runtime.store.claim_pull_request.assert_not_awaited()
     assert not provider.clients
     assert not communications.posts

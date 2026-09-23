@@ -3346,6 +3346,13 @@ def create_app(
                 pull_request_url(repository, assignment.number), assignment.sender,
             )
         if not may_write:
+            log.info(
+                "ignored an assignment of #%s from %s, who cannot write to %s",
+                assignment.number, assignment.sender, repository,
+            )
+            github_activity.ignored(
+                f"{assignment.sender} cannot write to {repository}"
+            )
             return
         graph = _mentioned_workflow()
         if graph is None:
