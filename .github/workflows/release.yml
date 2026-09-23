@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/release-gate.yml
+    permissions:
+      contents: read
+      actions: read
+
+  release-please:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+
+  bundle:
+    needs: release-please
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'pull_request' || needs.release-please.outputs.created == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+          python-version: "3.12"
+      - run: npm --prefix apps/web ci
+      - name: Build all wheels and application bundle
+        env:
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha || github.sha }}
+        run: uv run --no-project python scripts/build_release.py --commit "$RELEASE_SHA"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle
+          path: |
+            dist/openengine-*.tar.gz
+            dist/release-manifest.json
+          if-no-files-found: error
+      # GITHUB_TOKEN-created tags do not trigger another workflow. Upload here.
+      - name: Attach application assets to the release
+        if: needs.release-please.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
+        run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json --clobber
