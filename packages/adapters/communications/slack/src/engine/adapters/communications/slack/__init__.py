@@ -158,7 +158,7 @@ class SlackCommunications:
         previous = self._progress.get(key) if progress else None
         history = ""
         if progress:
-            timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+            timestamp = datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S %Z")
             history = f"{message.text} ({timestamp})"
             if previous:
                 history = f"{previous[1]}\n{history}"
