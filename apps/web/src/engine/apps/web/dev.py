@@ -68,6 +68,7 @@ RELOAD_EXCLUDED_DIRECTORIES = (
     ".pytest_cache",
     ".ruff_cache",
     "apps/web/dist",
+    "apps/web/src/engine/apps/web/static",
     "apps/web/node_modules",
     "apps/web/playwright-report",
     "apps/web/test-results",

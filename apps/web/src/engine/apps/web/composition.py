@@ -22,8 +22,10 @@ restart without requiring an external database service.
 import logging
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from engine.apps.web.paths import data_directory
 
 from engine.adapters.agent_runner.claude_code import (
     READ_ONLY_TOOLS,
@@ -86,7 +88,7 @@ class Settings:
     Frozen so one immutable settings value can be shared by the server wiring.
     """
 
-    host: str = "localhost"
+    host: str = "127.0.0.1"
     port: int = 8000
     codex_binary: str = "codex"
     codex_sandbox: str = "read-only"
@@ -96,12 +98,12 @@ class Settings:
     for, so it gets the sandbox that needs no one present. Chat is the other
     case and takes `interactive_codex_sandbox`.
     """
-    codex_working_directory: str = "."
+    codex_working_directory: str = field(default_factory=lambda: str(data_directory()))
     codex_timeout_seconds: float | None = None
     """No ceiling: a turn runs until it is done or someone cancels it."""
     codex_model: str = ""
     claude_binary: str = "claude"
-    claude_working_directory: str = "."
+    claude_working_directory: str = field(default_factory=lambda: str(data_directory()))
     claude_timeout_seconds: float | None = None
     """Same as `codex_timeout_seconds`."""
     claude_model: str = ""
@@ -128,8 +130,8 @@ class Settings:
     """
     source_control_preferences: SourceControlPreferences | None = None
     workspace_root: str = DEFAULT_ROOT_DIRECTORY
-    sqlite_path: str = "conversations.sqlite3"
-    graph_state_directory: str = "graph-state"
+    sqlite_path: str = field(default_factory=lambda: str(data_directory() / "conversations.sqlite3"))
+    graph_state_directory: str = field(default_factory=lambda: str(data_directory() / "graph-state"))
     """Where a graph workflow's saved progress is kept.
 
     Plain English: the new graph workflows remember where they got to by
@@ -409,7 +411,7 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 def build_session(
     capabilities: Capabilities,
     runners: Mapping[str, AgentRunner],
-    repository: str = ".",
+    repository: str | None = None,
     read_only_runners: Mapping[str, AgentRunner] | None = None,
 ) -> AgentSession:
     """Conversations, over the capabilities this process composed.

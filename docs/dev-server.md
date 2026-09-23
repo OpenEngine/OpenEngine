@@ -14,7 +14,7 @@ you which one you just touched:
 
 - Editing `apps/web/src/*.tsx` changes nothing a browser can see until
   `npm --prefix apps/web run build` runs. The Python process serves Vite's
-  output from `apps/web/dist` (`STATIC_DIRECTORY` in
+  output from `apps/web/src/engine/apps/web/static` (`STATIC_DIRECTORY` in
   `apps/web/src/engine/apps/web/__main__.py`), so an unbuilt edit is invisible
   rather than broken, which is the failure mode that wastes the most time.
 - Editing any Python under `packages/` or `apps/web/src/engine` requires
@@ -88,7 +88,7 @@ otherwise produce a server that restarts continuously while doing normal work:
   working directory on every message. Watching the repository root without
   excluding them means every chat turn restarts the server mid-turn.
 - `.venv` is thousands of `*.py` files that a `uv sync` rewrites, and
-  `apps/web/node_modules` and `apps/web/dist` are vendor code and build output.
+  `apps/web/node_modules` and `apps/web/src/engine/apps/web/static` are vendor code and build output.
 - Agent worktrees live under `workspace_root`, which defaults to
   `/tmp/engine-workspaces` and is therefore already outside the tree. It is
   excluded when it is not: pointing `workspace_root` inside the repository

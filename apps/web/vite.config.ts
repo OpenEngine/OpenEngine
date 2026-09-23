@@ -5,6 +5,7 @@ import { apiProxy } from "./src/api-proxy";
 
 export default defineConfig({
   plugins: [react()],
+  build: { outDir: "src/engine/apps/web/static", emptyOutDir: true },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test-setup.ts",

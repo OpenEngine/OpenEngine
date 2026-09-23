@@ -54,6 +54,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/engine"]
 
+[tool.hatch.build]
+artifacts = ["src/engine/apps/web/static/**"]
+
+[tool.hatch.build.hooks.custom]
+
 [tool.uv.sources]
 engine-runtime = { workspace = true }
 engine-scoper = { workspace = true }

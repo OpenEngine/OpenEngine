@@ -581,10 +581,14 @@ version = "0.0.0"
 source = { editable = "packages/adapters/workspace_provider/git_worktree" }
 dependencies = [
     { name = "engine-runtime" },
+    { name = "platformdirs" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
+requires-dist = [
+    { name = "engine-runtime", editable = "packages/runtime" },
+    { name = "platformdirs", specifier = ">=4" },
+]
 
 [[package]]
 name = "engine-control-server"
