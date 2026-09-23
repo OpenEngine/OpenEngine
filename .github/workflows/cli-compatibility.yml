@@ -88,6 +88,15 @@ jobs:
       - name: Put the CLI on PATH
         run: echo "$RUNNER_TEMP/agent-cli/bin" >> "$GITHUB_PATH"
 
+      - name: Authenticate Codex with the CI API key
+        if: matrix.provider == 'codex'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            printenv OPENAI_API_KEY | codex login --with-api-key
+          fi
+
       - name: Record what is actually installed
         # What the CLI calls itself, not what we asked npm for: a package that
         # resolves to something else is exactly the kind of drift this matrix
@@ -192,6 +201,15 @@ jobs:
           codex=$(npm view "@agentclientprotocol/codex-acp" "dependencies[@openai/codex]")
           echo "::notice::codex-acp bundles @openai/codex $codex"
           echo "### bundled @openai/codex $codex" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Authenticate the bundled Codex with the CI API key
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            codex_version=$(npm view "@agentclientprotocol/codex-acp" "dependencies[@openai/codex]")
+            printenv OPENAI_API_KEY | npx --yes --package "@openai/codex@$codex_version" codex login --with-api-key
+          fi
 
       - name: Handshake, a turn, and a permission round trip over ACP
         env:

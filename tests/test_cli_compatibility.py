@@ -296,7 +296,7 @@ class Chat:
         )
         try:
             if decide is not None:
-                pending = await self._await_pending(before, stage)
+                pending = await self._await_pending(before, stage, started)
                 self.transcript.note_approval(f"{stage}: asked", pending)
                 answered = await self.client.post(
                     f"/api/threads/{self.thread_id}/runs/current/approvals/"
@@ -328,13 +328,49 @@ class Chat:
         )
         return Turn(events=events, approvals=raised)
 
-    async def _await_pending(self, after: int, stage: str) -> ApprovalRecord:
+    async def _await_pending(
+        self, after: int, stage: str, started: asyncio.Task[httpx.Response]
+    ) -> ApprovalRecord:
         """Wait for the provider to ask, and say something useful if it never does."""
         deadline = asyncio.get_running_loop().time() + self._pause_timeout
         while asyncio.get_running_loop().time() < deadline:
             approvals = await self.store.list_approvals()
             if len(approvals) > after and approvals[-1].is_pending:
                 return approvals[-1]
+            if started.done():
+                response = await started
+                events = (
+                    [json.loads(line) for line in response.text.splitlines() if line.strip()]
+                    if response.status_code == 200
+                    else []
+                )
+                # Keep provider text private, but make known setup failures actionable.
+                errors = [str(event["error"]) for event in events if "error" in event]
+                error_kinds = sorted({
+                    kind
+                    for error in errors
+                    for phrase, kind in (
+                        ("authentication required", "authentication"),
+                        ("credit balance is too low", "billing"),
+                        ("insufficient_quota", "billing"),
+                    )
+                    if phrase in error.lower()
+                })
+                self.transcript.note(
+                    f"{stage}: ended before approval",
+                    status_code=response.status_code,
+                    event_types=[event.get("type") for event in events],
+                    errors=[redacted(error) for error in errors],
+                    error_kinds=error_kinds,
+                    body=redacted(response.text) if response.status_code != 200 else None,
+                )
+                raise ScenarioFailure(
+                    self.transcript.label,
+                    stage,
+                    "the turn ended before requesting approval "
+                    f"(HTTP {response.status_code}; events: "
+                    f"{[event.get('type') for event in events]}; error kinds: {error_kinds})",
+                )
             await asyncio.sleep(0.02)
         raise ScenarioFailure(
             self.transcript.label,
@@ -481,6 +517,34 @@ SCENARIOS: dict[str, Callable] = {
     "cancel": cancel_scenario,
     "session": session_scenario,
 }
+
+
+@pytest.mark.parametrize("status, body, kind", [
+    (409, '{"error":"private response"}', None),
+    (200, '{"type":"error","error":"Authentication required: private response"}\n', "authentication"),
+    (200, '{"type":"error","error":"Credit balance is too low: private response"}\n', "billing"),
+    (200, '{"type":"done","content":"private response"}\n', None),
+])
+def test_completed_turn_without_approval_fails_promptly_and_redacts_errors(status, body, kind):
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(status, text=body)),
+            base_url="http://test",
+        ) as client:
+            transcript = Transcript("test", "test", "test")
+            chat = Chat(client, InMemoryStateStore(), "thread", transcript,
+                        pause_timeout=180, turn_timeout=300)
+            with pytest.raises(ScenarioFailure, match="ended before requesting approval") as failure:
+                await asyncio.wait_for(
+                    chat.say("test", decide=ApprovalDecision.ACCEPT, stage="approve"), 1
+                )
+            assert "private response" not in str(failure.value)
+            assert "private response" not in json.dumps(transcript.entries)
+            ended = transcript.entries[-1]
+            assert ended["status_code"] == status
+            assert ended["error_kinds"] == ([kind] if kind else [])
+
+    asyncio.run(run())
 
 
 # --- fake CLIs that speak the real protocols --------------------------------
