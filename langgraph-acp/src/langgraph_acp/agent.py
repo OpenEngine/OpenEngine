@@ -32,6 +32,7 @@ from typing import Protocol, runtime_checkable
 from langgraph_acp._json import checked_sequence
 from langgraph_acp._stdio import connect_over_stdio
 from langgraph_acp.client import ACPClient
+from langgraph_acp.elicitation import ACPElicitationHandler
 from langgraph_acp.errors import ACPAgentNotFoundError
 from langgraph_acp.permissions import ACPPermissionHandler
 
@@ -102,6 +103,8 @@ class StdioACPProvider:
     policy that could differ between two connections to the same agent would be
     a permission granted by whichever code path happened to open the pipe.
     """
+    elicitations: ACPElicitationHandler | None = None
+    """Who answers `elicitation/create`. `None` does not offer to."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
@@ -113,6 +116,7 @@ class StdioACPProvider:
             env=self.env,
             cwd=self.cwd,
             permissions=self.permissions,
+            elicitations=self.elicitations,
         )
 
 

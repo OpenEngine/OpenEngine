@@ -261,9 +261,9 @@ def test_no_composition_root_builds_a_cli_runner(tmp_path) -> None:
     assert all(isinstance(runner, ACPAgentRunner) for runner in runners)
 
 
-def test_the_runner_nobody_is_watching_stays_on_the_strictest_preset(tmp_path) -> None:
+def test_the_runner_nobody_is_watching_stays_read_only(tmp_path) -> None:
     """The port implementation a non-interactive caller reaches has nobody to
-    ask, and runs under codex-acp's preset that asks before leaving the tree."""
+    ask, and runs in Codex's read-only sandbox."""
     capabilities = build_capabilities(Settings(sqlite_path=str(tmp_path / "c.sqlite3")))
     try:
         runner = capabilities.agent_runner
@@ -272,6 +272,7 @@ def test_the_runner_nobody_is_watching_stays_on_the_strictest_preset(tmp_path) -
 
     assert runner.provider.name == "codex"
     assert runner.provider.env["INITIAL_AGENT_MODE"] == "read-only"
+    assert runner.provider.env["ENGINE_CODEX_SANDBOX"] == "read-only"
 
 
 def test_interactive_runners_may_do_what_the_user_approves() -> None:
@@ -281,6 +282,7 @@ def test_interactive_runners_may_do_what_the_user_approves() -> None:
     # Codex: writable inside the worktree, and stopping to ask a person before
     # it would step outside one -- never a model approving on their behalf.
     assert runners["codex"].provider.env["INITIAL_AGENT_MODE"] == "read-only"
+    assert runners["codex"].provider.env["ENGINE_CODEX_SANDBOX"] == "workspace-write"
     # Claude: reads run unattended, everything else reaches the user.
     options = _claude_options(runners["claude"])
     assert options["allowedTools"] == ["Read", "Glob", "Grep"]
@@ -312,6 +314,7 @@ def test_the_interactive_codex_preset_is_not_widened_by_the_policy() -> None:
     runner = build_runners(Settings(engine_config=auto))["codex"]
 
     assert runner.provider.env["INITIAL_AGENT_MODE"] == "read-only"
+    assert runner.provider.env["ENGINE_CODEX_SANDBOX"] == "workspace-write"
 
 
 def test_engine_config_styles_every_claude_runner_this_process_offers() -> None:
@@ -389,6 +392,7 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
     codex = session.runner_for(PLANNER.agent_id, "codex")
     assert codex is not session.runner_for(CODER, "codex")
     assert codex.provider.env["INITIAL_AGENT_MODE"] == "read-only"
+    assert codex.provider.env["ENGINE_CODEX_SANDBOX"] == "read-only"
 
 
 def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:

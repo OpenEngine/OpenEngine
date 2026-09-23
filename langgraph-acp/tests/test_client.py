@@ -15,6 +15,7 @@ import logging
 import sys
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import aclosing, asynccontextmanager
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ from typing import Any
 import pytest
 
 from langgraph_acp import (
+    ACPElicitationRequest,
+    ACPElicitationResponse,
     ACPAgentCapabilityError,
     ACPClient,
     ACPConnectionError,
@@ -401,6 +404,54 @@ async def test_a_permission_request_is_streamed_and_answered() -> None:
         event for event in events if event.type == ACPEventType.TOOL_UPDATED
     )
     assert answered.data["answer"] == {"outcome": {"outcome": "cancelled"}}
+
+
+@asyncio_test
+async def test_a_question_is_offered_streamed_and_answered(tmp_path: Path) -> None:
+    """A client with someone to ask says so, and the agent gets their answer."""
+    log = tmp_path / "sent.jsonl"
+    asked: list[ACPElicitationRequest] = []
+
+    async def answer(request: ACPElicitationRequest) -> ACPElicitationResponse:
+        asked.append(request)
+        return ACPElicitationResponse.accept({"question_0": "Blue"})
+
+    provider = replace(fake_agent("--ask", log=log), elicitations=answer)
+    client = await provider.connect()
+    try:
+        session = await client.new_session(cwd=tmp_path)
+        events = [event async for event in session.prompt("ask me")]
+    finally:
+        await client.close()
+
+    assert params_of(log, "initialize")["clientCapabilities"]["elicitation"] == {
+        "form": {}
+    }
+    [request] = asked
+    assert request.session_id == "sess_fake_1"
+    assert request.tool_call_id == "call_ask"
+    assert request.message == "Which colour?"
+    properties = request.requested_schema["properties"]
+    assert isinstance(properties, dict)
+    assert set(properties) == {"question_0", "question_0_custom"}
+    types = [event.type for event in events]
+    assert types.index(ACPEventType.ELICITATION_REQUESTED) < types.index(
+        ACPEventType.ELICITATION_RESOLVED
+    )
+    assert json.loads((tmp_path / "answer.json").read_text()) == {
+        "action": "accept",
+        "content": {"question_0": "Blue"},
+    }
+
+
+@asyncio_test
+async def test_a_client_with_nobody_to_ask_is_not_asked(tmp_path: Path) -> None:
+    async with connected("--ask") as client:
+        session = await client.new_session(cwd=tmp_path)
+        events = [event async for event in session.prompt("ask me")]
+
+    assert ACPEventType.ELICITATION_REQUESTED not in [event.type for event in events]
+    assert not (tmp_path / "answer.json").exists()
 
 
 @asyncio_test

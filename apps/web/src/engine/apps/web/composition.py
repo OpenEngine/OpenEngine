@@ -101,8 +101,8 @@ class Settings:
 
     `build_capabilities` wires the one runner a non-interactive caller reaches
     for, so it gets the sandbox that needs no one present. Chat is the other
-    case and takes `interactive_codex_sandbox`. Both are translated to a
-    codex-acp preset by `CODEX_MODES`, which says what each one becomes.
+    case and takes `interactive_codex_sandbox`. codex-acp cannot be asked for a
+    sandbox, so `codex_acp_runner` enforces it under the adapter.
     """
     codex_working_directory: str = "."
     codex_timeout_seconds: float | None = None
@@ -389,9 +389,8 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 
     Withholding the tools is half of it. The other half is that a `read_only`
     profile's approvals are refused by the broker, so a policy cannot hand back
-    at the pause what this withheld before the turn. For Codex that refusal is
-    most of it: codex-acp has no read-only sandbox to withhold with, so its
-    strictest preset is used -- see `CODEX_MODES`.
+    at the pause what this withheld before the turn. For Codex the withholding
+    is its read-only sandbox, which `codex_acp_runner` holds every turn to.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {

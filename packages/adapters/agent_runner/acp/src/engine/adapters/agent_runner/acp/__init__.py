@@ -9,6 +9,7 @@ package binds it to the runner port:
     session/update  agent_message_chunk     narration, then the answer
                     tool_call(_update)      a ToolCall, then its result
     session/request_permission              ApprovalRequest -> decision -> option
+    elicitation/create                      ApprovalRequest.questions -> answers
     session/prompt  stopReason, usage       FinishReason, TokenUsage
 
 Each turn is one agent process and one new ACP session, given the whole
@@ -25,22 +26,29 @@ server, which is attached to the session and whose tools are never re-asked
 about: that server is Engine's own broker and decides for itself.
 
 `codex_acp_runner` and `claude_acp_runner` translate Engine's settings into
-what each adapter reads: a session preset in the environment for Codex, SDK
-options under `_meta.claudeCode.options` for Claude.
+what each adapter reads: a sandbox enforced under codex-acp for Codex (see
+`codex_policy`), SDK options under `_meta.claudeCode.options` for Claude.
 """
 
 import asyncio
 import contextlib
+import functools
+import hashlib
 import json
 import os
 import shlex
+import sys
+import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
+from pathlib import Path
 from typing import Any
 
 from langgraph_acp import (
     ACPAgentProvider,
     ACPClient,
+    ACPElicitationRequest,
+    ACPElicitationResponse,
     ACPEvent,
     ACPEventType,
     ACPPermissionOutcome,
@@ -59,9 +67,18 @@ from engine.adapters.agent_runner.acp.claude import (
     allowed_tools_for,
     claude_session_config,
 )
+from engine.adapters.agent_runner.acp.codex_policy import (
+    CODEX_PATH_VARIABLE,
+    SANDBOX_POLICIES,
+    SANDBOX_VARIABLE,
+)
 from engine.adapters.agent_runner.acp.permissions import (
     ACP_PERMISSION_TRANSLATOR,
     ACPPermissionTranslator,
+)
+from engine.adapters.agent_runner.acp.questions import (
+    content_from_answers,
+    questions_from_form,
 )
 from engine.domain.agents import AgentProfile
 from engine.domain.chat import Message, ToolCall
@@ -78,27 +95,21 @@ from engine.ports.agent_runner import (
     ResponseStyle,
     TokenUsage,
     TurnObserver,
+    UserInputResponse,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.session_grants import PATH_COLLECTION_FIELDS, PATH_FIELDS
 from engine.runtime.transcript import flatten
 
-#: codex-acp's session presets, by the Codex sandbox name Engine's settings use.
-#:
-#: codex-acp 1.13 offers three presets and none of them is Codex's read-only
-#: sandbox: its `read-only` preset is `on-request` approval with a person as the
-#: reviewer over a workspace-write sandbox, so it asks before anything outside
-#: the worktree and nothing inside it. That is exactly what chat's
-#: `workspace-write` was, and the strictest preset there is, so it answers for
-#: `read-only` too; what keeps a read-only agent from escalating is the broker,
-#: which refuses every request a `read_only` profile raises. The adapter's
-#: default, `agent`, is not used: it has a model approve requests on a person's
-#: behalf.
-CODEX_MODES: Mapping[str, str] = {
-    "read-only": "read-only",
-    "workspace-write": "read-only",
-    "danger-full-access": "agent-full-access",
-}
+#: The codex-acp preset every Codex session starts in: `on-request` approval,
+#: with a person as the reviewer. The adapter's default, `agent`, has a model
+#: approve requests on a person's behalf. The preset's sandbox is not used -- see
+#: `engine.adapters.agent_runner.acp.codex_policy`, which replaces it, and the
+#: preset's approval policy, on every turn.
+CODEX_AGENT_MODE = "read-only"
+
+#: The Codex sandbox names `codex_acp_runner` accepts.
+CODEX_SANDBOXES = tuple(SANDBOX_POLICIES)
 
 NO_ATTRIBUTION_INSTRUCTIONS = (
     "Do not add AI attribution to commits or pull requests, including "
@@ -400,8 +411,15 @@ class ACPAgentRunner:
             mcp_server=mcp_server.name if mcp_server is not None else None,
         )
         # The provider's own permission handler is a policy fixed at
-        # construction; here it is this turn, so the turn gets a copy.
-        client = await replace(self._provider, permissions=turn.answer).connect()  # type: ignore[type-var]
+        # construction; here it is this turn, so the turn gets a copy. Questions
+        # are offered only to a turn with someone to put them to: an agent told
+        # the client cannot answer keeps them to itself.
+        handlers: dict[str, Any] = {"permissions": turn.answer}
+        if on_approval is not None and "elicitations" in {
+            field.name for field in fields(self._provider)  # type: ignore[arg-type]
+        }:
+            handlers["elicitations"] = turn.elicit
+        client = await replace(self._provider, **handlers).connect()  # type: ignore[type-var]
         running = _Running(client)
         self._running[agent_run_id] = running
         try:
@@ -482,7 +500,7 @@ class _Turn:
             case ACPEventType.TOOL_STARTED | ACPEventType.TOOL_UPDATED:
                 self._flush()
                 self._tool(data)
-            case ACPEventType.PERMISSION_REQUESTED:
+            case ACPEventType.PERMISSION_REQUESTED | ACPEventType.ELICITATION_REQUESTED:
                 self._flush()
                 tool_call = data.get("toolCall")
                 if isinstance(tool_call, Mapping) and tool_call.get("toolCallId"):
@@ -604,16 +622,25 @@ class _Turn:
             cost_usd=self._cost,
         )
 
-    # --- session/request_permission ------------------------------------------
+    # --- session/request_permission and elicitation/create ------------------
 
-    async def answer(self, request: ACPPermissionRequest) -> ACPPermissionOutcome:
+    async def _heard(self) -> int | None:
+        """Wait until the stream has shown this request; `None` if it never will.
+
+        Both kinds of request are streamed before their handler is called, with
+        nothing awaited in between, so the nth request asked is the nth observed.
+        """
         self._asked += 1
         asked = self._asked
         async with self._progress:
             await self._progress.wait_for(
                 lambda: self._observed >= asked or self._closed
             )
-        if self._closed:
+        return None if self._closed else asked
+
+    async def answer(self, request: ACPPermissionRequest) -> ACPPermissionOutcome:
+        asked = await self._heard()
+        if asked is None:
             return ACPPermissionOutcome.cancelled()
         call = self._merged(request)
         mcp_tool = _mcp_tool(call) or ""
@@ -629,6 +656,44 @@ class _Turn:
         ):
             return _refusing(request)
         return _allowing(request)
+
+    async def elicit(self, request: ACPElicitationRequest) -> ACPElicitationResponse:
+        """A question for the user: Claude's AskUserQuestion, Codex's user input.
+
+        Answered with the user's answers, or cancelled -- which abandons the
+        tool call that asked -- when they decline to give any.
+        """
+        asked = await self._heard()
+        if asked is None or self._on_approval is None:
+            return ACPElicitationResponse.cancel()
+        questions = questions_from_form(request.message, request.requested_schema)
+        call = self._calls.get(request.tool_call_id or "", {})
+        tool_name = _claude_tool(call)
+        approval = ApprovalRequest(
+            approval_id=f"{self._run}:elicitation-{asked}",
+            kind=ApprovalKind.USER_INPUT,
+            reason=request.message or None,
+            cwd=self._working_directory,
+            tool_name=tool_name,
+            tool_call_id=(
+                self._call_id(request.tool_call_id) if request.tool_call_id else None
+            ),
+            allowed_decisions=(
+                (ApprovalDecision.CANCEL,)
+                if questions
+                else (ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL)
+            ),
+            questions=questions,
+            requires_human=True,
+        )
+        decision = await self._on_approval(approval)
+        if isinstance(decision, UserInputResponse):
+            return ACPElicitationResponse.accept(
+                content_from_answers(request.requested_schema, decision)
+            )
+        if decision is ApprovalDecision.ACCEPT and not questions:
+            return ACPElicitationResponse.accept({})
+        return ACPElicitationResponse.cancel()
 
     def _merged(self, request: ACPPermissionRequest) -> dict[str, Any]:
         """The request's tool call, with what the stream already said about it."""
@@ -811,15 +876,26 @@ def codex_acp_runner(
     attribution: bool = True,
     env: Mapping[str, str] | None = None,
 ) -> ACPAgentRunner:
-    """Codex, through codex-acp, under the preset `CODEX_MODES` names.
+    """Codex, through codex-acp, in the sandbox Engine names.
 
-    The preset reaches the adapter as `INITIAL_AGENT_MODE`, and attribution as
-    Codex's `developer_instructions` in `CODEX_CONFIG` -- the two knobs
-    codex-acp reads from its environment rather than from the protocol.
+    codex-acp cannot be asked for a sandbox, so it is handed a Codex that
+    enforces one: `CODEX_PATH` names `codex_policy`, which pins every turn to
+    `sandbox` with `on-request` approval. The operator's own `CODEX_PATH`, if
+    any, is the Codex that runs underneath. Attribution reaches Codex as
+    `developer_instructions` in `CODEX_CONFIG`, which codex-acp reads from its
+    environment rather than from the protocol.
     """
-    if sandbox not in CODEX_MODES:
-        raise ValueError(f"sandbox must be one of {tuple(CODEX_MODES)}, got {sandbox!r}")
-    codex_env = {**(env or {}), "INITIAL_AGENT_MODE": CODEX_MODES[sandbox]}
+    if sandbox not in CODEX_SANDBOXES:
+        raise ValueError(f"sandbox must be one of {CODEX_SANDBOXES}, got {sandbox!r}")
+    codex_env = {
+        **(env or {}),
+        "INITIAL_AGENT_MODE": CODEX_AGENT_MODE,
+        "CODEX_PATH": _codex_policy_launcher(),
+        SANDBOX_VARIABLE: sandbox,
+    }
+    codex_path = (env or {}).get("CODEX_PATH") or os.environ.get("CODEX_PATH")
+    if codex_path:
+        codex_env[CODEX_PATH_VARIABLE] = codex_path
     if not attribution:
         codex_env["CODEX_CONFIG"] = json.dumps(
             {"developer_instructions": NO_ATTRIBUTION_INSTRUCTIONS}
@@ -831,6 +907,32 @@ def codex_acp_runner(
         timeout_seconds=timeout_seconds,
         workspace_provider=workspace_provider,
     )
+
+
+@functools.cache
+def _codex_policy_launcher() -> str:
+    """An executable that runs `codex_policy` under this interpreter.
+
+    `CODEX_PATH` is started as a program with `app-server` as its only argument,
+    so it has to be a file. Written once per interpreter, and atomically, since
+    two processes may race to write the same one.
+    """
+    interpreter = sys.executable
+    module = "engine.adapters.agent_runner.acp.codex_policy"
+    if os.name == "nt":
+        suffix, body = ".cmd", f'@"{interpreter}" -m {module} %*\r\n'
+    else:
+        suffix, body = "", f'#!/bin/sh\nexec {shlex.quote(interpreter)} -m {module} "$@"\n'
+    digest = hashlib.sha256(body.encode()).hexdigest()[:16]
+    directory = Path(tempfile.gettempdir()) / "engine-codex-policy"
+    directory.mkdir(parents=True, exist_ok=True)
+    launcher = directory / f"codex-{digest}{suffix}"
+    if not launcher.is_file():
+        staged = directory / f".{launcher.name}.{os.getpid()}"
+        staged.write_text(body, encoding="utf-8")
+        staged.chmod(0o755)
+        os.replace(staged, launcher)
+    return str(launcher)
 
 
 def claude_acp_runner(
@@ -875,7 +977,8 @@ def claude_acp_runner(
 
 __all__ = [
     "ACP_PERMISSION_TRANSLATOR",
-    "CODEX_MODES",
+    "CODEX_AGENT_MODE",
+    "CODEX_SANDBOXES",
     "READ_ONLY_TOOLS",
     "NO_ATTRIBUTION_INSTRUCTIONS",
     "ACPAgentRunner",

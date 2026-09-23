@@ -14,6 +14,10 @@ is how a test asserts on what was *sent* rather than only on what came back.
 named after the last `run:` in the prompt, in the session's working directory,
 once the client has allowed it. That is what lets an approval be asserted on
 the file it did or did not create, rather than on the answer that was sent.
+
+`--ask` puts a question to the client the way claude-agent-acp does, as a form
+`elicitation/create` -- and, like it, only to a client that advertised forms --
+then writes whatever came back to `answer.json` in the session's directory.
 """
 
 import json
@@ -26,6 +30,7 @@ from typing import Any
 #: The ids the agent uses for the requests it makes of the client.
 PERMISSION_REQUEST_ID = 9001
 READ_FILE_REQUEST_ID = 9002
+ELICITATION_REQUEST_ID = 9003
 
 SESSION_ID = "sess_fake_1"
 
@@ -37,6 +42,35 @@ WORKING_DIRECTORIES: dict[str, str] = {}
 
 #: Commands allowed with `allow_always`, which this process does not ask again.
 ALWAYS_ALLOWED: set[str] = set()
+
+#: What the client said it could do in `initialize`.
+CLIENT_CAPABILITIES: dict[str, Any] = {}
+
+#: The question `--ask` puts, in claude-agent-acp's form: an option list, and a
+#: free-text field beside it for an answer that is none of them.
+QUESTION_FORM = {
+    "type": "object",
+    "properties": {
+        "question_0": {
+            "type": "string",
+            "title": "Colour",
+            "oneOf": [
+                {"const": "Red", "title": "Red", "description": "Warm"},
+                {"const": "Blue", "title": "Blue"},
+            ],
+        },
+        "question_0_custom": {
+            "type": "string",
+            "title": "Other",
+            "_meta": {
+                "_askUserQuestionCustomAnswer": {
+                    "questionId": "question_0",
+                    "isCustomAnswer": True,
+                }
+            },
+        },
+    },
+}
 
 
 def send(message: dict[str, Any]) -> None:
@@ -215,6 +249,58 @@ def run_directive(message_id: Any, params: dict[str, Any]) -> None:
     respond(message_id, {"stopReason": "end_turn"})
 
 
+def ask_question(message_id: Any) -> None:
+    """Ask the question, write down the answer, and say it was answered."""
+    form = (CLIENT_CAPABILITIES.get("elicitation") or {}).get("form")
+    if form is None:
+        update(
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "Nobody to ask."},
+            }
+        )
+        respond(message_id, {"stopReason": "end_turn"})
+        return
+    call = {
+        "toolCallId": "call_ask",
+        "title": "Which colour?",
+        "kind": "other",
+        "rawInput": {"questions": [{"question": "Which colour?"}]},
+        "_meta": {"claudeCode": {"toolName": "AskUserQuestion"}},
+    }
+    update({"sessionUpdate": "tool_call", "status": "pending", **call})
+    send(
+        {
+            "jsonrpc": "2.0",
+            "id": ELICITATION_REQUEST_ID,
+            "method": "elicitation/create",
+            "params": {
+                "sessionId": SESSION_ID,
+                "toolCallId": "call_ask",
+                "mode": "form",
+                "message": "Which colour?",
+                "requestedSchema": QUESTION_FORM,
+            },
+        }
+    )
+    while True:
+        reply = receive()
+        if reply is None:
+            return
+        if reply.get("id") == ELICITATION_REQUEST_ID:
+            break
+    answer = reply.get("result") or {}
+    directory = Path(WORKING_DIRECTORIES.get(SESSION_ID) or ".")
+    (directory / "answer.json").write_text(json.dumps(answer), encoding="utf-8")
+    update(
+        {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": f"Answered: {answer.get('action')}."},
+        }
+    )
+    respond(message_id, {"stopReason": "end_turn"})
+
+
 def run_turn(message_id: Any, options: set[str]) -> None:
     """One prompt turn: some updates, maybe a question, then a stop reason."""
     response_file = os.environ.get("FAKE_AGENT_RESPONSE_FILE")
@@ -292,6 +378,9 @@ def main() -> int:
         message_id = message.get("id")
 
         if method == "initialize":
+            CLIENT_CAPABILITIES.update(
+                (message.get("params") or {}).get("clientCapabilities") or {}
+            )
             respond(message_id, capabilities(options))
         elif method == "session/new":
             if "--die-on-new-session" in options:
@@ -334,6 +423,8 @@ def main() -> int:
                     "this session is over quota",
                     {"reason": "quota exhausted", "body": "x" * 4000},
                 )
+            elif "--ask" in options:
+                ask_question(message_id)
             elif "--run-directive" in options:
                 run_directive(message_id, message.get("params") or {})
             else:

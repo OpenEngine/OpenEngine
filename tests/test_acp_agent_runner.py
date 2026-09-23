@@ -13,12 +13,15 @@ separately below from what reaches the agent.
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from engine.adapters.agent_runner.acp import (
+    CODEX_SANDBOXES,
     READ_ONLY_TOOLS,
     ACPAgentRunner,
     ACPToolsUnsupportedError,
@@ -35,12 +38,21 @@ from engine.domain import (
     Role,
 )
 from engine.domain.tools import ToolSpec
+from engine.adapters.agent_runner.acp.questions import (
+    content_from_answers,
+    questions_from_form,
+)
 from engine.ports import (
     ApprovalRequest,
+    ApprovalResponse,
     InteractiveMcpAgentRunner,
     McpServerConfig,
     ResponseStyle,
     StreamingAgentRunner,
+    UserInputAnswer,
+    UserInputOption,
+    UserInputQuestion,
+    UserInputResponse,
 )
 from engine.ports.permissions import ApprovalCapability
 from provider_fakes import DIRECTIVE
@@ -203,21 +215,205 @@ def test_a_profile_with_tool_grants_is_refused(tmp_path) -> None:
         )
 
 
+# --- questions ---------------------------------------------------------------
+
+ASKING_COMMAND = (sys.executable, str(FAKE_AGENT), "--ask")
+
+
+def _ask(tmp_path: Path, answer: ApprovalResponse | None):
+    """One turn in which the agent asks which colour, and what it was told."""
+    runner = claude_acp_runner(command=ASKING_COMMAND, working_directory=str(tmp_path))
+    asked: list[ApprovalRequest] = []
+
+    async def respond(request: ApprovalRequest) -> ApprovalResponse:
+        asked.append(request)
+        assert answer is not None
+        return answer
+
+    run = (
+        runner.run_turn(AgentRunId("run-1"), PROFILE, (Message.user("ask me"),))
+        if answer is None
+        else runner.run_turn_interactive(
+            AgentRunId("run-1"), PROFILE, (Message.user("ask me"),), respond
+        )
+    )
+    turn = asyncio.run(run)
+    written = tmp_path / "answer.json"
+    return turn, asked, json.loads(written.read_text()) if written.exists() else None
+
+
+def test_an_agent_s_question_reaches_the_user_and_their_answer_the_agent(
+    tmp_path,
+) -> None:
+    turn, asked, answered = _ask(
+        tmp_path,
+        UserInputResponse(answers=(UserInputAnswer("question_0", ("Red",)),)),
+    )
+
+    [request] = asked
+    assert request.kind is ApprovalKind.USER_INPUT
+    assert request.requires_human
+    assert request.tool_name == "AskUserQuestion"
+    assert request.tool_call_id == "run-1:call_ask"
+    assert request.allowed_decisions == (ApprovalDecision.CANCEL,)
+    # The free-text field is the question's "other" answer, not a question.
+    assert request.questions == (
+        UserInputQuestion(
+            question_id="question_0",
+            header="Colour",
+            question="Which colour?",
+            options=(UserInputOption("Red", "Warm"), UserInputOption("Blue")),
+            allows_other=True,
+        ),
+    )
+    assert answered == {"action": "accept", "content": {"question_0": "Red"}}
+    assert turn.message.content == "Answered: accept."
+
+
+def test_an_answer_none_of_the_options_cover_is_the_other_answer(tmp_path) -> None:
+    _, _, answered = _ask(
+        tmp_path,
+        UserInputResponse(answers=(UserInputAnswer("question_0", ("Green",)),)),
+    )
+
+    assert answered == {"action": "accept", "content": {"question_0_custom": "Green"}}
+
+
+def test_a_question_the_user_cancels_is_cancelled(tmp_path) -> None:
+    _, _, answered = _ask(tmp_path, ApprovalDecision.CANCEL)
+
+    assert answered == {"action": "cancel"}
+
+
+def test_a_turn_with_nobody_to_ask_is_not_asked(tmp_path) -> None:
+    turn, _, answered = _ask(tmp_path, None)
+
+    assert answered is None
+    assert turn.message.content == "Nobody to ask."
+
+
+def test_codex_s_questions_read_the_same_as_claude_s() -> None:
+    """codex-acp titles a field with the question and describes it with the header."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "scope": {
+                "type": "string",
+                "title": "Which files?",
+                "description": "Scope",
+                "_meta": {"codex": {"isOther": True, "isSecret": False}},
+                "oneOf": [
+                    {"const": "All", "title": "All"},
+                    {"const": "None of the above", "title": "None of the above"},
+                ],
+            },
+            "scope_note": {
+                "type": "string",
+                "_meta": {"codex": {"questionId": "scope", "role": "user_note"}},
+            },
+        },
+        "required": ["scope"],
+    }
+
+    [question] = questions_from_form("Codex needs your input to continue.", schema)
+
+    assert (question.question_id, question.header, question.question) == (
+        "scope",
+        "Scope",
+        "Which files?",
+    )
+    assert [option.label for option in question.options] == ["All", "None of the above"]
+    assert content_from_answers(
+        schema,
+        UserInputResponse(answers=(UserInputAnswer("scope", ("All", "src only")),)),
+    ) == {"scope": "All", "scope_note": "src only"}
+
+
 # --- what each agent is configured with -------------------------------------
 
 
-def test_codex_runs_under_the_strictest_codex_acp_preset() -> None:
-    """codex-acp has no read-only sandbox; its `read-only` preset asks a person."""
-    for sandbox in ("read-only", "workspace-write"):
-        runner = codex_acp_runner(sandbox=sandbox)
-        assert runner.provider.env["INITIAL_AGENT_MODE"] == "read-only"
-        assert "CODEX_CONFIG" not in runner.provider.env
-    assert (
-        codex_acp_runner(sandbox="danger-full-access").provider.env["INITIAL_AGENT_MODE"]
-        == "agent-full-access"
-    )
+@pytest.mark.parametrize("sandbox", CODEX_SANDBOXES)
+def test_codex_runs_in_the_sandbox_engine_names(sandbox: str) -> None:
+    """codex-acp is handed a Codex that holds every turn to `sandbox`."""
+    runner = codex_acp_runner(sandbox=sandbox)
+    env = runner.provider.env
+
+    # A person reviews, never a model on their behalf.
+    assert env["INITIAL_AGENT_MODE"] == "read-only"
+    assert env["ENGINE_CODEX_SANDBOX"] == sandbox
+    assert os.access(env["CODEX_PATH"], os.X_OK)
+    assert "ENGINE_CODEX_PATH" not in env
+    assert "CODEX_CONFIG" not in env
+
+
+def test_an_unknown_codex_sandbox_is_refused() -> None:
     with pytest.raises(ValueError):
         codex_acp_runner(sandbox="anything")
+
+
+def test_the_operator_s_codex_still_runs_under_the_sandbox() -> None:
+    env = codex_acp_runner(env={"CODEX_PATH": "/opt/codex"}).provider.env
+
+    assert env["ENGINE_CODEX_PATH"] == "/opt/codex"
+    assert env["CODEX_PATH"] != "/opt/codex"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake Codex is a shell script")
+@pytest.mark.parametrize(
+    ("sandbox", "policy"),
+    [
+        ("read-only", {"type": "readOnly"}),
+        ("workspace-write", {"type": "workspaceWrite"}),
+        ("danger-full-access", {"type": "dangerFullAccess"}),
+    ],
+)
+def test_every_codex_turn_is_pinned_to_the_sandbox_and_asks(
+    sandbox: str, policy: dict[str, str], tmp_path: Path
+) -> None:
+    """What codex-acp sends is rewritten before Codex sees it.
+
+    Its `read-only` preset writes anywhere in the worktree unasked and its
+    full-access preset never asks; neither reaches Codex. Driven through the
+    launcher codex-acp is given, with a Codex that writes down what it received.
+    """
+    received = tmp_path / "received.jsonl"
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" > {received}.argv\n'
+        f"exec cat >> {received}\n"
+    )
+    fake_codex.chmod(0o755)
+    runner = codex_acp_runner(sandbox=sandbox, env={"CODEX_PATH": str(fake_codex)})
+    preset = {
+        "approvalPolicy": "never",
+        "approvalsReviewer": "user",
+        "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": []},
+    }
+    sent = [
+        {"id": 1, "method": "thread/start", "params": {"cwd": str(tmp_path)}},
+        {"id": 2, "method": "turn/start", "params": {"threadId": "t", **preset}},
+    ]
+
+    done = subprocess.run(
+        [runner.provider.env["CODEX_PATH"], "app-server"],
+        input="".join(json.dumps(message) + "\n" for message in sent),
+        env={**os.environ, **runner.provider.env},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert Path(f"{received}.argv").read_text().strip() == "app-server"
+    thread_start, turn_start = map(json.loads, received.read_text().splitlines())
+    assert thread_start == sent[0]
+    assert turn_start["params"] == {
+        "threadId": "t",
+        "approvalPolicy": "on-request",
+        "approvalsReviewer": "user",
+        "sandboxPolicy": policy,
+    }
 
 
 def test_codex_attribution_and_model_reach_the_session() -> None:
