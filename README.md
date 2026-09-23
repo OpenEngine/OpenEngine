@@ -6,7 +6,7 @@ OpenEngine is a graph execution engine that meets you where you work.
 
 We give you an out-of-the-box configuration to get you up and running. The out-of-the-box graph lives [here](./workflows/implementation_review_graph.py) and looks like this:
 ```
-Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change 
+Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ```
 ## Getting started
 
