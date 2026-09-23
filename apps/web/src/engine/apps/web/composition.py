@@ -38,7 +38,7 @@ from engine.adapters.communications.slack import (
 )
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
-    GitHubOAuthTransport,
+    GitHubCliTransport,
 )
 from engine.adapters.source_control.gitlab import GitLabSourceControl
 from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport
@@ -156,18 +156,17 @@ def build_capabilities(
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    # Agent API credentials are deployment configuration, independent of UI
-    # connections and provider preferences. Never fall back to a personal token.
-    logging.getLogger(__name__).log(
-        logging.INFO if settings.github_token else logging.WARNING,
-        "source_control composition=web github_identity=service credential=settings.github_token configured=%s",
-        bool(settings.github_token),
+    # The host's `gh auth` login is the only credential for agent GitHub
+    # actions. Browser login identifies the UI user and never reaches here;
+    # neither do Settings device-flow tokens or GITHUB_TOKEN.
+    logging.getLogger(__name__).info(
+        "source_control composition=web github_identity=gh-cli credential=gh auth"
     )
     github = GitHubSourceControl(
-        settings.github_token,
+        "",
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
-        transport=GitHubOAuthTransport(settings.github_token),
+        transport=GitHubCliTransport(),
     )
 
     def _gitlab_origin() -> str:
@@ -234,7 +233,7 @@ def build_capabilities(
     else:
         source_control = RoutingSourceControl(
             settings.source_control_preferences,
-            # Both GitHub choices use the service credential for agent actions.
+            # Both GitHub choices use the gh CLI login for agent actions.
             github,
             github,
             gitlab,

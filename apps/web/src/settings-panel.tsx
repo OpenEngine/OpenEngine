@@ -536,9 +536,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         <section className="settings-section">
           <h2 className="settings-section-title">GitHub</h2>
           <p className="settings-status settings-status-muted">
-            Agent pull requests and comments use the server’s configured worker
-            account. Changing your personal connection below leaves that account
-            unchanged.
+            Agent pull requests and comments use the server’s GitHub CLI login
+            (<code>gh auth status</code>). Signing in to OpenEngine only
+            identifies you, and nothing below changes the agents’ account.
           </p>
 
           <fieldset className="settings-provider-choice">
