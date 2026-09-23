@@ -175,7 +175,6 @@ def test_the_application_can_be_built_from_configuration_alone(
     monkeypatch.chdir(tmp_path)
 
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
-    monkeypatch.setenv("ENGINE_CONFIG_DIR", str(tmp_path))
     if show_projects is not None:
         (tmp_path / "engine.toml").write_text(
             f"show_projects = {str(show_projects).lower()}\n"
@@ -191,14 +190,13 @@ def test_the_application_can_be_built_from_configuration_alone(
     answered = asyncio.run(ask())
     assert answered.status_code == 200
     assert answered.json()["showProjects"] is (show_projects is not False)
-    assert answered.json()["repositories"] == []
+    assert answered.json()["repositories"] == [{"name": f". ({tmp_path})", "path": "."}]
     assert answered.json()["runners"] == [
         {"id": "codex", "implementation": "CodexAgentRunner"},
         {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
     ]
-    # State is independent of the directory from which engine-web starts.
-    assert (tmp_path / "data/conversations.sqlite3").exists()
-    assert not (tmp_path / "conversations.sqlite3").exists()
+    # Composed from the working directory, exactly as `engine-web` composes it.
+    assert (tmp_path / "conversations.sqlite3").exists()
     assert app.state.milestone_scoper is not None
 
 

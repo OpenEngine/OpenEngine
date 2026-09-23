@@ -16,8 +16,6 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from engine.apps.web.paths import config_directory
-
 from dotenv import dotenv_values
 
 from engine.runtime import LoadedEngineConfig
@@ -57,7 +55,7 @@ def github_webhook_config(loaded: LoadedEngineConfig) -> GitHubWebhookConfig | N
     reporting that is more use than silently behaving as if neither was written.
     """
 
-    secret_file = (loaded.path.parent if loaded.path else config_directory()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
     config = GitHubWebhookConfig(loaded.config.github.repository, secret_file)
     if not config.repository and not config.current_secret():
         return None

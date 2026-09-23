@@ -1604,7 +1604,7 @@ def create_app(
                 "repositories": [
                     {"name": name, "path": str(Path(path).expanduser().resolve())}
                     for name, path in (repos or {}).items()
-                ],
+                ] or [{"name": f". ({Path.cwd()})", "path": "."}],
                 # Only the graphs this process can actually start are here --
                 # see `offered_graphs` -- because an entry nobody could run
                 # would be a choice that fails after it was made. Their

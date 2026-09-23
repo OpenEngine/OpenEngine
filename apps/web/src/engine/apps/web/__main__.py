@@ -9,8 +9,6 @@ which constructs the same application again in every fresh child process.
 """
 
 import argparse
-import logging
-from logging.handlers import RotatingFileHandler
 from importlib.resources import files
 import os
 import sys
@@ -21,7 +19,6 @@ import uvicorn
 from dotenv import dotenv_values
 from starlette.applications import Starlette
 
-from engine.apps.web.paths import config_directory, log_directory
 from engine.apps.web.api import create_app
 from engine.apps.web.composition import (
     Settings,
@@ -127,7 +124,7 @@ def _webhook_secret_reader(webhook: GitHubWebhookConfig | None) -> Callable[[], 
 
 
 def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None:
-    secret_file = (loaded.path.parent if loaded.path else config_directory()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
     values = dotenv_values(secret_file, interpolate=False)
     client_id = os.environ.get(
         "ENGINE_GITHUB_LOGIN_CLIENT_ID", loaded.config.github_login_client_id
@@ -156,7 +153,7 @@ def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
     startup rather than silently admitting nothing.
     """
 
-    secret_file = (loaded.path.parent if loaded.path else config_directory()) / ".env"
+    secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
 
     def read() -> str:
         if "ENGINE_SERVICE_TOKEN" in os.environ:
@@ -185,18 +182,15 @@ def read_configuration(
     and because "what a restart is for" has to be one list: the development
     server watches exactly what this function reads.
     """
-    selected = config_path or os.environ.get("ENGINE_CONFIG")
-    if selected is None:
-        default = config_directory() / "engine.toml"
-        loaded = load_engine_config(default) if default.is_file() else LoadedEngineConfig()
-    else:
-        loaded = load_engine_config(selected)
+    loaded = load_engine_config(config_path)
     settings = _settings(loaded)
-    directory = loaded.workflows_directory or Path(
-        str(files("engine.apps.web").joinpath("default_workflows"))
-    )
-    catalog = load_workflow_catalog(
-        directory, session_config=claude_session_config_for(settings)
+    catalog = (
+        load_workflow_catalog(
+            loaded.workflows_directory,
+            session_config=claude_session_config_for(settings),
+        )
+        if loaded.workflows_directory is not None
+        else None
     )
     return loaded, catalog
 
@@ -246,10 +240,7 @@ def compose_app(
         milestone_scoper=build_milestone_scoper(settings),
         work_orders=loaded.config.work_orders,
         show_projects=loaded.config.show_projects,
-        repos={
-            name: str((loaded.path.parent if loaded.path else config_directory()) / Path(path).expanduser())
-            for name, path in loaded.config.repos.items()
-        },
+        repos=loaded.config.repos,
     )
 
 
@@ -266,7 +257,6 @@ def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the OpenEngine web interface.")
     parser.add_argument("--config", help="read Engine settings from this TOML file")
-    parser.add_argument("--port", type=int, default=8000, help="loopback HTTP port (default: 8000)")
     parser.add_argument("--check", action="store_true", help="report wiring and exit")
     args = parser.parse_args(argv)
     try:
@@ -281,13 +271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
         return 2
-    handler = RotatingFileHandler(log_directory() / "engine-web.log", maxBytes=5_000_000, backupCount=3)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    logging.getLogger().addHandler(handler)
     print(describe_loaded_config(loaded))
-    if not loaded.config.workflows.directory:
-        print("workflows: bundled implementation/review")
-    uvicorn.run(app, host=settings.host, port=args.port)
+    uvicorn.run(app, host=settings.host, port=settings.port)
     return 0
 
 

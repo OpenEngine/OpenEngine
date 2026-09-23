@@ -11,7 +11,7 @@ from engine.runtime.config import CONFIG_ENVIRONMENT_VARIABLE
 
 
 @pytest.fixture(autouse=True)
-def _engine_config_is_not_inherited(monkeypatch, tmp_path):
+def _engine_config_is_not_inherited(monkeypatch):
     """Keep an exported ``ENGINE_CONFIG`` out of every test.
 
     A developer with Engine running has this set to their own checkout's
@@ -23,6 +23,3 @@ def _engine_config_is_not_inherited(monkeypatch, tmp_path):
     """
 
     monkeypatch.delenv(CONFIG_ENVIRONMENT_VARIABLE, raising=False)
-    monkeypatch.setenv("ENGINE_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("ENGINE_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("ENGINE_LOG_DIR", str(tmp_path / "logs"))

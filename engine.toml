@@ -2,6 +2,44 @@ attribution = false
 default_branch = "main"
 # Hide the Projects accordion; set true to show it (defaults to true if omitted).
 show_projects = false
+public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
+github_login_client_id = "Iv23ligesj8xRFa2Iffc"
+github_login_redirect_uri = "https://sheas-mac-mini.taileb7fdb.ts.net/api/auth/github/callback"
+
+# Repository names and local checkout paths offered when creating a WorkOrder.
+# Paths expand ~ and resolve relative to the server's working directory.
+[repos]
+"OpenEngine/OpenEngine" = "~/code/OpenEngine"
+"n8n" = "~/code/n8n"
+
+# Whose GitHub events this deployment answers. The secret that signs those
+# deliveries is not written here -- engine.toml is committed -- it lives in a
+# server-local `.env` beside it. See docs/github-webhooks.md.
+[github]
+repository = "OpenEngine/OpenEngine"
+# Explicit aliases of the SAME forge, mapped to its transport authority (host and optional port).
+# Example: { "github-web.example" = "github-api.example" }
+# Aliases are accepted only by the named transport; this does not add forges.
+# Explicitly include the host of OpenEngine/OpenEngine.
+host_aliases = { "github.com" = "github.com" }
+
+[communications]
+provider = "slack"
+# #openengine-bot, by id so the post skips the name lookup.
+channel = "C0BUZP7GR0V"
+
+# What pinging the bot starts. A mention is a sentence, so the answers the web
+# form collects alongside the prompt come from here instead. See
+# docs/work-orders-from-slack.md for the Slack app side of it.
+[work_orders]
+repository = "."
+workflow = "implementation-review-rerank"
+
+[orchestrator]
+host = "127.0.0.1:7233"
+database = ".engine/temporal.sqlite3"
+health_check_interval = 5.0
+
 [claude]
 output_style = "concise"
 

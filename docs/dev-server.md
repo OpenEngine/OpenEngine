@@ -220,3 +220,19 @@ subprocesses are not:
 2. Restart deferral while runs are in flight — only if phase 1's caveat is
    actually felt.
 3. The same treatment for `engine-worker` and `engine-control-server`.
+
+## Packaging the frontend
+
+Build the client before building the web wheel:
+
+```sh
+npm --prefix apps/web ci
+npm --prefix apps/web run build
+uv build --package engine-web --wheel
+```
+
+The wheel includes the generated frontend and serves it through Python package
+resources. Building a wheel without the frontend fails with an actionable error;
+editable installs still work before a frontend build. This is only the frontend
+packaging increment: a standalone installer, versioned release pipeline, bundled
+default workflow, and portable configuration/state locations remain deferred.

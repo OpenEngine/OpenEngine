@@ -10,18 +10,24 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ```
 ## Getting started
 
-For an installation without Python, Node.js, or a source checkout, follow the
-[packaged release installation guide](docs/installation.md). Then start the UI
-from any directory with `~/.local/bin/engine-web` and visit
-`http://127.0.0.1:8000`. Agent CLIs and credentials are only needed when you use
-agent capabilities.
+Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
-For development from source, install uv and Node.js, then:
+OpenEngine uses your locally installed codex and claude CLI. This means that it can utilize your subscription limits instead of being provided an API key. Make sure your claude or codex CLI are installed and authenticated. 
+
+First, clone the repo:
 ```bash
-uv sync --all-packages
-npm --prefix apps/web ci
+cd OpenEngine
+uv sync --all-packages  # install all workspace packages, editable
+npm --prefix apps/web install
 npm --prefix apps/web run build
-uv run engine-web
+```
+Then, run it by pointing it at your directory:
+```bash
+uv run \
+  --project /path/to/openengine \
+  --directory /path/to/your/project \
+  --all-packages \
+  engine-web
 ```
 While working on OpenEngine itself, run the development server instead:
 ```bash
