@@ -39,6 +39,7 @@ from collections.abc import (
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from html import escape
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, urlsplit
@@ -1102,6 +1103,7 @@ def create_app(
     run_reader = RunReader(session.state_store, catalog)
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
+    graph_agent_reports: set[RunId] = set()
     # A pull request merged while its work order was still working towards its
     # human review. GitHub sends the merge once, so it is kept until the run
     # asks for that review rather than dropped for having arrived early.
@@ -1112,7 +1114,12 @@ def create_app(
     deleting_runs: set[RunId] = set()
 
     async def notify_graph_event(state: RunState, event: RuntimeEvent) -> None:
-        """Report lifecycle events without making delivery failure fail the graph."""
+        """Transcript owns agent text; lifecycle owns starts, actions and errors.
+
+        Graph agents are not offered update_status: the visible transcript is
+        the single progress/report path. Textless runs get a completion notice.
+        Never reconstruct agent text from tool payloads or raw provider output.
+        """
         text = ""
         links: list[MessageLink] = []
         mention = False
@@ -1124,7 +1131,19 @@ def create_app(
         )
         node = topology.node(event.node_id) if topology and event.node_id else None
         label = node.name if node else str(event.node_id or "Workflow")
-        if event.kind is EventKind.NODE_STARTED:
+        if event.kind is EventKind.RUN_FORKED:
+            graph_agent_reports.discard(state.run_id)
+            return
+        if event.kind is EventKind.TRANSCRIPT:
+            if event.payload.get("role", "assistant") != "assistant":
+                return
+            report = event.payload.get("text")
+            if not isinstance(report, str) or not report:
+                return
+            # Preserve UI redactions and escape Slack mention/link syntax.
+            text = escape(report, quote=False)
+            graph_agent_reports.add(state.run_id)
+        elif event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
         elif event.kind is EventKind.APPROVAL_REQUESTED:
             if event.payload.get("autoApproved"):
@@ -1142,22 +1161,37 @@ def create_app(
                 text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
             mention = True
         elif event.kind is EventKind.RUN_FAILED:
+            graph_agent_reports.discard(state.run_id)
             text = f"Work order failed: {event.payload.get('error', 'Unknown error')}"
             mention = True
         elif event.kind is EventKind.RUN_FINISHED:
+            if state.run_id in graph_agent_reports:
+                graph_agent_reports.discard(state.run_id)
+                return
             text = "Work order finished."
         if text:
             link = run_notifier.work_order_link(state)
             if link:
                 links.append(link)
-            await run_notifier.announce(
-                state, text, links=links, mention=mention,
-            )
+            try:
+                await run_notifier.deliver(
+                    state, text, links=links, mention=mention,
+                )
+            except Exception:
+                # Exceptions may contain credentials or request bodies. Record
+                # only a fixed diagnostic in OE's replayable event feed.
+                await graph_events.append(RuntimeEvent(
+                    run_id=state.run_id, kind=EventKind.NOTIFICATION_FAILED,
+                    node_id=event.node_id, execution_id=event.execution_id,
+                    payload={"error": "Slack notification could not be delivered.",
+                             "eventKind": event.kind.value},
+                ))
 
     async def graph_notifications(event: RuntimeEvent) -> None:
         if event.kind not in (
             EventKind.NODE_STARTED, EventKind.APPROVAL_REQUESTED,
             EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
+            EventKind.TRANSCRIPT, EventKind.RUN_FORKED,
         ):
             return
         async with graph_notification_lock:
