@@ -30,6 +30,9 @@ FALLBACK_IDENTITY = ("engine", "engine@localhost")
 #: What `detach` records when it finds work that was never committed.
 SNAPSHOT_MESSAGE = "engine: snapshot of uncommitted work before detaching"
 
+#: Worktree config naming who `_credit` credits, for commits that skip its hook.
+CO_AUTHOR_SETTING = "engine.coAuthor"
+
 
 class GitWorktreeWorkspaceProvider:
     """Provisions isolated checkouts as git worktrees under a root directory.
@@ -279,15 +282,21 @@ async def _snapshot(root_path: Path) -> None:
     # `-c` outranks the config file, so the fallback identity is only passed
     # when the repository has none of its own to be outranked.
     identity: tuple[str, ...] = ()
-    if not await _configured(root_path, "user.email"):
+    if not await _setting(root_path, "user.email"):
         name, email = FALLBACK_IDENTITY
         identity = ("-c", f"user.name={name}", "-c", f"user.email={email}")
+    # Skipping hooks skips the crediting one too, so the snapshot, which holds
+    # the agent's work, carries the trailer itself.
+    credit: tuple[str, ...] = ()
+    if co_author := await _setting(root_path, CO_AUTHOR_SETTING):
+        credit = ("--trailer", f"Co-authored-by: {co_author}")
     await _git(
         str(root_path),
         *identity,
         "commit",
         # A snapshot is bookkeeping; the repository's hooks did not ask for it.
         "--no-verify",
+        *credit,
         "--message",
         SNAPSHOT_MESSAGE,
     )
@@ -326,6 +335,7 @@ async def _credit(root_path: Path, co_author: str) -> None:
     )
     await _git(path, "config", "extensions.worktreeConfig", "true")
     await _git(path, "config", "--worktree", "core.hooksPath", str(hooks))
+    await _git(path, "config", "--worktree", CO_AUTHOR_SETTING, name)
 
 
 def _executable(path: Path) -> bool:
@@ -337,7 +347,7 @@ def _write_hook(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-async def _configured(root_path: Path, setting: str) -> bool:
+async def _setting(root_path: Path, setting: str) -> str:
     process = await asyncio.create_subprocess_exec(
         "git",
         "-C",
@@ -349,7 +359,7 @@ async def _configured(root_path: Path, setting: str) -> bool:
         stderr=asyncio.subprocess.DEVNULL,
     )
     stdout, _ = await process.communicate()
-    return process.returncode == 0 and bool(stdout.strip())
+    return stdout.decode(errors="replace").strip() if process.returncode == 0 else ""
 
 
 async def _git(repository: str, *arguments: str) -> str:

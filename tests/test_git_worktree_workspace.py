@@ -392,6 +392,21 @@ def test_reattaching_keeps_crediting_the_co_author(tmp_path: Path) -> None:
     assert f"Co-authored-by: {_CO_AUTHOR}" in message
 
 
+def test_the_detach_snapshot_credits_the_co_author(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(
+        provider.provision(str(repository), "HEAD", co_author=_CO_AUTHOR)
+    )
+    Path(workspace.root_path, "agent.md").write_text("what the agent did\n")
+
+    asyncio.run(provider.detach(workspace.workspace_id))
+
+    message = _git(repository, "log", "-1", "--format=%B", workspace.ref)
+    assert message.count(f"Co-authored-by: {_CO_AUTHOR}") == 1
+
+
 def test_no_co_author_adds_no_trailer(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     _repository(repository)
