@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -344,6 +345,19 @@ def test_codex_runs_in_the_sandbox_engine_names(sandbox: str) -> None:
     assert os.access(env["CODEX_PATH"], os.X_OK)
     assert "ENGINE_CODEX_PATH" not in env
     assert "CODEX_CONFIG" not in env
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_the_codex_launcher_is_private_to_this_user() -> None:
+    """Not at a shared, guessable path another user could have claimed first."""
+    launcher = Path(codex_acp_runner().provider.env["CODEX_PATH"])
+
+    assert launcher.parent != Path(tempfile.gettempdir()) / "engine-codex-policy"
+    assert not launcher.is_symlink()
+    for path in (launcher, launcher.parent):
+        info = path.lstat()
+        assert info.st_uid == os.getuid()
+        assert info.st_mode & 0o077 == 0
 
 
 def test_an_unknown_codex_sandbox_is_refused() -> None:

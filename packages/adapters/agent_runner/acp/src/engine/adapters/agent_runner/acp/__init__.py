@@ -31,12 +31,13 @@ what each adapter reads: a sandbox enforced under codex-acp for Codex (see
 """
 
 import asyncio
+import atexit
 import contextlib
 import functools
-import hashlib
 import json
 import os
 import shlex
+import shutil
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -914,24 +915,22 @@ def _codex_policy_launcher() -> str:
     """An executable that runs `codex_policy` under this interpreter.
 
     `CODEX_PATH` is started as a program with `app-server` as its only argument,
-    so it has to be a file. Written once per interpreter, and atomically, since
-    two processes may race to write the same one.
+    so it has to be a file. It is written once per process into a directory
+    `mkdtemp` creates -- unpredictably named, and readable only by this user --
+    rather than a fixed path under a shared temp directory, where anyone who got
+    there first could put their own program in its place.
     """
     interpreter = sys.executable
     module = "engine.adapters.agent_runner.acp.codex_policy"
     if os.name == "nt":
-        suffix, body = ".cmd", f'@"{interpreter}" -m {module} %*\r\n'
+        name, body = "codex.cmd", f'@"{interpreter}" -m {module} %*\r\n'
     else:
-        suffix, body = "", f'#!/bin/sh\nexec {shlex.quote(interpreter)} -m {module} "$@"\n'
-    digest = hashlib.sha256(body.encode()).hexdigest()[:16]
-    directory = Path(tempfile.gettempdir()) / "engine-codex-policy"
-    directory.mkdir(parents=True, exist_ok=True)
-    launcher = directory / f"codex-{digest}{suffix}"
-    if not launcher.is_file():
-        staged = directory / f".{launcher.name}.{os.getpid()}"
-        staged.write_text(body, encoding="utf-8")
-        staged.chmod(0o755)
-        os.replace(staged, launcher)
+        name, body = "codex", f'#!/bin/sh\nexec {shlex.quote(interpreter)} -m {module} "$@"\n'
+    directory = Path(tempfile.mkdtemp(prefix="engine-codex-policy-"))
+    atexit.register(shutil.rmtree, directory, ignore_errors=True)
+    launcher = directory / name
+    launcher.write_text(body, encoding="utf-8")
+    launcher.chmod(0o700)
     return str(launcher)
 
 
