@@ -6,7 +6,7 @@ const REPO = 'https://github.com/OpenEngine/OpenEngine';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'OpenEngine',
-  tagline: 'Your SDLC, defined as a graph.',
+  tagline: 'Your Software Factory',
   favicon: 'favicon.svg',
   url: 'https://openengine.sh',
   baseUrl: '/',
@@ -48,7 +48,7 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
-      colorMode: {respectPrefersColorScheme: true},
+      colorMode: {defaultMode: 'dark', respectPrefersColorScheme: false},
       navbar: {
         title: 'OpenEngine',
         logo: {alt: '', src: 'favicon.svg'},

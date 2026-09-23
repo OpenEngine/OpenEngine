@@ -77,14 +77,14 @@ export default function Home() {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title="Your SDLC, defined as a graph"
+      title="Your Software Factory"
       description="OpenEngine runs your software development lifecycle as a LangGraph workflow, on the Claude Code and Codex subscriptions you already have.">
       <main className={styles.landing}>
         <div className={styles.wrap}>
           <div className={styles.hero}>
             <p className={`${styles.eyebrow} ${styles.rise}`}>Open source · Apache-2.0</p>
             <h1 className={styles.rise}>
-              Your SDLC, defined as a <em>graph</em>.
+              Your Software <em>Factory</em>
             </h1>
             <p className={`${styles.lede} ${styles.rise}`}>
               Write your development lifecycle once, in LangGraph. OpenEngine runs every change through it on Claude
