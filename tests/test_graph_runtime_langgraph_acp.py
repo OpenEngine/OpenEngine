@@ -39,7 +39,7 @@ from engine.domain import (
     ApprovalDecision, ApprovalId, ApprovalKind, RunFailed, RunId, StepCompleted,
     WorkspaceId,
 )
-from engine.graph_runtime import EventLog, GraphId, NodeId, RuntimeEvent
+from engine.graph_runtime import RunStatus, EventLog, GraphId, NodeId, RuntimeEvent
 from engine.graph_runtime_langgraph import (
     LangGraphDefinition,
     LangGraphRuntime,
@@ -598,6 +598,7 @@ def test_run_bound_tools_cross_acp_and_mcp_processes_and_rebind_on_resume(
             "clarify",
             "git_subcommand",
             "open_pull_request",
+            "take_over_pull_request",
         ],
         [
             "complete_step",
@@ -605,6 +606,7 @@ def test_run_bound_tools_cross_acp_and_mcp_processes_and_rebind_on_resume(
             "clarify",
             "git_subcommand",
             "open_pull_request",
+            "take_over_pull_request",
         ],
         [
             "complete_step",
@@ -612,6 +614,7 @@ def test_run_bound_tools_cross_acp_and_mcp_processes_and_rebind_on_resume(
             "clarify",
             "git_subcommand",
             "open_pull_request",
+            "take_over_pull_request",
         ],
     ]
     assert len(set(session["mcp_ports"])) == 2
@@ -2395,134 +2398,100 @@ def test_a_ci_fix_step_reports_only_the_pull_request_its_run_opened(
     assert reported == "https://github.com/acme/api/pull/407"
 
 
-@pytest.mark.parametrize("held_by", [None, "run-0"])
-def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
-    tmp_path: Path, held_by: str | None,
-) -> None:
-    """End to end over a real store, for a step that opened its pull request
-    with `gh pr create`: the forge vouches for the report and the run claims
-    it -- unless another run already holds it, which keeps it."""
-
+@pytest.mark.parametrize("status", [None, RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL,
+                                    RunStatus.FAILED, RunStatus.COMPLETED, "cancelled"])
+def test_explicit_pull_request_takeover_checks_owner_and_records_handoff(tmp_path, status):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
     from engine.graph_runtime_langgraph.store import PullRequestRecord
     from engine.runtime.terminal_mcp import _mcp_response
 
     url = "https://github.com/acme/repository/pull/7"
 
-    class ShellOpenedSourceControl(RecordingSourceControl):
-        did_push = False
+    class Source(RecordingSourceControl):
+        async def view_change_request(self, workspace, number):
+            return ChangeRequest(number=number, title="Fix", state="open", body="",
+                                 author="human", url=url, head_ref="feature", head_sha="abc123", base_ref="main")
 
-        async def run_git(
-            self, workspace_id: WorkspaceId, arguments: Sequence[str]
-        ) -> GitResult:
-            if tuple(arguments[:1]) == ("push",):
-                self.did_push = True
-                return GitResult(
-                    0,
-                    "",
-                    "To https://github.com/acme/repository.git\n"
-                    " * [new branch]      agent/greeting -> agent/greeting\n",
-                )
-            if arguments[0] == "rev-parse":
-                return GitResult(0, "abc123", "")
-            if arguments[0] == "remote":
-                return GitResult(0, "https://github.com/acme/repository.git\n", "")
-            raise AssertionError(f"unexpected Git transport read: {arguments}")
-
-        async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
-            assert project == "acme/repository"
-            return {"agent/greeting": "abc123"} if self.did_push else {}
-
-        async def view_change_request(
-            self, _workspace_id: WorkspaceId, number: int
-        ) -> ChangeRequest:
-            return ChangeRequest(
-                number=number, title="Add a greeting", state="open", body="",
-                author="OpenEngineBot", url=url, head_ref="agent/greeting",
-                head_sha="abc123", base_ref="main", head_is_same_repository=True,
-            )
-
-    class Runtime:
-        def __init__(self, store: Any) -> None:
-            self.store = store
-            self.source_control = ShellOpenedSourceControl()
-
-    class Execution:
-        def __init__(self, store: Any) -> None:
-            self.runtime = Runtime(store)
-            self.run_id = RunId("run-1")
-            self.execution_id = "task-1"
-            self.node_id = NodeId(IMPLEMENTATION)
-
-    async def approve_push(request: Any) -> ApprovalDecision:
-        assert request.command == "git push origin agent/greeting"
-        return ApprovalDecision.ACCEPT
-
-    async def scenario() -> tuple[dict[str, Any], Any, Any]:
+    async def scenario():
         store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
-        if held_by is not None:
+        previous = RunId("old") if status is not None else None
+        stalled_runtime = None
+        if status == "cancelled":
+            from langgraph.checkpoint.memory import InMemorySaver
+
+            async def stalled(state):
+                await asyncio.Event().wait()
+                return {}
+
+            graph = StateGraph(State)
+            graph.add_node("stalled", stalled)
+            graph.add_edge(START, "stalled")
+            graph.add_edge("stalled", END)
+            stalled_runtime = LangGraphRuntime(LangGraphDefinition(
+                graph_id=GraphId("stalled"), name="Stalled",
+                graph=graph.compile(checkpointer=InMemorySaver()),
+            ), store=store)
+            previous = (await stalled_runtime.start(GraphId("stalled"), {})).run_id
+        if previous:
             await store.remember_pull_request(PullRequestRecord(
-                repository="acme/repository", number=7, run_id=RunId(held_by),
-                opened_at="2026-09-09T17:00:00+00:00", url=url,
+                repository="acme/repository", number=7, run_id=previous,
+                opened_at="2026-09-09T17:00:00Z", url=url,
             ))
-        server = TerminalMcpServer(
-            step_id=IMPLEMENTATION,
-            agent_id=AGENT,
-            required_outputs=("pr_url",),
-            repository_tools=("git_subcommand",),
-        )
-        async with server(
-            {"workspaceId": "ws-graph-run"}, Execution(store), approve_push  # type: ignore[arg-type]
-        ) as bound:
-            arguments = list(bound.config["args"])
-            await _mcp_response(
-                arguments[arguments.index("--host") + 1],
-                int(arguments[arguments.index("--port") + 1]),
-                arguments[arguments.index("--token") + 1],
-                {
-                    "jsonrpc": "2.0",
-                    "id": "push-1",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "git_subcommand",
-                        "arguments": {"arguments": ["push", "origin", "agent/greeting"]},
-                    },
-                },
-                repository_tools=("git_subcommand",),
-            )
-            answer = await _mcp_response(
-                arguments[arguments.index("--host") + 1],
-                int(arguments[arguments.index("--port") + 1]),
-                arguments[arguments.index("--token") + 1],
-                {
-                    "jsonrpc": "2.0",
-                    "id": "complete-1",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "complete_step",
-                        "arguments": {
-                            "outcome": "success",
-                            "summary": "Added the greeting.",
-                            "outputs": {"pr_url": url},
-                        },
-                    },
-                },
-                repository_tools=("git_subcommand",),
-            )
-        owned = await store.pull_requests(RunId("run-1"))
-        holder = await store.run_for_pull_request("acme/repository", 7)
+        runtime = SimpleNamespace(store=store, source_control=Source(),
+                                  snapshot=(stalled_runtime.snapshot if stalled_runtime else
+                                            AsyncMock(return_value=SimpleNamespace(status=status))))
+        execution = SimpleNamespace(runtime=runtime, run_id=RunId("new"),
+                                    execution_id="task", node_id=NodeId(IMPLEMENTATION))
+        server = TerminalMcpServer(step_id=IMPLEMENTATION, agent_id=AGENT,
+                                   required_outputs=("pr_url",))
+        async with server({"workspaceId": "ws"}, execution,
+                          AsyncMock(return_value=ApprovalDecision.ACCEPT)) as bound:
+            args = list(bound.config["args"])
+            assert "take_over_pull_request" in args
+
+            async def call(name, arguments, request_id):
+                response = await _mcp_response(
+                    args[args.index("--host") + 1], int(args[args.index("--port") + 1]),
+                    args[args.index("--token") + 1],
+                    {"jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+                     "params": {"name": name, "arguments": arguments}},
+                    repository_tools=("take_over_pull_request",),
+                )
+                return response["result"]
+
+            report = {"outcome": "success", "summary": "Fixed", "outputs": {"pr_url": url}}
+            assert (await call("complete_step", report, "before"))["isError"]
+            takeover = {"pr_url": url, "expected_owner_run_id": previous, "reason": "Recover work"}
+            if previous:
+                wrong = await call("take_over_pull_request", {**takeover, "expected_owner_run_id": None}, "wrong")
+                assert wrong["isError"]
+            if stalled_runtime:
+                assert (await call("take_over_pull_request", takeover, "still-active"))["isError"]
+                await stalled_runtime.cancel(previous)
+            result = await call("take_over_pull_request", takeover, "takeover")
+            allowed = status in (None, RunStatus.FAILED, RunStatus.COMPLETED, "cancelled")
+            assert (result.get("isError") is not True) is allowed
+            assert await store.run_for_pull_request("acme/repository", 7) == (RunId("new") if allowed else previous)
+            events = store.events_since(RunId("new"))
+            assert len(events) == int(allowed)
+            if allowed:
+                assert events[0].kind is EventKind.PULL_REQUEST_TAKEN_OVER
+                assert events[0].payload["previousRunId"] == previous
+                assert events[0].payload["reason"] == "Recover work"
+                assert not (await call("take_over_pull_request", takeover, "retry")).get("isError")
+                assert len(store.events_since(RunId("new"))) == 1
+                assert not (await call("complete_step", report, "after")).get("isError")
+                if previous:
+                    assert await store.pull_requests(previous) == ()
+        if stalled_runtime:
+            await stalled_runtime.aclose()
         store.close()
-        return answer["result"], owned, holder
+        reopened = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        assert len(reopened.events_since(RunId("new"))) == int(allowed)
+        reopened.close()
 
-    result, owned, holder = asyncio.run(scenario())
-
-    if held_by is None:
-        assert result.get("isError") is not True
-        assert owned == (("acme/repository", 7),)
-        assert holder == RunId("run-1")
-    else:
-        assert result["isError"] is True
-        assert owned == ()
-        assert holder == RunId(held_by)
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("partial", ["", "I started looking at the change."])

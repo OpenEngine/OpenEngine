@@ -65,6 +65,8 @@ class EventKind(Enum):
     APPROVAL_RESOLVED = "approval.resolved"
     STEERING_RECEIVED = "steering.received"
     """A message was routed to an execution that was already running."""
+    PULL_REQUEST_TAKEN_OVER = "pull_request.taken_over"
+    """An explicit handoff: repository, number, previousRunId, reason, and url."""
     RUN_FORKED = "run.forked"
     """A resume was asked for: `from`, `checkpointId`, `nodes`.
 

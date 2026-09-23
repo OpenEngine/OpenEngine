@@ -40,7 +40,6 @@ from engine.ports import (
 from engine.runtime.change_requests import (
     ChangeRequest,
     change_request,
-    remote_project,
 )
 from engine.runtime.step_results import (
     InvalidStepResultError,
@@ -81,10 +80,8 @@ PullRequestRecorder = Callable[["OpenedPullRequest"], Awaitable[None]]
 #: `PullRequestRecorder`, and read back when a step names a pull request.
 PullRequestLookup = Callable[[], Awaitable[Sequence[tuple[str, int]]]]
 
-#: Given a pull request the forge shows is this run's work, take it on unless
-#: another run already holds it, and say whether this run holds it now. Bound
-#: by whoever owns the store, like `PullRequestRecorder`.
-PullRequestClaimer = Callable[["OpenedPullRequest"], Awaitable[bool]]
+#: Explicit, approved handoff with the owner the caller expects to replace.
+PullRequestTakeover = Callable[["OpenedPullRequest", RunId | None, str], Awaitable[None]]
 WorkorderCreator = Callable[[RunId, str, RunId | None], Awaitable[tuple[str, str]]]
 
 
@@ -98,6 +95,7 @@ _PROTOCOL_VERSION = "2025-06-18"
 REPOSITORY_TOOL_METHODS: dict[str, str] = {
     "git_subcommand": "run_git",
     "open_pull_request": "request_review",
+    "take_over_pull_request": "view_change_request",
     "add_comment": "add_comment",
     "view_change_request": "view_change_request",
     "list_work_items": "list_work_items",
@@ -178,22 +176,14 @@ class TerminalResultRegistry:
         agent_run_id: AgentRunId,
         event: TerminalEvent,
         deliver: TerminalDelivery | None,
-        admit: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """Accept `event` once per agent run.
-
-        `admit` runs only for the submission that gets past the guard, before
-        anything is delivered, so what it records is never left behind by a
-        duplicate or a refusal. It raises to refuse the submission.
-        """
+        """Accept `event` once per agent run."""
         async with self._lock:
             previous = self._accepted.get(agent_run_id)
             if previous is not None:
                 raise TerminalResultAlreadySubmittedError(
                     "a terminal result was already accepted for this agent run"
                 )
-            if admit is not None:
-                await admit()
             if deliver is not None:
                 await deliver(event)
             self._accepted[agent_run_id] = event
@@ -244,9 +234,8 @@ class TerminalMcpBroker:
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
         self._pull_request_lookup: PullRequestLookup | None = None
-        self._pull_request_claimer: PullRequestClaimer | None = None
+        self._pull_request_takeover: PullRequestTakeover | None = None
         self._opened: set[ChangeRequest] = set()
-        self._pushed: set[_PushedBranch] = set()
         self._workorder_creator: WorkorderCreator | None = None
 
     def enable_workorder_creation(self, create: WorkorderCreator) -> None:
@@ -285,36 +274,19 @@ class TerminalMcpBroker:
     def enable_pull_request_ownership(self, lookup: PullRequestLookup) -> None:
         """Hold `add_comment` and a reported `pr_url` to this run's pull requests.
 
-        The run's pull requests are what this step opened together with what
-        `lookup` says the store has recorded, so a store that has not caught up
-        with an open still counts it. A URL outside them is refused: a number
+        The durable lookup is authoritative, including after a takeover.
+        A URL outside the recorded ownership is refused: a number
         picked up from an issue, a diff or CI output is how a step comes to
         report, and then post to, somebody else's pull request.
 
         This fails closed: with nothing recorded, or a store that cannot be
-        read, only what this step opened is accepted.
+        read, no pull request is accepted.
         """
         self._pull_request_lookup = lookup
 
-    def enable_pull_request_claims(self, claim: PullRequestClaimer) -> None:
-        """Record a reported `pr_url` the forge shows is this step's work.
-
-        A step that opened its pull request some other way -- `gh pr create`
-        in the shell -- leaves nothing recorded, and a later step would have
-        nothing to be held to. Naming a pull request is not enough to own it,
-        though, and neither is the checkout, which the agent arranges as it
-        likes: a report is claimed only when the forge shows that pull request
-        authored by the account these credentials act as, and this step's own
-        `git_subcommand` push put its head commit on its head branch in the
-        repository it lives in. The login is shared by every run, so what ties
-        a pull request to this step is that push and nothing else -- fetching
-        another run's branch reproduces its checkout, and pushing a branch of
-        the same name to a remote of one's own proves nothing about the
-        repository the pull request is in. A pull request another run already
-        holds stays with that run, and nothing is claimed for a submission the
-        single-result guard turns away.
-        """
-        self._pull_request_claimer = claim
+    def enable_pull_request_takeover(self, takeover: PullRequestTakeover) -> None:
+        """Bind the explicit handoff to the host's ownership and run checks."""
+        self._pull_request_takeover = takeover
 
     def enable_repository_tools(
         self,
@@ -518,7 +490,6 @@ class TerminalMcpBroker:
                 assert self._clarifications is not None
                 self._clarifications.put_nowait(None)
                 return {"ok": True, "acknowledgement": "clarified"}
-            admit: Callable[[], Awaitable[None]] | None = None
             if name == "complete_step":
                 if "add_comment" in self._repository_tools and not self._comments_added:
                     return {
@@ -534,18 +505,11 @@ class TerminalMcpBroker:
                 )
                 if self._validate_completion is not None:
                     self._validate_completion(event)
-                claims: list[tuple[OpenedPullRequest, str]] = []
                 for output in event.outputs:
                     if output.name == "pr_url":
                         foreign = await self._foreign_pull_request(output.value)
-                        if foreign is None:
-                            continue
-                        confirmed = await self._confirmed_pull_request(output.value)
-                        if confirmed is None:
+                        if foreign is not None:
                             return {"ok": False, "error": foreign}
-                        claims.append((confirmed, foreign))
-                if claims:
-                    admit = self._claim_confirmed_pull_requests(claims)
             elif name == "fail_step":
                 event = run_failed_from_arguments(
                     run_id=self._run_id,
@@ -556,7 +520,7 @@ class TerminalMcpBroker:
             else:
                 return {"ok": False, "error": f"unknown terminal tool: {name}"}
             await self._registry.accept(
-                self._agent_run_id, event, self._deliver, admit
+                self._agent_run_id, event, self._deliver
             )
         except (
             InvalidStepResultError,
@@ -607,27 +571,20 @@ class TerminalMcpBroker:
         if self._workspace_id is None:
             return {"ok": False, "error": f"{name} needs a workspace and this step has none"}
 
+        if name == "take_over_pull_request":
+            return await self._take_over_pull_request(arguments, request_id)
+
         if name == "git_subcommand":
             git_arguments = _git_arguments(arguments)
             approved = await self._approve_git(git_arguments, request_id)
             if approved is not None:
                 return approved
-            expected = await self._push_source_tips(git_arguments)
-            before = await self._push_snapshot(git_arguments)
             try:
                 result = await self._source_control.run_git(
                     self._workspace_id, git_arguments
                 )
             except Exception as error:
                 return {"ok": False, "error": f"could not run git: {error}"}
-            if result.ok and before is not None:
-                after = await self._push_snapshot(git_arguments)
-                if after is not None and before[0] == after[0]:
-                    self._pushed.update(
-                        _PushedBranch(after[0], branch, commit)
-                        for branch, commit in after[1].items()
-                        if before[1].get(branch) != commit and expected.get(branch) == commit
-                    )
             reported = "\n".join(part for part in (result.stdout, result.stderr) if part)
             if not result.ok:
                 return {
@@ -707,17 +664,16 @@ class TerminalMcpBroker:
         """Why `url` is not one of this run's pull requests, or `None` if it is.
 
         Once ownership is enabled this fails closed: a run with nothing
-        recorded, or a store that cannot be read, owns only what this step
-        opened, so a number picked up elsewhere is refused rather than let
-        through while ownership is unknown. Without ownership enabled only
+        recorded, or a store that cannot be read, owns nothing. Locally opened
+        URLs cannot bypass a subsequent handoff. Without ownership enabled only
         what this step opened is held to, and nothing when it opened nothing.
         """
         requested = change_request(url)
-        owned = set(self._opened)
+        owned = set(self._opened) if self._pull_request_lookup is None else set()
         if self._pull_request_lookup is None:
             if not owned or requested in owned:
                 return None
-        elif requested not in owned:
+        else:
             try:
                 recorded = await self._pull_request_lookup()
             except Exception as error:
@@ -734,7 +690,7 @@ class TerminalMcpBroker:
         if not owned:
             return (
                 f"{url} is not a pull request this run opened; this run has no "
-                "recorded pull request, so open one with open_pull_request first"
+                "recorded pull request; use open_pull_request or explicitly take_over_pull_request"
             )
         named = ", ".join(
             sorted(f"{one.project}#{one.number}" for one in owned)
@@ -744,119 +700,52 @@ class TerminalMcpBroker:
             "use the URL open_pull_request returned"
         )
 
-    async def _confirmed_pull_request(self, url: str) -> OpenedPullRequest | None:
-        """`url` as this run's, if the forge shows it is this step's work.
-
-        See `enable_pull_request_claims` for what has to match. This only reads;
-        the claim is made when the completion is accepted. Anything that cannot
-        be confirmed -- a forge that does not answer, an empty login, a head
-        this step never pushed to that repository -- confirms nothing.
-        """
-        if self._pull_request_claimer is None or self._workspace_id is None:
-            return None
-        requested = change_request(url)
-        if requested is None or self._source_control is None:
-            return None
+    async def _take_over_pull_request(
+        self, arguments: object, request_id: McpRequestId
+    ) -> dict[str, object]:
+        if self._pull_request_takeover is None or self._git_approval is None:
+            return {"ok": False, "error": "takeover requires ownership and approval handling"}
+        if not isinstance(arguments, dict) or set(arguments) != {
+            "pr_url", "expected_owner_run_id", "reason"
+        }:
+            raise ValueError("provide pr_url, expected_owner_run_id (null if unrecorded), and reason")
+        url, owner, reason = (arguments[key] for key in (
+            "pr_url", "expected_owner_run_id", "reason"
+        ))
+        if not isinstance(url, str) or (requested := change_request(url)) is None:
+            raise ValueError("pr_url must name a pull request")
+        if owner is not None and (not isinstance(owner, str) or not owner.strip()):
+            raise ValueError("expected_owner_run_id must be a non-empty string or null")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be a non-empty string")
+        assert self._source_control is not None and self._workspace_id is not None
         try:
             shown = await self._source_control.view_change_request(
                 self._workspace_id, requested.number
             )
-            login = await self._source_control.authenticated_login(url)
-        except Exception:
-            logger.exception("Could not confirm the reported pull request %s", url)
-            return None
-        pushed = _PushedBranch(requested.project, shown.head_ref, shown.head_sha)
-        if not (
-            change_request(shown.url) == requested
-            and shown.head_is_same_repository
-            and pushed in self._pushed
-            and login
-            and shown.author == login
-        ):
-            return None
-        return OpenedPullRequest(requested.project, requested.number, url)
-
-    async def _push_source_tips(self, arguments: Sequence[str]) -> dict[str, str]:
-        """Bind receipts to the commits this push names, before it runs."""
-        target = _push_target(arguments)
-        if self._pull_request_claimer is None or target is None:
-            return {}
-        assert self._source_control is not None and self._workspace_id is not None
-        tips: dict[str, str] = {}
-        try:
-            for destination, source in target[1].items():
-                result = await self._source_control.run_git(
-                    self._workspace_id,
-                    ("rev-parse", "--verify", "--end-of-options", source + "^{commit}"),
-                )
-                if not result.ok or len(result.stdout.splitlines()) != 1:
-                    return {}
-                tips[destination] = result.stdout.strip()
-        except Exception:
-            logger.exception("Could not read push source commits")
-            return {}
-        return tips
-
-    async def _push_snapshot(
-        self, arguments: Sequence[str]
-    ) -> tuple[str, dict[str, str]] | None:
-        """Read remote tips independently before and after an explicit push.
-
-        Push output, local refs and Git transport configuration are agent-controlled.
-        Only a branch the forge API confirms changed can become an ownership receipt.
-        Unrecognised option forms still run, but cannot establish ownership.
-        """
-        if self._pull_request_claimer is None:
-            return None
-        target = _push_target(arguments)
-        if target is None:
-            return None
-        remote, destinations = target
-        assert self._source_control is not None and self._workspace_id is not None
-        try:
-            if remote_project(remote) is None:
-                resolved = await self._source_control.run_git(
-                    self._workspace_id, ("remote", "get-url", "--push", "--all", remote)
-                )
-                if not resolved.ok or len(resolved.stdout.splitlines()) != 1:
-                    return None
-                remote = resolved.stdout.strip()
-            project = remote_project(remote)
-            if project is None:
-                return None
-            branches = await self._source_control.branch_tips(project, tuple(destinations))
-            return project, {
-                branch: commit for branch, commit in branches.items()
-                if branch in destinations
-            }
-        except Exception:
-            logger.exception("Could not read remote branches for a push")
-            return None
-
-    def _claim_confirmed_pull_requests(
-        self, claims: Sequence[tuple[OpenedPullRequest, str]]
-    ) -> Callable[[], Awaitable[None]]:
-        """Claim each confirmed report, refusing the completion if one is held.
-
-        Run by the registry for the one submission it accepts, so a duplicate
-        or concurrent `complete_step` claims nothing.
-        """
-        claimer = self._pull_request_claimer
-        assert claimer is not None
-
-        async def admit() -> None:
-            for reported, foreign in claims:
-                try:
-                    held = await claimer(reported)
-                except Exception as error:
-                    logger.exception(
-                        "Could not claim the reported pull request %s", reported.url
-                    )
-                    raise InvalidStepResultError(foreign) from error
-                if not held:
-                    raise InvalidStepResultError(foreign)
-
-        return admit
+            if change_request(shown.url) != requested or shown.state.lower() not in {"open", "opened"}:
+                return {"ok": False, "error": "takeover requires an open pull request in this workspace's repository"}
+            tool_name = f"mcp__{_SERVER_NAME}__take_over_pull_request"
+            tool_arguments = json.dumps(arguments, sort_keys=True)
+            decision = await self._git_approval(ApprovalRequest(
+                approval_id=f"terminal:{self._agent_run_id}:{request_id}",
+                kind=ApprovalKind.TOOL_USE,
+                reason=f"Transfer {url} from {owner or 'an unrecorded owner'} to {self._run_id}: {reason}",
+                tool_name=tool_name,
+                tool_call_id=(self._tool_call_ids(tool_name, tool_arguments)
+                              if self._tool_call_ids is not None else None),
+                arguments=tool_arguments,
+                allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+            ))
+            if decision is not ApprovalDecision.ACCEPT:
+                return {"ok": False, "error": "take_over_pull_request was not approved"}
+            await self._pull_request_takeover(
+                OpenedPullRequest(requested.project, requested.number, shown.url),
+                RunId(owner) if owner is not None else None, reason.strip(),
+            )
+        except Exception as error:
+            return {"ok": False, "error": f"could not take over pull request: {error}"}
+        return {"ok": True, "acknowledgement": "pull request taken over", "output": shown.url}
 
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
@@ -1120,6 +1009,26 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "additionalProperties": False,
         },
     },
+    "take_over_pull_request": {
+        "name": "take_over_pull_request",
+        "description": (
+            "Explicitly take ownership of an existing open pull request. Requires approval. "
+            "Name its expected owner run, or null if unrecorded. An existing owner must "
+            "be completed or failed; stop a stalled run before taking over. Records the "
+            "handoff and routes future feedback to this run. A push or reported URL "
+            "alone never transfers ownership."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_url": {"type": "string", "minLength": 1},
+                "expected_owner_run_id": {"type": ["string", "null"], "minLength": 1},
+                "reason": {"type": "string", "minLength": 1},
+            },
+            "required": ["pr_url", "expected_owner_run_id", "reason"],
+            "additionalProperties": False,
+        },
+    },
     "open_pull_request": {
         "name": "open_pull_request",
         "description": (
@@ -1264,59 +1173,6 @@ def _status_argument(arguments: object) -> str:
     if not isinstance(status, str) or not status.strip():
         raise ValueError("status must be a non-empty string")
     return status.strip()
-
-
-@dataclass(frozen=True, slots=True)
-class _PushedBranch:
-    """A branch one `git push` put on one repository, at one commit."""
-
-    project: str
-    branch: str
-    commit: str
-
-
-def _push_target(arguments: Sequence[str]) -> tuple[str, dict[str, str]] | None:
-    """Recognise explicit pushes without trusting their terminal output."""
-    if _git_subcommand(arguments) != "push":
-        return None
-    positional: list[str] = []
-    options = True
-    for argument in arguments[arguments.index("push") + 1:]:
-        if options and argument == "--":
-            options = False
-        elif options and argument.startswith("-"):
-            if argument not in {
-                "-u", "--set-upstream", "-f", "--force", "--force-with-lease",
-                "--porcelain", "--atomic", "--verbose", "-v", "--quiet", "-q",
-            } and not argument.startswith("--force-with-lease="):
-                return None
-        else:
-            positional.append(argument)
-    if len(positional) < 2:
-        return None
-    destinations: dict[str, str] = {}
-    for refspec in positional[1:]:
-        source, separator, destination = refspec.lstrip("+").partition(":")
-        destination = destination if separator else source
-        if not source or not destination or "*" in refspec:
-            return None
-        if destination.startswith("refs/") and not destination.startswith("refs/heads/"):
-            continue
-        destinations[destination.removeprefix("refs/heads/")] = source
-    return positional[0], destinations
-
-
-def _git_subcommand(arguments: Sequence[str]) -> str | None:
-    """The subcommand a git argument vector runs, past git's own options.
-
-    The adapter finds it the same way, permitting a closed set of global
-    options before it, so `git --no-pager push origin agent/x` is the push it
-    is here too rather than a vector whose first word is not one.
-    """
-    for argument in arguments:
-        if not argument.startswith("-"):
-            return argument
-    return None
 
 
 def _git_arguments(arguments: object) -> tuple[str, ...]:

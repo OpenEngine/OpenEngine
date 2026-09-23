@@ -214,3 +214,30 @@ and edits the same override. Returning to the workflow's original runner clears
 the override, and retry uses that runner even when the original creation input
 was different. Nodes can implement `_for_runner` to configure models and MCP
 bindings for the resolved runner, including approval recovery.
+
+## Taking over an existing pull request
+
+A push and a `pr_url` reported to `complete_step` do not establish workflow
+ownership. Use `open_pull_request` to create and record a new PR. For an existing
+open PR, implementation steps that require `pr_url` expose
+`take_over_pull_request`:
+
+```json
+{
+  "pr_url": "https://github.com/acme/api/pull/7",
+  "expected_owner_run_id": "previous-run-id",
+  "reason": "Continue the remaining work after stopping the stalled run"
+}
+```
+
+The takeover goes through Engine approval. The expected owner must match the
+recorded owner and must have completed or failed. Cancel a stalled run before
+requesting takeover; a run waiting for approval is still active. Use `null` for
+`expected_owner_run_id` only when the PR has no recorded owner, including a PR
+opened outside the workflow tool. Unknown run state cannot authorize takeover.
+
+The ownership change and a `pull_request.taken_over` event are recorded together,
+including the previous owner and reason. Competing handoffs cannot replace a
+newer claim. Later PR comments and webhooks follow the new owner, and the former
+owner can no longer report or comment on that PR through workflow tools. Retrying
+a successful takeover in the same run does not create another handoff event.

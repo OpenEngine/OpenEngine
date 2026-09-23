@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from engine.domain import AgentId, AgentRunId, StepCompleted, StepId, StepSpec
+from engine.domain import AgentId, AgentRunId, RunId, StepCompleted, StepId, StepSpec
 from engine.domain.ids import WorkspaceId
+from engine.graph_runtime import RunStatus
 from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.terminal_mcp import (
     REPOSITORY_TOOL_METHODS,
@@ -82,13 +83,17 @@ class TerminalMcpServer:
                 getattr(source_control, REPOSITORY_TOOL_METHODS.get(name, ""), None)
             )
         )
+        if "pr_url" in self.required_outputs and callable(
+            getattr(source_control, "view_change_request", None)
+        ):
+            served = (*served, "take_over_pull_request")
         broker.enable_repository_tools(
             source_control,
             served,
             WorkspaceId(workspace),
             approve,
         )
-        if "add_comment" in served or "pr_url" in self.required_outputs:
+        if {"add_comment", "open_pull_request"}.intersection(served) or "pr_url" in self.required_outputs:
             store = execution.runtime.store
 
             async def owned() -> tuple[tuple[str, int], ...]:
@@ -98,7 +103,18 @@ class TerminalMcpServer:
         if "pr_url" in self.required_outputs:
             store = execution.runtime.store
 
-            async def claim_reported(reported: OpenedPullRequest) -> bool:
+            async def take_over(
+                reported: OpenedPullRequest, replacing: RunId | None, reason: str,
+            ) -> None:
+                current = await store.run_for_pull_request(reported.repository, reported.number)
+                if current == execution.run_id:
+                    return  # An acknowledged handoff may safely be retried.
+                if current != replacing:
+                    raise ValueError(f"pull request owner changed; current owner is {current}")
+                if current is not None:
+                    snapshot = await execution.runtime.snapshot(current)
+                    if snapshot is None or snapshot.status not in (RunStatus.COMPLETED, RunStatus.FAILED):
+                        raise ValueError(f"owner {current} is active or unknown; stop a stalled run before takeover")
                 holder = await store.claim_pull_request(
                     PullRequestRecord(
                         repository=reported.repository,
@@ -107,11 +123,12 @@ class TerminalMcpServer:
                         opened_at=datetime.now(UTC).isoformat(),
                         node_id=execution.node_id,
                         url=reported.url,
-                    )
+                    ), replacing=replacing, takeover_reason=reason,
                 )
-                return holder == execution.run_id
+                if holder != execution.run_id:
+                    raise ValueError(f"pull request owner changed; current owner is {holder}")
 
-            broker.enable_pull_request_claims(claim_reported)
+            broker.enable_pull_request_takeover(take_over)
         if "add_comment" in served:
             store = execution.runtime.store
 
@@ -134,7 +151,7 @@ class TerminalMcpServer:
             store = execution.runtime.store
 
             async def claim(opened: OpenedPullRequest) -> None:
-                await store.remember_pull_request(
+                await store.claim_pull_request(
                     PullRequestRecord(
                         repository=opened.repository,
                         number=opened.number,

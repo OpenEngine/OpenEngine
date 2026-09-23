@@ -799,3 +799,56 @@ def test_start_preserves_scheduled_run_identity_and_refuses_duplicates() -> None
         finally:
             await runtime.aclose()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+@pytest.mark.parametrize("previous", [None, RunId("stalled")])
+def test_competing_takeovers_record_only_the_winning_handoff(tmp_path, backend, previous):
+    from engine.graph_runtime_langgraph.store import PullRequestRecord
+
+    async def scenario():
+        store = (InMemoryGraphRuntimeStore() if backend == "memory"
+                 else SqliteGraphRuntimeStore(tmp_path / "handoff.db"))
+        record = PullRequestRecord(repository="acme/api", number=7, run_id=RunId("a"),
+                                   opened_at="2026-09-23T00:00:00Z")
+        if previous:
+            await store.remember_pull_request(replace(record, run_id=previous))
+        holders = await asyncio.gather(*(
+            store.claim_pull_request(replace(record, run_id=RunId(run)), replacing=previous,
+                                     takeover_reason="Recover stalled work")
+            for run in ("a", "b")
+        ))
+        assert holders == [RunId("a"), RunId("a")]
+        assert await store.run_for_pull_request("acme/api", 7) == RunId("a")
+        assert await store.pull_requests(RunId("b")) == ()
+        events = store.events_since(RunId("a"))
+        assert len(events) == 1
+        assert events[0].kind is EventKind.PULL_REQUEST_TAKEN_OVER
+        assert events[0].payload["previousRunId"] == previous
+        assert store.events_since(RunId("b")) == ()
+        if backend == "sqlite":
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_takeover_rolls_back_ownership_if_audit_cannot_be_written(tmp_path, monkeypatch):
+    from engine.graph_runtime_langgraph.store import PullRequestRecord
+
+    async def scenario():
+        store = SqliteGraphRuntimeStore(tmp_path / "handoff.db")
+        record = PullRequestRecord(repository="acme/api", number=7, run_id=RunId("old"),
+                                   opened_at="2026-09-23T00:00:00Z")
+        await store.remember_pull_request(record)
+
+        def fail(event):
+            raise RuntimeError("audit unavailable")
+
+        monkeypatch.setattr(store, "append_event", fail)
+        with pytest.raises(RuntimeError, match="audit unavailable"):
+            await store.claim_pull_request(replace(record, run_id=RunId("new")),
+                                           replacing=RunId("old"), takeover_reason="Recovery")
+        assert await store.run_for_pull_request("acme/api", 7) == RunId("old")
+        store.close()
+
+    asyncio.run(scenario())

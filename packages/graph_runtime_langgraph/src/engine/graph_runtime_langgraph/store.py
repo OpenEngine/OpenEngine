@@ -176,6 +176,17 @@ class PullRequestRecord:
     url: str = ""
 
 
+def _takeover_event(
+    record: PullRequestRecord, previous: RunId | None, reason: str,
+) -> RuntimeEvent:
+    return RuntimeEvent(
+        run_id=record.run_id, kind=EventKind.PULL_REQUEST_TAKEN_OVER,
+        node_id=record.node_id,
+        payload={"repository": record.repository, "number": record.number,
+                 "previousRunId": previous, "reason": reason, "url": record.url},
+    )
+
+
 @runtime_checkable
 class GraphRuntimeStore(EventStore, Protocol):
     """The durable half of the runtime, including the event history."""
@@ -229,7 +240,8 @@ class GraphRuntimeStore(EventStore, Protocol):
         ...
 
     async def claim_pull_request(
-        self, record: PullRequestRecord, *, replacing: RunId | None = None
+        self, record: PullRequestRecord, *, replacing: RunId | None = None,
+        takeover_reason: str | None = None,
     ) -> RunId:
         """Take a pull request on if it is free, and say who ended up with it.
 
@@ -240,6 +252,8 @@ class GraphRuntimeStore(EventStore, Protocol):
         over legitimate. Everyone else is told the current holder's id instead
         of displacing it, so two callers racing to take the same pull request
         on agree on the winner, and the loser can undo what it started.
+        When takeover_reason is supplied, record the handoff in the event log
+        atomically with the claim. The caller must authorize and check the old run.
         Replacing unconditionally would leave that run alive and unreachable,
         since every later comment is routed by this row.
         """
@@ -379,12 +393,15 @@ class InMemoryGraphRuntimeStore:
         self._pull_requests[(record.repository, record.number)] = record
 
     async def claim_pull_request(
-        self, record: PullRequestRecord, *, replacing: RunId | None = None
+        self, record: PullRequestRecord, *, replacing: RunId | None = None,
+        takeover_reason: str | None = None,
     ) -> RunId:
         held = self._pull_requests.get((record.repository, record.number))
         if held is not None and held.run_id != replacing:
             return held.run_id
         self._pull_requests[(record.repository, record.number)] = record
+        if takeover_reason is not None:
+            self.append_event(_takeover_event(record, replacing, takeover_reason))
         return record.run_id
 
     async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
@@ -599,7 +616,8 @@ class SqliteGraphRuntimeStore:
         )
 
     async def claim_pull_request(
-        self, record: PullRequestRecord, *, replacing: RunId | None = None
+        self, record: PullRequestRecord, *, replacing: RunId | None = None,
+        takeover_reason: str | None = None,
     ) -> RunId:
         # The write is the claim, and the database decides it: the insert takes
         # a free pull request, and the conditional update takes one still held
@@ -608,26 +626,34 @@ class SqliteGraphRuntimeStore:
         # of committed state, so the loser is told who won rather than left
         # thinking it did. `replacing` of `None` matches no row, because a
         # claimed pull request always names a run.
-        self._connection.execute(
-            "INSERT INTO github_pull_requests "
-            "(repository, number, run_id, node_id, opened_at, url) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (repository, number) DO UPDATE SET "
-            "run_id = excluded.run_id, node_id = excluded.node_id, "
-            "opened_at = excluded.opened_at, url = excluded.url "
-            "WHERE github_pull_requests.run_id = ?",
-            (
-                record.repository,
-                record.number,
-                str(record.run_id),
-                None if record.node_id is None else str(record.node_id),
-                record.opened_at,
-                record.url,
-                None if replacing is None else str(replacing),
-            ),
-        )
-        held = await self.run_for_pull_request(record.repository, record.number)
-        assert held is not None  # just inserted, if it was not already there
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = self._connection.execute(
+                "INSERT INTO github_pull_requests "
+                "(repository, number, run_id, node_id, opened_at, url) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (repository, number) DO UPDATE SET "
+                "run_id = excluded.run_id, node_id = excluded.node_id, "
+                "opened_at = excluded.opened_at, url = excluded.url "
+                "WHERE github_pull_requests.run_id = ?",
+                (
+                    record.repository,
+                    record.number,
+                    str(record.run_id),
+                    None if record.node_id is None else str(record.node_id),
+                    record.opened_at,
+                    record.url,
+                    None if replacing is None else str(replacing),
+                ),
+            )
+            if takeover_reason is not None and cursor.rowcount:
+                self.append_event(_takeover_event(record, replacing, takeover_reason))
+            held = await self.run_for_pull_request(record.repository, record.number)
+            assert held is not None  # just inserted, if it was not already there
+            self._connection.execute("COMMIT")
+        except BaseException:
+            self._connection.execute("ROLLBACK")
+            raise
         return held
 
     async def run_for_pull_request(self, repository: str, number: int) -> RunId | None:
