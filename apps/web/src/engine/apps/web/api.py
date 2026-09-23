@@ -51,6 +51,11 @@ from uuid import uuid4
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
+from engine.apps.web.github_communications import (
+    GITHUB_CHANNEL_PREFIX,
+    ChannelRoutedCommunications,
+    GithubCommunications,
+)
 from engine.apps.web.github_ingress import (
     GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_co_author,
     github_requester,
@@ -1199,6 +1204,15 @@ def create_app(
             link = run_notifier.work_order_link(state)
             if link:
                 links.append(link)
+            if state.origin.channel.startswith(GITHUB_CHANNEL_PREFIX) and not any(
+                existing.label == "View pull request" for existing in links
+            ):
+                # The issue timeline is the run's history, so every update
+                # carries the pull request once the run has opened one.
+                read = getattr(getattr(surface.runtime, "store", None), "pull_request_for_run", None)
+                opened = await read(state.run_id) if read is not None else None
+                if opened is not None:
+                    links.append(MessageLink("View pull request", pull_request_url(*opened)))
             try:
                 await run_notifier.deliver(
                     state, text, links=links, mention=mention,
@@ -2971,8 +2985,15 @@ def create_app(
     _slack_store = slack_credential_store or SlackCredentialStore()
     _slack_state: str | None = None
     _slack_redirect_uri: str | None = None
-    # Concierge replies and graph progress share the same Slack transport.
-    run_notifier = RunNotifier(session.capabilities.communications, public_url)
+    # Concierge replies and graph progress share the same Slack transport;
+    # runs started from a GitHub issue report back there as comments instead.
+    run_notifier = RunNotifier(
+        ChannelRoutedCommunications(
+            session.capabilities.communications,
+            GithubCommunications(session.capabilities.source_control),
+        ),
+        public_url,
+    )
 
     def _signing_secret() -> str:
         return _slack_store.signing_secret() or ""
@@ -3536,8 +3557,7 @@ def create_app(
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
         if surface.runtime is None:
             raise RuntimeError("could not start a work order: graph runtime unavailable")
-        # Like PR-started runs, omit the chat origin: GitHub channels cannot
-        # receive progress through the Slack communications adapter.
+        # Progress is reported back to the issue, mentioning whoever assigned it.
         await start_graph_run(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
@@ -3545,6 +3565,12 @@ def create_app(
                     f"{assignment.body}\n\nIssue: {assignment.url}\n"
                     f"Include Fixes #{assignment.number} in the pull request body."),
             repository=repository, milestone_id=None,
+            origin=RunOrigin(
+                channel=f"{GITHUB_CHANNEL_PREFIX}{repository}",
+                thread_id=f"issue/{assignment.number}",
+                author=assignment.sender,
+                requester=github_requester(assignment.sender_id, assignment.sender) or "",
+            ),
             requester=github_requester(assignment.sender_id, assignment.sender),
         )
 
