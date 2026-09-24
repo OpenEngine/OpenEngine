@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Tag or commit of langgraph-acp to publish to PyPI
+        description: Release tag (vX.Y.Z) or full commit SHA on main to publish to PyPI
         required: true
 
 permissions:
@@ -110,10 +110,35 @@ jobs:
       run:
         working-directory: langgraph-acp
     steps:
+      # Check out main with full history and tags, never the requested ref: the
+      # ref is verified against main before any of its code is checked out.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || needs.release-please.outputs.sha }}
+          ref: main
+          fetch-depth: 0
           persist-credentials: false
+      # Only a release tag (vX.Y.Z) or a full commit SHA, and in both cases the
+      # commit must already be on main. This blocks publishing an unreviewed
+      # branch, a PR ref, or a tag pushed onto a commit that main never merged.
+      - name: Verify the ref is released code on main
+        working-directory: .
+        env:
+          REF: ${{ inputs.ref || needs.release-please.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && git rev-parse -q --verify "refs/tags/$REF" >/dev/null; then
+            sha=$(git rev-parse "refs/tags/$REF^{commit}")
+          elif [[ "$REF" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$REF^{commit}" 2>/dev/null; then
+            sha=$REF
+          else
+            echo "::error::'$REF' is not a release tag (vX.Y.Z) or a full commit SHA in this repository"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::$sha is not on main"
+            exit 1
+          fi
+          git checkout --quiet --detach "$sha"
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.28"
