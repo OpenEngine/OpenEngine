@@ -271,7 +271,7 @@ class AgentSession:
             return None
         return await self._capabilities.workspace_provider.state(instance.workspace_id)
 
-    async def attach_workspace(self, instance_id: AgentInstanceId) -> WorkspaceState:
+    async def attach_workspace(self, instance_id: AgentInstanceId, repository: str | None = None) -> WorkspaceState:
         """Give this conversation a checkout to work in, and keep the pairing.
 
         Works from any starting point: a conversation that never had a
@@ -280,7 +280,7 @@ class AgentSession:
         behind.
         """
         instance = await self._require_instance(instance_id)
-        selected_repository = self._workspace_repository
+        selected_repository = repository or self._workspace_repository
         selected_base_ref = self._workspace_base_ref
         if selected_repository is None:
             raise WorkspacesUnavailableError()

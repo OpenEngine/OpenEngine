@@ -160,7 +160,7 @@ def test_rejects_unsafe_configuration(uri):
 
 
 def test_loopback_and_secret_repr():
-    config = GitHubLoginConfig("client", "private-secret", "http://127.0.0.1:8000/api/auth/github/callback")
+    config = GitHubLoginConfig("client", "private-secret", "http://127.0.0.1:4364/api/auth/github/callback")
     assert "private-secret" not in repr(config)
 
 

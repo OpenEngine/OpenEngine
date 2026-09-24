@@ -40,6 +40,7 @@ from collections.abc import (
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from importlib.metadata import version
 from html import escape
 from pathlib import Path
 from typing import Protocol
@@ -488,11 +489,11 @@ class ThreadService:
         self._locks[instance.instance_id] = asyncio.Lock()
         return thread
 
-    async def attach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
+    async def attach_workspace(self, instance_id: AgentInstanceId, repository: str | None = None) -> ChatThread:
         """Give this chat a checkout again -- or a first one."""
         thread = await self._require_idle(instance_id)
         async with self._locks[instance_id]:
-            state = await self.session.attach_workspace(instance_id)
+            state = await self.session.attach_workspace(instance_id, repository)
         return self._apply_workspace_state(thread, state)
 
     async def detach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -1360,8 +1361,20 @@ def create_app(
                 # recovered, and none of them may stop the server from serving.
                 log.exception("could not restore graph WorkOrder %s", state.run_id)
 
+    ready = False
+    service_version = version("engine-web")
+
+    async def health(_request: Request) -> JSONResponse:
+        return JSONResponse(
+            {"service": "openengine", "version": service_version,
+             "ready": ready, "api_version": 1},
+            status_code=200 if ready else 503,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        nonlocal ready
         async with AsyncExitStack() as opened:
             opened.push_async_callback(slack_ingress.close)
             opened.push_async_callback(github_concierge.close)
@@ -1425,7 +1438,11 @@ def create_app(
                         await asyncio.gather(dependency_task, return_exceptions=True)
 
                     opened.push_async_callback(stop_dependencies)
-            yield
+            ready = graph_runtime is None or surface.runtime is not None
+            try:
+                yield
+            finally:
+                ready = False
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
@@ -2290,7 +2307,28 @@ def create_app(
         thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
-        return JSONResponse(_thread_json(thread))
+        result = _thread_json(thread)
+        current = service.latest_run(thread.instance_id)
+        result["phase"] = (
+            "running" if current is not None and not current.done
+            else "failed" if current is not None and current.error is not None
+            else "idle"
+        )
+        result["currentRun"] = (
+            {
+                "id": str(current.agent_run_id),
+                "phase": result["phase"],
+            }
+            if current is not None else None
+        )
+        # Agent-turn records are intentionally ephemeral: conversation history
+        # is durable, but it is not an audit of every provider turn. Keep the
+        # field explicit so terminal clients never infer a history from a live
+        # process-local snapshot.
+        result["previousRuns"] = []
+        approvals = await session.state_store.list_approvals(instance_id=thread.instance_id)
+        result["pendingApproval"] = any(record.status.value == "pending" for record in approvals)
+        return JSONResponse(result)
 
     async def update_thread(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
@@ -2402,8 +2440,12 @@ def create_app(
         instance_id = _thread_id(request)
         if await service.get(instance_id) is None:
             return _error("thread not found", 404)
+        body = await _json_body(request)
+        repository = body.get("repository")
+        if repository is not None and (not isinstance(repository, str) or not repository.strip()):
+            return _error("repository must be a non-empty string", 400)
         try:
-            thread = await service.attach_workspace(instance_id)
+            thread = await service.attach_workspace(instance_id, repository)
         except RuntimeError as error:
             # A repository that cannot produce a checkout -- unwired, or git
             # refusing -- is the server's problem to explain, not a 404.
@@ -3718,6 +3760,7 @@ def create_app(
 
     github_login = GitHubLogin(github_login_config, service_token, github_login_allowed)
     routes = [
+        Route("/api/health", health),
         *github_login.routes(),
         Route("/api/config", config),
         Route("/api/github/status", github_status),

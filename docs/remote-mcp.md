@@ -26,8 +26,9 @@ control. Rotate it by changing the private env file and restarting the gateway.
    free port. For a loopback integration, set `OE_MCP_ENGINE_URL=http://localhost:5173`
    to use the Vite dev server's fixed port; it proxies `/api` to the actual API
    port. GitHub and Slack webhooks use this same indirection. The example env
-   file and gateway settings default to `http://127.0.0.1:8000`; that address is
-   correct only when the API port is pinned with `engine-dev --port 8000`.
+   file and gateway settings default to `http://127.0.0.1:4364`, the production
+   `engine-web` endpoint. When using `engine-dev`, override `OE_MCP_ENGINE_URL`
+   to match its actual endpoint.
    Run `uv sync --locked --all-packages` from this checkout.
 2. Install Tailscale on the mini, sign in, and enable Funnel for the node in your
    tailnet policy. Follow the [Funnel prerequisites](https://tailscale.com/docs/features/tailscale-funnel).

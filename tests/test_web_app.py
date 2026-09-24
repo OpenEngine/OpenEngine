@@ -3913,6 +3913,56 @@ def test_finished_run_resumed_after_restart_gets_live_frontier():
     }
 
 
+@pytest.mark.parametrize("login_enabled", [False, True])
+def test_health_identity_and_lifecycle(login_enabled):
+    from importlib.metadata import version
+    from starlette.testclient import TestClient
+    from engine.apps.web.github_login import GitHubLoginConfig
+
+    runner = ConcurrentRunner()
+    app = create_app(
+        _session(runner), {"test": runner},
+        github_login_config=(GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ) if login_enabled else None),
+    )
+    expected = {"service": "openengine", "version": version("engine-web"),
+                "ready": False, "api_version": 1}
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json() == {**expected, "ready": True}
+        assert response.headers["cache-control"] == "no-store"
+        assert client.get("/api/health").json() == response.json()
+        if login_enabled:
+            assert client.get("/api/threads").status_code == 401
+    response = client.get("/api/health")
+    assert response.status_code == 503
+    assert response.json() == expected
+
+
+def test_health_not_ready_when_configured_graph_runtime_fails():
+    from starlette.testclient import TestClient
+
+    @asynccontextmanager
+    async def broken_runtime():
+        raise OSError("cannot open graph state")
+        yield
+
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {"test": runner}, graph_runtime=broken_runtime())
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+        assert response.status_code == 503
+        assert response.json()["ready"] is False
+        assert response.json()["service"] == "openengine"
+
+
+def test_production_port_default_preserves_explicit_settings():
+    assert Settings().port == 4364
+    assert Settings(port=8123).port == 8123
+
+
 def _login_gate(repository: str, source_control: object):
     """The check the app hands its GitHub login, over `source_control`."""
     unused = object()

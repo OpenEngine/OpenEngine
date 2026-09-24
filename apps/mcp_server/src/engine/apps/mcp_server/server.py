@@ -23,7 +23,7 @@ class Settings:
     repository: str
     workflow: str
     public_url: str
-    engine_url: str = "http://127.0.0.1:8000"
+    engine_url: str = "http://127.0.0.1:4364"
     # Presented to OE on `POST /api/runs` when OE requires GitHub login. Separate
     # from `token`: a client's credential for the gateway never reaches OE.
     engine_token: str = field(default="", repr=False)

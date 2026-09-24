@@ -90,7 +90,7 @@ class Settings:
     """
 
     host: str = "localhost"
-    port: int = 8000
+    port: int = 4364
     codex_binary: str = "codex"
     """The Codex CLI milestone scoping runs. Chat's runners reach Codex through
     `codex_acp_command`, whose adapter brings its own."""

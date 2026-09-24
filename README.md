@@ -29,6 +29,58 @@ uv run \
   --all-packages \
   engine-web
 ```
+The production service defaults to `http://127.0.0.1:4364`. Verify its identity
+and readiness after startup:
+```bash
+curl --fail http://127.0.0.1:4364/api/health
+# {"service":"openengine","version":"0.0.0","ready":true,"api_version":1}
+```
+`version` is the installed `engine-web` package version. Health returns HTTP 503
+until startup completes, if the configured graph runtime cannot open, or during
+shutdown; otherwise it returns HTTP 200. This public endpoint requires no browser
+login and does not check external provider credentials.
+
+## Terminal diagnostics
+
+CLI v1 contract: the binary is `engine`; its local service default is
+`http://127.0.0.1:4364`; `--server` and profiles select remote services;
+interactive terminals enter the workbench while all subcommands remain
+scriptable. Specification authoring is outside this CLI contract.
+
+The `engine` terminal client inspects a local or remote service:
+
+```bash
+engine status
+engine doctor --json
+engine status --server https://engine.example
+```
+
+It defaults to `http://127.0.0.1:4364`; `engine config server URL` saves a
+server for the selected profile and `engine config profile NAME` switches
+profiles. This first CLI release is diagnostic-only: local service startup and
+interactive task workflows arrive in later stages. When the selected server is
+the default local address and no compatible service is responding, `engine
+status` starts one `engine-web` process and waits for its health endpoint. An
+explicit `--server` is always probe-only.
+
+In an interactive terminal, running `engine` opens the read-only workbench.
+Type `/` to search the palette, then choose `/status`, `/connections`, `/threads`,
+`/transcript`, `/web`, or `/quit`. The matching scriptable commands are `engine status`,
+`engine connections`, `engine threads`
+(`--all` or `--archived`), `engine task THREAD_ID`, and `engine transcript THREAD_ID`.
+Task creation, streaming,
+and decisions remain later stages.
+
+Start a terminal task with `engine run "describe the work"`; it creates a
+conversation using the service's default agent and runner, then renders its
+NDJSON progress. For a local service, the directory where you invoke the
+command is attached as the task repository. `--agent`, `--runner`, and
+`--repository` override those defaults; pass `--repository` when targeting a
+remote service. `engine resume
+THREAD_ID` reconnects to a current run.
+Ctrl-C detaches the terminal stream only: it never sends the service a cancel
+request.
+
 While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev
@@ -73,8 +125,8 @@ no server configuration is required beyond the step below.
 2. Fill in the form (device flow does not use the callback URL, but GitHub
    requires one):
    - **Application name:** `OpenEngine`
-   - **Homepage URL:** `http://localhost:8000`
-   - **Authorization callback URL:** `http://localhost:8000`
+   - **Homepage URL:** `http://localhost:4364`
+   - **Authorization callback URL:** `http://localhost:4364`
 3. Click **Register application**
 4. On the app page, check **Enable Device Flow** and click **Update application**
 5. Copy the **Client ID** (looks like `Ov23liXXXXXXXXXX`)

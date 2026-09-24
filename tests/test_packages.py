@@ -30,6 +30,7 @@ EXPECTED_PACKAGE_ROOTS = [
     "apps/control_server",
     "apps/worker",
     "apps/web",
+    "apps/cli",
 ]
 
 #: Capability -> the port protocol that defines it.
