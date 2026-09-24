@@ -23,3 +23,5 @@ playwright-report/
 # Server-local secrets
 .env
 .env.*
+*.oauth-keys.json
+*.oauth-keys.json.*
