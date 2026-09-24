@@ -3,7 +3,7 @@
 import base64
 import hashlib
 from urllib.parse import parse_qs, urlsplit
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -11,13 +11,22 @@ from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 from starlette.testclient import TestClient
 
-from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
+from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig, RepositoryLoginPermission
+from engine.adapters.source_control.github.transports import GitHubTransportError
 
 
 @pytest.fixture
-def flow():
+def permission_api(monkeypatch):
+    request = AsyncMock(return_value={"permission": "write", "user": {"id": 42, "login": "alice"}})
+    monkeypatch.setattr("engine.apps.web.github_login.GitHubCliTransport.request", request)
+    return request
+
+
+@pytest.fixture
+def flow(permission_api):
     return GitHubLogin(GitHubLoginConfig(
-        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback",
+        repository="owner/repo",
     ))
 
 
@@ -156,11 +165,13 @@ def test_disabled():
 @pytest.mark.parametrize("uri", ["http://public.test/api/auth/github/callback", "https://engine.test/wrong", "https://engine.test/api/auth/github/callback?next=evil", "https://user@engine.test/api/auth/github/callback"])
 def test_rejects_unsafe_configuration(uri):
     with pytest.raises(ValueError):
-        GitHubLoginConfig("client", "secret", uri)
+        GitHubLoginConfig("client", "secret", uri, repository="owner/repo")
 
 
 def test_loopback_and_secret_repr():
-    config = GitHubLoginConfig("client", "private-secret", "http://127.0.0.1:8000/api/auth/github/callback")
+    config = GitHubLoginConfig("client", "private-secret", "http://127.0.0.1:8000/api/auth/github/callback",
+    repository="owner/repo",
+)
     assert "private-secret" not in repr(config)
 
 
@@ -233,12 +244,13 @@ def test_stale_callback_preserves_newer_login(flow):
     assert login_cleared
 
 
-def test_token_exchange_uses_rotated_file_secret(tmp_path, monkeypatch):
+def test_token_exchange_uses_rotated_file_secret(tmp_path, monkeypatch, permission_api):
     monkeypatch.delenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", raising=False)
     secret_file = tmp_path / ".env"
     secret_file.write_text("ENGINE_GITHUB_LOGIN_CLIENT_SECRET=initial\n")
     flow = GitHubLogin(GitHubLoginConfig(
-        "login-client", "initial", "https://engine.test/api/auth/github/callback", secret_file
+        "login-client", "initial", "https://engine.test/api/auth/github/callback", secret_file,
+        repository="owner/repo",
     ))
     client = browser(flow)
     state = start(client)["state"][0]
@@ -466,7 +478,8 @@ SERVICE_TOKEN = "service-token-" * 3
 def _service_app(token=SERVICE_TOKEN):
     from starlette.responses import JSONResponse as _J
     flow = GitHubLogin(GitHubLoginConfig(
-        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback",
+        repository="owner/repo",
     ), lambda: token)
     routes = flow.routes() + [
         Route("/api/runs", lambda _r: _J({"runId": "run-1"}, status_code=201), methods=["GET", "POST"]),
@@ -511,7 +524,8 @@ def test_service_token_rotation_takes_effect_per_request():
     current = {"token": SERVICE_TOKEN}
     from starlette.responses import JSONResponse as _J
     flow = GitHubLogin(GitHubLoginConfig(
-        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback",
+        repository="owner/repo",
     ), lambda: current["token"])
     routes = [Route("/api/runs", lambda _r: _J({}, status_code=201), methods=["POST"])]
     client = TestClient(flow.middleware(Starlette(routes=routes)), base_url="https://engine.test")
@@ -545,3 +559,121 @@ def test_invalid_service_token_fails_startup(tmp_path, monkeypatch):
     monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "short")
     with pytest.raises(EngineConfigError, match="ENGINE_SERVICE_TOKEN"):
         _service_token_reader(SimpleNamespace(path=tmp_path / "engine.toml"))
+
+
+@pytest.mark.parametrize("permission, admitted", [
+    ("write", True), ("maintain", True), ("admin", True),
+    ("read", False), ("triage", False), ("none", False), ("unknown", False),
+])
+def test_callback_requires_repository_permission(flow, permission_api, permission, admitted):
+    permission_api.return_value["permission"] = permission
+    client = browser(flow)
+    state = start(client)["state"][0]
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, state, code="code")
+    assert response.headers["location"] == ("/" if admitted else "/login?error=forbidden")
+    assert bool(client.cookies.get("engine_session")) is admitted
+    assert client.get("/api/auth/github/status").json()["authenticated"] is admitted
+    permission_api.assert_awaited_once_with("GET", "/repos/owner/repo/collaborators/alice/permission")
+
+
+@pytest.mark.parametrize("body", [
+    None, [], {}, {"permission": "write"},
+    {"permission": "write", "user": {"id": 99, "login": "alice"}},
+    {"permission": "write", "user": {"id": 42, "login": "other"}},
+    {"permission": "write", "user": {"id": "42", "login": "alice"}},
+    {"permission": ["write"], "user": {"id": 42, "login": "alice"}},
+])
+def test_unexpected_permission_response_denies_login(flow, permission_api, body):
+    permission_api.return_value = body
+    client = browser(flow)
+    state = start(client)["state"][0]
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, state, code="code")
+    assert response.headers["location"] == "/login?error=forbidden"
+    assert not client.cookies.get("engine_session")
+
+
+@pytest.mark.parametrize("error", ["404 Not Found", "403 Forbidden", "500 Server Error", "timeout", "invalid JSON"])
+def test_permission_api_errors_deny_login(flow, permission_api, error):
+    permission_api.side_effect = GitHubTransportError(error)
+    client = browser(flow)
+    state = start(client)["state"][0]
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, state, code="code")
+    assert response.headers["location"] == "/login?error=forbidden"
+    assert not client.cookies.get("engine_session")
+
+
+@pytest.mark.parametrize("failure", ["revoked", "api-error", "renamed"])
+def test_existing_session_rechecks_permission(flow, permission_api, failure):
+    client = _app_with_middleware(flow)
+    now = [1000.0]
+    with patch("engine.apps.web.github_login.time.monotonic", side_effect=lambda: now[0]):
+        # Two browsers for the same user share one permission check.
+        client.cookies.set("engine_session", flow._make_session_cookie(42, "alice"))
+        assert client.get("/api/data").status_code == 200
+        other = browser(flow)
+        other.cookies.set("engine_session", flow._make_session_cookie(42, "alice"))
+        assert other.get("/api/auth/github/status").json()["authenticated"]
+        if failure == "revoked":
+            permission_api.return_value["permission"] = "read"
+        elif failure == "renamed":
+            permission_api.return_value["user"]["id"] = 99
+        else:
+            permission_api.side_effect = GitHubTransportError("unavailable")
+        now[0] += 899
+        assert client.get("/api/data").status_code == 200
+        assert permission_api.await_count == 1
+        now[0] += 1
+        assert client.get("/api/data").status_code == 401
+        assert client.get("/graph/api/graphs").status_code == 401
+        assert not other.get("/api/auth/github/status").json()["authenticated"]
+        assert permission_api.await_count == 2
+
+
+def test_permission_cache_is_per_identity(permission_api):
+    import asyncio
+
+    async def scenario():
+        permission = RepositoryLoginPermission("owner/repo")
+        assert await permission.allowed(42, "alice")
+        assert not await permission.allowed(43, "bob")
+        assert await permission.allowed(42, "alice")
+        assert permission_api.await_count == 2
+        assert not await RepositoryLoginPermission("").allowed(42, "alice")
+        assert permission_api.await_count == 2
+    asyncio.run(scenario())
+
+
+def test_permission_uses_host_cli_identity(monkeypatch):
+    import asyncio
+    import json
+
+    monkeypatch.setenv("GITHUB_TOKEN", "settings-token")
+    monkeypatch.setenv("GITHUB_ENTERPRISE_TOKEN", "settings-enterprise-token")
+    monkeypatch.setenv("GH_HOST", "other.example")
+    process = AsyncMock()
+    process.returncode = 0
+    process.communicate.return_value = (
+        json.dumps({"permission": "write", "user": {"id": 42, "login": "alice"}}).encode(), b""
+    )
+    with patch("asyncio.create_subprocess_exec", return_value=process) as spawn:
+        assert asyncio.run(RepositoryLoginPermission("owner/repo").allowed(42, "alice"))
+    args, kwargs = spawn.call_args
+    assert args[:3] == ("gh", "api", "/repos/owner/repo/collaborators/alice/permission")
+    assert args[args.index("--hostname") + 1] == "github.com"
+    assert "GITHUB_TOKEN" not in kwargs["env"]
+    assert "GITHUB_ENTERPRISE_TOKEN" not in kwargs["env"]
+
+
+def test_service_token_does_not_require_repository_check(monkeypatch):
+    check = AsyncMock(side_effect=AssertionError("service tokens must bypass the check"))
+    monkeypatch.setattr(RepositoryLoginPermission, "allowed", check)
+    client = _service_app()
+    client.cookies.set("engine_session", "invalid-browser-session")
+    assert client.post("/api/runs", headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}).status_code == 201
+    check.assert_not_awaited()

@@ -22,7 +22,7 @@ from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.__main__ import build_app
 from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
-from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
+from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig, RepositoryLoginPermission
 from engine.apps.web.utilization import (
     RunnerUtilization,
     UtilizationService,
@@ -985,7 +985,8 @@ def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
     app = _graph_app_over(
         store, runtime, _review_graph(),
         github_login_config=GitHubLoginConfig(
-            "client", "secret", "https://engine.test/api/auth/github/callback"
+            "client", "secret", "https://engine.test/api/auth/github/callback",
+            repository="owner/repo",
         ),
     )
 
@@ -1007,7 +1008,7 @@ def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ):
+    ), patch.object(RepositoryLoginPermission, "allowed", return_value=True):
         created = asyncio.run(scenario())
 
     assert created.status_code == 201, created.text
@@ -3629,7 +3630,8 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) 
     app = _graph_app_over(
         store, ScriptedGraphRuntime(graph), graph,
         github_login_config=GitHubLoginConfig(
-            "client", "secret", "https://engine.test/api/auth/github/callback"
+            "client", "secret", "https://engine.test/api/auth/github/callback",
+            repository="owner/repo",
         ),
     )
 
@@ -3649,7 +3651,7 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) 
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ):
+    ), patch.object(RepositoryLoginPermission, "allowed", return_value=True):
         started = asyncio.run(scenario())
 
     assert started.status_code == 200, started.text

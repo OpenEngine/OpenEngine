@@ -5,13 +5,16 @@ The session cookie is set after a successful OAuth callback and checked by
 the status endpoint so the frontend can gate access.
 """
 
+import asyncio
 import base64
 import hashlib
 import hmac
 
 import os
+import re
 import secrets
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +22,7 @@ from urllib.parse import unquote, urlencode, urlsplit
 
 import httpx
 from dotenv import dotenv_values
+from engine.adapters.source_control.github.transports import GitHubCliTransport, GitHubTransportError
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -29,6 +33,7 @@ _COOKIE = "engine_github_login"
 _SESSION_COOKIE = "engine_session"
 _TTL = 600
 _SESSION_TTL = 86400  # 24 hours
+_PERMISSION_TTL = 900  # 15 minutes
 _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 # The one route a service credential may reach: the MCP gateway creating work
 # orders. Everything else still requires a browser session.
@@ -49,12 +54,63 @@ def _return_to(value: str) -> str:
     return value
 
 
+class RepositoryLoginPermission:
+    """Reusable, fail-closed authorization for a verified GitHub identity.
+
+    Uses the host CLI credential, never a browser or Settings OAuth token.
+    Results (including denials) are cached per identity for 15 minutes. The
+    bounded process-local cache cannot outlive the process-local session key.
+    """
+
+    def __init__(self, repository: str) -> None:
+        self.repository = repository
+        # Browser OAuth identifies github.com users, regardless of GH_HOST.
+        self._transport = GitHubCliTransport(host="github.com", timeout_seconds=10)
+        self._cache: OrderedDict[tuple[int, str], tuple[float, bool]] = OrderedDict()
+        self._lock = asyncio.Lock()
+
+    async def allowed(self, user_id: int, login: str) -> bool:
+        """Whether this stable user ID/login may log in or refresh a token."""
+        if (type(user_id) is not int or user_id <= 0
+                or not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9-]+", login)
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository)):
+            return False
+        key = (user_id, login)
+        async with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None and time.monotonic() < cached[0]:
+                self._cache.move_to_end(key)
+                return cached[1]
+            allowed = False
+            try:
+                body = await self._transport.request(
+                    "GET", f"/repos/{self.repository}/collaborators/{login}/permission"
+                )
+                if isinstance(body, dict):
+                    user = body.get("user")
+                    allowed = (
+                        body.get("permission") in ("write", "maintain", "admin")
+                        and isinstance(user, dict)
+                        and type(user.get("id")) is int and user["id"] == user_id
+                        and isinstance(user.get("login"), str)
+                        and user["login"].lower() == login.lower()
+                    )
+            except (GitHubTransportError, OSError, ValueError):
+                pass
+            self._cache[key] = (time.monotonic() + _PERMISSION_TTL, allowed)
+            self._cache.move_to_end(key)
+            if len(self._cache) > 4096:
+                self._cache.popitem(last=False)
+            return allowed
+
+
 @dataclass(frozen=True)
 class GitHubLoginConfig:
     client_id: str
     client_secret: str = field(repr=False)
     redirect_uri: str
     secret_file: Path | None = field(default=None, repr=False)
+    repository: str = ""
 
     def current_secret(self) -> str:
         if self.secret_file is None:
@@ -79,6 +135,9 @@ class GitHubLoginConfig:
         ):
             raise ValueError("GitHub login requires credentials and an HTTPS callback URL (HTTP allowed on loopback)")
 
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository):
+            raise ValueError("GitHub login requires [github].repository in owner/repo format")
+
 
 class GitHubLogin:
     def __init__(
@@ -87,6 +146,7 @@ class GitHubLogin:
         service_token: Callable[[], str] = lambda: "",
     ) -> None:
         self.config = config
+        self.permission = RepositoryLoginPermission(config.repository if config else "")
         # A reader rather than a value, so rotating the secret on disk takes
         # effect on the next request without a restart.
         self.service_token = service_token
@@ -114,7 +174,7 @@ class GitHubLogin:
         return f"{payload}|{self._sign(payload)}"
 
     def _read_session(self, request: Request) -> dict[str, object] | None:
-        """Verify and decode the session cookie, or None if invalid/expired."""
+        """Decode a signed identity; callers must authorize it via read_session."""
         cookie = request.cookies.get(_SESSION_COOKIE, "")
         if not cookie or len(cookie) > 512:
             return None
@@ -133,6 +193,13 @@ class GitHubLogin:
         if expires <= time.time() or user_id <= 0 or not login:
             return None
         return {"id": user_id, "login": login}
+
+    async def read_session(self, request: Request) -> dict[str, object] | None:
+        """Read a session only while repository access is still authorized."""
+        user = self._read_session(request)
+        if user is None or not await self.permission.allowed(int(user["id"]), str(user["login"])):
+            return None
+        return user
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
@@ -248,6 +315,8 @@ class GitHubLogin:
                     raise ValueError("Invalid identity")
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
+        if not await self.permission.allowed(user["id"], user["login"]):
+            return RedirectResponse("/login?error=forbidden", status_code=302)
         # Issue a session cookie and redirect to the app.
         response = RedirectResponse(pending[3], status_code=302)
         session_value = self._make_session_cookie(user["id"], user["login"])
@@ -258,7 +327,7 @@ class GitHubLogin:
 
     async def status(self, request: Request) -> Response:
         """Return the current session state for the frontend auth gate."""
-        user = self._read_session(request)
+        user = await self.read_session(request)
         return JSONResponse({
             "authenticated": user is not None,
             "user": user,
@@ -311,7 +380,7 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        if self.login._read_session(request) is not None or self.login._has_service_token(request):
+        if self.login._has_service_token(request) or await self.login.read_session(request) is not None:
             await self.app(scope, receive, send)
             return
         response = JSONResponse(

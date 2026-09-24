@@ -7,6 +7,9 @@ in `engine.toml`:
 ```toml
 github_login_client_id = "your-login-client-id"
 github_login_redirect_uri = "https://your-engine-host/api/auth/github/callback"
+
+[github]
+repository = "owner/repo"
 ```
 
 `ENGINE_GITHUB_LOGIN_CLIENT_ID` and `ENGINE_GITHUB_LOGIN_REDIRECT_URI`
@@ -35,7 +38,25 @@ mounting the application. Middleware returns 401 for unauthenticated requests
 to protected `/api/` and `/graph/api/` routes; the four GitHub login endpoints remain public. Slack events bypass browser
 session checks and retain Slack signature verification. The frontend rechecks
 session status every 30 seconds and unmounts the app if the session is invalid.
-Repository permission checks (#302) remain separate work.
+Only users with `write`, `maintain`, or `admin` permission on
+`[github].repository` may log in. The server checks GitHub's collaborator
+permission endpoint using the host's `gh auth` identity described below, never
+the logging-in user's token. That host credential must be able to read
+collaborator permissions for the configured repository on github.com.
+
+Login fails closed: missing repository configuration fails startup; API errors,
+missing host credentials, unexpected responses, and insufficient permissions
+redirect to `/login?error=forbidden` without issuing a session. Permission
+responses must match the verified user's stable GitHub ID as well as login.
+
+Permission results are cached per user in a bounded server-side cache for
+15 minutes, shared across that user's browser sessions. The next session status
+or protected API request after expiry rechecks permission; revocation or an API
+failure then denies access even if the 24-hour session cookie has not expired.
+Denials are cached for the same interval, so restored access may take up to
+15 minutes to become available. Cache eviction can cause an earlier recheck.
+`RepositoryLoginPermission.allowed(user_id, login)` is the reusable check for
+future token-refresh callers.
 
 ## Service token for the MCP gateway
 

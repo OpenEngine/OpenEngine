@@ -1411,7 +1411,8 @@ def test_slack_signature_auth_with_github_login_enabled(tmp_path, valid_signatur
     app, _, _ = _app(
         tmp_path, RecordingCommunications(), WorkOrdersConfig(),
         github_login_config=GitHubLoginConfig(
-            "client", "secret", "https://engine.example/api/auth/github/callback"
+            "client", "secret", "https://engine.example/api/auth/github/callback",
+            repository="owner/repo",
         ),
     )
     body = json.dumps({"type": "url_verification", "challenge": "abc"}).encode()

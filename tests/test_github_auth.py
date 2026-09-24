@@ -754,8 +754,9 @@ def test_browser_users_have_isolated_credentials_and_device_flows(tmp_path, monk
     monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
     monkeypatch.setattr(keyring, "delete_password", lambda s, u: saved.pop((s, u), None))
     GitHubCredentialStore().set("legacy-personal-token")
-    config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback")
+    config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback", repository="owner/repo")
     login = GitHubLogin(config)
+    monkeypatch.setattr(login.permission, "allowed", AsyncMock(return_value=True))
     monkeypatch.setattr("engine.apps.web.api.GitHubLogin", lambda *_: login)
     app = _make_github_app(tmp_path, client_id="", login_config=config)
     start = AsyncMock(side_effect=[

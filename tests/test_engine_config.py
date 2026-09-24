@@ -384,6 +384,7 @@ def test_github_login_toml_and_secret_rotation(tmp_path, monkeypatch):
     (tmp_path / "engine.toml").write_text(
         'github_login_client_id = "login-client"\n'
         'github_login_redirect_uri = "https://engine.test/api/auth/github/callback"\n'
+        '[github]\nrepository = "owner/repo"\n'
     )
     secret_file = tmp_path / ".env"
     secret_file.write_text('ENGINE_GITHUB_LOGIN_CLIENT_SECRET="first-${LITERAL}"\n')
@@ -484,3 +485,14 @@ def test_repository_choices_load_from_toml(tmp_path: Path) -> None:
 def test_invalid_repository_choices_are_rejected(repos) -> None:
     with pytest.raises(EngineConfigError, match="repos"):
         parse_engine_config({"repos": repos})
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]])
+def test_web_login_requires_repository(tmp_path, monkeypatch, capsys, args):
+    path = tmp_path / "engine.toml"
+    path.write_text("")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "client")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "https://engine.test/api/auth/github/callback")
+    assert web_main.main([*args, "--config", str(path)]) == 2
+    assert "[github].repository" in capsys.readouterr().err

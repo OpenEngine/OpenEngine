@@ -140,7 +140,9 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
     if not any((client_id, redirect_uri, secret)):
         return None
     try:
-        return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
+        return GitHubLoginConfig(
+            client_id, secret, redirect_uri, secret_file, loaded.config.github.repository
+        )
     except ValueError as error:
         raise EngineConfigError(str(error)) from error
 

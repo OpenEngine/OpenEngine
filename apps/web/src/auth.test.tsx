@@ -186,6 +186,7 @@ describe("AuthGate", () => {
 
   it.each([
     ["expired", "Login expired. Please try again."],
+    ["forbidden", "Access denied. Write access to the configured GitHub repository is required. Contact the administrator if access could not be verified."],
     ["denied", "GitHub authorization was not completed."],
     ["failed", "Could not verify your GitHub identity. Please try again."],
     ["unknown", "Could not verify your GitHub identity. Please try again."],
