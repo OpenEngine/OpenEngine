@@ -337,6 +337,68 @@ def fetch_json(server: str, path: str) -> dict[str, Any]:
     return payload
 
 
+def request_json(server: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    request = Request(
+        f"{server}{path}", data=json.dumps(body).encode(), method="POST",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=10.0) as response:
+            payload = json.loads(response.read())
+    except HTTPError as error:
+        try:
+            detail = json.loads(error.read()).get("error")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            detail = None
+        raise RuntimeError(str(detail or f"server returned HTTP {error.code}")) from None
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"could not post {path}: {error}") from None
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{path} did not return a JSON object")
+    return payload
+
+
+def content_text(content: object) -> str:
+    if not isinstance(content, list):
+        return ""
+    return "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
+
+
+def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> int:
+    request = Request(
+        f"{server}{path}", data=json.dumps(body).encode() if body is not None else None,
+        method="POST" if body is not None else "GET",
+        headers={"Accept": "application/x-ndjson", **({"Content-Type": "application/json"} if body is not None else {})},
+    )
+    try:
+        with urlopen(request, timeout=30.0) as response:
+            if response.status == 204:
+                print("No active run.")
+                return EXIT_OK
+            for line in response:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if event.get("type") == "content":
+                    print(content_text(event.get("content")), end="\r", flush=True)
+                elif event.get("type") == "error":
+                    print(f"\nengine: {event.get('error')}", file=sys.stderr)
+                    return EXIT_UNHEALTHY
+                elif event.get("type") == "done":
+                    text = content_text(event.get("content"))
+                    if text:
+                        print(f"\n{text}")
+                    return EXIT_OK
+    except KeyboardInterrupt:
+        print("\nDetached; the service-side run continues.")
+        return EXIT_OK
+    except HTTPError as error:
+        print(f"engine: server returned HTTP {error.code}", file=sys.stderr)
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+        print(f"engine: stream disconnected: {error}", file=sys.stderr)
+    return EXIT_UNHEALTHY
+
+
 def selected_server(arguments: argparse.Namespace, preferences: Preferences) -> str:
     candidate = arguments.server if getattr(arguments, "server", None) else preferences.profile().server
     return normalize_server(candidate)
@@ -454,6 +516,52 @@ def task(arguments: argparse.Namespace, preferences: Preferences) -> int:
     return EXIT_OK
 
 
+def creation_defaults(server: str, preferences: Preferences, arguments: argparse.Namespace) -> tuple[str, str, str]:
+    config = fetch_json(server, "/api/config")
+    agent = getattr(arguments, "agent", None) or config.get("defaultAgent")
+    runner = getattr(arguments, "runner", None) or config.get("defaultRunner")
+    repositories = config.get("repositories") if isinstance(config.get("repositories"), list) else []
+    remembered = preferences.profile().last_repository
+    repository = getattr(arguments, "repository", None) or remembered or (
+        repositories[0].get("path", "") if repositories and isinstance(repositories[0], dict) else ""
+    )
+    if not isinstance(agent, str) or not agent or not isinstance(runner, str) or not runner:
+        raise RuntimeError("service does not advertise a default agent and runner")
+    return agent, runner, str(repository)
+
+
+def run(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            print(f"engine: {check.detail}", file=sys.stderr)
+            return EXIT_UNHEALTHY
+        agent, runner, repository = creation_defaults(server, preferences, arguments)
+        thread = request_json(server, "/api/threads", {"agentId": agent, "runner": runner})
+        if repository:
+            thread["workspaceRoot"] = repository
+        remember_thread(preferences, thread)
+        print(f"Started {thread.get('title', 'task')} ({thread.get('id')})")
+        return stream_run(server, f"/api/threads/{thread['id']}/runs", {"text": arguments.prompt, "runner": runner})
+    except (ValueError, RuntimeError, KeyError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+
+
+def resume(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            print(f"engine: {check.detail}", file=sys.stderr)
+            return EXIT_UNHEALTHY
+        thread = fetch_json(server, f"/api/threads/{arguments.thread_id}")
+        remember_thread(preferences, thread)
+    except (ValueError, RuntimeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+    return stream_run(server, f"/api/threads/{arguments.thread_id}/runs/current")
+
+
 def palette(options: list[str], prompt: str) -> str | None:
     """A tiny searchable, arrow-key/Enter picker without a UI dependency."""
     query = ""
@@ -523,9 +631,9 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         if line != "/":
             print("Use / to open the command palette. Type /quit to exit.")
             continue
-        command = palette(["/help", "/status", "/threads", "/web", "/quit"], "Command: ")
+        command = palette(["/help", "/status", "/threads", "/new", "/web", "/quit"], "Command: ")
         if command in {None, "/help"}:
-            print("/status  service readiness\n/threads  inspect conversations\n/web  open the web UI\n/quit  exit")
+            print("/status  service readiness\n/threads  inspect conversations\n/new  start a task\n/web  open the web UI\n/quit  exit")
         elif command == "/status":
             status(argparse.Namespace(server=server, json=False), preferences)
         elif command == "/threads":
@@ -538,7 +646,11 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
             selected = palette(choices, "Open thread: ") if choices else None
             if selected:
                 thread_id = selected.rsplit(" — ", 1)[-1]
-                task(argparse.Namespace(server=server, thread_id=thread_id, json=False), preferences)
+                resume(argparse.Namespace(server=server, thread_id=thread_id), preferences)
+        elif command == "/new":
+            prompt = input("Task: ").strip()
+            if prompt:
+                run(argparse.Namespace(server=server, prompt=prompt, agent=None, runner=None, repository=None), preferences)
         elif command == "/web":
             webbrowser.open(server)
             print(f"Opened {server}")
@@ -616,6 +728,15 @@ def parser() -> argparse.ArgumentParser:
     task_command.add_argument("thread_id")
     task_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
     task_command.add_argument("--json", action="store_true")
+    run_command = commands.add_parser("run", help="create a conversation and stream its task")
+    run_command.add_argument("prompt")
+    run_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    run_command.add_argument("--agent")
+    run_command.add_argument("--runner")
+    run_command.add_argument("--repository")
+    resume_command = commands.add_parser("resume", help="reconnect to a conversation's current run")
+    resume_command.add_argument("thread_id")
+    resume_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
     config = commands.add_parser("config", help="manage persistent CLI preferences")
     config_commands = config.add_subparsers(dest="config_command", required=True)
     server = config_commands.add_parser("server", help="set the selected profile's service URL")
@@ -643,6 +764,10 @@ def main(argv: list[str] | None = None) -> int:
         return threads(arguments, preferences)
     if arguments.command == "task":
         return task(arguments, preferences)
+    if arguments.command == "run":
+        return run(arguments, preferences)
+    if arguments.command == "resume":
+        return resume(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "server":
         return configure_server(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "profile":

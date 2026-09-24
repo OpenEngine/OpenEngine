@@ -64,6 +64,15 @@ Type `/` to search the palette, then choose `/status`, `/threads`, `/web`, or
 (`--all` or `--archived`), and `engine task THREAD_ID`. Task creation, streaming,
 and decisions remain later stages.
 
+Start a terminal task with `engine run "describe the work"`; it creates a
+conversation using the service's default agent and runner, then renders its
+NDJSON progress. `--agent` and `--runner` select the service's available
+configuration; `--repository` records the task's repository context while the
+service workspace provider attaches the new conversation. `engine resume
+THREAD_ID` reconnects to a current run.
+Ctrl-C detaches the terminal stream only: it never sends the service a cancel
+request.
+
 While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev

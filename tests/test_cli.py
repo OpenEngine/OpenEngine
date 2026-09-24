@@ -171,6 +171,34 @@ def test_palette_filters_then_selects_with_arrow_keys(monkeypatch):
     assert cli.palette(["/help", "/status", "/threads"], "Command: ") == "/threads"
 
 
+def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "cli.json"))
+    monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))
+    monkeypatch.setattr(cli, "creation_defaults", lambda *_args: ("coder", "codex", "/repo"))
+    monkeypatch.setattr(cli, "request_json", lambda *_args: {"id": "thread-1", "title": "New chat"})
+    seen = []
+    monkeypatch.setattr(cli, "stream_run", lambda server, path, body=None: seen.append((server, path, body)) or 0)
+
+    assert cli.main(["run", "Ship it"]) == 0
+
+    assert seen == [("http://engine.test", "/api/threads/thread-1/runs", {"text": "Ship it", "runner": "codex"})]
+    assert cli.load_preferences().profile().last_task == "thread-1"
+    assert "Started New chat" in capsys.readouterr().out
+
+
+def test_resume_reconnects_without_issuing_a_cancellation(monkeypatch):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))
+    monkeypatch.setattr(cli, "fetch_json", lambda *_args: {"id": "thread-1"})
+    seen = []
+    monkeypatch.setattr(cli, "stream_run", lambda server, path, body=None: seen.append((server, path, body)) or 0)
+
+    assert cli.main(["resume", "thread-1"]) == 0
+
+    assert seen == [("http://engine.test", "/api/threads/thread-1/runs/current", None)]
+
+
 def test_doctor_reports_prerequisites_and_keeps_a_stable_exit_code(monkeypatch, tmp_path: Path, capsys):
     monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "config" / "cli.json"))
     monkeypatch.setattr(cli, "user_data_path", lambda _name: tmp_path / "data")
