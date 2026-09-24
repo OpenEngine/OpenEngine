@@ -29,7 +29,6 @@ import {
   useRunGithubComments,
 } from "./github-activity";
 import { useProjectMilestones } from "./milestone-timeline";
-import { WorkspaceControl } from "./workspace";
 
 export const IN_PROGRESS_PHASES = new Set([
   "pending",
@@ -998,11 +997,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
               />
             )}
           </StatStrip>
-          {graph && typeof graph.values.workspaceId === "string" && (
-            <section className="run-workspace" aria-label="WorkOrder checkout">
-              <WorkspaceControl runId={graph.runId} />
-            </section>
-          )}
           <StageProgress run={run} />
           {/* A WorkOrder's stages are its graph's nodes, so having none means
               the graph engine could not be read -- not that the run has no

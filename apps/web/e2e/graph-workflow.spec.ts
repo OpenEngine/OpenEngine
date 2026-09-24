@@ -383,19 +383,6 @@ test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) =
   ]);
 });
 
-test("the checkout a graph run works in is on its WorkOrder page", async ({
-  page,
-  engine,
-}) => {
-  engine.script(SCRIPT);
-
-  const runUrl = await create(page, engine.repository);
-  await page.goto(runUrl);
-
-  const checkout = page.locator(".run-workspace .dock-path");
-  await expect(checkout).toContainText("cd ");
-});
-
 test("the rail offers a graph WorkOrder's conversations by node", async ({
   page,
   engine,
