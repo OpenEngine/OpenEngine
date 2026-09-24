@@ -211,11 +211,14 @@ If you want the browser tier pointed at a real agent as well, the credentials go
 in **repository → Settings → Secrets and variables → Actions**, under the names
 that workflow already reads:
 
-* `OPENAI_API_KEY` -- Codex CLI.
-* `ANTHROPIC_API_KEY` -- Claude Code. A subscription token from
-  `claude setup-token` works too, as `CLAUDE_CODE_OAUTH_TOKEN`; whichever you
-  add, the job must export it into the server process's environment, because
-  that is what spawns the CLI.
+* `OPENAI_API_KEY` -- Codex, through `@agentclientprotocol/codex-acp`.
+* `ANTHROPIC_API_KEY` -- Claude, through
+  `@agentclientprotocol/claude-agent-acp`. A subscription token from
+  `claude setup-token` works too, as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Whichever you add, the job must export it into the server process's
+environment, because that is what launches the ACP adapter, which passes it on
+to the agent.
 
 Absent, live scenarios skip rather than fail: an unauthenticated runner is a
 configuration fact, not a test result. Nothing in this directory reads a

@@ -37,5 +37,6 @@ uv pip install ./wheels/*.whl
 ```
 
 Configure `engine.toml` for the deployment and point its workflow directory at
-the extracted `workflows` directory. Provider CLIs and credentials are supplied
-by the deployment.
+the extracted `workflows` directory. The deployment supplies Node.js with `npx`,
+which Engine uses to launch the pinned ACP adapters, and each provider's
+credentials. No `codex` or `claude` executable is needed.
