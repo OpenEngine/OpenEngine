@@ -22,7 +22,9 @@ function LoginPage() {
               ? "Login expired. Please try again."
               : error === "denied"
                 ? "GitHub authorization was not completed."
-                : "Could not verify your GitHub identity. Please try again."}
+                : error === "forbidden"
+                  ? "Your GitHub account does not have write access to this repository."
+                  : "Could not verify your GitHub identity. Please try again."}
           </p>
         )}
         <a href={loginUrl} className="btn btn-primary login-btn">

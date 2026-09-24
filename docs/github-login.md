@@ -35,7 +35,19 @@ mounting the application. Middleware returns 401 for unauthenticated requests
 to protected `/api/` and `/graph/api/` routes; the four GitHub login endpoints remain public. Slack events bypass browser
 session checks and retain Slack signature verification. The frontend rechecks
 session status every 30 seconds and unmounts the app if the session is invalid.
-Repository permission checks (#302) remain separate work.
+
+## Repository access
+
+A GitHub account alone does not open the app: WorkOrder links are posted to
+GitHub issues, which anyone can read. At the callback, the server asks GitHub
+whether the signed-in account has write access (write, maintain, or admin) to
+the `[github] repository` named in `engine.toml`, counting team and
+organization grants. The check uses the server's own `gh` login, not the
+user's token. An account without write access is sent to
+`/login?error=forbidden` and receives no session. When the check fails or
+times out, or no `[github] repository` is configured, login is refused.
+Access is checked at sign-in only, so revoking it takes effect when the
+session expires (24 hours) or the server restarts.
 
 ## Service token for the MCP gateway
 
