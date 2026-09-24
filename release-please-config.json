@@ -8,6 +8,11 @@
       "extra-files": [
         {
           "type": "toml",
+          "path": "apps/cli/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
           "path": "apps/control_server/pyproject.toml",
           "jsonpath": "$.project.version"
         },
