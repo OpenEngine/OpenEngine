@@ -86,3 +86,29 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
         run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json --clobber
+
+  publish-langgraph-acp:
+    needs: release-please
+    if: github.event_name == 'push' && needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    # PyPI trusted publishing: the `pypi` environment and this workflow file are
+    # what the project's trusted publisher on pypi.org names. No token is stored.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/langgraph-acp/
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: langgraph-acp
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+      - run: uv build --no-sources
+      - run: uv publish --trusted-publishing always

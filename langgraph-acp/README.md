@@ -10,7 +10,7 @@ langgraph-acp owns the binding between the two.
 ```
 
 The design and the ticket sequence live in
-[docs/langgraph-acp Architecture and Implementation Plan.md](../docs/langgraph-acp%20Architecture%20and%20Implementation%20Plan.md).
+[docs/langgraph-acp Architecture and Implementation Plan.md](https://github.com/OpenEngine/OpenEngine/blob/main/docs/langgraph-acp%20Architecture%20and%20Implementation%20Plan.md).
 
 ## Status
 
