@@ -61,7 +61,6 @@ from approval_scenarios import (
     FAKE_PAUSE_TIMEOUT,
     FAKE_TURN_TIMEOUT,
     SCENARIOS,
-    Transcript,
     open_chat,
 )
 
@@ -93,12 +92,10 @@ def test_the_approval_contract_holds_over_acp(
     """Approve, cancel, and a session grant replayed to a new agent process."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    transcript = Transcript(f"acp-{provider}-{scenario}", provider, "fake")
-
     async def run() -> None:
         client, chat = await open_chat(
             RUNNERS[provider](workspace),
-            transcript,
+            f"acp-{provider}-{scenario}",
             runner_name=provider,
             pause_timeout=FAKE_PAUSE_TIMEOUT,
             turn_timeout=FAKE_TURN_TIMEOUT,
@@ -110,10 +107,7 @@ def test_the_approval_contract_holds_over_acp(
         finally:
             await client.aclose()
 
-    try:
-        asyncio.run(run())
-    finally:
-        transcript.write()
+    asyncio.run(run())
 
 
 def _turn(runner: ACPAgentRunner, decide: ApprovalDecision, workspace: Path):

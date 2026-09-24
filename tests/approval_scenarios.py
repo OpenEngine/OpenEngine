@@ -19,11 +19,9 @@ started a second turn would pass without any of our persistence existing.
 """
 
 import asyncio
-import hashlib
 import json
-import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -39,7 +37,7 @@ from engine.domain import (
     ApprovalStatus,
 )
 from engine.ports import AgentRunner
-from engine.runtime import AgentSession, Capabilities, normalized_scope
+from engine.runtime import AgentSession, Capabilities
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -56,20 +54,11 @@ PROFILES = {
 FAKE_PAUSE_TIMEOUT = 20.0
 FAKE_TURN_TIMEOUT = 60.0
 
-#: Where a failing scenario leaves its redacted transcript. Unset locally, so
-#: nothing is written; CI sets it and uploads the directory on failure only.
-ARTIFACTS = os.environ.get("ENGINE_COMPAT_ARTIFACTS", "")
-
-#: What the agent is told to do. Fixed strings, so a transcript may quote them:
-#: everything else a provider sends is redacted, because we cannot know what
-#: put it there.
+#: What the agent is told to do.
 APPROVED_COMMAND = "printf 'approved\\n' >> allowed.txt"
 SESSION_COMMAND = "printf 'again\\n' >> session.txt"
 OTHER_COMMAND = "printf 'other\\n' >> other.txt"
 FORBIDDEN_COMMAND = "printf 'forbidden\\n' >> forbidden.txt"
-SAFE_TO_QUOTE = frozenset(
-    {APPROVED_COMMAND, SESSION_COMMAND, OTHER_COMMAND, FORBIDDEN_COMMAND}
-)
 
 
 # --- what a failure has to say for itself -----------------------------------
@@ -78,7 +67,7 @@ SAFE_TO_QUOTE = frozenset(
 class ScenarioFailure(AssertionError):
     """A compatibility failure that names where it happened.
 
-    Which provider, which scenario, and which stage of it, so a red cell can be
+    Which provider, which scenario, and which stage of it, so a failure can be
     read without opening the log.
     """
 
@@ -86,77 +75,6 @@ class ScenarioFailure(AssertionError):
         super().__init__(f"[{label}] {stage}: {detail}")
         self.label = label
         self.stage = stage
-
-
-def redacted(value: str | None) -> str | None:
-    """Text we are willing to keep, or a fingerprint of text we are not.
-
-    Everything a provider says is somebody's prompt, somebody's source file, or
-    somebody's command output until proven otherwise, and none of that belongs
-    in a public build artifact. The scenarios' own commands are quotable
-    because we wrote them; anything else is reduced to a length and a digest,
-    which is still enough to see that two frames carried the same thing.
-    """
-    if value is None:
-        return None
-    if value in SAFE_TO_QUOTE:
-        return value
-    digest = hashlib.sha256(value.encode()).hexdigest()[:12]
-    return f"<redacted len={len(value)} sha256={digest}>"
-
-
-@dataclass
-class Transcript:
-    """What happened, in the shape a stranger could act on.
-
-    Structure only: kinds, decisions, statuses, timings, and event *types*. No
-    message text, no command output, no environment. A transcript that could
-    leak a prompt would not be uploadable, and one that is not uploadable is
-    not a diagnostic.
-    """
-
-    label: str
-    provider: str
-    version: str
-    entries: list[dict[str, object]] = field(default_factory=list)
-
-    def note(self, stage: str, **fields: object) -> None:
-        self.entries.append({"stage": stage, **fields})
-
-    def note_approval(self, stage: str, record: ApprovalRecord) -> None:
-        self.note(
-            stage,
-            approval_id=str(record.approval_id),
-            kind=record.kind.value,
-            status=record.status.value,
-            decision=record.decision.value if record.decision else None,
-            decision_source=(
-                record.decision_source.value if record.decision_source else None
-            ),
-            tool_name=record.tool_name,
-            command=redacted(record.command),
-            cwd=redacted(record.cwd),
-            arguments=redacted(record.arguments),
-            normalized_scope=redacted(normalized_scope(record)),
-        )
-
-    def write(self) -> None:
-        if not ARTIFACTS:
-            return
-        directory = Path(ARTIFACTS)
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{self.label}.json").write_text(
-            json.dumps(
-                {
-                    "provider": self.provider,
-                    "version": self.version,
-                    "scenario": self.label,
-                    "entries": self.entries,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
 
 
 # --- driving one conversation -----------------------------------------------
@@ -204,7 +122,7 @@ class Chat:
         client: httpx.AsyncClient,
         store: InMemoryStateStore,
         thread_id: str,
-        transcript: Transcript,
+        label: str,
         *,
         pause_timeout: float,
         turn_timeout: float,
@@ -212,7 +130,7 @@ class Chat:
         self.client = client
         self.store = store
         self.thread_id = thread_id
-        self.transcript = transcript
+        self.label = label
         self._pause_timeout = pause_timeout
         self._turn_timeout = turn_timeout
 
@@ -225,20 +143,17 @@ class Chat:
         timeout -- which is the correct outcome for "this should not have
         asked", and is reported as exactly that.
         """
-        self.transcript.note(stage, sent=redacted(text), decision=decide.value if decide else None)
         try:
             return await asyncio.wait_for(self._say(text, decide, stage), self._turn_timeout)
         except asyncio.TimeoutError:
             waiting = await self.store.list_approvals(status=ApprovalStatus.PENDING)
-            for record in waiting:
-                self.transcript.note_approval(f"{stage}: still waiting", record)
             await self.stop()
             raise ScenarioFailure(
-                self.transcript.label,
+                self.label,
                 stage,
                 (
                     f"the turn did not finish within {self._turn_timeout:g}s; it is "
-                    f"waiting on {[redacted(record.command) for record in waiting]}"
+                    f"waiting on {[record.command for record in waiting]}"
                     if waiting
                     else f"the turn did not finish within {self._turn_timeout:g}s"
                 ),
@@ -256,7 +171,6 @@ class Chat:
         try:
             if decide is not None:
                 pending = await self._await_pending(before, stage)
-                self.transcript.note_approval(f"{stage}: asked", pending)
                 answered = await self.client.post(
                     f"/api/threads/{self.thread_id}/runs/current/approvals/"
                     f"{pending.approval_id}",
@@ -264,7 +178,7 @@ class Chat:
                 )
                 if answered.status_code != 200:
                     raise ScenarioFailure(
-                        self.transcript.label,
+                        self.label,
                         stage,
                         f"the decision was refused: {answered.status_code} {answered.text}",
                     )
@@ -275,15 +189,8 @@ class Chat:
                 await asyncio.gather(started, return_exceptions=True)
 
         raised = tuple((await self.store.list_approvals())[before:])
-        for record in raised:
-            self.transcript.note_approval(f"{stage}: recorded", record)
         events = tuple(
             json.loads(line) for line in response.text.splitlines() if line.strip()
-        )
-        self.transcript.note(
-            f"{stage}: finished",
-            event_types=[event.get("type") for event in events],
-            approvals=len(raised),
         )
         return Turn(events=events, approvals=raised)
 
@@ -296,7 +203,7 @@ class Chat:
                 return approvals[-1]
             await asyncio.sleep(0.02)
         raise ScenarioFailure(
-            self.transcript.label,
+            self.label,
             stage,
             f"the provider did not ask for approval within {self._pause_timeout:g}s",
         )
@@ -314,7 +221,7 @@ class Chat:
 
 async def open_chat(
     runner: AgentRunner,
-    transcript: Transcript,
+    label: str,
     *,
     runner_name: str,
     pause_timeout: float,
@@ -348,7 +255,7 @@ async def open_chat(
         client,
         store,
         created.json()["id"],
-        transcript,
+        label,
         pause_timeout=pause_timeout,
         turn_timeout=turn_timeout,
     )
