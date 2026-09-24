@@ -92,6 +92,9 @@ def claude_session_config(
             "type": "preset",
             "preset": "claude_code",
             "append": instructions,
+            # The SDK otherwise records the first prompt and replays it on
+            # resume, so a loaded session would keep its original append.
+            "snapshot": False,
         }
     return {"claudeCode": {"options": options}}
 

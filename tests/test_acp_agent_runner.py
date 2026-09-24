@@ -455,6 +455,8 @@ def test_claude_is_given_its_allowed_tools_and_settings() -> None:
     assert options["settings"]["outputStyle"] == "Concise"
     assert options["settings"]["attribution"] == {"commit": "", "pr": "", "sessionUrl": False}
     assert "AI attribution" in options["systemPrompt"]["append"]
+    # Re-rendered on session/load rather than replayed from the first launch.
+    assert options["systemPrompt"]["snapshot"] is False
     assert config["model"] == "claude-picked"
     # Whatever mode the operator's own Claude settings name, Engine is asked.
     assert config["mode"] == "default"
