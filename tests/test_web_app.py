@@ -3960,3 +3960,33 @@ def test_signing_in_is_refused_without_a_repository_to_check() -> None:
 
     assert asyncio.run(authorize("maintainer")) is False
     source_control.can_write_repository.assert_not_awaited()
+
+
+def test_configured_mcp_oauth_uses_login_gate_and_public_discovery(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "secret")
+    config = tmp_path / "engine.toml"
+    config.write_text('''public_url = "https://engine.test"
+mcp_resource_url = "https://gateway.test/mcp"
+github_login_client_id = "client"
+github_login_redirect_uri = "https://engine.test/api/auth/github/callback"
+[github]
+repository = "acme/api"
+''')
+    app = build_app(config)
+    endpoint = next(route.endpoint for route in app.app.routes
+                    if getattr(route, "path", "") == "/api/oauth/authorize")
+    oauth = endpoint.__self__
+    assert oauth.login is app.login
+    assert oauth.login.authorize is not None
+    assert oauth.resource == "https://gateway.test/mcp"
+    assert "/.well-known/oauth-authorization-server" in _proxied_prefixes()
+    async def ask():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://engine.test") as client:
+            discovery = await client.get("/.well-known/oauth-authorization-server/api/oauth")
+            assert discovery.status_code == 200
+            assert discovery.json()["issuer"] == "https://engine.test/api/oauth"
+            assert (await client.get("/api/oauth/authorize", follow_redirects=False)).status_code == 302
+            assert (await client.get("/api/config")).status_code == 401
+    asyncio.run(ask())

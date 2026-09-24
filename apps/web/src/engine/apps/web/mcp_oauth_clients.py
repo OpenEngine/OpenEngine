@@ -22,7 +22,7 @@ def validate_client(document):
             raise ValueError("invalid redirect URI")
         uri = urlsplit(value)
         local = uri.hostname in {"127.0.0.1", "::1", "localhost"}
-        if (not uri.hostname or uri.username or uri.password or uri.fragment
+        if (not uri.hostname or uri.username is not None or uri.password is not None or "#" in value
                 or "\\" in value or (uri.scheme != "https" and not (uri.scheme == "http" and local))):
             raise ValueError("redirect URI requires HTTPS (HTTP allowed on loopback)")
         _ = uri.port
@@ -42,8 +42,8 @@ def validate_client(document):
 
 async def fetch_cimd(client_id: str):
     uri = urlsplit(client_id)
-    if (uri.scheme != "https" or not uri.hostname or uri.username or uri.password
-            or uri.fragment or not uri.path or uri.path == "/" or len(client_id) > 2048
+    if (uri.scheme != "https" or not uri.hostname or uri.username is not None or uri.password is not None
+            or "#" in client_id or not uri.path or uri.path == "/" or len(client_id) > 2048
             or "\\" in client_id or any(c.isspace() for c in client_id)):
         raise ValueError("invalid HTTPS client_id")
     # Limit the whole operation, including DNS and slow streaming bodies.

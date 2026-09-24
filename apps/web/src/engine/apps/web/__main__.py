@@ -244,6 +244,8 @@ def compose_app(
         github_repository=settings.github_webhook.repository if settings.github_webhook else "",
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
+        mcp_resource_url=loaded.config.mcp_resource_url,
+        oauth_database=settings.sqlite_path,
         milestone_scoper=build_milestone_scoper(settings),
         work_orders=loaded.config.work_orders,
         show_projects=loaded.config.show_projects,
