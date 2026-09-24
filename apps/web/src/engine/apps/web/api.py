@@ -1138,6 +1138,10 @@ def create_app(
             graph_agent_reports.discard(state.run_id)
             return
         if event.kind is EventKind.TRANSCRIPT:
+            # Assistant role alone is not authorship: human/tool nodes also
+            # narrate their work in the UI. Their notifications are lifecycle-owned.
+            if node is None or node.kind != "agent":
+                return
             if event.payload.get("role", "assistant") != "assistant":
                 return
             report = event.payload.get("text")

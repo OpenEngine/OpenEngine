@@ -45,6 +45,7 @@ def test_agent_transcript_is_mirrored(
             raise RuntimeError("unexpected service failure")
         return {}
 
+    agent.graph_node_kind = "agent"
     builder = StateGraph(State)
     builder.add_node("agent", agent)
     builder.add_edge(START, "agent")
@@ -142,3 +143,83 @@ def test_agent_transcript_is_mirrored(
         "private command", "private output", "hidden system prompt", "user instructions",
     ))
     assert all((channel, thread) == ("CSOURCE", "1") for channel, _, thread in communications.posts)
+
+
+@pytest.mark.parametrize("decision", ["accept", "cancel"])
+@pytest.mark.parametrize("agent_report", [False, True])
+def test_human_review_slack_sequence(tmp_path, decision, agent_report):
+    from engine.graph_runtime_langgraph.components import HumanReviewNode
+
+    class Agent:
+        graph_node_kind = "agent"
+
+        async def __call__(self, state):
+            if agent_report:
+                await current_execution().say("Final report: ready for review.")
+            return {}
+
+    builder = StateGraph(State)
+    builder.add_node("agent", Agent())
+    builder.add_node("decision", HumanReviewNode())
+    builder.add_edge(START, "agent")
+    builder.add_edge("agent", "decision")
+    builder.add_edge("decision", END)
+    graph = graph_workflow(builder, id="review-mirror-test", name="Review mirror test")
+    communications = RecordingCommunications()
+    provider = FakeACPProvider(create=True, text="Created the work order.")
+    app, capabilities, _ = _app(
+        tmp_path, communications,
+        WorkOrdersConfig(repository="acme/api", workflow=graph.graph_id),
+        WorkflowCatalog.from_graphs((graph,)), provider=provider,
+        graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"),
+    )
+    with TestClient(app) as client:
+        body = json.dumps({"type": "event_callback", "event": {
+            "type": "app_mention", "channel": "CSOURCE", "user": "UREQUESTER",
+            "ts": "2", "thread_ts": "1", "text": "<@BOT> new workorder please",
+        }}).encode()
+        assert client.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
+        client.portal.call(app.state.slack_ingress.drain)
+        runs = client.portal.call(capabilities.state_store.list_runs)
+        assert len(runs) == 1
+        run_id = runs[0].run_id
+
+        async def wait_for_phase(phase):
+            async with asyncio.timeout(10):
+                while (await capabilities.state_store.load(run_id)).phase is not phase:
+                    await asyncio.sleep(0.01)
+
+        async def wait_for_review():
+            async with asyncio.timeout(10):
+                while not any(m.text == "Review complete and ready for your decision."
+                              for _, m, _ in communications.posts):
+                    await asyncio.sleep(0.01)
+
+        client.portal.call(wait_for_review)
+        events = client.get(f"/api/runs/{run_id}/graph-events").json()["events"]
+        approval = next(e for e in events if e["type"] == "approval.requested")
+        response = client.post(
+            f"/graph/api/runs/{run_id}/approvals/{approval['payload']['approvalId']}",
+            json={"decision": decision},
+        )
+        assert response.status_code < 300, response.text
+        client.portal.call(wait_for_phase, RunPhase.SUCCEEDED if decision == "accept" else RunPhase.FAILED)
+        events = client.get(f"/api/runs/{run_id}/graph-events").json()["events"]
+        # Internal narration remains available in OE but cannot count as a report.
+        transcripts = [e["payload"]["text"] for e in events if e["type"] == "transcript"]
+        assert HumanReviewNode().prompt in transcripts
+        assert f"Recorded: {'approved' if decision == 'accept' else 'rejected'}." in transcripts
+
+    expected = ["Created the work order.", "*agent* started."]
+    if agent_report:
+        expected.append("Final report: ready for review.")
+    expected.extend(["*Human review* started.", "Review complete and ready for your decision."])
+    if decision == "cancel":
+        expected.append("Work order failed: approval of this run was not allowed")
+    elif not agent_report:
+        expected.append("Work order finished.")
+    assert [message.text for _, message, _ in communications.posts] == expected
+    assert all((channel, thread) == ("CSOURCE", "1") for channel, _, thread in communications.posts)
+    review_message = next(m for _, m, _ in communications.posts
+                          if m.text == "Review complete and ready for your decision.")
+    assert review_message.mention == "UREQUESTER"

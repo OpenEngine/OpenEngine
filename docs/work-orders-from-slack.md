@@ -87,8 +87,9 @@ conversation routing are future work.
 
 ## What the agent can say
 
-Slack-originated graph WorkOrders mirror each assistant transcript message from
-the same event feed the WorkOrder UI renders, in order, into the originating
+Slack-originated graph WorkOrders mirror assistant transcript messages authored by
+agent nodes (identified by the graph topology's `agent` kind). Messages come from
+the same event feed the WorkOrder UI renders and arrive in order in the originating
 channel and thread. This includes intermediate narration and the final report,
 even when the agent never calls a status tool. The original requester identity
 stays on the WorkOrder; human action notifications mention that requester.
@@ -101,10 +102,10 @@ Notification ownership is explicit:
 | --- | --- |
 | Initial acknowledgement | Concierge, once when the WorkOrder is created |
 | Agent progress and final report | Assistant transcript events, once per event; graph agents are not offered the legacy `update_status` tool |
-| Tool calls, terminal output, user/system messages, hidden prompts | UI/runtime only; never mirrored |
+| Tool calls, terminal output, user/system messages, hidden prompts, non-agent node narration (including human-review prompts and recorded decisions) | UI/runtime only; never mirrored |
 | Node start | Lifecycle subscriber, one start notice |
 | Review or approval needing a human | Lifecycle subscriber, with the WorkOrder link and requester mention; automatic approvals stay silent |
-| Successful completion | Agent transcript owns the report; a generic completion notice is sent only when this run/continuation produced no assistant text |
+| Successful completion | Agent transcript owns the report; a generic completion notice is sent only when this run/continuation produced no agent-authored assistant text |
 | Unexpected run failure | Lifecycle subscriber, with the failure reason and requester mention |
 
 Tool-result summaries are not separately posted as completion reports. Repeated
