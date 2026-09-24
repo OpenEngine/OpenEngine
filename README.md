@@ -40,6 +40,22 @@ until startup completes, if the configured graph runtime cannot open, or during
 shutdown; otherwise it returns HTTP 200. This public endpoint requires no browser
 login and does not check external provider credentials.
 
+## Terminal diagnostics
+
+The `engine` terminal client can inspect a local or remote service without
+starting one:
+
+```bash
+engine status
+engine doctor --json
+engine status --server https://engine.example
+```
+
+It defaults to `http://127.0.0.1:4364`; `engine config server URL` saves a
+server for the selected profile and `engine config profile NAME` switches
+profiles. This first CLI release is diagnostic-only: local service startup and
+interactive task workflows arrive in later stages.
+
 While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev

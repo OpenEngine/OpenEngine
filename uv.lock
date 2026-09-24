@@ -23,6 +23,7 @@ members = [
     "engine-adapter-state-store-sqlite",
     "engine-adapter-workflow-runtime-temporal",
     "engine-adapter-workspace-provider-git-worktree",
+    "engine-cli",
     "engine-control-server",
     "engine-domain",
     "engine-github-concierge",
@@ -585,6 +586,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
+
+[[package]]
+name = "engine-cli"
+version = "0.0.0"
+source = { editable = "apps/cli" }
+dependencies = [
+    { name = "platformdirs" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "platformdirs", specifier = ">=4" }]
 
 [[package]]
 name = "engine-control-server"
