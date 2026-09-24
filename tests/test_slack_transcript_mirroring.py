@@ -133,6 +133,8 @@ def test_agent_transcript_is_mirrored(
         if text.strip()
     ]
     assert [text for text in posted if text in expected] == expected
+    assert all(not message.progress for _, message, _ in communications.posts
+               if message.text in expected)
     assert ("Work order finished." in posted) == (blank_report and ending == "finished")
     assert posted.count("Work order failed: unexpected service failure") == int(ending == "failed")
     assert posted.count("*agent* started.") == 1
