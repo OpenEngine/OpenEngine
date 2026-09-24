@@ -12,7 +12,7 @@ import pytest
 
 from engine.domain import RunId
 from engine.graph_runtime import EventKind, ExecutionId, NodeId, RuntimeEvent
-from engine.graph_runtime.usage import price_for, usage_rollup
+from engine.graph_runtime.usage import TokenCounts, price_for, usage_rollup
 from engine.graph_runtime_langgraph.acp import ACPNode, _Turn
 from engine.graph_runtime_langgraph.executions import NodeExecution
 from langgraph_acp import ACPEvent, ACPEventType
@@ -79,6 +79,20 @@ def test_an_unpriced_agent_is_unknown_not_free() -> None:
     assert usage_rollup([]).json()["costUsd"] is None
 
 
+def test_non_finite_numbers_are_ignored() -> None:
+    inf, nan = float("inf"), float("nan")
+    rollup = usage_rollup([
+        usage(IMPLEMENTATION, agent="claude", sessionId="a", sessionCostUsd=0.01),
+        usage(IMPLEMENTATION, agent="claude", sessionId="a", sessionCostUsd=inf),
+        usage(IMPLEMENTATION, agent="claude", sessionId="a", sessionCostUsd=nan),
+        turn(IMPLEMENTATION, "a", inputTokens=inf, outputTokens=nan, cachedReadTokens=5),
+    ])
+
+    node = rollup.nodes[str(IMPLEMENTATION)]
+    assert node.cost_usd == pytest.approx(0.01)
+    assert node.tokens == TokenCounts(cached_read_tokens=5)
+
+
 def test_the_configured_model_is_priced_before_the_agent() -> None:
     assert price_for("claude", "claude-haiku-4-5") == price_for("haiku")
     assert price_for("claude") == price_for("claude", "opus")
@@ -93,9 +107,12 @@ def test_acp_node_publishes_turn_tokens_and_session_cost() -> None:
                                data={"used": 10, "cost": {"amount": 0.02, "currency": "USD"}})
                 yield ACPEvent(agent="claude", type=ACPEventType.USAGE_UPDATED, session_id="s",
                                data={"cost": {"amount": 3, "currency": "EUR"}})
+                yield ACPEvent(agent="claude", type=ACPEventType.USAGE_UPDATED, session_id="s",
+                               data={"cost": {"amount": float("inf"), "currency": "USD"}})
                 yield ACPEvent(agent="claude", type=ACPEventType.PROMPT_COMPLETED, session_id="s",
                                data={"stopReason": "end_turn",
-                                     "usage": {"inputTokens": 7, "outputTokens": 3}})
+                                     "usage": {"inputTokens": 7, "outputTokens": 3,
+                                               "cachedReadTokens": float("nan")}})
 
             async def cancel(self) -> None: ...
 

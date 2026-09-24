@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import math
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -1100,14 +1101,14 @@ class ACPNode:
             payload["turn"] = True
             for name in ("inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens"):
                 value = usage.get(name)
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if _finite(value):
                     payload[name] = int(value)
             return payload
         cost = event.data.get("cost")
         if not isinstance(cost, Mapping) or cost.get("currency") not in (None, "USD"):
             return None
         amount = cost.get("amount")
-        if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+        if not _finite(amount):
             return None
         payload["sessionCostUsd"] = float(amount)
         return payload
@@ -1161,6 +1162,11 @@ class ACPNode:
         """
         value = request.tool_call.get("toolCallId")
         return value if isinstance(value, str) else ""
+
+
+def _finite(value: object) -> bool:
+    """Whether `value` is a real, finite number; JSON's `1e400` is infinity."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 __all__ = [

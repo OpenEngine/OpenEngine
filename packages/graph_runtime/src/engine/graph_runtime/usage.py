@@ -3,7 +3,8 @@
 An agent node publishes `usage.updated` as its conversation reports usage: the
 tokens of every prompt turn, and -- when the agent says -- what the session has
 cost so far. Nothing else is stored. The totals are a reduction over the run's
-event log, so they survive a restart with the log and cannot drift from it.
+event log, so they cannot drift from it -- and last only as long as it does,
+which for the web app's in-memory log is until the server restarts.
 
     usage.updated (per turn, per session)
         -> SessionUsage   reported session cost, else priced tokens
@@ -18,6 +19,7 @@ its cost is `None`, and any total it contributes to says it is incomplete.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
@@ -68,6 +70,17 @@ def price_for(agent: str, model: str = "") -> TokenPrice | None:
     return None
 
 
+def _amount(value: object) -> float | None:
+    """`value` as a finite, non-negative number, or `None` for anything else.
+
+    JSON can spell infinity (`1e400`), which no response can serialize back.
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    amount = float(value)
+    return amount if math.isfinite(amount) and amount >= 0 else None
+
+
 @dataclass(frozen=True, slots=True)
 class TokenCounts:
     """Tokens summed over disjoint prompt turns.
@@ -92,9 +105,8 @@ class TokenCounts:
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> TokenCounts:
         def count(name: str) -> int:
-            value = payload.get(name)
-            is_count = isinstance(value, (int, float)) and not isinstance(value, bool)
-            return int(value) if is_count and value >= 0 else 0
+            value = _amount(payload.get(name))
+            return int(value) if value is not None else 0
 
         return cls(
             count("inputTokens"),
@@ -191,9 +203,9 @@ def usage_rollup(events: Iterable[RuntimeEvent]) -> WorkOrderUsage:
         session = sessions.setdefault(key, _Session())
         session.agent = str(payload.get("agent") or session.agent)
         session.model = str(payload.get("model") or session.model)
-        cost = payload.get("sessionCostUsd")
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
-            session.reported_cost = float(cost)
+        cost = _amount(payload.get("sessionCostUsd"))
+        if cost is not None:
+            session.reported_cost = cost
         if payload.get("turn"):
             session.tokens += TokenCounts.from_payload(payload)
             session.turns += 1
