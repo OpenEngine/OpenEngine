@@ -59,7 +59,8 @@ def _codex_authenticated() -> bool:
     """Whether Codex has something to authenticate with.
 
     `codex login` leaves `auth.json` under `CODEX_HOME`; CI supplies an API key
-    instead. Either is enough to run a turn.
+    instead, which the turn hands to the adapter as `DEFAULT_AUTH_REQUEST`.
+    Either is enough to run a turn.
     """
     home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
     return bool(os.environ.get("OPENAI_API_KEY")) or os.path.exists(
@@ -117,13 +118,27 @@ def test_the_codex_adapter_completes_the_acp_handshake() -> None:
 
 
 @needs_codex
-def test_a_turn_through_the_codex_adapter_answers() -> None:
+def test_a_turn_through_the_codex_adapter_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The whole path: session, prompt, streamed updates, assembled result.
 
     `ACPNode` reads text out of `session/update` notifications and a stop
     reason out of the prompt response. Both are shapes the adapter owns, and
     neither is exercised by asserting on a command tuple.
+
+    The adapter only reads `OPENAI_API_KEY` while answering an ACP
+    `authenticate` for its `api-key` method, which this package never sends.
+    Without a login on disk, `session/new` is refused with "Authentication
+    required" however valid the key is. `DEFAULT_AUTH_REQUEST` is the adapter's
+    own way to authenticate on demand instead, and it is ignored when a login
+    already exists.
     """
+    if os.environ.get("OPENAI_API_KEY"):
+        monkeypatch.setenv(
+            "DEFAULT_AUTH_REQUEST",
+            os.environ.get("DEFAULT_AUTH_REQUEST", '{"methodId": "api-key"}'),
+        )
     result = asyncio.run(
         ACPNode(agent="codex")(
             "Reply with exactly the word: pineapple. No tools, no preamble."

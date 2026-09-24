@@ -74,6 +74,8 @@ class EventKind(Enum):
     """
     RUN_FINISHED = "run.finished"
     RUN_FAILED = "run.failed"
+    NOTIFICATION_FAILED = "notification.failed"
+    """Best-effort external delivery failed; payload contains a sanitized error."""
 
 
 @dataclass(frozen=True, slots=True)

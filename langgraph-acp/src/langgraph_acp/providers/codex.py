@@ -24,6 +24,13 @@ Authentication is Codex's own, and is unaffected by which binary runs: the
 bundled Codex reads `CODEX_HOME` (`~/.codex` by default), so it uses whatever
 `codex login` left behind. Nothing here reads or carries a credential, which is
 the property the secrets ticket has to preserve rather than establish.
+
+An `OPENAI_API_KEY` in the environment is not a login: the adapter reads it only
+when asked to authenticate with its `api-key` method, and this package never
+asks. Without a login, `session/new` is refused as "Authentication required".
+The adapter's `DEFAULT_AUTH_REQUEST` makes it authenticate on demand instead:
+
+    CodexACPProvider(env={"DEFAULT_AUTH_REQUEST": '{"methodId": "api-key"}'})
 """
 
 import os

@@ -87,29 +87,36 @@ conversation routing are future work.
 
 ## What the agent can say
 
-A step whose run came from a conversation is served one extra run-bound MCP
-tool, `update_status`, and told to use it. It takes a sentence, posts it in the
-thread, and does not end the step. A run started from the web is not served the
-tool at all, because there is nowhere for its updates to go.
+Slack-originated graph WorkOrders mirror assistant transcript messages authored by
+agent nodes (identified by the graph topology's `agent` kind). Messages come from
+the same event feed the WorkOrder UI renders and arrive in order in the originating
+channel and thread. This includes intermediate narration and the final report,
+even when the agent never calls a status tool. The original requester identity
+stays on the WorkOrder; human action notifications mention that requester.
+Web-originated runs have no Slack output, and routing never falls back to a
+configured default channel.
 
-Everything else in the thread is the runtime reporting, not the agent:
+Notification ownership is explicit:
 
-| What happened | What the thread says |
+| Message type | Owner and Slack behavior |
 | --- | --- |
-| A step began | `*Review* started.` |
-| `update_status` | `*Implementation*: <what the agent wrote>` |
-| `complete_step` | `*Implementation* complete.` with the step's summary, the pull request when the step declared a `pr_url` output, and a link to the WorkOrder |
-| `fail_step` | `*Implementation* failed.` with the reason |
-| `clarify` | the agent answered a question and changed nothing |
-| Any other pausing tool | `*Implementation* is waiting for an answer.` with what it asked |
-| The run died outside a step | `This work order failed.` with the reason |
-| Reviews finished | the review is complete and waiting on them, addressed by name |
+| Initial acknowledgement | Concierge, once when the WorkOrder is created |
+| Agent progress and final report | Assistant transcript events, once per event; graph agents are not offered the legacy `update_status` tool |
+| Tool calls, terminal output, user/system messages, hidden prompts, non-agent node narration (including human-review prompts and recorded decisions) | UI/runtime only; never mirrored |
+| Node start | Lifecycle subscriber, one start notice |
+| Review or approval needing a human | Lifecycle subscriber, with the WorkOrder link and requester mention; automatic approvals stay silent |
+| Successful completion | Agent transcript owns the report; a generic completion notice is sent only when this run/continuation produced no agent-authored assistant text |
+| Unexpected run failure | Lifecycle subscriber, with the failure reason and requester mention |
 
-That last one does not depend on the workflow's `notification=`, which says
-whether to *also* announce in the operators' channel — a different message with
-a different audience. A run started from a conversation always gets its ping,
-or the thread would report the review complete and then go quiet with the run
-parked on a decision nobody was told about.
+Tool-result summaries are not separately posted as completion reports. Repeated
+words in distinct assistant transcript events remain distinct messages; the
+subscriber does not deduplicate agent speech by text. A resumed run starts a new
+completion-notice decision. Browsing or replaying the UI feed does not resend
+notifications.
+
+Mirroring uses only the UI event text, preserving its redactions, and escapes
+Slack control syntax so agent-authored mentions and links cannot impersonate
+Slack routing or notification markup.
 
 Thread replies continue the concierge conversation. A correction to running work
 can use `steer_workorder`: the host selects the sole linked WorkOrder and passes
@@ -166,19 +173,11 @@ single-workspace deployment; a dedicated index can replace it as volume grows.
 
 ## What it will not do
 
-- **A graph workflow's stages are not narrated into the thread.** A graph run
-  is startable from a mention -- `workflow` above names one, and this repository
-  ships nothing else -- and its ending is reported. What is not reported is each
-  stage as it passes: a graph node has no run-bound step tool to report through,
-  so the thread hears that the run started and how it ended, and the WorkOrder
-  page is where the middle is read.
 - **Duplicate deliveries are ignored while remembered.** Accepted message identities
   are bounded to 4096 entries. A retry that was never accepted can be processed;
   no cross-restart exactly-once guarantee is claimed.
-- **Nothing is reported when the provider is down.** A Slack outage must not
-  fail the work it was reporting on, so the runtime's own messages are best
-  effort: they are logged and dropped, and the run continues with its record on
-  the WorkOrder page unaffected. `update_status` is the exception, because the
-  agent is waiting on the answer to its own tool call — it is told the status
-  did not go out, which does not end the step either. A disconnected workspace
-  counts as down: it is reported, not treated as a message that was sent.
+- **Slack delivery is best effort.** A failed graph notification does not fail
+  execution. The OE event feed records a `notification.failed` event with a fixed,
+  sanitized diagnostic; provider exception text, tokens and request bodies are
+  excluded. Failed posts are not retried automatically. The event feed diagnostic
+  is process-local, like the UI feed itself; this is not a durable delivery queue.
