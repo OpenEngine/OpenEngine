@@ -58,7 +58,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           version: "0.9.28"
           python-version: "3.12"
@@ -139,7 +139,7 @@ jobs:
             exit 1
           fi
           git checkout --quiet --detach "$sha"
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           version: "0.9.28"
       - run: uv build --no-sources --build-constraints build-constraints.txt --require-hashes --out-dir dist
