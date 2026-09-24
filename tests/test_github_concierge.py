@@ -1356,3 +1356,43 @@ def test_issue_progress_withholds_run_details_and_reports_a_resume(tmp_path, mon
     assert "Work order resumed." in texts
     assert not any("secret" in text or "evil" in text or "@team" in text for text in texts)
     assert all(call.args[0] == "github:acme/api" for call in posted.await_args_list)
+
+
+def test_issue_progress_survives_a_failed_pull_request_lookup(tmp_path, monkeypatch):
+    """The pull request link is optional: when the store cannot say which pull
+    request the run opened, the update still reaches the issue and the graph
+    observer does not raise into the run."""
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    from engine.apps.web.github_communications import GithubCommunications
+    from engine.graph_runtime import EventKind, RuntimeEvent
+
+    posted = AsyncMock(return_value="41")
+    monkeypatch.setattr(GithubCommunications, "post", posted)
+    runtime, opened = _graph_runtime()
+    runtime.store.pull_request_for_run = AsyncMock(side_effect=OSError("database is locked"))
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    ))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        observe = runtime.observe.call_args.args[0]
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId(STARTED_RUN), kind=EventKind.RUN_FINISHED, payload={},
+        ))
+
+    runtime.store.pull_request_for_run.assert_awaited()
+    message = posted.await_args.args[1]
+    assert message.text == "Work order finished."
+    assert not any(link.label == "View pull request" for link in message.links)

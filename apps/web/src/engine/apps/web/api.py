@@ -1222,8 +1222,14 @@ def create_app(
                 existing.label == "View pull request" for existing in links
             ):
                 # The issue timeline is the run's history, so every update
-                # carries the pull request once the run has opened one.
-                opened = await github_pull_request_for_run(str(state.run_id))
+                # carries the pull request once the run has opened one. The
+                # link is optional: a failed lookup must not fail the run or
+                # drop the update, since this observer runs inside the graph.
+                try:
+                    opened = await github_pull_request_for_run(str(state.run_id))
+                except Exception:
+                    log.exception("could not look up the pull request for run %s", state.run_id)
+                    opened = None
                 if opened is not None:
                     links.append(MessageLink("View pull request", pull_request_url(*opened)))
             try:
