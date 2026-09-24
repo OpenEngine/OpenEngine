@@ -45,8 +45,9 @@ the `[github] repository` named in `engine.toml`, counting team and
 organization grants. The check uses the server's own `gh` login, not the
 user's token. An account without write access is sent to
 `/login?error=forbidden` and receives no session. When the check fails or
-times out, login is refused with `/login?error=unverified`; when no
-`[github] repository` is configured, login is refused as forbidden.
+times out, login is refused with `/login?error=unverified`. Configuring GitHub
+login without a `[github] repository` is a configuration error: the server
+does not start.
 Access is checked at sign-in only, so revoking it takes effect when the
 session expires (24 hours) or the server restarts.
 

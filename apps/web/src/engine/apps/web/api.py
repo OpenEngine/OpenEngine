@@ -3668,7 +3668,8 @@ def create_app(
     async def github_login_allowed(login: str) -> bool:
         """Only people who can push to this deployment's repository see its WorkOrders."""
         if not github_repository:
-            log.warning("refused a session to %s: no [github] repository to check access against", login)
+            # Startup refuses login without a repository; kept as a fallback
+            # for apps built directly.
             return False
         async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
             # The check reads the repository from a pull request URL; the

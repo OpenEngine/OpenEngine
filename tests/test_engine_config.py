@@ -384,6 +384,7 @@ def test_github_login_toml_and_secret_rotation(tmp_path, monkeypatch):
     (tmp_path / "engine.toml").write_text(
         'github_login_client_id = "login-client"\n'
         'github_login_redirect_uri = "https://engine.test/api/auth/github/callback"\n'
+        '[github]\nrepository = "acme/api"\n'
     )
     secret_file = tmp_path / ".env"
     secret_file.write_text('ENGINE_GITHUB_LOGIN_CLIENT_SECRET="first-${LITERAL}"\n')
@@ -437,6 +438,29 @@ def test_web_reports_invalid_login_configuration(tmp_path, monkeypatch, capsys, 
     assert "Traceback" not in captured.err
     assert "private-secret" not in captured.err
     assert captured.out == ""
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]])
+def test_web_refuses_to_start_login_without_a_repository(tmp_path, monkeypatch, capsys, args):
+    """Login admits only accounts that can write to `[github] repository`, so
+    without one every login would be refused: that is a setup error, reported
+    at startup rather than to each user as missing access."""
+    path = tmp_path / "engine.toml"
+    path.write_text("")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "client")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "private-secret")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "https://engine.test/api/auth/github/callback")
+
+    def unexpected_start(*args, **kwargs):
+        pytest.fail("Login without a repository must stop startup")
+
+    monkeypatch.setattr(web_main.uvicorn, "run", unexpected_start)
+    monkeypatch.setattr(web_main, "report_wiring", unexpected_start)
+    assert web_main.main(["--config", str(path), *args]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("configuration error: GitHub login requires [github] repository")
+    assert "Traceback" not in captured.err
+    assert "private-secret" not in captured.err
 
 
 @pytest.mark.parametrize("key", ["github_login_client_id", "github_login_redirect_uri"])
