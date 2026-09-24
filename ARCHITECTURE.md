@@ -86,7 +86,7 @@ AgentRouter
    ↓
 AgentRunner port
    ↓
-Codex adapter
+ACP agent runner
 
 The runtime owns execution mechanics; the engine owns decisions.
 
@@ -119,10 +119,8 @@ Executes a configured agent.
 
 Implementations might include:
 
-ACP agents -- Codex and Claude Code, reached through langgraph-acp (what chat and the workflows use)
-Codex CLI
-Claude Code CLI
-Other coding CLIs
+ACP agents -- Codex and Claude Code, reached through langgraph-acp and the pinned ACP adapters (what chat and the workflows use)
+Other agents that speak ACP
 Source Control
 
 Provides repository/change-management capabilities.

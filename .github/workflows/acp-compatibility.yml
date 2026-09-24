@@ -64,13 +64,17 @@ jobs:
         # Read from the pins themselves, so the summary names what the tests
         # launched. The bundled Codex is recorded too: codex-acp runs its own
         # `@openai/codex` rather than a `codex` on PATH, so "which Codex broke"
-        # has no other answer here.
+        # has no other answer here. The adapter declares that dependency as a
+        # range, so it is read off an install of the pinned adapter -- the
+        # release npx resolves for the tests -- rather than off its manifest.
         shell: bash
         run: |
           set -euo pipefail
           codex_acp=$(uv run --locked python -c 'from langgraph_acp.providers.codex import CODEX_ACP_VERSION; print(CODEX_ACP_VERSION)')
           claude_acp=$(uv run --locked python -c 'from langgraph_acp.providers.claude import CLAUDE_ACP_VERSION; print(CLAUDE_ACP_VERSION)')
-          codex=$(npm view "@agentclientprotocol/codex-acp@$codex_acp" "dependencies[@openai/codex]")
+          prefix="$RUNNER_TEMP/codex-acp"
+          npm install --silent --no-audit --no-fund --prefix "$prefix" "@agentclientprotocol/codex-acp@$codex_acp"
+          codex=$(node -p 'require(process.argv[1]).version' "$prefix/node_modules/@openai/codex/package.json")
           for pinned in \
             "@agentclientprotocol/codex-acp $codex_acp" \
             "@agentclientprotocol/claude-agent-acp $claude_acp" \
