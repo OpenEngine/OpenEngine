@@ -34,6 +34,7 @@ def test_status_json_identifies_a_ready_compatible_service(monkeypatch, capsys):
         "checks": [{"name": "service", "ok": True, "detail": "OpenEngine 1.2.3 is ready"}],
         "identity": {"service": "openengine", "version": "1.2.3", "ready": True, "api_version": 1},
         "server": "http://engine.test",
+        "started": False,
     }
 
 
@@ -74,6 +75,61 @@ def test_config_profile_switches_the_server_preference(monkeypatch, tmp_path: Pa
     preferences = cli.load_preferences(path)
     assert preferences.selected_profile == "staging"
     assert preferences.profile().server == "https://staging.example"
+
+
+def test_default_local_status_starts_one_service_when_nothing_responds(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv(cli.STATE_ENVIRONMENT_VARIABLE, str(tmp_path))
+    unavailable = cli.Check("service", False, "cannot reach local service")
+    ready = cli.Check("service", True, "OpenEngine 1.2.3 is ready")
+    identity = {"service": "openengine", "version": "1.2.3", "ready": True, "api_version": 1}
+    responses = iter([(unavailable, None), (unavailable, None)])
+    monkeypatch.setattr(cli, "probe", lambda *_args, **_kwargs: next(responses))
+    started = []
+    monkeypatch.setattr(cli, "launch_local_service", lambda server: started.append(server) or object())
+    monkeypatch.setattr(cli, "wait_until_ready", lambda *_args: (ready, identity))
+
+    check, actual_identity, launched = cli.ensure_service(cli.DEFAULT_SERVER)
+
+    assert check.ok is True
+    assert actual_identity == identity
+    assert launched is True
+    assert started == [cli.DEFAULT_SERVER]
+
+
+def test_explicit_remote_service_never_starts_a_local_process(monkeypatch):
+    unavailable = cli.Check("service", False, "cannot reach remote service")
+    monkeypatch.setattr(cli, "probe", lambda *_args, **_kwargs: (unavailable, None))
+    monkeypatch.setattr(cli, "launch_local_service", lambda *_args: (_ for _ in ()).throw(AssertionError("must not start")))
+
+    check, identity, launched = cli.ensure_service("https://example.invalid")
+
+    assert check is unavailable
+    assert identity is None
+    assert launched is False
+
+
+def test_an_occupied_default_port_with_another_http_service_is_not_replaced(monkeypatch):
+    occupied = cli.Check("service", False, "endpoint is not an OpenEngine service")
+    monkeypatch.setattr(cli, "probe", lambda *_args, **_kwargs: (occupied, {"service": "other"}))
+    monkeypatch.setattr(cli, "launch_local_service", lambda *_args: (_ for _ in ()).throw(AssertionError("must not start")))
+
+    check, identity, launched = cli.ensure_service(cli.DEFAULT_SERVER)
+
+    assert check is occupied
+    assert identity == {"service": "other"}
+    assert launched is False
+
+
+def test_stale_startup_lock_is_recovered(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv(cli.STATE_ENVIRONMENT_VARIABLE, str(tmp_path))
+    lock = tmp_path / "startup.lock"
+    lock.write_text("999999")
+    monkeypatch.setattr(cli, "process_alive", lambda _pid: False)
+
+    with cli.startup_lock():
+        assert lock.exists()
+
+    assert not lock.exists()
 
 
 def test_doctor_reports_prerequisites_and_keeps_a_stable_exit_code(monkeypatch, tmp_path: Path, capsys):

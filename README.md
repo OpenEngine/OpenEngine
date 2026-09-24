@@ -42,8 +42,7 @@ login and does not check external provider credentials.
 
 ## Terminal diagnostics
 
-The `engine` terminal client can inspect a local or remote service without
-starting one:
+The `engine` terminal client inspects a local or remote service:
 
 ```bash
 engine status
@@ -54,7 +53,10 @@ engine status --server https://engine.example
 It defaults to `http://127.0.0.1:4364`; `engine config server URL` saves a
 server for the selected profile and `engine config profile NAME` switches
 profiles. This first CLI release is diagnostic-only: local service startup and
-interactive task workflows arrive in later stages.
+interactive task workflows arrive in later stages. When the selected server is
+the default local address and no compatible service is responding, `engine
+status` starts one `engine-web` process and waits for its health endpoint. An
+explicit `--server` is always probe-only.
 
 While working on OpenEngine itself, run the development server instead:
 ```bash
