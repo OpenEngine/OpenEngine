@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import webbrowser
 from contextlib import contextmanager
@@ -395,23 +396,61 @@ def content_text(content: object) -> str:
     return "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
 
 
+class TerminalSpinner:
+    """Show that a streaming request is alive before its first event arrives."""
+
+    def __init__(self, message: str = "Working") -> None:
+        self.message = message
+        self._stopped = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._finished = False
+
+    def start(self) -> None:
+        if not sys.stderr.isatty():
+            return
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        self._stopped.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+            print("\r\x1b[K", end="", file=sys.stderr, flush=True)
+
+    def _spin(self) -> None:
+        for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
+            print(f"\r{frame} {self.message}…", end="", file=sys.stderr, flush=True)
+            if self._stopped.wait(0.1):
+                return
+
+
 def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> int:
     request = Request(
         f"{server}{path}", data=json.dumps(body).encode() if body is not None else None,
         method="POST" if body is not None else "GET",
         headers=request_headers({"Accept": "application/x-ndjson", **({"Content-Type": "application/json"} if body is not None else {})}),
     )
+    spinner = TerminalSpinner()
+    spinner.start()
+    last_content = ""
     try:
         with urlopen(request, timeout=30.0) as response:
             if response.status == 204:
+                spinner.stop()
                 print("No active run.")
                 return EXIT_OK
             for line in response:
                 if not line.strip():
                     continue
+                spinner.stop()
                 event = json.loads(line)
                 if event.get("type") == "content":
-                    print(content_text(event.get("content")), end="\r", flush=True)
+                    last_content = content_text(event.get("content"))
+                    print(last_content, end="\r", flush=True)
                 elif event.get("type") == "approval" and isinstance(event.get("approval"), dict):
                     approval = event["approval"]
                     print("\nApproval required:")
@@ -440,8 +479,10 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
                     return EXIT_UNHEALTHY
                 elif event.get("type") == "done":
                     text = content_text(event.get("content"))
-                    if text:
+                    if text and text != last_content:
                         print(f"\n{text}")
+                    elif text:
+                        print()
                     return EXIT_OK
     except KeyboardInterrupt:
         print("\nDetached; the service-side run continues.")
@@ -450,6 +491,8 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
         print(f"engine: server returned HTTP {error.code}", file=sys.stderr)
     except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
         print(f"engine: stream disconnected: {error}", file=sys.stderr)
+    finally:
+        spinner.stop()
     return EXIT_UNHEALTHY
 
 
@@ -484,6 +527,74 @@ def status(arguments: argparse.Namespace, preferences: Preferences) -> int:
     check, identity, started = ensure_service(server)
     render([check], arguments.json, {"server": server, "identity": identity, "started": started})
     return EXIT_OK if check.ok else EXIT_UNHEALTHY
+
+
+def connection_snapshot(server: str) -> dict[str, dict[str, Any]]:
+    """Read each integration's existing status endpoint without changing it."""
+    return {
+        "github": fetch_json(server, "/api/github/status"),
+        "sourceControl": fetch_json(server, "/api/source-control/status"),
+        "gitlab": fetch_json(server, "/api/gitlab/status"),
+        "slack": fetch_json(server, "/api/slack/status"),
+    }
+
+
+def _connection_state(connected: object, configured: object = True) -> str:
+    if connected is True:
+        return "connected"
+    if configured is True:
+        return "not connected"
+    return "not configured"
+
+
+def render_connections(snapshot: dict[str, dict[str, Any]], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps({"connections": snapshot}, sort_keys=True))
+        return
+
+    github = snapshot["github"]
+    source_control = snapshot["sourceControl"]
+    gitlab = snapshot["gitlab"]
+    slack = snapshot["slack"]
+    gh_cli = source_control.get("ghCli")
+    gh_cli = gh_cli if isinstance(gh_cli, dict) else {}
+    provider = source_control.get("provider") or "none selected"
+    account = gh_cli.get("account")
+    source_connected = False
+    if provider == "gh-cli" and gh_cli.get("authenticated") is True:
+        provider_detail = f"GitHub CLI connected{f' as {account}' if account else ''}"
+        source_connected = True
+    elif provider == "github-oauth":
+        provider_detail = "GitHub OAuth"
+        source_connected = github.get("connected") is True
+    elif provider == "gitlab-oauth":
+        provider_detail = "GitLab OAuth"
+        source_connected = gitlab.get("connected") is True
+    else:
+        provider_detail = str(provider)
+    slack_state = _connection_state(slack.get("connected"), slack.get("configured"))
+    if slack.get("connected") is True:
+        slack_state += "; events ready" if slack.get("events") is True else "; events not ready"
+    gitlab_origin = gitlab.get("origin") or "https://gitlab.com"
+
+    print("Connections")
+    print(f"{'✓' if github.get('connected') is True else '○'}  GitHub OAuth: {_connection_state(github.get('connected'), github.get('clientIdConfigured'))}")
+    print(f"{'✓' if source_connected else '○'}  Source control: {provider_detail}")
+    print(f"{'✓' if gitlab.get('connected') is True else '○'}  GitLab ({gitlab_origin}): {_connection_state(gitlab.get('connected'), gitlab.get('clientIdConfigured'))}")
+    print(f"{'✓' if slack.get('connected') is True else '○'}  Slack: {slack_state}")
+
+
+def connections(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            render([check], arguments.json, {"server": server})
+            return EXIT_UNHEALTHY
+        render_connections(connection_snapshot(server), arguments.json)
+        return EXIT_OK
+    except (ValueError, RuntimeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
 
 
 def filtered_threads(threads: list[dict[str, Any]], filter_name: str) -> list[dict[str, Any]]:
@@ -527,6 +638,58 @@ def threads(arguments: argparse.Namespace, preferences: Preferences) -> int:
         return EXIT_UNHEALTHY
     render_threads(values, arguments.json)
     return EXIT_OK
+
+
+def load_transcript(server: str, thread_id: str) -> list[dict[str, Any]]:
+    payload = fetch_json(server, f"/api/threads/{thread_id}/messages")
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or any(not isinstance(message, dict) for message in messages):
+        raise RuntimeError("service returned invalid conversation messages")
+    return messages
+
+
+def visible_transcript(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the terminal transcript conversational; tools remain UI-only."""
+    visible = []
+    for message in messages:
+        text = content_text(message.get("content"))
+        if not text:
+            continue
+        visible.append({
+            "id": message.get("id"),
+            "role": message.get("role"),
+            "content": [{"type": "text", "text": text}],
+        })
+    return visible
+
+
+def render_transcript(messages: list[dict[str, Any]], as_json: bool) -> None:
+    visible = visible_transcript(messages)
+    if as_json:
+        print(json.dumps({"messages": visible}, sort_keys=True))
+        return
+    if not visible:
+        print("No conversation messages.")
+        return
+    for message in visible:
+        speaker = "You" if message.get("role") == "user" else "OpenEngine"
+        text = content_text(message.get("content"))
+        print(speaker)
+        print("\n".join(f"  {line}" for line in text.splitlines() or [""]))
+        print()
+
+
+def transcript(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            render([check], arguments.json, {"server": server})
+            return EXIT_UNHEALTHY
+        render_transcript(load_transcript(server, arguments.thread_id), arguments.json)
+        return EXIT_OK
+    except (ValueError, RuntimeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
 
 
 def remember_thread(preferences: Preferences, thread: dict[str, Any]) -> None:
@@ -576,12 +739,22 @@ def creation_defaults(server: str, preferences: Preferences, arguments: argparse
     runner = getattr(arguments, "runner", None) or config.get("defaultRunner")
     repositories = config.get("repositories") if isinstance(config.get("repositories"), list) else []
     remembered = preferences.profile().last_repository
-    repository = getattr(arguments, "repository", None) or remembered or (
+    # A local Engine shares the terminal's filesystem, so the least surprising
+    # task workspace is the directory where the person ran `engine run`.
+    # Never make that assumption for a remote server: its filesystem may be
+    # unrelated to the terminal client's.
+    local_cwd = str(Path.cwd().resolve()) if is_local_server(server) else ""
+    repository = getattr(arguments, "repository", None) or local_cwd or remembered or (
         repositories[0].get("path", "") if repositories and isinstance(repositories[0], dict) else ""
     )
     if not isinstance(agent, str) or not agent or not isinstance(runner, str) or not runner:
         raise RuntimeError("service does not advertise a default agent and runner")
     return agent, runner, str(repository)
+
+
+def is_local_server(server: str) -> bool:
+    """Whether a server URL can safely use a client-side filesystem path."""
+    return urlsplit(server).hostname in {"127.0.0.1", "localhost", "::1"}
 
 
 def run(arguments: argparse.Namespace, preferences: Preferences) -> int:
@@ -724,9 +897,9 @@ def repo(arguments: argparse.Namespace, preferences: Preferences) -> int:
         return EXIT_UNHEALTHY
 
 
-def palette(options: list[str], prompt: str) -> str | None:
+def palette(options: list[str], prompt: str, *, initial_query: str = "") -> str | None:
     """A tiny searchable, arrow-key/Enter picker without a UI dependency."""
-    query = ""
+    query = initial_query
     selected = 0
     while True:
         matches = [option for option in options if query.casefold() in option.casefold()]
@@ -740,6 +913,8 @@ def palette(options: list[str], prompt: str) -> str | None:
         key = read_key()
         if key == "enter":
             return matches[selected] if matches else None
+        if key == "quit":
+            return "/quit"
         if key == "escape":
             return None
         if key == "up" and matches:
@@ -759,7 +934,8 @@ def read_key() -> str:
         key = msvcrt.getwch()
         if key in {"\x00", "\xe0"}:
             return {"H": "up", "P": "down"}.get(msvcrt.getwch(), "")
-        return {"\r": "enter", "\x1b": "escape", "\x08": "backspace"}.get(key, key)
+        return {"\r": "enter", "\x1a": "quit", "\x1b": "escape", "\x08": "backspace"}.get(key, key)
+    import select
     import termios
     import tty
 
@@ -767,11 +943,26 @@ def read_key() -> str:
     previous = termios.tcgetattr(descriptor)
     try:
         tty.setraw(descriptor)
-        key = sys.stdin.read(1)
+        # Do not mix TextIOWrapper reads with select/os.read below: the wrapper
+        # can prefetch `[` and `A`/`B` from an arrow sequence, making select
+        # incorrectly conclude that lone Escape was pressed.
+        key = os.read(descriptor, 1).decode(errors="ignore")
         if key == "\x1b":
-            suffix = sys.stdin.read(2)
-            return {"[A": "up", "[B": "down"}.get(suffix, "escape")
-        return {"\r": "enter", "\n": "enter", "\x7f": "backspace"}.get(key, key)
+            # Escape is also the first byte of an arrow-key sequence. Waiting
+            # for two more bytes here made a lone Escape feel like it needed
+            # extra key presses before a menu could go back.
+            ready, _, _ = select.select([descriptor], [], [], 0.03)
+            if not ready:
+                return "escape"
+            first = os.read(descriptor, 1).decode(errors="ignore")
+            if first != "[":
+                return "escape"
+            ready, _, _ = select.select([descriptor], [], [], 0.03)
+            if not ready:
+                return "escape"
+            second = os.read(descriptor, 1).decode(errors="ignore")
+            return {"A": "up", "B": "down"}.get(second, "escape")
+        return {"\r": "enter", "\n": "enter", "\x1a": "quit", "\x7f": "backspace"}.get(key, key)
     finally:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
 
@@ -786,18 +977,51 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         print(f"engine: {check.detail}", file=sys.stderr)
         return EXIT_UNHEALTHY
     print(f"OpenEngine workbench — {server}. Type / for commands.")
+    commands = [
+        "/help",
+        "/status",
+        "/connections",
+        "/threads",
+        "/transcript",
+        "/new",
+        "/approvals",
+        "/setup",
+        "/connect",
+        "/web",
+        "/quit",
+    ]
+    palette_open = False
     while True:
-        line = input("engine> ").strip()
-        if not line:
+        if palette_open:
+            command = palette(commands, "Command: ", initial_query="/")
+            palette_open = False
+        else:
+            # Read the first key directly so `/` opens the picker without making
+            # someone press Enter first. Any remaining keys, including a pasted
+            # `/status`, are consumed by the fuzzy picker as its search query.
+            print("engine> ", end="", flush=True)
+            key = read_key()
+            if key == "quit":
+                print()
+                return EXIT_OK
+            if key != "/":
+                if key and key != "enter":
+                    print(key)
+                else:
+                    print()
+                print("Use / to open the command palette. Type /quit to exit.")
+                continue
+            command = palette(commands, "Command: ", initial_query="/")
+        # Escape dismisses this top-level picker and returns to `engine>`.
+        # Nested pickers use the same `None` result to return to their parent.
+        if command is None:
             continue
-        if line != "/":
-            print("Use / to open the command palette. Type /quit to exit.")
-            continue
-        command = palette(["/help", "/status", "/threads", "/new", "/approvals", "/setup", "/connect", "/web", "/quit"], "Command: ")
-        if command in {None, "/help"}:
-            print("/status  service readiness\n/threads  inspect conversations\n/new  start a task\n/approvals  pending decisions\n/web  open the web UI\n/quit  exit")
+        if command == "/help":
+            print("/status  service readiness\n/connections  integration status\n/threads  inspect conversations\n/transcript  read a conversation\n/new  start a task\n/approvals  pending decisions\n/web  open the web UI\n/quit  exit")
         elif command == "/status":
             status(argparse.Namespace(server=server, json=False), preferences)
+        elif command == "/connections":
+            connections(argparse.Namespace(server=server, json=False), preferences)
         elif command == "/threads":
             thread_filter = palette(["Active", "All", "Archived"], "Threads: ")
             if thread_filter is None:
@@ -808,7 +1032,15 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
             selected = palette(choices, "Open thread: ") if choices else None
             if selected:
                 thread_id = selected.rsplit(" — ", 1)[-1]
-                resume(argparse.Namespace(server=server, thread_id=thread_id), preferences)
+                action = palette(["View transcript", "Resume active task", "Back"], "Thread: ")
+                if action == "View transcript":
+                    transcript(argparse.Namespace(server=server, thread_id=thread_id, json=False), preferences)
+                elif action == "Resume active task":
+                    resume(argparse.Namespace(server=server, thread_id=thread_id), preferences)
+        elif command == "/transcript":
+            thread_id = input("Thread ID: ").strip()
+            if thread_id:
+                transcript(argparse.Namespace(server=server, thread_id=thread_id, json=False), preferences)
         elif command == "/new":
             prompt = input("Task: ").strip()
             if prompt:
@@ -831,7 +1063,10 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
                     decide(argparse.Namespace(server=server, approval_id=approval_id, reason=reason), preferences, "cancel")
         elif command in {"/setup", "/connect"}:
             provider = palette(["gh", "github", "gitlab", "Skip"], "Provider: ")
-            if provider and provider != "Skip":
+            if provider is None:
+                palette_open = True
+                continue
+            if provider != "Skip":
                 connect(argparse.Namespace(server=server, provider=provider, origin="https://gitlab.com", open=True), preferences)
         elif command == "/web":
             webbrowser.open(server)
@@ -900,6 +1135,9 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
         command.add_argument("--json", action="store_true", help="emit a stable machine-readable report")
+    connection_list = commands.add_parser("connections", help="show configured integration status")
+    connection_list.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    connection_list.add_argument("--json", action="store_true", help="emit a stable machine-readable report")
     thread_list = commands.add_parser("threads", help="list service conversations")
     thread_list.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
     thread_list.add_argument("--json", action="store_true")
@@ -910,6 +1148,10 @@ def parser() -> argparse.ArgumentParser:
     task_command.add_argument("thread_id")
     task_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
     task_command.add_argument("--json", action="store_true")
+    transcript_command = commands.add_parser("transcript", help="show a conversation's message history")
+    transcript_command.add_argument("thread_id")
+    transcript_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    transcript_command.add_argument("--json", action="store_true")
     run_command = commands.add_parser("run", help="create a conversation and stream its task")
     run_command.add_argument("prompt")
     run_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
@@ -959,12 +1201,16 @@ def main(argv: list[str] | None = None) -> int:
     preferences = load_preferences()
     if arguments.command == "status":
         return status(arguments, preferences)
+    if arguments.command == "connections":
+        return connections(arguments, preferences)
     if arguments.command == "doctor":
         return doctor(arguments, preferences)
     if arguments.command == "threads":
         return threads(arguments, preferences)
     if arguments.command == "task":
         return task(arguments, preferences)
+    if arguments.command == "transcript":
+        return transcript(arguments, preferences)
     if arguments.command == "run":
         return run(arguments, preferences)
     if arguments.command == "resume":
