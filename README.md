@@ -64,9 +64,11 @@ status` starts one `engine-web` process and waits for its health endpoint. An
 explicit `--server` is always probe-only.
 
 In an interactive terminal, running `engine` opens the read-only workbench.
-Type `/` to search the palette, then choose `/status`, `/threads`, `/web`, or
-`/quit`. The matching scriptable commands are `engine status`, `engine threads`
-(`--all` or `--archived`), and `engine task THREAD_ID`. Task creation, streaming,
+Type `/` to search the palette, then choose `/status`, `/connections`, `/threads`,
+`/transcript`, `/web`, or `/quit`. The matching scriptable commands are `engine status`,
+`engine connections`, `engine threads`
+(`--all` or `--archived`), `engine task THREAD_ID`, and `engine transcript THREAD_ID`.
+Task creation, streaming,
 and decisions remain later stages.
 
 Start a terminal task with `engine run "describe the work"`; it creates a

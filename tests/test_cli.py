@@ -85,6 +85,81 @@ def test_status_reports_a_remote_connection_failure(monkeypatch, capsys):
     assert report["checks"][0]["ok"] is False
 
 
+def test_connections_reports_github_and_slack_readiness(monkeypatch, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))
+    responses = {
+        "/api/github/status": {"connected": True, "clientIdConfigured": True},
+        "/api/source-control/status": {
+            "provider": "gh-cli",
+            "ghCli": {"authenticated": True, "account": "vadym"},
+        },
+        "/api/gitlab/status": {
+            "origin": "https://gitlab.com", "connected": False, "clientIdConfigured": False,
+        },
+        "/api/slack/status": {"configured": True, "connected": True, "events": True},
+    }
+    monkeypatch.setattr(cli, "fetch_json", lambda _server, path: responses[path])
+
+    assert cli.main(["connections", "--json"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == {"connections": {
+        "github": responses["/api/github/status"],
+        "sourceControl": responses["/api/source-control/status"],
+        "gitlab": responses["/api/gitlab/status"],
+        "slack": responses["/api/slack/status"],
+    }}
+
+
+def test_connections_human_output_explains_slack_event_readiness(capsys):
+    cli.render_connections({
+        "github": {"connected": False, "clientIdConfigured": True},
+        "sourceControl": {"provider": "github-oauth", "ghCli": {}},
+        "gitlab": {"origin": "https://gitlab.com", "connected": False, "clientIdConfigured": False},
+        "slack": {"configured": True, "connected": True, "events": False},
+    }, False)
+
+    output = capsys.readouterr().out
+    assert "GitHub OAuth: not connected" in output
+    assert "Slack: connected; events not ready" in output
+
+
+def test_transcript_shows_user_and_agent_messages_but_not_tool_calls(monkeypatch, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))
+    monkeypatch.setattr(cli, "fetch_json", lambda *_args: {"messages": [
+        {"id": "user-1", "role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"id": "agent-1", "role": "assistant", "content": [
+            {"type": "tool-call", "toolName": "read_file"},
+            {"type": "text", "text": "I read the file."},
+        ]},
+    ]})
+
+    assert cli.main(["transcript", "thread-1"]) == 0
+
+    output = capsys.readouterr().out
+    assert "You\n  Hello" in output
+    assert "OpenEngine\n  I read the file." in output
+    assert "read_file" not in output
+
+
+def test_transcript_json_omits_tool_calls(monkeypatch, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))
+    monkeypatch.setattr(cli, "fetch_json", lambda *_args: {"messages": [
+        {"id": "agent-1", "role": "assistant", "content": [
+            {"type": "tool-call", "toolName": "read_file"},
+            {"type": "text", "text": "Done"},
+        ]},
+    ]})
+
+    assert cli.main(["transcript", "thread-1", "--json"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == {"messages": [{
+        "id": "agent-1", "role": "assistant", "content": [{"type": "text", "text": "Done"}],
+    }]}
+
+
 def test_config_server_persists_selected_profile(monkeypatch, tmp_path: Path, capsys):
     path = tmp_path / "cli.json"
     monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(path))
@@ -242,6 +317,33 @@ def test_palette_ctrl_z_selects_quit(monkeypatch):
     monkeypatch.setattr(cli, "read_key", lambda: "quit")
 
     assert cli.palette(["/status", "/quit"], "Command: ") == "/quit"
+
+
+def test_interactive_escape_returns_from_the_command_palette_to_the_prompt(monkeypatch, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    keys = iter(["/", "escape", "quit"])
+    monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, ready))
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+
+    assert cli.interactive(cli.argparse.Namespace(server=None), cli.Preferences()) == 0
+    assert "service readiness" not in capsys.readouterr().out
+
+
+def test_interactive_escape_from_setup_reopens_the_command_palette(monkeypatch):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    commands = iter(["/setup", "/quit"])
+    prompts = []
+    monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, ready))
+    monkeypatch.setattr(cli, "read_key", lambda: "/")
+
+    def choose(_options, prompt, *, initial_query=""):
+        prompts.append((prompt, initial_query))
+        return None if prompt == "Provider: " else next(commands)
+
+    monkeypatch.setattr(cli, "palette", choose)
+
+    assert cli.interactive(cli.argparse.Namespace(server=None), cli.Preferences()) == 0
+    assert prompts == [("Command: ", "/"), ("Provider: ", ""), ("Command: ", "/")]
 
 
 def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path, capsys):
