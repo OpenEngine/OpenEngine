@@ -58,6 +58,12 @@ the default local address and no compatible service is responding, `engine
 status` starts one `engine-web` process and waits for its health endpoint. An
 explicit `--server` is always probe-only.
 
+In an interactive terminal, running `engine` opens the read-only workbench.
+Type `/` to search the palette, then choose `/status`, `/threads`, `/web`, or
+`/quit`. The matching scriptable commands are `engine status`, `engine threads`
+(`--all` or `--archived`), and `engine task THREAD_ID`. Task creation, streaming,
+and decisions remain later stages.
+
 While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev

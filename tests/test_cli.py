@@ -132,6 +132,45 @@ def test_stale_startup_lock_is_recovered(monkeypatch, tmp_path: Path):
     assert not lock.exists()
 
 
+def test_threads_lists_active_threads_as_json(monkeypatch, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "ensure_service", lambda _server: (ready, {}, False))
+    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _Response({"threads": [
+        {"id": "active", "title": "Active task", "archived": False},
+        {"id": "archived", "title": "Archived task", "archived": True},
+    ]}))
+
+    assert cli.main(["threads", "--json"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == {"threads": [
+        {"id": "active", "title": "Active task", "archived": False},
+    ]}
+
+
+def test_task_remembers_the_opened_thread(monkeypatch, tmp_path: Path, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "cli.json"))
+    monkeypatch.setattr(cli, "ensure_service", lambda _server: (ready, {}, False))
+    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _Response({
+        "id": "thread-1", "title": "Inspect me", "workspaceRoot": "/work/repo",
+        "runner": "codex", "archived": False, "phase": "running",
+        "currentRun": {"id": "run-1", "phase": "running"}, "previousRuns": [],
+        "pendingApproval": True,
+    }))
+
+    assert cli.main(["task", "thread-1", "--json"]) == 0
+
+    assert cli.load_preferences().profile().last_task == "thread-1"
+    assert json.loads(capsys.readouterr().out)["title"] == "Inspect me"
+
+
+def test_palette_filters_then_selects_with_arrow_keys(monkeypatch):
+    keys = iter(["t", "up", "enter"])
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+
+    assert cli.palette(["/help", "/status", "/threads"], "Command: ") == "/threads"
+
+
 def test_doctor_reports_prerequisites_and_keeps_a_stable_exit_code(monkeypatch, tmp_path: Path, capsys):
     monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "config" / "cli.json"))
     monkeypatch.setattr(cli, "user_data_path", lambda _name: tmp_path / "data")

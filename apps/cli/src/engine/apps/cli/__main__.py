@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import webbrowser
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
@@ -318,9 +319,33 @@ def source_control_check(server: str, service_ok: bool) -> Check:
     return Check("source_control", bool(provider), str(provider or "no provider selected"))
 
 
+def fetch_json(server: str, path: str) -> dict[str, Any]:
+    """Read a small service resource, preserving a useful command-line error."""
+    try:
+        with urlopen(Request(f"{server}{path}", headers={"Accept": "application/json"}), timeout=5.0) as response:
+            payload = json.loads(response.read())
+    except HTTPError as error:
+        if error.code == 404:
+            raise RuntimeError("not found") from None
+        if error.code == 401:
+            raise RuntimeError("service requires browser login; sign in through /web first") from None
+        raise RuntimeError(f"server returned HTTP {error.code}") from None
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"could not read {path}: {error}") from None
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{path} did not return a JSON object")
+    return payload
+
+
 def selected_server(arguments: argparse.Namespace, preferences: Preferences) -> str:
     candidate = arguments.server if getattr(arguments, "server", None) else preferences.profile().server
     return normalize_server(candidate)
+
+
+def read_service(arguments: argparse.Namespace, preferences: Preferences) -> tuple[str, Check]:
+    server = selected_server(arguments, preferences)
+    check, _identity, _started = ensure_service(server)
+    return server, check
 
 
 def render(checks: list[Check], as_json: bool, extra: dict[str, Any] | None = None) -> None:
@@ -343,6 +368,182 @@ def status(arguments: argparse.Namespace, preferences: Preferences) -> int:
     check, identity, started = ensure_service(server)
     render([check], arguments.json, {"server": server, "identity": identity, "started": started})
     return EXIT_OK if check.ok else EXIT_UNHEALTHY
+
+
+def filtered_threads(threads: list[dict[str, Any]], filter_name: str) -> list[dict[str, Any]]:
+    if filter_name == "active":
+        return [thread for thread in threads if not thread.get("archived")]
+    if filter_name == "archived":
+        return [thread for thread in threads if thread.get("archived")]
+    return threads
+
+
+def load_threads(server: str, filter_name: str) -> list[dict[str, Any]]:
+    payload = fetch_json(server, "/api/threads")
+    threads = payload.get("threads")
+    if not isinstance(threads, list) or any(not isinstance(thread, dict) for thread in threads):
+        raise RuntimeError("service returned invalid thread data")
+    return filtered_threads(threads, filter_name)
+
+
+def render_threads(threads: list[dict[str, Any]], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps({"threads": threads}, sort_keys=True))
+        return
+    if not threads:
+        print("No threads.")
+        return
+    for thread in threads:
+        archived = " archived" if thread.get("archived") else ""
+        repository = thread.get("workspaceRoot") or "no repository attached"
+        print(f"{thread.get('id', '?')}  {thread.get('title', 'Untitled')} [{repository}]{archived}")
+
+
+def threads(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            render([check], arguments.json, {"server": server})
+            return EXIT_UNHEALTHY
+        values = load_threads(server, arguments.filter)
+    except (ValueError, RuntimeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+    render_threads(values, arguments.json)
+    return EXIT_OK
+
+
+def remember_thread(preferences: Preferences, thread: dict[str, Any]) -> None:
+    profiles = dict(preferences.profiles or {})
+    current = profiles.get(preferences.selected_profile, Profile())
+    profiles[preferences.selected_profile] = Profile(
+        current.server,
+        str(thread.get("workspaceRoot") or current.last_repository),
+        str(thread.get("id") or current.last_task),
+    )
+    save_preferences(Preferences(preferences.selected_profile, profiles))
+
+
+def render_thread(thread: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(thread, sort_keys=True))
+        return
+    print(f"{thread.get('title', 'Untitled')} ({thread.get('id', '?')})")
+    print(f"Repository: {thread.get('workspaceRoot') or 'not attached'}")
+    print(f"Runner: {thread.get('runner', 'unknown')}")
+    print(f"State: {thread.get('phase', 'archived' if thread.get('archived') else 'idle')}")
+    current = thread.get("currentRun")
+    print(f"Current run: {current.get('id') if isinstance(current, dict) else 'none'}")
+    previous = thread.get("previousRuns")
+    print(f"Previous runs: {len(previous) if isinstance(previous, list) else 0}")
+    print(f"Pending approval: {'yes' if thread.get('pendingApproval') else 'no'}")
+
+
+def task(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            render([check], arguments.json, {"server": server})
+            return EXIT_UNHEALTHY
+        thread = fetch_json(server, f"/api/threads/{arguments.thread_id}")
+        remember_thread(preferences, thread)
+    except (ValueError, RuntimeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+    render_thread(thread, arguments.json)
+    return EXIT_OK
+
+
+def palette(options: list[str], prompt: str) -> str | None:
+    """A tiny searchable, arrow-key/Enter picker without a UI dependency."""
+    query = ""
+    selected = 0
+    while True:
+        matches = [option for option in options if query.casefold() in option.casefold()]
+        if matches:
+            selected = min(selected, len(matches) - 1)
+        else:
+            selected = 0
+        print("\x1b[2J\x1b[H" + prompt + query)
+        for index, option in enumerate(matches):
+            print(("› " if index == selected else "  ") + option)
+        key = read_key()
+        if key == "enter":
+            return matches[selected] if matches else None
+        if key == "escape":
+            return None
+        if key == "up" and matches:
+            selected = (selected - 1) % len(matches)
+        elif key == "down" and matches:
+            selected = (selected + 1) % len(matches)
+        elif key == "backspace":
+            query = query[:-1]
+        elif len(key) == 1 and key.isprintable():
+            query += key
+
+
+def read_key() -> str:
+    if os.name == "nt":
+        import msvcrt
+
+        key = msvcrt.getwch()
+        if key in {"\x00", "\xe0"}:
+            return {"H": "up", "P": "down"}.get(msvcrt.getwch(), "")
+        return {"\r": "enter", "\x1b": "escape", "\x08": "backspace"}.get(key, key)
+    import termios
+    import tty
+
+    descriptor = sys.stdin.fileno()
+    previous = termios.tcgetattr(descriptor)
+    try:
+        tty.setraw(descriptor)
+        key = sys.stdin.read(1)
+        if key == "\x1b":
+            suffix = sys.stdin.read(2)
+            return {"[A": "up", "[B": "down"}.get(suffix, "escape")
+        return {"\r": "enter", "\n": "enter", "\x7f": "backspace"}.get(key, key)
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
+
+
+def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+    except ValueError as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_USAGE
+    if not check.ok:
+        print(f"engine: {check.detail}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+    print(f"OpenEngine workbench — {server}. Type / for commands.")
+    while True:
+        line = input("engine> ").strip()
+        if not line:
+            continue
+        if line != "/":
+            print("Use / to open the command palette. Type /quit to exit.")
+            continue
+        command = palette(["/help", "/status", "/threads", "/web", "/quit"], "Command: ")
+        if command in {None, "/help"}:
+            print("/status  service readiness\n/threads  inspect conversations\n/web  open the web UI\n/quit  exit")
+        elif command == "/status":
+            status(argparse.Namespace(server=server, json=False), preferences)
+        elif command == "/threads":
+            thread_filter = palette(["Active", "All", "Archived"], "Threads: ")
+            if thread_filter is None:
+                continue
+            values = load_threads(server, thread_filter.casefold())
+            render_threads(values, False)
+            choices = [f"{item.get('title', 'Untitled')} — {item.get('id', '?')}" for item in values]
+            selected = palette(choices, "Open thread: ") if choices else None
+            if selected:
+                thread_id = selected.rsplit(" — ", 1)[-1]
+                task(argparse.Namespace(server=server, thread_id=thread_id, json=False), preferences)
+        elif command == "/web":
+            webbrowser.open(server)
+            print(f"Opened {server}")
+        elif command == "/quit":
+            return EXIT_OK
 
 
 def doctor(arguments: argparse.Namespace, preferences: Preferences) -> int:
@@ -405,6 +606,16 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
         command.add_argument("--json", action="store_true", help="emit a stable machine-readable report")
+    thread_list = commands.add_parser("threads", help="list service conversations")
+    thread_list.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    thread_list.add_argument("--json", action="store_true")
+    filters = thread_list.add_mutually_exclusive_group()
+    filters.add_argument("--all", dest="filter", action="store_const", const="all", default="active")
+    filters.add_argument("--archived", dest="filter", action="store_const", const="archived")
+    task_command = commands.add_parser("task", help="inspect one service conversation")
+    task_command.add_argument("thread_id")
+    task_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    task_command.add_argument("--json", action="store_true")
     config = commands.add_parser("config", help="manage persistent CLI preferences")
     config_commands = config.add_subparsers(dest="config_command", required=True)
     server = config_commands.add_parser("server", help="set the selected profile's service URL")
@@ -417,6 +628,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None and len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
+        return interactive(argparse.Namespace(server=None), load_preferences())
     arguments = parser().parse_args(argv)
     if arguments.command is None:
         parser().print_help()
@@ -426,6 +639,10 @@ def main(argv: list[str] | None = None) -> int:
         return status(arguments, preferences)
     if arguments.command == "doctor":
         return doctor(arguments, preferences)
+    if arguments.command == "threads":
+        return threads(arguments, preferences)
+    if arguments.command == "task":
+        return task(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "server":
         return configure_server(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "profile":

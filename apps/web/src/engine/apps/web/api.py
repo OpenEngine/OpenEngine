@@ -2269,7 +2269,28 @@ def create_app(
         thread = await service.get(_thread_id(request))
         if thread is None:
             return _error("thread not found", 404)
-        return JSONResponse(_thread_json(thread))
+        result = _thread_json(thread)
+        current = service.latest_run(thread.instance_id)
+        result["phase"] = (
+            "running" if current is not None and not current.done
+            else "failed" if current is not None and current.error is not None
+            else "idle"
+        )
+        result["currentRun"] = (
+            {
+                "id": str(current.agent_run_id),
+                "phase": result["phase"],
+            }
+            if current is not None else None
+        )
+        # Agent-turn records are intentionally ephemeral: conversation history
+        # is durable, but it is not an audit of every provider turn. Keep the
+        # field explicit so terminal clients never infer a history from a live
+        # process-local snapshot.
+        result["previousRuns"] = []
+        approvals = await session.state_store.list_approvals(instance_id=thread.instance_id)
+        result["pendingApproval"] = any(record.status.value == "pending" for record in approvals)
+        return JSONResponse(result)
 
     async def update_thread(request: Request) -> JSONResponse:
         instance_id = _thread_id(request)
