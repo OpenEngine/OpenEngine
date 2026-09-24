@@ -1057,7 +1057,11 @@ class ACPNode:
         return _TurnResult("".join(said), cancelled=cancelled)
 
     async def _republish(self, execution: NodeExecution, event: Any) -> None:
-        if event.type == ACPEventType.TOOL_STARTED:
+        if event.type in (ACPEventType.USAGE_UPDATED, ACPEventType.PROMPT_COMPLETED):
+            usage = self._usage(event)
+            if usage is not None:
+                await execution.emit(EventKind.USAGE_UPDATED, usage)
+        elif event.type == ACPEventType.TOOL_STARTED:
             await execution.emit(
                 EventKind.TOOL_CALL,
                 {
@@ -1075,6 +1079,38 @@ class ACPNode:
                     "result": str(event.data.get("status") or "updated"),
                 },
             )
+
+    def _usage(self, event: Any) -> dict[str, object] | None:
+        """This event's usage as a `usage.updated` payload, if it reported any.
+
+        ACP carries the two halves separately: `usage_update` the session's
+        running cost, and the prompt response the finished turn's tokens.
+        Anything but USD is left out rather than converted.
+        """
+        model = (self.session_config or {}).get("model")
+        payload: dict[str, object] = {
+            "agent": self.agent,
+            "model": model if isinstance(model, str) else "",
+            "sessionId": event.session_id or "",
+        }
+        if event.type == ACPEventType.PROMPT_COMPLETED:
+            usage = event.data.get("usage")
+            if not isinstance(usage, Mapping):
+                return None
+            payload["turn"] = True
+            for name in ("inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens"):
+                value = usage.get(name)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    payload[name] = int(value)
+            return payload
+        cost = event.data.get("cost")
+        if not isinstance(cost, Mapping) or cost.get("currency") not in (None, "USD"):
+            return None
+        amount = cost.get("amount")
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+            return None
+        payload["sessionCostUsd"] = float(amount)
+        return payload
 
     def _prompt(self, state: Mapping[str, object]) -> ACPPrompt:
         if callable(self.prompt):

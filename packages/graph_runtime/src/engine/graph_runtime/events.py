@@ -72,6 +72,12 @@ class EventKind(Enum):
     came from keeps its other children, so the attempt being replaced stays
     readable beside the one replacing it.
     """
+    USAGE_UPDATED = "usage.updated"
+    """An agent reported usage: `agent`, `model`, `sessionId`, and either a
+    finished turn's tokens (`turn`, `inputTokens`, `outputTokens`,
+    `cachedReadTokens`, `cachedWriteTokens`) or the session's running
+    `sessionCostUsd`. `engine.graph_runtime.usage` rolls these up.
+    """
     RUN_FINISHED = "run.finished"
     RUN_FAILED = "run.failed"
     NOTIFICATION_FAILED = "notification.failed"

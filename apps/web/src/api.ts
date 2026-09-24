@@ -230,7 +230,24 @@ export type ApiWorkflowRun = ApiWorkflowRunListing & {
   failureReason: string;
   /** Who started it, as `github:<id>:<login>` or `slack:<team>:<user>`. */
   requester?: string | null;
+  /** What its agents consumed, in approximate dollars, per node and total. */
+  usage?: ApiWorkOrderUsage;
 };
+
+/** Usage in approximate USD. `costUsd` is null when nothing could be costed;
+ *  `estimated` means list prices were applied to tokens, and `complete` false
+ *  means some session reported nothing and is missing from the figure. */
+export type ApiUsage = {
+  costUsd: number | null;
+  estimated: boolean;
+  complete: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  cachedReadTokens: number;
+  cachedWriteTokens: number;
+};
+
+export type ApiWorkOrderUsage = ApiUsage & { nodes: Record<string, ApiUsage> };
 
 /** A WorkOrder as its page draws it: the row, with the stages, frontier and
  *  pending decision read off the graph engine's own snapshot.

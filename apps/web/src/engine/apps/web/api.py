@@ -136,6 +136,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
 )
@@ -2166,7 +2167,11 @@ def create_app(
         run = await run_reader.get(run_id)
         if run is None:
             return _error("run not found", 404)
-        return JSONResponse(_run_json(run))
+        # The WorkOrder's usage is its run's: summed from what each node's
+        # agent reported, so it is read here rather than stored on the row.
+        return JSONResponse({
+            **_run_json(run), "usage": usage_rollup(graph_events.since(run_id)).json(),
+        })
 
     async def delete_run(request: Request) -> Response:
         """Throw a WorkOrder away unless scheduled work still depends on it.
