@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Publishes langgraph-acp alone, from a chosen ref, without cutting a release:
+  # the first PyPI upload, or a re-run after a failed publish.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag or commit of langgraph-acp to publish to PyPI
+        required: true
 
 permissions:
   contents: read
@@ -87,9 +94,39 @@ jobs:
           RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
         run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json --clobber
 
-  publish-langgraph-acp:
+  # Built without the PyPI credential: the build backend is third-party code, so
+  # it is hash-locked and runs in a job that cannot request the OIDC token. The
+  # publish job below only uploads the artifacts this job produced.
+  build-langgraph-acp:
     needs: release-please
-    if: github.event_name == 'push' && needs.release-please.outputs.created == 'true'
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && needs.release-please.outputs.created == 'true'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: langgraph-acp
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || needs.release-please.outputs.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+      - run: uv build --no-sources --build-constraints build-constraints.txt --require-hashes --out-dir dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: langgraph-acp-dist
+          path: langgraph-acp/dist/*
+          if-no-files-found: error
+
+  publish-langgraph-acp:
+    needs: build-langgraph-acp
+    if: ${{ !cancelled() && needs.build-langgraph-acp.result == 'success' }}
     runs-on: ubuntu-latest
     # PyPI trusted publishing: the `pypi` environment and this workflow file are
     # what the project's trusted publisher on pypi.org names. No token is stored.
@@ -97,18 +134,13 @@ jobs:
       name: pypi
       url: https://pypi.org/project/langgraph-acp/
     permissions:
-      contents: read
       id-token: write
-    defaults:
-      run:
-        working-directory: langgraph-acp
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
-          ref: ${{ needs.release-please.outputs.sha }}
-          persist-credentials: false
+          name: langgraph-acp-dist
+          path: dist
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.28"
-      - run: uv build --no-sources
-      - run: uv publish --trusted-publishing always
+      - run: uv publish --trusted-publishing always dist/*
