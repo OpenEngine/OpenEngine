@@ -1179,6 +1179,7 @@ def create_app(
             try:
                 await run_notifier.deliver(
                     state, text, links=links, mention=mention,
+                    progress=event.kind in (EventKind.NODE_STARTED, EventKind.RUN_FINISHED),
                 )
             except Exception:
                 # Exceptions may contain credentials or request bodies. Record
