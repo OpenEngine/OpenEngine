@@ -952,6 +952,10 @@ GITHUB_AUTHORIZATION_TIMEOUT_SECONDS = 45
 #: before it starts from whatever was last cached instead.
 UTILIZATION_REFRESH_TIMEOUT_SECONDS = 10
 
+#: How old utilization may be before a least-utilized WorkOrder scrapes again;
+#: every scrape reads the runners' stored credentials, so starts share one.
+UTILIZATION_MAX_AGE_SECONDS = 60 * 60
+
 
 @dataclass(slots=True)
 class _GraphSurface:
@@ -1910,12 +1914,15 @@ def create_app(
         if requester is None and scheduled is not None:
             requester = scheduled.requester
         async def runner_usage() -> dict[str, float]:
-            # Scraped now rather than trusting the cache, which only fills when
-            # someone opens the Utilization page. A slow or failing scrape
-            # falls back to the cache instead of holding up the run.
+            # Scraped here rather than trusting the cache, which otherwise only
+            # fills when someone opens the Utilization page, but at most hourly.
+            # A slow or failing scrape falls back to the cache instead of
+            # holding up the run.
             try:
                 async with asyncio.timeout(UTILIZATION_REFRESH_TIMEOUT_SECONDS):
-                    readings = await _utilization.refresh(tuple(runners))
+                    readings = await _utilization.recent(
+                        tuple(runners), UTILIZATION_MAX_AGE_SECONDS
+                    )
             except Exception:  # noqa: BLE001 -- placement must not fail the run
                 log.warning("utilization refresh failed; using cached readings", exc_info=True)
                 readings = _utilization.cached()
@@ -1924,6 +1931,9 @@ def create_app(
                 for reading in readings if reading.windows
             }
 
+        # Read before taking the lock, so a slow scrape does not hold up every
+        # other WorkOrder being created, deleted or scoped meanwhile.
+        usage = await runner_usage() if LEAST_UTILIZED in (inputs or {}).values() else {}
         async with dependency_lock:
             if depends_on_run_id is not None:
                 prerequisite = await session.state_store.load(depends_on_run_id)
@@ -1945,9 +1955,6 @@ def create_app(
                     return state
             # Policies resolve at start, not at scheduling, so a dependent
             # WorkOrder is placed by utilization when it actually runs.
-            usage = (
-                await runner_usage() if LEAST_UTILIZED in (inputs or {}).values() else {}
-            )
             inputs = choose_runners(
                 getattr(graph, "inputs", ()), inputs,
                 usage=lambda: usage,

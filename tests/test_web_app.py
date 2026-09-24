@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import re
+import time
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -3592,23 +3593,50 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, st
     asyncio.run(scenario())
 
 
-def test_graph_workorder_round_robin_runner_resolves_at_start():
-    from dataclasses import dataclass
-    from engine.graph_runtime.inputs import ROUND_ROBIN, WorkflowInput
+def _runner_input_graph(*choices: str) -> ScriptedGraph:
+    """A graph whose one input is an implementation runner offering `choices`."""
+    from engine.graph_runtime.inputs import WorkflowInput
 
     @dataclass(frozen=True)
     class InputGraph(ScriptedGraph):
         inputs: tuple[WorkflowInput, ...] = (
             WorkflowInput(
-                "implementation_runner", "Implementation runner", "codex", True,
-                ("codex", "claude", ROUND_ROBIN),
+                "implementation_runner", "Implementation runner", "codex", True, choices,
             ),
         )
 
-    graph = InputGraph(
+    return InputGraph(
         GraphId("inputs"), "Inputs",
         (ScriptedNode(NodeId("work"), (Say("Done"),)),),
     )
+
+
+def _least_utilized_app(tmp_path, read_test, cached: float | None = None):
+    """A least-utilized graph app whose "test" runner is read by `read_test`.
+
+    `cached` seeds an hour-old "test" reading at that percentage, so the start
+    still scrapes but has something to fall back to.
+    """
+    from engine.graph_runtime.inputs import LEAST_UTILIZED
+
+    service = UtilizationService(
+        cache_path=tmp_path / "utilization.json", readers={"test": read_test}
+    )
+    if cached is not None:
+        service._write((RunnerUtilization(
+            runner="test", read_at=time.time() - 2 * 60 * 60,
+            windows=(UtilizationWindow("five_hour", "5-hour", cached, ""),),
+        ),))
+    return _graph_app(
+        InMemoryStateStore(), _runner_input_graph("codex", "test", LEAST_UTILIZED),
+        utilization=service,
+    )
+
+
+def test_graph_workorder_round_robin_runner_resolves_at_start():
+    from engine.graph_runtime.inputs import ROUND_ROBIN
+
+    graph = _runner_input_graph("codex", "claude", ROUND_ROBIN)
     app, runtime = _graph_app(InMemoryStateStore(), graph)
 
     async def scenario():
@@ -3632,17 +3660,7 @@ def test_graph_workorder_round_robin_runner_resolves_at_start():
 
 def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path):
     """Nothing else keeps the utilization cache warm, so starting the run reads it."""
-    from dataclasses import dataclass
-    from engine.graph_runtime.inputs import LEAST_UTILIZED, WorkflowInput
-
-    @dataclass(frozen=True)
-    class InputGraph(ScriptedGraph):
-        inputs: tuple[WorkflowInput, ...] = (
-            WorkflowInput(
-                "implementation_runner", "Implementation runner", "codex", True,
-                ("codex", "test", LEAST_UTILIZED),
-            ),
-        )
+    from engine.graph_runtime.inputs import LEAST_UTILIZED
 
     async def read_test(_client) -> RunnerUtilization:
         return RunnerUtilization(
@@ -3650,16 +3668,7 @@ def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path)
             windows=(UtilizationWindow("five_hour", "5-hour", 5.0, ""),),
         )
 
-    graph = InputGraph(
-        GraphId("inputs"), "Inputs",
-        (ScriptedNode(NodeId("work"), (Say("Done"),)),),
-    )
-    app, runtime = _graph_app(
-        InMemoryStateStore(), graph,
-        utilization=UtilizationService(
-            cache_path=tmp_path / "utilization.json", readers={"test": read_test}
-        ),
-    )
+    app, runtime = _least_utilized_app(tmp_path, read_test)
 
     async def scenario():
         async with app.router.lifespan_context(app):
@@ -3676,6 +3685,113 @@ def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path)
 
     assert asyncio.run(scenario()) == "test"
     assert (tmp_path / "utilization.json").exists()
+
+
+def test_graph_workorder_least_utilized_falls_back_to_the_cache_when_the_scrape_hangs(
+    monkeypatch, tmp_path,
+):
+    from engine.apps.web import api as web_api
+    from engine.graph_runtime.inputs import LEAST_UTILIZED
+
+    async def hang(_client) -> RunnerUtilization:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(web_api, "UTILIZATION_REFRESH_TIMEOUT_SECONDS", 0.05)
+    app, runtime = _least_utilized_app(tmp_path, hang, cached=5.0)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post("/api/runs", json={
+                    "workflowId": "inputs", "repository": ".", "prompt": "Task",
+                    "inputs": {"implementation_runner": LEAST_UTILIZED},
+                })
+                assert response.status_code == 201
+                snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                return snapshot.values["inputs"]["implementation_runner"]
+
+    assert asyncio.run(scenario()) == "test"
+
+
+def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(tmp_path):
+    """The scrape runs outside the lock every WorkOrder creation takes."""
+    from engine.graph_runtime.inputs import LEAST_UTILIZED
+
+    scraping, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(_client) -> RunnerUtilization:
+        scraping.set()
+        await release.wait()
+        return RunnerUtilization(
+            runner="test", windows=(UtilizationWindow("five_hour", "5-hour", 5.0, ""),),
+        )
+
+    app, _runtime = _least_utilized_app(tmp_path, slow)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                placed = asyncio.create_task(client.post("/api/runs", json={
+                    "workflowId": "inputs", "repository": ".", "prompt": "Placed",
+                    "inputs": {"implementation_runner": LEAST_UTILIZED},
+                }))
+                try:
+                    async with asyncio.timeout(5):
+                        await scraping.wait()
+                        explicit = await client.post("/api/runs", json={
+                            "workflowId": "inputs", "repository": ".", "prompt": "Explicit",
+                            "inputs": {"implementation_runner": "codex"},
+                        })
+                    assert explicit.status_code == 201
+                    assert not placed.done()
+                finally:
+                    release.set()
+                assert (await placed).status_code == 201
+
+    asyncio.run(scenario())
+
+
+def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts():
+    """A scheduled dependent keeps the policy and is placed once it can run."""
+    from engine.graph_runtime.inputs import ROUND_ROBIN
+
+    graph = _runner_input_graph("codex", "claude", ROUND_ROBIN)
+    store = InMemoryStateStore()
+    app, runtime = _graph_app(store, graph)
+    prerequisite = RunState(
+        run_id=RunId("prerequisite"), task_id=TaskId("task-prerequisite"),
+        workflow_id=WorkflowId(str(graph.graph_id)), phase=RunPhase.RUNNING_AGENT,
+        repository=".",
+    )
+
+    async def scenario():
+        await store.save(prerequisite)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post("/api/runs", json={
+                    "workflowId": "inputs", "repository": ".", "prompt": "Follow up",
+                    "dependsOnRunId": "prerequisite",
+                    "inputs": {"implementation_runner": ROUND_ROBIN},
+                })
+                assert response.status_code == 201
+                dependent = RunId(response.json()["runId"])
+                scheduled = await store.load(dependent)
+                assert scheduled.phase is RunPhase.SCHEDULED
+                assert scheduled.inputs["implementation_runner"] == ROUND_ROBIN
+
+                await store.save(replace(prerequisite, phase=RunPhase.SUCCEEDED))
+                started = await client.post(f"/api/runs/{dependent}/start")
+                assert started.status_code == 200, started.text
+                snapshot = await runtime.snapshot(dependent)
+                return snapshot.values["inputs"]["implementation_runner"]
+
+    assert asyncio.run(scenario()) == "codex"
 
 
 def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() -> None:
