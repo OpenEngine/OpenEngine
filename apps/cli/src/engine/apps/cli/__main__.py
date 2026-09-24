@@ -423,12 +423,16 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
                             action = palette(["Approve", "Reject", "Defer"], "Decision: ")
                         if action in {"Approve", "Reject"}:
                             thread_id = path.split("/")[3]
-                            request_json(
-                                server,
-                                f"/api/threads/{thread_id}/runs/current/approvals/{approval['id']}",
-                                {"decision": "accept" if action == "Approve" else "cancel"},
-                            )
-                            print("Approval sent; continuing stream.")
+                            try:
+                                request_json(
+                                    server,
+                                    f"/api/threads/{thread_id}/runs/current/approvals/{approval['id']}",
+                                    {"decision": "accept" if action == "Approve" else "cancel"},
+                                )
+                            except RuntimeError as error:
+                                print(f"Approval was not applied: {error}. Continuing stream.")
+                            else:
+                                print("Approval sent; continuing stream.")
                     else:
                         print(f"Run `engine approve {approval['id']}` or `engine reject {approval['id']} --reason …`.")
                 elif event.get("type") == "error":
@@ -589,7 +593,7 @@ def run(arguments: argparse.Namespace, preferences: Preferences) -> int:
         agent, runner, repository = creation_defaults(server, preferences, arguments)
         thread = request_json(server, "/api/threads", {"agentId": agent, "runner": runner})
         if repository:
-            thread["workspaceRoot"] = repository
+            thread = request_json(server, f"/api/threads/{thread['id']}/workspace", {"repository": repository})
         remember_thread(preferences, thread)
         print(f"Started {thread.get('title', 'task')} ({thread.get('id')})")
         return stream_run(server, f"/api/threads/{thread['id']}/runs", {"text": arguments.prompt, "runner": runner})

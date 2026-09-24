@@ -488,11 +488,11 @@ class ThreadService:
         self._locks[instance.instance_id] = asyncio.Lock()
         return thread
 
-    async def attach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
+    async def attach_workspace(self, instance_id: AgentInstanceId, repository: str | None = None) -> ChatThread:
         """Give this chat a checkout again -- or a first one."""
         thread = await self._require_idle(instance_id)
         async with self._locks[instance_id]:
-            state = await self.session.attach_workspace(instance_id)
+            state = await self.session.attach_workspace(instance_id, repository)
         return self._apply_workspace_state(thread, state)
 
     async def detach_workspace(self, instance_id: AgentInstanceId) -> ChatThread:
@@ -2402,8 +2402,12 @@ def create_app(
         instance_id = _thread_id(request)
         if await service.get(instance_id) is None:
             return _error("thread not found", 404)
+        body = await _json_body(request)
+        repository = body.get("repository")
+        if repository is not None and (not isinstance(repository, str) or not repository.strip()):
+            return _error("repository must be a non-empty string", 400)
         try:
-            thread = await service.attach_workspace(instance_id)
+            thread = await service.attach_workspace(instance_id, repository)
         except RuntimeError as error:
             # A repository that cannot produce a checkout -- unwired, or git
             # refusing -- is the server's problem to explain, not a 404.
