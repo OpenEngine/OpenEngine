@@ -682,6 +682,64 @@ def test_a_failed_recheck_is_retried_rather_than_cached(monkeypatch):
     assert answers == []
 
 
+def test_a_failed_recheck_does_not_report_the_session_as_signed_in(monkeypatch):
+    answers = [True, RuntimeError("gh is down")]
+
+    async def authorize(user_id, login):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    now = [1000.0]
+    monkeypatch.setattr("engine.apps.web.github_login.time.monotonic", lambda: now[0])
+    client = _signed_in(_login_flow(authorize))
+    now[0] += 301
+
+    status = client.get("/api/auth/github/status")
+    assert status.status_code == 503
+    assert status.json() == {"error": "repository access could not be verified"}
+    # The session is kept, so the next successful check lets the user back in.
+    assert not any("engine_session=" in cookie for cookie in status.headers.get_list("set-cookie"))
+
+
+def test_an_open_stream_ends_when_access_is_revoked(monkeypatch):
+    """A long-lived response is rechecked while it streams, not only when it starts."""
+    import asyncio
+
+    from starlette.responses import StreamingResponse
+
+    allowed = [True]
+
+    async def authorize(user_id, login):
+        return allowed[0]
+
+    async def events(_request):
+        async def body():
+            for n in range(1000):
+                if n == 3:
+                    allowed[0] = False
+                    flow._access.clear()
+                yield f"data: {n}\n\n".encode()
+                await asyncio.sleep(0.01)
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    monkeypatch.setattr("engine.apps.web.github_login._STREAM_RECHECK", 0.01)
+    flow = _login_flow(authorize)
+    inner = Starlette(routes=flow.routes() + [Route("/api/events", events)])
+    client = TestClient(flow.middleware(inner), base_url="https://engine.test")
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        callback(client, params["state"][0], code="code")
+
+    response = client.get("/api/events")
+    assert response.status_code == 200
+    assert response.text.startswith("data: 0\n\n")
+    assert "data: 999" not in response.text
+    assert client.get("/api/events").status_code == 401
+
+
 def test_a_slow_lookup_holds_up_only_its_own_user():
     import asyncio
 

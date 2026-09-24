@@ -18,12 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
 
+import anyio
 import httpx
 from dotenv import dotenv_values
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,9 @@ _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 # The one route a service credential may reach: the MCP gateway creating work
 # orders. Everything else still requires a browser session.
 _SERVICE_ROUTE = ("POST", "/api/runs")
+# How often a response still streaming asks whether its user may keep it, so an
+# open event stream ends about when a new request would be refused.
+_STREAM_RECHECK = 30
 
 
 def valid_service_token(token: str) -> bool:
@@ -315,7 +319,13 @@ class GitHubLogin:
     async def status(self, request: Request) -> Response:
         """Return the current session state for the frontend auth gate."""
         user = self._read_session(request)
-        revoked = user is not None and await self.has_access(user) is False
+        allowed = None if user is None else await self.has_access(user)
+        if user is not None and allowed is None:
+            # Not signed out, but not confirmed either: the browser keeps its
+            # page and asks again, as it does for any failed check.
+            return JSONResponse({"error": "repository access could not be verified"},
+                                503, headers=_HEADERS)
+        revoked = allowed is False
         if revoked:
             user = None
         body: dict[str, object] = {
@@ -385,7 +395,7 @@ class _SessionAuthMiddleware:
         user = self.login._read_session(request)
         allowed = None if user is None else await self.login.has_access(user)
         if allowed:
-            await self.app(scope, receive, send)
+            await self._serve(request, scope, receive, send)
             return
         if user is not None and allowed is None:
             response = JSONResponse(
@@ -400,3 +410,45 @@ class _SessionAuthMiddleware:
                 headers=_HEADERS,
             )
         await response(scope, receive, send)
+
+    async def _serve(self, request: Request, scope: Scope, receive: Receive, send: Send) -> None:
+        """Run the app, ending its response if access ends while it streams."""
+        started = finished = revoked = False
+        error: Exception | None = None
+
+        async def tracked(message: Message) -> None:
+            nonlocal started, finished
+            started = True
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                finished = True
+            await send(message)
+
+        async with anyio.create_task_group() as group:
+            async def serve() -> None:
+                nonlocal error
+                try:
+                    await self.app(scope, receive, tracked)
+                except Exception as exc:
+                    # Raised as itself below, not inside an exception group.
+                    error = exc
+                finally:
+                    group.cancel_scope.cancel()
+
+            group.start_soon(serve)
+            while True:
+                await anyio.sleep(_STREAM_RECHECK)
+                user = self.login._read_session(request)
+                if user is None or not await self.login.has_access(user):
+                    revoked = True
+                    group.cancel_scope.cancel()
+                    break
+        if error is not None:
+            raise error
+        if not revoked or finished:
+            return
+        log.info("ended a response whose session no longer has access")
+        if started:
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+        else:
+            await JSONResponse({"error": "authentication required"}, 401,
+                               headers=_HEADERS)(scope, receive, send)

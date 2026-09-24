@@ -54,8 +54,10 @@ with `/login?error=unverified`.
 Signed-in requests recheck access. `/api/auth/github/status` and protected API
 requests reuse GitHub's answer for up to five minutes per user, then ask
 again. When access has been revoked, the API answers 401 and the status
-endpoint clears the session. A failed lookup is not cached: that request gets
-503, and the next request asks GitHub again.
+endpoint clears the session. A failed lookup is not cached: that request,
+including the status check, gets 503, and the next request asks GitHub again.
+Responses that stay open, such as event streams, recheck every 30 seconds and
+end when access is revoked or can no longer be confirmed.
 
 ### Operators
 
