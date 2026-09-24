@@ -23,6 +23,35 @@ class _Response:
         return json.dumps(self.payload).encode()
 
 
+class _StreamResponse:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def __iter__(self):
+        return iter([b'{"type": "done", "content": []}\n'])
+
+
+class _ContentThenDoneResponse:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def __iter__(self):
+        return iter([
+            b'{"type": "content", "content": [{"text": "Working answer"}]}\n',
+            b'{"type": "done", "content": [{"text": "Working answer"}]}\n',
+        ])
+
+
 def test_status_json_identifies_a_ready_compatible_service(monkeypatch, capsys):
     monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _Response({
         "service": "openengine", "version": "1.2.3", "ready": True, "api_version": 1,
@@ -171,6 +200,35 @@ def test_palette_filters_then_selects_with_arrow_keys(monkeypatch):
     assert cli.palette(["/help", "/status", "/threads"], "Command: ") == "/threads"
 
 
+def test_palette_shows_all_slash_commands_as_soon_as_slash_is_typed(monkeypatch, capsys):
+    keys = iter(["s", "t", "a", "t", "u", "s", "enter"])
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+
+    assert cli.palette(
+        ["/help", "/status", "/threads"], "Command: ", initial_query="/"
+    ) == "/status"
+
+    first_frame = capsys.readouterr().out.split("\x1b[2J\x1b[H", 2)[1]
+    assert "/help" in first_frame
+    assert "/status" in first_frame
+    assert "/threads" in first_frame
+
+
+def test_interactive_opens_the_command_palette_on_slash_without_enter(monkeypatch):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, ready))
+    monkeypatch.setattr(cli, "read_key", lambda: "/")
+    seen = []
+    monkeypatch.setattr(
+        cli,
+        "palette",
+        lambda _options, _prompt, *, initial_query="": seen.append(initial_query) or "/quit",
+    )
+
+    assert cli.interactive(cli.argparse.Namespace(server=None), cli.Preferences()) == 0
+    assert seen == ["/"]
+
+
 def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path, capsys):
     ready = cli.Check("service", True, "OpenEngine is ready")
     monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "cli.json"))
@@ -185,6 +243,35 @@ def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path
     assert seen == [("http://engine.test", "/api/threads/thread-1/runs", {"text": "Ship it", "runner": "codex"})]
     assert cli.load_preferences().profile().last_task == "thread-1"
     assert "Started New chat" in capsys.readouterr().out
+
+
+def test_stream_run_shows_a_spinner_until_the_first_event(monkeypatch):
+    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _StreamResponse())
+    events = []
+
+    class Spinner:
+        stopped = False
+
+        def start(self):
+            events.append("start")
+
+        def stop(self):
+            if not self.stopped:
+                self.stopped = True
+                events.append("stop")
+
+    monkeypatch.setattr(cli, "TerminalSpinner", Spinner)
+
+    assert cli.stream_run("http://engine.test", "/api/threads/thread-1/runs", {"text": "Ship it"}) == 0
+    assert events == ["start", "stop"]
+
+
+def test_stream_run_does_not_repeat_the_final_content_snapshot(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _ContentThenDoneResponse())
+
+    assert cli.stream_run("http://engine.test", "/api/threads/thread-1/runs") == 0
+
+    assert capsys.readouterr().out.count("Working answer") == 1
 
 
 def test_run_defaults_a_local_task_repository_to_the_current_directory(monkeypatch, tmp_path: Path):

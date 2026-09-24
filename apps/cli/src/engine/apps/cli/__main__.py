@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import webbrowser
 from contextlib import contextmanager
@@ -395,23 +396,61 @@ def content_text(content: object) -> str:
     return "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
 
 
+class TerminalSpinner:
+    """Show that a streaming request is alive before its first event arrives."""
+
+    def __init__(self, message: str = "Working") -> None:
+        self.message = message
+        self._stopped = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._finished = False
+
+    def start(self) -> None:
+        if not sys.stderr.isatty():
+            return
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        self._stopped.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+            print("\r\x1b[K", end="", file=sys.stderr, flush=True)
+
+    def _spin(self) -> None:
+        for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
+            print(f"\r{frame} {self.message}…", end="", file=sys.stderr, flush=True)
+            if self._stopped.wait(0.1):
+                return
+
+
 def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> int:
     request = Request(
         f"{server}{path}", data=json.dumps(body).encode() if body is not None else None,
         method="POST" if body is not None else "GET",
         headers=request_headers({"Accept": "application/x-ndjson", **({"Content-Type": "application/json"} if body is not None else {})}),
     )
+    spinner = TerminalSpinner()
+    spinner.start()
+    last_content = ""
     try:
         with urlopen(request, timeout=30.0) as response:
             if response.status == 204:
+                spinner.stop()
                 print("No active run.")
                 return EXIT_OK
             for line in response:
                 if not line.strip():
                     continue
+                spinner.stop()
                 event = json.loads(line)
                 if event.get("type") == "content":
-                    print(content_text(event.get("content")), end="\r", flush=True)
+                    last_content = content_text(event.get("content"))
+                    print(last_content, end="\r", flush=True)
                 elif event.get("type") == "approval" and isinstance(event.get("approval"), dict):
                     approval = event["approval"]
                     print("\nApproval required:")
@@ -440,8 +479,10 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
                     return EXIT_UNHEALTHY
                 elif event.get("type") == "done":
                     text = content_text(event.get("content"))
-                    if text:
+                    if text and text != last_content:
                         print(f"\n{text}")
+                    elif text:
+                        print()
                     return EXIT_OK
     except KeyboardInterrupt:
         print("\nDetached; the service-side run continues.")
@@ -450,6 +491,8 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
         print(f"engine: server returned HTTP {error.code}", file=sys.stderr)
     except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
         print(f"engine: stream disconnected: {error}", file=sys.stderr)
+    finally:
+        spinner.stop()
     return EXIT_UNHEALTHY
 
 
@@ -734,9 +777,9 @@ def repo(arguments: argparse.Namespace, preferences: Preferences) -> int:
         return EXIT_UNHEALTHY
 
 
-def palette(options: list[str], prompt: str) -> str | None:
+def palette(options: list[str], prompt: str, *, initial_query: str = "") -> str | None:
     """A tiny searchable, arrow-key/Enter picker without a UI dependency."""
-    query = ""
+    query = initial_query
     selected = 0
     while True:
         matches = [option for option in options if query.casefold() in option.casefold()]
@@ -796,14 +839,31 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         print(f"engine: {check.detail}", file=sys.stderr)
         return EXIT_UNHEALTHY
     print(f"OpenEngine workbench — {server}. Type / for commands.")
+    commands = [
+        "/help",
+        "/status",
+        "/threads",
+        "/new",
+        "/approvals",
+        "/setup",
+        "/connect",
+        "/web",
+        "/quit",
+    ]
     while True:
-        line = input("engine> ").strip()
-        if not line:
-            continue
-        if line != "/":
+        # Read the first key directly so `/` opens the picker without making
+        # someone press Enter first. Any remaining keys, including a pasted
+        # `/status`, are consumed by the fuzzy picker as its search query.
+        print("engine> ", end="", flush=True)
+        key = read_key()
+        if key != "/":
+            if key and key != "enter":
+                print(key)
+            else:
+                print()
             print("Use / to open the command palette. Type /quit to exit.")
             continue
-        command = palette(["/help", "/status", "/threads", "/new", "/approvals", "/setup", "/connect", "/web", "/quit"], "Command: ")
+        command = palette(commands, "Command: ", initial_query="/")
         if command in {None, "/help"}:
             print("/status  service readiness\n/threads  inspect conversations\n/new  start a task\n/approvals  pending decisions\n/web  open the web UI\n/quit  exit")
         elif command == "/status":
