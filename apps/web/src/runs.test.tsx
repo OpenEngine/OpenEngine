@@ -236,6 +236,37 @@ describe("NewWorkflowPage", () => {
     });
   });
 
+  it("starts the runner inputs from the last submitted selection", async () => {
+    const user = userEvent.setup();
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    window.localStorage.removeItem("engine.workflowChoices");
+    const configured: EngineConfig = {
+      ...withGraph,
+      workflows: [{
+        id: "implementation-review-codex",
+        name: "Implementation review (codex)",
+        inputs: [
+          { name: "implementation_runner", label: "Implementation runner", default: "codex", required: true, choices: ["codex", "claude"] },
+          { name: "review_runner", label: "Review runner", default: "claude", required: true, choices: ["codex", "claude"] },
+        ],
+      }],
+    };
+    const first = render(<NewWorkflowPage config={configured} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Implementation runner" }), "claude");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Review runner" }), "codex");
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Create WorkOrder" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
+    first.unmount();
+
+    render(<NewWorkflowPage config={configured} />);
+    expect(screen.getByRole("combobox", { name: "Implementation runner" })).toHaveValue("claude");
+    expect(screen.getByRole("combobox", { name: "Review runner" })).toHaveValue("codex");
+    window.localStorage.removeItem("engine.workflowChoices");
+  });
+
   it("restores a prompt after unmounting and remounting", async () => {
     vi.stubGlobal("fetch", stubPageApi());
     const user = userEvent.setup();

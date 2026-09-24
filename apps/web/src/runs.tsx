@@ -41,6 +41,20 @@ export const IN_PROGRESS_PHASES = new Set([
  *  check a run, or by closing the tab — should not be what throws it out. */
 const WORKFLOW_DRAFT_KEY = "engine.workflowDraft";
 
+/** The dropdown workflow inputs -- the implementation and review runners --
+ *  as last submitted, by input name, so the next WorkOrder starts from the
+ *  runners you picked rather than the workflow's defaults. */
+const WORKFLOW_CHOICES_KEY = "engine.workflowChoices";
+
+function savedChoices(): Record<string, string> {
+  try {
+    const saved: unknown = JSON.parse(window.localStorage.getItem(WORKFLOW_CHOICES_KEY) ?? "{}");
+    return saved && typeof saved === "object" ? saved as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
 export function phaseLabel(value: string) {
   return value.replaceAll("_", " ");
 }
@@ -357,7 +371,13 @@ export function NewWorkflowPage({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [choices] = useState(savedChoices);
   const selected = config.workflows.find((workflow) => workflow.id === workflowId);
+  const inputs = selected?.inputs ?? [];
+  // A remembered choice the workflow no longer offers falls back to its default.
+  const inputValue = (input: (typeof inputs)[number]) =>
+    inputValues[input.name]
+      ?? (input.choices.includes(choices[input.name] ?? "") ? choices[input.name] : input.default);
 
   useEffect(() => {
     if (prompt) window.localStorage.setItem(WORKFLOW_DRAFT_KEY, prompt);
@@ -375,14 +395,17 @@ export function NewWorkflowPage({
           workflowId,
           prompt,
           repository,
-          inputs: Object.fromEntries((selected?.inputs ?? []).map((input) => [
-            input.name, inputValues[input.name] ?? input.default,
-          ])),
+          inputs: Object.fromEntries(inputs.map((input) => [input.name, inputValue(input)])),
           ...(milestone ? { milestoneId: milestone.milestoneId } : {}),
         }),
       });
       // The run now owns this prompt, so the draft has nothing left to keep.
       window.localStorage.removeItem(WORKFLOW_DRAFT_KEY);
+      window.localStorage.setItem(WORKFLOW_CHOICES_KEY, JSON.stringify({
+        ...savedChoices(),
+        ...Object.fromEntries(inputs.filter((input) => input.choices.length)
+          .map((input) => [input.name, inputValue(input)])),
+      }));
       window.location.assign(`/runs/${encodeURIComponent(run.runId)}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not create WorkOrder");
@@ -433,16 +456,16 @@ export function NewWorkflowPage({
             ))}
           </select>
         </label>
-        {!!selected?.inputs?.length && (
+        {!!inputs.length && (
           <details className="workflow-inputs" open>
             <summary>Workflow inputs</summary>
-            {selected.inputs.map((input) => (
+            {inputs.map((input) => (
               <label key={input.name}>
                 <span>{input.label}</span>
                 {input.choices.length ? (
                   <select
                     required={input.required}
-                    value={inputValues[input.name] ?? input.default}
+                    value={inputValue(input)}
                     onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
                   >
                     {!input.default && <option value="">Select…</option>}
@@ -451,7 +474,7 @@ export function NewWorkflowPage({
                 ) : (
                   <input
                     required={input.required}
-                    value={inputValues[input.name] ?? input.default}
+                    value={inputValue(input)}
                     onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
                   />
                 )}
