@@ -34,6 +34,9 @@ class Message:
     but one place.
     """
 
+    progress: bool = False
+    """Routine state transition that may edit an existing progress indicator."""
+
 
 @runtime_checkable
 class Communications(Protocol):

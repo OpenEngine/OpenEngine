@@ -21,6 +21,19 @@ import httpx
 #: How long a `gh` that has been asked to stop is given before it is killed.
 _TERMINATION_GRACE_SECONDS = 5
 
+#: OpenEngine's own token settings. `gh` would silently prefer these over its
+#: stored login, so they are withheld to keep `gh auth` authoritative.
+_ENGINE_TOKEN_VARIABLES = ("GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+
+
+def gh_cli_environment() -> dict[str, str]:
+    """The environment for `gh`, authenticated only by its own login."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _ENGINE_TOKEN_VARIABLES
+    }
+
 
 class GitHubTransportError(RuntimeError):
     """One transport could not complete a GitHub API request."""
@@ -211,6 +224,7 @@ class GitHubCliTransport:
                 stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=gh_cli_environment(),
             )
         except FileNotFoundError as error:
             raise GitHubTransportError(

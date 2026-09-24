@@ -1170,6 +1170,15 @@ select:disabled { cursor: default; }
 
 .detail-head { display: grid; gap: 18px; padding: 26px var(--gutter) 30px; }
 .detail-title { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; justify-content: space-between; }
+.workorder-heading { min-width: 0; max-width: 100%; }
+.workorder-prompt { display: grid; gap: 10px; justify-items: start; }
+.workorder-prompt-text {
+  max-height: 10rem;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.workorder-prompt-text[data-expanded="true"] { max-height: none; }
 .detail-title h1 {
   max-width: 24ch;
   font-size: clamp(28px, 3.4vw, 48px);

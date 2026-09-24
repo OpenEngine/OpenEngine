@@ -24,8 +24,14 @@ from test_slack_work_orders import (
 @pytest.mark.parametrize("origin", ["slack", "web"])
 @pytest.mark.parametrize("fail_post", [False, True])
 @pytest.mark.parametrize("before_row", [False, True])
-def test_agent_transcript_is_mirrored(tmp_path, origin, fail_post, before_row, ending):
-    texts = ["Inspecting the code.", "Checking <@UOTHER> & [REDACTED].", "Final report: done."]
+@pytest.mark.parametrize("blank_report", [False, True])
+def test_agent_transcript_is_mirrored(
+    tmp_path, origin, fail_post, before_row, ending, blank_report,
+):
+    texts = (
+        [" \n"] if blank_report
+        else ["Inspecting the code.", "Checking <@UOTHER> & [REDACTED].", "Final report: done."]
+    )
 
     async def agent(state):
         execution = current_execution()
@@ -33,8 +39,8 @@ def test_agent_transcript_is_mirrored(tmp_path, origin, fail_post, before_row, e
         await execution.say("user instructions", role="user")
         await execution.say(texts[0])
         await execution.tool("shell-1", "terminal", {"command": "private command"}, "private output")
-        await execution.say(texts[1])
-        await execution.say(texts[2])
+        for text in texts[1:]:
+            await execution.say(text)
         if ending == "failed":
             raise RuntimeError("unexpected service failure")
         return {}
@@ -103,7 +109,7 @@ def test_agent_transcript_is_mirrored(tmp_path, origin, fail_post, before_row, e
         assert state.phase is (RunPhase.SUCCEEDED if ending == "finished" else RunPhase.FAILED)
         events = client.get(f"/api/runs/{run_id}/graph-events").json()["events"]
         diagnostics = [e for e in events if e["type"] == EventKind.NOTIFICATION_FAILED.value]
-        assert len(diagnostics) == int(origin == "slack" and fail_post)
+        assert len(diagnostics) == int(origin == "slack" and fail_post and not blank_report)
         assert "secret-token" not in str(events)
         assert "private request body" not in str(events)
         if diagnostics:
@@ -121,12 +127,15 @@ def test_agent_transcript_is_mirrored(tmp_path, origin, fail_post, before_row, e
         "CSOURCE", "1", "UREQUESTER",
     )
     posted = [m.text for _, m, _ in communications.posts]
-    expected = [escape(text, quote=False) for text in texts[1 if fail_post else 0:]]
+    expected = [
+        escape(text, quote=False)
+        for text in texts[1 if fail_post else 0:]
+        if text.strip()
+    ]
     assert [text for text in posted if text in expected] == expected
-    assert "Work order finished." not in posted
+    assert ("Work order finished." in posted) == (blank_report and ending == "finished")
     assert posted.count("Work order failed: unexpected service failure") == int(ending == "failed")
     assert posted.count("*agent* started.") == 1
-    assert any("Started a work order" in text for text in posted)
     assert not any(word in text for text in posted for word in (
         "private command", "private output", "hidden system prompt", "user instructions",
     ))

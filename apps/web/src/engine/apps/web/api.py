@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import (
     AsyncIterator,
@@ -48,7 +49,9 @@ from uuid import uuid4
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
-from engine.apps.web.github_ingress import GithubAssignment, GithubComment, GithubIngress, GithubMerge
+from engine.apps.web.github_ingress import (
+    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_requester,
+)
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
@@ -1039,7 +1042,6 @@ def create_app(
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
-    github_bot_login: str = "",
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
@@ -1104,6 +1106,7 @@ def create_app(
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
     graph_agent_reports: set[RunId] = set()
+    deferred_graph_notifications: dict[RunId, RunOrigin] = {}
     # A pull request merged while its work order was still working towards its
     # human review. GitHub sends the merge once, so it is kept until the run
     # asks for that review rather than dropped for having arrived early.
@@ -1138,7 +1141,7 @@ def create_app(
             if event.payload.get("role", "assistant") != "assistant":
                 return
             report = event.payload.get("text")
-            if not isinstance(report, str) or not report:
+            if not isinstance(report, str) or not report.strip():
                 return
             # Preserve UI redactions and escape Slack mention/link syntax.
             text = escape(report, quote=False)
@@ -1196,7 +1199,7 @@ def create_app(
             return
         async with graph_notification_lock:
             state = await session.state_store.load(event.run_id)
-            if state is None:
+            if state is None or event.run_id in deferred_graph_notifications:
                 pending_graph_notifications.setdefault(event.run_id, []).append(event)
                 return
             for pending in pending_graph_notifications.pop(event.run_id, []):
@@ -1798,6 +1801,7 @@ def create_app(
             ),
             policy=ScopingPolicy(rules=(message,)),
         )
+        requester = _web_requester(request)
         # Independent proposals wait for explicit dispatch; dependent proposals
         # start when their prerequisite succeeds.
         definition = _mentioned_workflow()
@@ -1831,6 +1835,7 @@ def create_app(
                     prompt=prompt,
                     repository=work_orders.repository,
                     depends_on_run_id=RunId(str(spec.dependencies[0])) if spec.dependencies else None,
+                    requester=requester,
                 ))
         dependencies_changed.set()
         return JSONResponse(_scoping_plan_json(plan))
@@ -1845,8 +1850,10 @@ def create_app(
         milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
         scheduled: RunState | None = None,
+        defer_notifications: bool = False,
         parent_run_id: RunId | None = None,
         depends_on_run_id: RunId | None = None,
+        requester: str | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1864,11 +1871,16 @@ def create_app(
 
         Declared inputs are validated before starting and carried in graph state.
 
+        ``requester`` is who asked; a scheduled row keeps its own when none is
+        given.
+
         The engine is an argument rather than something read here, because
         having one is what made this graph offerable in the first place: a
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
+        if requester is None and scheduled is not None:
+            requester = scheduled.requester
         async with dependency_lock:
             if depends_on_run_id is not None:
                 prerequisite = await session.state_store.load(depends_on_run_id)
@@ -1882,7 +1894,7 @@ def create_app(
                         milestone_id=milestone_id, phase=RunPhase.SCHEDULED,
                         prompt=prompt, repository=repository, origin=origin,
                         parent_run_id=parent_run_id, depends_on_run_id=depends_on_run_id,
-                        inputs=inputs,
+                        inputs=inputs, requester=requester,
                     )
                     await session.state_store.save(state)
                     # Recheck after saving to cover completion racing with creation.
@@ -1897,6 +1909,10 @@ def create_app(
                 },
                 run_id=scheduled.run_id if scheduled else None,
             )
+            # Register before saving the row: earlier events already wait for
+            # the row, and later ones must wait for the concierge reply too.
+            if defer_notifications and origin is not None:
+                deferred_graph_notifications[snapshot.run_id] = origin
             seed_graph_progress(runtime, snapshot)
             if approval_policy.auto_approve:
                 topology = runtime.topology(GraphId(str(graph.graph_id)))
@@ -1918,12 +1934,14 @@ def create_app(
                 parent_run_id=scheduled.parent_run_id if scheduled else parent_run_id,
                 depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
                 inputs=inputs,
+                requester=requester,
             )
             await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
         async with graph_notification_lock:
-            for event in pending_graph_notifications.pop(state.run_id, []):
-                await notify_graph_event(state, event)
+            if state.run_id not in deferred_graph_notifications:
+                for event in pending_graph_notifications.pop(state.run_id, []):
+                    await notify_graph_event(state, event)
         # A very short run can be over before the row above exists, and the
         # ending it announced would then have had nothing to land on -- leaving
         # a WorkOrder that claims to be working forever. So the engine is asked
@@ -1962,7 +1980,7 @@ def create_app(
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=parent.repository,
             milestone_id=parent.milestone_id, parent_run_id=parent.run_id,
-            depends_on_run_id=depends_on_run_id,
+            depends_on_run_id=depends_on_run_id, requester=parent.requester,
         )
         link = run_notifier.work_order_link(state)
         return link.url if link else f"/runs/{state.run_id}", str(state.run_id)
@@ -2027,6 +2045,9 @@ def create_app(
                 surface.runtime, graph, inputs=inputs, prompt=state.prompt,
                 repository=repository, milestone_id=state.milestone_id,
                 scheduled=state, origin=state.origin,
+                # The proposer stays the requester; whoever clicks Start only
+                # names a row that recorded nobody.
+                requester=state.requester or _web_requester(request),
             )
             run = await run_reader.get(state.run_id)
             assert run is not None
@@ -2072,6 +2093,7 @@ def create_app(
                 repository=repository,
                 milestone_id=milestone_id,
                 depends_on_run_id=RunId(dependency_value) if dependency_value else None,
+                requester=_web_requester(request),
             )
         except ValueError as error:
             return _error(str(error), 400)
@@ -2484,10 +2506,23 @@ def create_app(
         source_control_preferences or SourceControlPreferences()
     )
 
-    # The single in-flight device flow. `_active_interval` tracks the current
-    # polling interval, which grows when GitHub returns `slow_down`.
-    _active_flow: DeviceFlowState | None = None
-    _active_interval: int = 5
+    # Scope connections and pending flows to the verified browser identity.
+    # No authenticated user inherits the legacy local account's credentials.
+    _github_flows: dict[tuple[str, str], tuple[DeviceFlowState, int, str]] = {}
+
+    def _github_store(request: Request) -> GitHubCredentialStore:
+        if not github_login.configured:
+            return _credential_store
+        user = github_login._read_session(request)
+        if user is None:
+            # Session middleware normally rejects this before routing.
+            raise RuntimeError("GitHub connection requires a browser session")
+        return GitHubCredentialStore(user_id=int(user["id"]))
+
+    def _web_requester(request: Request) -> str | None:
+        """The signed-in GitHub account, or ``None`` without one to name."""
+        user = github_login._read_session(request) if github_login.configured else None
+        return github_requester(int(user["id"]), str(user["login"])) if user else None
 
     def _is_local_request(request: Request) -> bool:
         """True when the request originates from the UI served by this process.
@@ -2529,18 +2564,18 @@ def create_app(
         """Return first 4 chars + bullets so the UI can confirm which ID is set."""
         return value[:4] + "••••••••" if len(value) > 4 else "••••••••"
 
-    def _effective_client_id() -> str:
+    def _effective_client_id(request: Request) -> str:
         """Env-var takes precedence; keychain is the fallback for UI-configured IDs."""
-        return github_client_id or _credential_store.get_client_id() or ""
+        return github_client_id or _github_store(request).get_client_id() or ""
 
     async def github_status(_request: Request) -> JSONResponse:
-        credentials = _credential_store.get_credentials()
+        credentials = _github_store(_request).get_credentials()
         now = time.time()
         connected = bool(credentials and credentials.is_usable(now))
         return JSONResponse(
             {
                 "connected": connected,
-                "clientIdConfigured": bool(_effective_client_id()),
+                "clientIdConfigured": bool(_effective_client_id(_request)),
             }
         )
 
@@ -2594,7 +2629,7 @@ def create_app(
 
     async def github_get_client_id(_request: Request) -> JSONResponse:
         # Never return the actual value — only whether one is set and its hint.
-        stored = _credential_store.get_client_id()
+        stored = _github_store(_request).get_client_id()
         if github_client_id:
             return JSONResponse(
                 {"source": github_client_id_source, "hint": _hint(github_client_id)}
@@ -2611,79 +2646,75 @@ def create_app(
         if not client_id:
             return _error("clientId is required", 400)
         try:
-            _credential_store.set_client_id(client_id)
+            _github_store(request).set_client_id(client_id)
         except GitHubAuthError as error:
             return _error(str(error), 500)
         return Response(status_code=204)
 
     async def github_connect(request: Request) -> JSONResponse:
-        nonlocal _active_flow, _active_interval
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        effective_client_id = _effective_client_id()
+        effective_client_id = _effective_client_id(request)
         if not effective_client_id:
             return _error(
                 "GitHub client ID is not configured. Enter it in Settings.", 503
             )
-        # Return the in-flight flow rather than discarding it — a second tab
-        # or a retry gets the same codes instead of racing with any polling
-        # that is still running against the first flow.
-        if _active_flow is not None:
-            return JSONResponse(
-                {
-                    "userCode": _active_flow.user_code,
-                    "verificationUri": _active_flow.verification_uri,
-                    "expiresIn": _active_flow.expires_in,
-                    "interval": _active_interval,
-                }
+        identity = _github_store(request).credential_identity
+        active = _github_flows.get(identity)
+        if active is None:
+            try:
+                flow = await start_device_flow(effective_client_id)
+            except GitHubAuthError as error:
+                return _error(str(error), 502)
+            # A concurrent tab may have started a flow while we awaited GitHub.
+            active = _github_flows.setdefault(
+                identity, (flow, flow.interval, effective_client_id)
             )
-        try:
-            _active_flow = await start_device_flow(effective_client_id)
-        except GitHubAuthError as error:
-            return _error(str(error), 502)
-        _active_interval = _active_flow.interval
+        flow, interval, _ = active
         return JSONResponse(
             {
-                "userCode": _active_flow.user_code,
-                "verificationUri": _active_flow.verification_uri,
-                "expiresIn": _active_flow.expires_in,
-                "interval": _active_interval,
+                "userCode": flow.user_code,
+                "verificationUri": flow.verification_uri,
+                "expiresIn": flow.expires_in,
+                "interval": interval,
             }
         )
 
     async def github_connect_poll(request: Request) -> JSONResponse:
-        nonlocal _active_flow, _active_interval
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        if _active_flow is None:
+        store = _github_store(request)
+        identity = store.credential_identity
+        active = _github_flows.get(identity)
+        if active is None:
             return _error(
                 "no active device flow; call POST /api/github/connect first", 409
             )
+        flow, interval, client_id = active
         try:
-            result = await poll_device_flow(
-                _effective_client_id(), _active_flow.device_code, _active_interval
-            )
+            result = await poll_device_flow(client_id, flow.device_code, interval)
         except GitHubAuthError as error:
-            _active_flow = None
+            if _github_flows.get(identity) is active:
+                _github_flows.pop(identity)
             return _error(str(error), 502)
+        if _github_flows.get(identity) is not active:
+            return _error("device flow was disconnected or replaced", 409)
         if isinstance(result, DeviceFlowComplete):
+            _github_flows.pop(identity)
             try:
-                _credential_store.set_credentials(credentials_from_device_flow(result))
+                store.set_credentials(credentials_from_device_flow(result))
             except GitHubAuthError as error:
-                _active_flow = None
                 return _error(str(error), 500)
-            _active_flow = None
             return JSONResponse({"status": "complete"})
-        # DeviceFlowPending — update the interval in case GitHub slowed us down.
-        _active_interval = result.next_interval
-        return JSONResponse({"status": "pending", "nextInterval": _active_interval})
+        _github_flows[identity] = (flow, result.next_interval, client_id)
+        return JSONResponse({"status": "pending", "nextInterval": result.next_interval})
 
     async def github_disconnect(request: Request) -> Response:
-        nonlocal _active_flow
         if not _is_local_request(request):
             return _error("forbidden", 403)
-        _active_flow = None
-        _credential_store.delete()
+        store = _github_store(request)
+        _github_flows.pop(store.credential_identity, None)
+        store.delete()
         return Response(status_code=204)
 
     # GitLab credentials are per OAuth issuer, unlike GitHub's single public
@@ -2823,9 +2854,7 @@ def create_app(
     _slack_store = slack_credential_store or SlackCredentialStore()
     _slack_state: str | None = None
     _slack_redirect_uri: str | None = None
-    # The way back into a chat thread, for the one message this app sends
-    # itself: the reply that says a mention became a work order. Everything
-    # after that is the executor's, which builds its own from the same port.
+    # Concierge replies and graph progress share the same Slack transport.
     run_notifier = RunNotifier(session.capabilities.communications, public_url)
 
     def _signing_secret() -> str:
@@ -2943,27 +2972,26 @@ def create_app(
         _slack_redirect_uri = None
         return Response(status_code=204)
 
-    _pending_announcements: list[tuple[RunOrigin, CommunicationsMessage, RunState, asyncio.Event]] = []
-
     async def concierge_reply(origin: RunOrigin, text: str) -> None:
         await run_notifier.post(origin, CommunicationsMessage(text, mention=origin.author))
 
     async def concierge_turn_finished(origin: RunOrigin) -> None:
-        for pending in list(_pending_announcements):
-            ann_origin, ann_msg, ann_state, ready = pending
-            if (ann_origin.channel, ann_origin.thread_id) != (origin.channel, origin.thread_id):
-                continue
-            _pending_announcements.remove(pending)
-            try:
-                await run_notifier.post(ann_origin, ann_msg, ann_state)
-            finally:
-                # A failed reply or announcement must not strand an accepted run.
-                ready.set()
+        # Release after the concierge reply, or when the turn fails so an
+        # accepted work order can still report progress.
+        # Serialize the flush with live events so new progress cannot overtake it.
+        async with graph_notification_lock:
+            for run_id, run_origin in list(deferred_graph_notifications.items()):
+                if (run_origin.channel, run_origin.thread_id) != (origin.channel, origin.thread_id):
+                    continue
+                del deferred_graph_notifications[run_id]
+                state = await session.state_store.load(run_id)
+                for event in pending_graph_notifications.pop(run_id, []):
+                    if state is not None:
+                        await notify_graph_event(state, event)
 
     async def concierge_create_workorder(
         origin: RunOrigin, repository: str, prompt: str,
     ) -> tuple[str, str]:
-        ready = asyncio.Event()
         graph = _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
@@ -2972,17 +3000,10 @@ def create_app(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            milestone_id=None, origin=origin,
+            milestone_id=None, origin=origin, defer_notifications=True,
+            requester=origin.requester or None,
         )
         link = run_notifier.work_order_link(state)
-        _pending_announcements.append((
-            origin,
-            CommunicationsMessage(
-                f"Started a work order on `{repository}`. I will report progress here.",
-                (link,) if link else (), mention=origin.author,
-            ),
-            state, ready,
-        ))
         return link.url if link else "", str(state.run_id)
 
     slack_selections: dict[tuple[str, str, str], str] = {}
@@ -3164,7 +3185,7 @@ def create_app(
 
     async def github_start_workorder(
         store: GithubProvenance | None, repository: str, number: int, prompt: str,
-        *, replacing: RunId | None,
+        *, replacing: RunId | None, requester: str | None = None,
     ) -> Continuation:
         """Start a work order for a pull request that has no run in flight.
 
@@ -3209,7 +3230,7 @@ def create_app(
             runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            milestone_id=None,
+            milestone_id=None, requester=requester,
         )
         url = pull_request_url(repository, number)
         try:
@@ -3276,7 +3297,9 @@ def create_app(
         link = run_notifier.work_order_link(state) if state is not None else None
         return Continuation(url=link.url if link else "", run_id=str(run_id))
 
-    async def github_continue_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+    async def github_continue_workorder(
+        origin: RunOrigin, prompt: str, allow_start: bool,
+    ) -> Continuation:
         """Reach this pull request's work order, and write down what happened.
 
         The recording is here rather than inside the two branches below
@@ -3287,14 +3310,16 @@ def create_app(
         sign anything went wrong.
         """
         try:
-            reached = await _github_reach_workorder(origin, prompt)
+            reached = await _github_reach_workorder(origin, prompt, allow_start)
         except Exception as failure:
             github_activity.dispatch_failed(str(failure) or type(failure).__name__)
             raise
         github_activity.dispatched(reached.run_id, started_run=reached.started)
         return reached
 
-    async def _github_reach_workorder(origin: RunOrigin, prompt: str) -> Continuation:
+    async def _github_reach_workorder(
+        origin: RunOrigin, prompt: str, allow_start: bool,
+    ) -> Continuation:
         """Steer the work order this pull request already has, or start one.
 
         Which of the two happens is the host's to decide, not the agent's: it
@@ -3304,7 +3329,7 @@ def create_app(
         opened by hand, or by a run that has since finished or lost its graph
         -- has no execution to steer, and steering one would either raise or
         reach nothing; a comment asking for a change there is a request for
-        work, so it gets a work order.
+        work, so it gets a work order only if the comment mentioned Engine.
         """
         repository = origin.channel.removeprefix("github:")
         number = int(origin.thread_id.partition("/review/")[0])
@@ -3327,8 +3352,13 @@ def create_app(
                 # A saved work order can outlive the graph it was started from.
                 snapshot = None
         if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+            if not allow_start:
+                raise RuntimeError(
+                    "no active work order and Engine was not @mentioned"
+                )
             reached = await github_start_workorder(
                 store, repository, number, prompt, replacing=run_id,
+                requester=origin.requester or None,
             )
         else:
             reached = await github_steer_workorder(run_id, prompt)
@@ -3349,20 +3379,16 @@ def create_app(
         repository*, and an unkeyed cache would quietly hand the first
         repository's answer to the second one's comments.
 
-        ``GITHUB_BOT_LOGIN`` is optional and usually unset, and a token held by
-        a machine user posts comments that look like anybody else's: without
-        knowing who this process posts as, the concierge answers its own reply
-        and then answers that, forever. The credentials themselves are the
+        A token held by a machine user posts comments that look like anybody
+        else's: without knowing who this process posts as, the concierge answers
+        its own reply and then answers that, forever. The credentials themselves are the
         authority on this, so they are asked rather than configured. A failure
         to answer propagates: the turn is retried on redelivery instead of
         replying into a loop this process cannot recognise.
         """
         if repository not in posting_login:
-            posting_login[repository] = (
-                github_bot_login
-                or await session.capabilities.source_control.authenticated_login(
-                    pull_request_url(repository, 1).rsplit("/pull/", 1)[0]
-                )
+            posting_login[repository] = await session.capabilities.source_control.authenticated_login(
+                pull_request_url(repository, 1).rsplit("/pull/", 1)[0]
             )
         return posting_login[repository]
 
@@ -3380,6 +3406,13 @@ def create_app(
                 pull_request_url(repository, assignment.number), assignment.sender,
             )
         if not may_write:
+            log.info(
+                "ignored an assignment of #%s from %s, who cannot write to %s",
+                assignment.number, assignment.sender, repository,
+            )
+            github_activity.ignored(
+                f"{assignment.sender} cannot write to {repository}"
+            )
             return
         graph = _mentioned_workflow()
         if graph is None:
@@ -3395,6 +3428,7 @@ def create_app(
                     f"{assignment.body}\n\nIssue: {assignment.url}\n"
                     f"Include Fixes #{assignment.number} in the pull request body."),
             repository=repository, milestone_id=None,
+            requester=github_requester(assignment.sender_id, assignment.sender),
         )
 
     async def github_concierge_turn(comment: GithubComment) -> None:
@@ -3419,9 +3453,8 @@ def create_app(
         # ingress treats like any other failure -- the comment is forgotten and
         # can be redelivered -- so a slow forge costs a retry, not the queue.
         async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-            if comment.author.lower() == (
-                await github_posting_login(comment.repository)
-            ).lower():
+            login = await github_posting_login(comment.repository)
+            if comment.author.lower() == login.lower():
                 # GitHub logins are case-insensitive, so the comparison is too.
                 github_activity.ignored("posted by Engine itself")
                 return
@@ -3450,6 +3483,20 @@ def create_app(
                 f"{comment.author} cannot write to {comment.repository}"
             )
             return
+        mentioned = bool(login and re.search(
+            rf"(?<![\w@-])@{re.escape(login)}(?![\w-])", comment.body, re.IGNORECASE,
+        ))
+        if not mentioned:
+            run_id = await github_run_for_pull_request(comment.repository, comment.number)
+            snapshot = None
+            if run_id is not None and surface.runtime is not None:
+                try:
+                    snapshot = await surface.runtime.snapshot(run_id)
+                except UnknownGraphError:
+                    pass
+            if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+                github_activity.ignored("no active work order and Engine was not @mentioned")
+                return
         thread_id = str(comment.number)
         if comment.event == "pull_request_review_comment":
             thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
@@ -3457,8 +3504,9 @@ def create_app(
             origin=RunOrigin(
                 channel=f"github:{comment.repository}", thread_id=thread_id,
                 author=comment.author,
+                requester=github_requester(comment.author_id, comment.author) or "",
             ),
-            text=comment.body, comment_id=comment.comment_id,
+            text=comment.body, comment_id=comment.comment_id, allow_start=mentioned,
         ))
 
     async def github_merge_approves_workorder(merged: GithubMerge) -> None:
@@ -3474,9 +3522,9 @@ def create_app(
 
         `merge_from_payload` has already refused a bot's merge. Engine's own is
         refused here, against the login its credentials resolve to: a machine
-        user's token merges as an ordinary `User`, and `GITHUB_BOT_LOGIN` is
-        usually unset. Anybody else who merged is a person GitHub let write to
-        the repository -- the same permission the comment path calls
+        user's token merges as an ordinary `User`. Anybody else who merged is
+        a person GitHub let write to the repository -- the same permission the
+        comment path calls
         `can_write_repository` to establish, here proven by the merge itself.
 
         A merge that decides nothing is not a failure: a pull request opened by
@@ -3581,7 +3629,7 @@ def create_app(
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
-        self_login=lambda: github_bot_login,
+        authenticated_login=github_posting_login,
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
         handle_assignment=github_create_workorder,
@@ -3946,6 +3994,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         return result
     result["taskPrompt"] = run.task_prompt
     result["failureReason"] = run.failure_reason
+    result["requester"] = run.requester
     return result
 
 

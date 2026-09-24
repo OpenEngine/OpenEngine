@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -22,9 +25,11 @@ _SIGNING_SECRET = "slack-signing-secret"
 _TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 _REVOKE_URL = "https://slack.com/api/auth.revoke"
 _AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
+_UPDATE_MESSAGE_URL = "https://slack.com/api/chat.update"
 _POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 _REACTIONS_ADD_URL = "https://slack.com/api/reactions.add"
 _LIST_CONVERSATIONS_URL = "https://slack.com/api/conversations.list"
+_MAX_PROGRESS_MESSAGES = 256
 
 
 class SlackAuthError(RuntimeError):
@@ -122,6 +127,8 @@ class SlackCommunications:
 
     def __init__(self, credential_store: SlackCredentialStore) -> None:
         self._credential_store = credential_store
+        self._progress: OrderedDict[tuple[str, str, str], tuple[str, str]] = OrderedDict()
+        self._progress_lock = asyncio.Lock()
 
     async def post(
         self,
@@ -130,6 +137,13 @@ class SlackCommunications:
         run_id=None,
         thread_id: str = "",
     ) -> str:
+        if isinstance(message, Message) and message.progress and run_id is not None:
+            # Parallel graph nodes must append in order without losing history.
+            async with self._progress_lock:
+                return await self._post(channel, message, run_id, thread_id)
+        return await self._post(channel, message, run_id, thread_id)
+
+    async def _post(self, channel, message, run_id, thread_id) -> str:
         token = self._credential_store.token()
         if not token:
             # Raised rather than returned as an empty id: a disconnected
@@ -139,13 +153,25 @@ class SlackCommunications:
             raise SlackAuthError(
                 "Slack is not connected, so the message was not sent"
             )
+        progress = isinstance(message, Message) and message.progress and run_id is not None
+        key = (channel, thread_id, str(run_id))
+        previous = self._progress.get(key) if progress else None
+        history = ""
+        if progress:
+            timestamp = datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S %Z")
+            history = f"{message.text} ({timestamp})"
+            if previous:
+                history = f"{previous[1]}\n{history}"
+            message = replace(message, text=history)
         payload: dict[str, str] = {}
-        if thread_id:
+        if previous:
+            payload["ts"] = previous[0]
+        elif thread_id:
             payload["thread_ts"] = thread_id
         async with httpx.AsyncClient() as client:
             channel_id = await self._resolve_channel(client, token, channel)
             response = await client.post(
-                _POST_MESSAGE_URL,
+                _UPDATE_MESSAGE_URL if previous else _POST_MESSAGE_URL,
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "channel": channel_id,
@@ -162,7 +188,15 @@ class SlackCommunications:
             raise SlackAuthError(
                 f"Slack notification failed: {body.get('error', 'message was not sent')}"
             )
-        return str(body.get("ts", ""))
+        message_id = str(body.get("ts", ""))
+        if progress and message_id:
+            self._progress[key] = (message_id, history)
+            self._progress.move_to_end(key)
+            # The adapter receives no run-deletion events. Bound retained
+            # histories, keeping the most recently updated indicators.
+            if len(self._progress) > _MAX_PROGRESS_MESSAGES:
+                self._progress.popitem(last=False)
+        return message_id
 
     @staticmethod
     def _render(message: str | Message) -> str:

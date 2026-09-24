@@ -7,6 +7,7 @@ import {
   NewWorkflowPage,
   phaseAccent,
   phaseLabel,
+  requesterLabel,
   RunDetailPage,
   RunsPage,
   runStatusLabel,
@@ -107,6 +108,12 @@ describe("run display helpers", () => {
   it("labels runs with their lifecycle phase", () => {
     expect(runStatusLabel(run())).toBe("running agent");
     expect(runStatusLabel(run({ phase: "succeeded" }))).toBe("succeeded");
+  });
+
+  it("names a requester by account and provider", () => {
+    expect(requesterLabel("github:42:alice")).toBe("alice (GitHub)");
+    expect(requesterLabel("slack:T1:U1")).toBe("U1 (Slack)");
+    expect(requesterLabel("other")).toBe("other");
   });
 });
 

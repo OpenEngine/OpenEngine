@@ -33,7 +33,7 @@ from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
-from engine.apps.web.source_control import SourceControlPreferences
+from engine.apps.web.source_control import SourceControlPreferences, gh_cli_status
 from engine.runtime import (
     EngineConfigError,
     LoadedEngineConfig,
@@ -45,7 +45,9 @@ from engine.runtime import (
 )
 
 #: Vite's production output, served by the same process as the API.
-STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
+STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
+if not STATIC_DIRECTORY.is_dir():
+    STATIC_DIRECTORY = Path(__file__).resolve().parents[4] / "dist"
 
 
 def report_wiring(settings: Settings) -> None:
@@ -62,6 +64,12 @@ def report_wiring(settings: Settings) -> None:
     print(f"openengine web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
+    cli = gh_cli_status()
+    print(
+        "  source_control GitHub identity: gh auth; "
+        f"authenticated={cli.authenticated} account={cli.account or 'unknown'}"
+        + ("" if cli.authenticated else f" ({cli.message})")
+    )
     print(f"agents: {', '.join(sorted(session.profiles))}")
     print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
     print(
@@ -198,7 +206,6 @@ def compose_app(
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
         settings,
-        credential_store=credential_store,
         slack_credential_store=slack_credential_store,
     )
     runners = build_runners(settings)
@@ -228,7 +235,6 @@ def compose_app(
         slack_credential_store=slack_credential_store,
         github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
         github_repository=settings.github_webhook.repository if settings.github_webhook else "",
-        github_bot_login=os.environ.get("GITHUB_BOT_LOGIN", ""),
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         milestone_scoper=build_milestone_scoper(settings),

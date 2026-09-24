@@ -1,0 +1,148 @@
+/* openengine — a square, printed, high-contrast system.
+ * Paper page, near-black rail, flame for the one thing that wants acting on.
+ * Nothing is rounded; structure is drawn with rules, not shadows. */
+
+:root {
+  --oe-ink: #111111;
+  --oe-ink-soft: #3c3c39;
+  --oe-muted: #6d6d68;
+  --oe-faint: #8b8b85;
+  --oe-paper: #f0efed;
+  --oe-fill: #e7e6e3;
+  --oe-surface: #ffffff;
+  --oe-rule: #d4d3cf;
+  --oe-flame: #e8452b;
+  --oe-flame-deep: #c9351d;
+  --oe-night: #111111;
+  --oe-night-raised: #1c1c1b;
+  --oe-night-rule: #2b2b29;
+  --oe-night-ink: #f4f3f1;
+  --oe-night-muted: #8d8d86;
+  --oe-logo-filter: none;
+
+  --oe-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --oe-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ifm-font-family-base: var(--oe-sans);
+  --ifm-font-family-monospace: var(--oe-mono);
+  --ifm-heading-font-weight: 800;
+  --ifm-color-primary: #c9351d;
+  --ifm-color-primary-dark: #b52f1a;
+  --ifm-color-primary-darker: #ab2d18;
+  --ifm-color-primary-darkest: #8d2514;
+  --ifm-color-primary-light: #e8452b;
+  --ifm-color-primary-lighter: #ea5239;
+  --ifm-color-primary-lightest: #ee7461;
+  --ifm-background-color: var(--oe-paper);
+  --ifm-background-surface-color: var(--oe-paper);
+  --ifm-global-radius: 0;
+  --ifm-button-border-radius: 0;
+  --ifm-code-border-radius: 0;
+  --ifm-code-font-size: 90%;
+  --ifm-toc-border-color: var(--oe-rule);
+  --ifm-hr-background-color: var(--oe-rule);
+  --ifm-table-stripe-background: transparent;
+  --ifm-navbar-background-color: var(--oe-night);
+  --ifm-navbar-link-color: var(--oe-night-muted);
+  --ifm-navbar-link-hover-color: var(--oe-night-ink);
+  --ifm-navbar-height: 62px;
+  --ifm-menu-color-background-active: var(--oe-surface);
+  --ifm-footer-background-color: var(--oe-paper);
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, .08);
+}
+
+[data-theme="dark"] {
+  --oe-ink: #f4f3f1;
+  --oe-ink-soft: #d6d5d1;
+  --oe-muted: #a3a39c;
+  --oe-faint: #8d8d86;
+  --oe-paper: #151514;
+  --oe-fill: #1c1c1b;
+  --oe-surface: #1f1f1e;
+  --oe-rule: #2f2f2d;
+  --oe-night: #0b0b0b;
+  --oe-logo-filter: invert(1);
+
+  --ifm-color-primary: #ee7461;
+  --ifm-color-primary-dark: #eb5d46;
+  --ifm-color-primary-darker: #e8452b;
+  --ifm-color-primary-darkest: #c9351d;
+  --ifm-color-primary-light: #f18b7c;
+  --ifm-color-primary-lighter: #f39889;
+  --ifm-color-primary-lightest: #f7bab1;
+  --ifm-background-color: var(--oe-paper);
+  --ifm-background-surface-color: var(--oe-paper);
+  --ifm-footer-background-color: var(--oe-paper);
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, .08);
+}
+
+body { -webkit-font-smoothing: antialiased; }
+
+/* --- navbar -------------------------------------------------------------- */
+
+.navbar { border-bottom: 0; box-shadow: none; }
+.navbar__brand { color: var(--oe-night-ink); }
+.navbar__brand:hover { color: var(--oe-night-ink); }
+.navbar__logo { height: 32px; margin-right: 12px; }
+.navbar__title { font-size: 19px; font-weight: 800; letter-spacing: -.025em; }
+.navbar__link { font: 500 13px/1 var(--oe-mono); }
+.navbar__link--active { color: var(--oe-night-ink); }
+.navbar-cta.navbar__link {
+  margin-left: 8px;
+  padding: 10px 14px;
+  color: #fff;
+  background: var(--oe-flame);
+}
+.navbar-cta.navbar__link:hover { color: #fff; background: var(--oe-flame-deep); }
+.navbar-cta svg { display: none; }
+.navbar .clean-btn { color: var(--oe-night-muted); }
+.navbar__toggle { color: var(--oe-night-ink); }
+
+/* --- docs ---------------------------------------------------------------- */
+
+.theme-doc-sidebar-container { background: var(--oe-fill); border-right: 1px solid var(--oe-rule) !important; }
+.menu__link { font-size: 14px; font-weight: 500; border-left: 2px solid transparent; }
+.menu__link--active:not(.menu__link--sublist) { font-weight: 700; border-left-color: var(--oe-flame); }
+.menu__list-item-collapsible .menu__link--sublist,
+.menu__link--sublist-caret {
+  color: var(--oe-faint);
+  font: 500 11px/1 var(--oe-mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.markdown h1 { font-size: clamp(32px, 4.4vw, 44px); letter-spacing: -.04em; }
+.markdown h2 { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--oe-rule); letter-spacing: -.03em; }
+.markdown > p:first-of-type { color: var(--oe-muted); font-size: 18px; }
+.markdown table { display: table; width: 100%; font-size: 14px; }
+.markdown th { font: 500 11px var(--oe-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--oe-faint); text-align: left; }
+.markdown img { border: 1px solid var(--oe-rule); }
+.pagination-nav__link, .theme-code-block, .alert { border-radius: 0; }
+
+.placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  margin-bottom: var(--ifm-leading);
+  padding: 20px;
+  color: var(--oe-faint);
+  border: 1px dashed var(--oe-faint);
+  background: repeating-linear-gradient(135deg, transparent 0 10px, var(--oe-fill) 10px 11px);
+  font: 12px var(--oe-mono);
+  text-align: center;
+}
+
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; list-style: none; }
+.flow li { margin: 0; }
+.flow .step { display: inline-block; padding: 6px 10px; background: var(--oe-surface); border: 1px solid var(--oe-rule); font: 500 12px var(--oe-mono); }
+.flow .step.hot { color: var(--oe-flame); border-color: var(--oe-flame); }
+.flow .arrow { color: var(--oe-faint); font-family: var(--oe-mono); }
+
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: var(--ifm-leading); }
+.cards a { display: grid; gap: 6px; padding: 18px; background: var(--oe-surface); border: 1px solid var(--oe-rule); color: var(--oe-ink); text-decoration: none; }
+.cards a:hover { border-color: var(--oe-ink); text-decoration: none; }
+.cards span { color: var(--oe-muted); font-size: 14px; line-height: 1.45; }
+@media (max-width: 820px) { .cards { grid-template-columns: 1fr; } }
+
+.footer { border-top: 1px solid var(--oe-rule); padding: 24px var(--ifm-spacing-horizontal); }
+.footer__copyright { color: var(--oe-muted); font: 12px var(--oe-mono); }
+.footer__copyright a { color: inherit; }

@@ -8,6 +8,7 @@ name: release gate
 # compatibility run pass, and was it recent enough to mean anything?
 
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       max_age_days:

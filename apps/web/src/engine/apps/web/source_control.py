@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal, TypeVar
 from urllib.parse import urlsplit
 
+from engine.adapters.source_control.github.transports import gh_cli_environment
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
     ChangeRequest,
@@ -89,6 +90,7 @@ def gh_cli_status(binary_path: str = "gh") -> GhCliStatus:
             [binary_path, "auth", "status", "--hostname", "github.com"],
             capture_output=True,
             check=False,
+            env=gh_cli_environment(),
             timeout=_STATUS_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
@@ -108,6 +110,7 @@ def gh_cli_status(binary_path: str = "gh") -> GhCliStatus:
             [binary_path, "api", "user", "--jq", ".login"],
             capture_output=True,
             check=False,
+            env=gh_cli_environment(),
             timeout=_STATUS_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):

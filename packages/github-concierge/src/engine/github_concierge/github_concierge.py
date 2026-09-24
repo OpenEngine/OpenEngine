@@ -45,8 +45,9 @@ from langgraph_acp.session import ACPSession
 from .github_egress import Continuation, FeedbackBroker
 
 #: Given the origin that asked and the feedback, reach that pull request's work
-#: order -- steering the one in flight, or starting one when there is none.
-ContinueWorkorder = Callable[[RunOrigin, str], Awaitable[Continuation]]
+#: order -- steering the one in flight, or starting one when there is none
+#: and the host granted this comment permission to start work.
+ContinueWorkorder = Callable[[RunOrigin, str, bool], Awaitable[Continuation]]
 Reply = Callable[[RunOrigin, str], Awaitable[None]]
 
 INSTRUCTIONS = """You are OpenEngineBot, a pull request concierge. Your one effect
@@ -126,6 +127,8 @@ class FeedbackRequest:
     origin: RunOrigin
     text: str
     comment_id: str = ""
+    #: Host permission from the mention check, never supplied by the agent.
+    allow_start: bool = False
 
 
 class ConversationState(TypedDict):
@@ -189,6 +192,7 @@ class GithubConcierge:
         # turns: exactly one is ever in flight to write it.
         self._delivery = Delivery()
         self._forwarding = None
+        self._allow_start = False
         # What forwarding achieved for comments already dealt with, so a reply
         # retried by redelivery is only a reply.
         self._forwarded: OrderedDict[tuple[str, str, str], Delivery] = OrderedDict()
@@ -256,6 +260,8 @@ class GithubConcierge:
             return {"reply": landed.announcement()}
         self._delivery = Delivery()
         self._forwarding = forwarded
+        # Sessions outlive comments; starting permission belongs to this turn.
+        self._allow_start = request.allow_start
         fresh = key not in self._threads
         if fresh:
             while len(self._threads) >= self.max_threads:
@@ -280,7 +286,7 @@ class GithubConcierge:
                             "is forwarded once"
                         )
                     self._delivery = Delivery(attempted=True)
-                    reached = await self.continue_workorder(origin, prompt)
+                    reached = await self.continue_workorder(origin, prompt, self._allow_start)
                     self._delivery = Delivery(
                         run_id=reached.run_id, url=reached.url, attempted=True,
                         started=reached.started,

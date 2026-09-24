@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
@@ -419,7 +420,7 @@ def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
-    payload = _issue_comment()
+    payload = _issue_comment(1, "@OpenEngineBot hello")
     payload["issue"]["pull_request"] = {}
     if failure == "reply":
         source_control.add_comment.side_effect = [RuntimeError("GitHub unavailable"), None]
@@ -571,8 +572,10 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
 
 @pytest.mark.parametrize("host", ["github.com", "forge.example:8443"])
 @pytest.mark.parametrize("absent", ["no-run", "unknown-graph", "finished"])
-def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent, host):
-    """Steering is for a run that is working; otherwise the comment is new work.
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+@pytest.mark.parametrize("mention", ["@oPeNeNgInEbOt", "", "@OpenEngineBot-other", "@someone"])
+def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, host, event, mention):
+    """Only an explicit mention can start work when no run is listening.
 
     Which of the two a comment gets is the host's to decide, and it decides
     from the provenance row written when the pull request was opened and from
@@ -580,7 +583,7 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
     which is a stranger's text. A pull request opened by hand has no row at
     all; one whose work order has finished, or whose graph is no longer
     registered, has nothing left listening to steer. In all three, a comment
-    asking for a change is asking for work nobody is doing.
+    asking for a change must mention Engine before it can start new work.
     """
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
@@ -607,15 +610,24 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source_control)
 
-    payload = _issue_comment(1, "new workorder please")
+    payload = _issue_comment(1, f"{mention} new workorder please")
     payload["issue"]["pull_request"] = {}
     payload["comment"]["html_url"] = f"https://{host}/acme/api/issues/7#c"
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=dict(
-            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+            github_signed(body), **{"x-github-event": event})).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         runtime.steer.assert_not_awaited()
+        if mention != "@oPeNeNgInEbOt":
+            runtime.start.assert_not_awaited()
+            runtime.store.claim_pull_request.assert_not_awaited()
+            assert not provider.clients
+            source_control.add_comment.assert_not_awaited()
+            assert not client.portal.call(capabilities.state_store.list_runs)
+            return
         # Started on the repository the comment arrived from, which is where
         # the pull request is, rather than the configured default.
         assert runtime.start.await_args.args[1] == {
@@ -640,11 +652,61 @@ def test_a_comment_with_nothing_in_flight_gets_a_new_work_order(tmp_path, absent
         pr_url,
         f"Started work order `{STARTED_RUN}` for this pull request. "
         f"https://engine.example/runs/{STARTED_RUN}",
-        in_reply_to_id=None,
+        in_reply_to_id=1 if event == "pull_request_review_comment" else None,
     )
     source_control.can_write_repository.assert_awaited_once_with(pr_url, payload["comment"]["user"]["login"])
     source_control.authenticated_login.assert_awaited_once_with(f"https://{host}/acme/api")
     assert not communications.posts
+
+
+@pytest.mark.parametrize("reuse_session", [False, True])
+def test_unmentioned_comment_cannot_start_work_if_run_finishes_during_turn(tmp_path, reuse_session):
+    from dataclasses import replace
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1",
+                         runner="default"),
+        _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+    )
+    source_control = MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    def deliver(client, comment_id, text):
+        payload = _issue_comment(comment_id, text)
+        payload["issue"]["pull_request"] = {}
+        body = json.dumps(payload).encode()
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+
+    with TestClient(app) as client:
+        if reuse_session:
+            # A prior mention must not authorize later comments in this session.
+            deliver(client, 1, "@OpenEngineBot new workorder please")
+            runtime.steer.assert_awaited_once()
+            runtime.steer.reset_mock()
+            source_control.add_comment.reset_mock()
+        active = client.portal.call(runtime.snapshot, RunId("existing"))
+        runtime.snapshot.reset_mock()
+        runtime.snapshot.side_effect = [active, replace(active, status=RunStatus.COMPLETED)]
+        deliver(client, 2, "new workorder please")
+        assert runtime.snapshot.await_count == 2
+        assert len(provider.clients) == 1
+        runtime.start.assert_not_awaited()
+        runtime.steer.assert_not_awaited()
+        runtime.store.claim_pull_request.assert_not_awaited()
+        assert not client.portal.call(capabilities.state_store.list_runs)
+        source_control.add_comment.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/7", UNDELIVERED, in_reply_to_id=None,
+        )
 
 
 def test_a_second_comment_steers_the_work_order_the_first_one_started(tmp_path):
@@ -673,7 +735,8 @@ def test_a_second_comment_steers_the_work_order_the_first_one_started(tmp_path):
         authenticated_login=AsyncMock(return_value="OpenEngineBot")))
 
     def deliver(client, comment_id):
-        payload = _issue_comment(comment_id, "new workorder please")
+        mention = "@OpenEngineBot " if comment_id == 1 else ""
+        payload = _issue_comment(comment_id, f"{mention}new workorder please")
         payload["issue"]["pull_request"] = {}
         body = json.dumps(payload).encode()
         return client.post("/api/github/events", content=body, headers=dict(
@@ -726,7 +789,7 @@ def test_a_start_that_does_not_win_the_claim_leaves_no_run_behind(tmp_path, clai
         authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source_control)
 
-    payload = _issue_comment(1, "new workorder please")
+    payload = _issue_comment(1, "@OpenEngineBot new workorder please")
     payload["issue"]["pull_request"] = {}
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
@@ -751,7 +814,7 @@ def test_a_start_that_does_not_win_the_claim_leaves_no_run_behind(tmp_path, clai
                 "https://github.com/acme/api/pull/7", UNDELIVERED, in_reply_to_id=None)
 
 
-@pytest.mark.parametrize("identity", ["resolved", "configured", "cased", "unavailable"])
+@pytest.mark.parametrize("identity", ["resolved", "cased", "unavailable"])
 def test_github_never_answers_its_own_reply(tmp_path, identity):
     """The bot's own comment looks like anybody else's, so it must be recognised.
 
@@ -767,7 +830,6 @@ def test_github_never_answers_its_own_reply(tmp_path, identity):
     app, capabilities, _ = _app(
         tmp_path, communications, WorkOrdersConfig(), provider=provider,
         github_webhook_secret=SIGNING_SECRET,
-        github_bot_login="OpenEngineBot" if identity == "configured" else "",
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
@@ -793,12 +855,8 @@ def test_github_never_answers_its_own_reply(tmp_path, identity):
         assert not provider.clients
         source_control.add_comment.assert_not_awaited()
         assert not client.portal.call(capabilities.state_store.list_runs)
-        if identity == "configured":
-            # A configured identity is authoritative, so nothing is asked.
-            source_control.authenticated_login.assert_not_awaited()
-        else:
-            source_control.authenticated_login.assert_awaited_once_with(
-                "https://github.com/acme/api")
+        source_control.authenticated_login.assert_awaited_once_with(
+            "https://github.com/acme/api")
         if identity == "unavailable":
             # Failing closed forgets the comment, so it can be redelivered
             # once the forge answers again rather than replying blind.
@@ -824,7 +882,7 @@ def test_github_asks_who_it_posts_as_only_once(tmp_path):
     object.__setattr__(capabilities, "source_control", source_control)
 
     def deliver(client, comment_id, login):
-        payload = _issue_comment(comment_id, "look at this")
+        payload = _issue_comment(comment_id, "@OpenEngineBot look at this")
         payload["issue"]["pull_request"] = {}
         payload["comment"]["user"]["login"] = login
         body = json.dumps(payload).encode()
@@ -865,8 +923,7 @@ def _merged(client, number=7, repository="acme/api", **pull_request):
 
 
 def _merge_app(tmp_path, opened, authenticated_login=None):
-    """An app whose credentials resolve to `OpenEngineBot`, with no
-    `GITHUB_BOT_LOGIN` configured -- the usual deployment."""
+    """An app whose credentials resolve to `OpenEngineBot`."""
     app, capabilities, _ = _app(
         tmp_path, RecordingCommunications(),
         WorkOrdersConfig(workflow="implementation-review-v1", runner="default"),
@@ -942,7 +999,7 @@ def test_a_merge_that_decides_nothing_leaves_the_review_waiting(tmp_path, pull_r
 def test_a_merge_by_engine_itself_decides_nothing(tmp_path):
     """A machine account holding a token is an ordinary `User` to GitHub, so
     the bot type does not catch Engine's own merge; the login does -- the one
-    its credentials resolve to, since `GITHUB_BOT_LOGIN` is usually unset."""
+    its credentials resolve to."""
     from starlette.testclient import TestClient
 
     runtime, opened = _graph_runtime(pending_approvals=(_human_review(),))
@@ -1204,10 +1261,11 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
 
 
 @pytest.mark.parametrize("may_write", [True, False])
-def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
+def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog):
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
 
+    caplog.set_level(logging.INFO, logger="engine.apps.web.api")
     runtime, opened = _graph_runtime()
     provider = FakeACPProvider(create=True)
     communications = RecordingCommunications()
@@ -1215,9 +1273,10 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
         tmp_path, communications,
         WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
         _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
-        github_bot_login="OpenEngineBot", graph_runtime=opened,
+        graph_runtime=opened,
     )
-    source = MagicMock(can_write_repository=AsyncMock(return_value=may_write))
+    source = MagicMock(can_write_repository=AsyncMock(return_value=may_write),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source)
     body = json.dumps(_assigned_issue()).encode()
     headers = dict(github_signed(body), **{"x-github-event": "issues"})
@@ -1226,6 +1285,7 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
         client.portal.call(app.state.github_ingress.drain)
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
+        source.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
         source.can_write_repository.assert_awaited_once_with(
             "https://github.com/acme/api/pull/7", "maintainer")
         if may_write:
@@ -1240,6 +1300,8 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write):
             assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
         else:
             runtime.start.assert_not_awaited()
+            assert "ignored an assignment of #7 from maintainer, who cannot write to acme/api" \
+                in caplog.messages
         runtime.store.claim_pull_request.assert_not_awaited()
     assert not provider.clients
     assert not communications.posts
