@@ -423,6 +423,8 @@ class UtilizationService:
     ) -> None:
         self._path = cache_path or user_cache_path("openengine") / "utilization.json"
         self._readers = dict(readers if readers is not None else READERS)
+        self._scraped_at = 0.0
+        self._recent_lock = asyncio.Lock()
 
     def readable(self, runners: Sequence[str]) -> tuple[str, ...]:
         """Which of this deployment's runners have a way of being read."""
@@ -442,8 +444,26 @@ class UtilizationService:
             if reading is not None
         )
 
+    async def recent(
+        self, runners: Sequence[str], max_age: float
+    ) -> tuple[RunnerUtilization, ...]:
+        """The cache, scraped again only if nothing was scraped in `max_age` seconds.
+
+        What counts as the last scrape is the newer of the cache's newest reading,
+        so a restart does not scrape again, and the last attempt this process
+        made, so a provider that keeps failing is not asked on every call.
+        Callers arriving together share one scrape.
+        """
+        async with self._recent_lock:
+            cached = self.cached()
+            newest = max((reading.read_at for reading in cached), default=0.0)
+            if time.time() - max(newest, self._scraped_at) < max_age:
+                return cached
+            return await self.refresh(runners)
+
     async def refresh(self, runners: Sequence[str]) -> tuple[RunnerUtilization, ...]:
         """Scrape every readable runner at once and remember what came back."""
+        self._scraped_at = time.time()
         names = self.readable(runners)
         async with httpx.AsyncClient() as client:
             taken = await asyncio.gather(

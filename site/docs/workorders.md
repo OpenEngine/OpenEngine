@@ -27,7 +27,7 @@ Describe what should change and what success looks like. The task is the impleme
 
 Implement with one model family and review with another. A model reviewing its own work tends to agree with itself. A different family has different blind spots and catches what the first one missed.
 
-The shipped workflow does this by default: Codex implements, Claude reviews. Choose either under **Workflow inputs** with the **Implementation runner** and **Review runner** fields.
+The shipped workflow does this by default: Codex implements, Claude reviews. Choose either under **Workflow inputs** with the **Implementation runner** and **Review runner** fields. Pick **least-utilized** to use whichever runner has the most headroom on the **Utilization** page, or **round-robin** to alternate runners from one WorkOrder to the next.
 
 | Review runner | Most facets | Security |
 | --- | --- | --- |

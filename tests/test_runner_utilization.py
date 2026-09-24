@@ -422,3 +422,64 @@ def test_no_cache_yet_reads_as_nothing_rather_than_failing(tmp_path) -> None:
 
 async def _reading(value: RunnerUtilization) -> RunnerUtilization:
     return value
+
+
+def _counting_service(tmp_path, asked: list[str]) -> UtilizationService:
+    async def reader(_client: httpx.AsyncClient) -> RunnerUtilization:
+        asked.append("codex")
+        return RunnerUtilization("codex", windows=(UtilizationWindow("w", "Weekly", 3.0),))
+
+    return UtilizationService(cache_path=tmp_path / "utilization.json", readers={"codex": reader})
+
+
+def test_recent_scrapes_at_most_once_per_max_age(monkeypatch, tmp_path) -> None:
+    """Runs starting within the hour share a scrape; the first one after it scrapes."""
+    asked: list[str] = []
+    service = _counting_service(tmp_path, asked)
+    now = time.time()
+    monkeypatch.setattr(utilization_module.time, "time", lambda: now)
+
+    asyncio.run(service.recent(("codex",), 3600))
+    asyncio.run(service.recent(("codex",), 3600))
+    assert asked == ["codex"]
+
+    monkeypatch.setattr(utilization_module.time, "time", lambda: now + 3600)
+    readings = asyncio.run(service.recent(("codex",), 3600))
+    assert asked == ["codex", "codex"]
+    assert readings[0].read_at == now + 3600
+
+
+def test_recent_trusts_a_cache_written_before_a_restart(tmp_path) -> None:
+    asked: list[str] = []
+    asyncio.run(_counting_service(tmp_path, asked).refresh(("codex",)))
+
+    reopened = _counting_service(tmp_path, asked)
+    assert asyncio.run(reopened.recent(("codex",), 3600))[0].windows
+    assert asked == ["codex"]
+
+
+def test_recent_does_not_retry_a_failing_provider_within_max_age(tmp_path) -> None:
+    """A failed scrape leaves no fresh reading, but it still counts as the hour's scrape."""
+    attempts: list[str] = []
+
+    async def fail(_client: httpx.AsyncClient) -> RunnerUtilization:
+        attempts.append("codex")
+        raise UtilizationError("could not reach the provider")
+
+    service = UtilizationService(cache_path=tmp_path / "utilization.json", readers={"codex": fail})
+
+    asyncio.run(service.recent(("codex",), 3600))
+    asyncio.run(service.recent(("codex",), 3600))
+
+    assert attempts == ["codex"]
+
+
+def test_recent_callers_arriving_together_share_one_scrape(tmp_path) -> None:
+    asked: list[str] = []
+    service = _counting_service(tmp_path, asked)
+
+    async def together():
+        return await asyncio.gather(*(service.recent(("codex",), 3600) for _ in range(3)))
+
+    assert all(readings[0].windows for readings in asyncio.run(together()))
+    assert asked == ["codex"]
