@@ -187,6 +187,40 @@ def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path
     assert "Started New chat" in capsys.readouterr().out
 
 
+def test_run_defaults_a_local_task_repository_to_the_current_directory(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "fetch_json", lambda *_args: {
+        "defaultAgent": "coder",
+        "defaultRunner": "codex",
+        "repositories": [{"path": "/configured/repository"}],
+    })
+
+    agent, runner, repository = cli.creation_defaults(
+        cli.DEFAULT_SERVER,
+        cli.Preferences(profiles={"default": cli.Profile(last_repository="/remembered/repository")}),
+        type("Arguments", (), {"agent": None, "runner": None, "repository": None})(),
+    )
+
+    assert (agent, runner, repository) == ("coder", "codex", str(tmp_path.resolve()))
+
+
+def test_run_does_not_send_the_current_directory_to_a_remote_server(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "fetch_json", lambda *_args: {
+        "defaultAgent": "coder",
+        "defaultRunner": "codex",
+        "repositories": [{"path": "/configured/repository"}],
+    })
+
+    _agent, _runner, repository = cli.creation_defaults(
+        "https://engine.example",
+        cli.Preferences(),
+        type("Arguments", (), {"agent": None, "runner": None, "repository": None})(),
+    )
+
+    assert repository == "/configured/repository"
+
+
 def test_resume_reconnects_without_issuing_a_cancellation(monkeypatch):
     ready = cli.Check("service", True, "OpenEngine is ready")
     monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))

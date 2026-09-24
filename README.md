@@ -71,9 +71,10 @@ and decisions remain later stages.
 
 Start a terminal task with `engine run "describe the work"`; it creates a
 conversation using the service's default agent and runner, then renders its
-NDJSON progress. `--agent` and `--runner` select the service's available
-configuration; `--repository` records the task's repository context while the
-service workspace provider attaches the new conversation. `engine resume
+NDJSON progress. For a local service, the directory where you invoke the
+command is attached as the task repository. `--agent`, `--runner`, and
+`--repository` override those defaults; pass `--repository` when targeting a
+remote service. `engine resume
 THREAD_ID` reconnects to a current run.
 Ctrl-C detaches the terminal stream only: it never sends the service a cancel
 request.

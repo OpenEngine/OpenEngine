@@ -576,12 +576,22 @@ def creation_defaults(server: str, preferences: Preferences, arguments: argparse
     runner = getattr(arguments, "runner", None) or config.get("defaultRunner")
     repositories = config.get("repositories") if isinstance(config.get("repositories"), list) else []
     remembered = preferences.profile().last_repository
-    repository = getattr(arguments, "repository", None) or remembered or (
+    # A local Engine shares the terminal's filesystem, so the least surprising
+    # task workspace is the directory where the person ran `engine run`.
+    # Never make that assumption for a remote server: its filesystem may be
+    # unrelated to the terminal client's.
+    local_cwd = str(Path.cwd().resolve()) if is_local_server(server) else ""
+    repository = getattr(arguments, "repository", None) or local_cwd or remembered or (
         repositories[0].get("path", "") if repositories and isinstance(repositories[0], dict) else ""
     )
     if not isinstance(agent, str) or not agent or not isinstance(runner, str) or not runner:
         raise RuntimeError("service does not advertise a default agent and runner")
     return agent, runner, str(repository)
+
+
+def is_local_server(server: str) -> bool:
+    """Whether a server URL can safely use a client-side filesystem path."""
+    return urlsplit(server).hostname in {"127.0.0.1", "localhost", "::1"}
 
 
 def run(arguments: argparse.Namespace, preferences: Preferences) -> int:
