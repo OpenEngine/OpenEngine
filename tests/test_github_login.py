@@ -649,6 +649,46 @@ def test_permission_cache_is_per_identity(permission_api):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_slow_permission_lookup_does_not_block_other_identities(permission_api, cached):
+    import asyncio
+
+    async def scenario():
+        permission = RepositoryLoginPermission("owner/repo")
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def request(method, path):
+            login = path.split("/")[-2]
+            if login == "bob":
+                started.set()
+                await release.wait()
+            return {"permission": "write", "user": {
+                "id": 42 if login == "alice" else 43, "login": login,
+            }}
+
+        permission_api.side_effect = request
+        if cached:
+            assert await permission.allowed(42, "alice")
+        slow = asyncio.create_task(permission.allowed(43, "bob"))
+        duplicate = None
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+            duplicate = asyncio.create_task(permission.allowed(43, "bob"))
+            assert await asyncio.wait_for(permission.allowed(42, "alice"), timeout=1)
+            assert not slow.done()
+            assert not duplicate.done()
+        finally:
+            release.set()
+            results = await asyncio.gather(slow, *([duplicate] if duplicate else []))
+        assert all(results)
+        # Same-identity requests still share a lookup, and idle locks are released.
+        assert permission_api.await_count == 2
+        assert not permission._locks
+
+    asyncio.run(scenario())
+
+
 def test_permission_uses_host_cli_identity(monkeypatch):
     import asyncio
     import json

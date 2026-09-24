@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
+from weakref import WeakValueDictionary
 
 import httpx
 from dotenv import dotenv_values
@@ -67,7 +68,7 @@ class RepositoryLoginPermission:
         # Browser OAuth identifies github.com users, regardless of GH_HOST.
         self._transport = GitHubCliTransport(host="github.com", timeout_seconds=10)
         self._cache: OrderedDict[tuple[int, str], tuple[float, bool]] = OrderedDict()
-        self._lock = asyncio.Lock()
+        self._locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = WeakValueDictionary()
 
     async def allowed(self, user_id: int, login: str) -> bool:
         """Whether this stable user ID/login may log in or refresh a token."""
@@ -76,7 +77,10 @@ class RepositoryLoginPermission:
                 or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository)):
             return False
         key = (user_id, login)
-        async with self._lock:
+        # Only checks for the same identity wait on its network lookup. Keep a
+        # strong reference while using the lock; idle locks disappear automatically.
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
             cached = self._cache.get(key)
             if cached is not None and time.monotonic() < cached[0]:
                 self._cache.move_to_end(key)
