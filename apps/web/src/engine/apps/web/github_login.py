@@ -136,15 +136,7 @@ class GitHubLogin:
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
-        # The same server-owned bearer credential is also how the local
-        # terminal client reaches the service when browser login is enabled.
-        # Keep the graph surface and OAuth callback routes outside this grant.
-        terminal_route = request.url.path.startswith("/api/threads") or request.url.path in {
-            "/api/config", "/api/source-control/status", "/api/source-control/provider",
-            "/api/github/connect", "/api/github/connect/poll", "/api/gitlab/connect",
-            "/api/gitlab/connect/poll", "/api/github/client-id", "/api/gitlab/client-id",
-        }
-        if (request.method, request.url.path) != _SERVICE_ROUTE and not terminal_route:
+        if (request.method, request.url.path) != _SERVICE_ROUTE:
             return False
         expected = self.service_token()
         if not valid_service_token(expected):

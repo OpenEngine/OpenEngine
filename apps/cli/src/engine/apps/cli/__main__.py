@@ -412,6 +412,25 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
                 event = json.loads(line)
                 if event.get("type") == "content":
                     print(content_text(event.get("content")), end="\r", flush=True)
+                elif event.get("type") == "approval" and isinstance(event.get("approval"), dict):
+                    approval = event["approval"]
+                    print("\nApproval required:")
+                    print(json.dumps(approval, indent=2, sort_keys=True))
+                    if sys.stdin.isatty():
+                        action = palette(["Approve", "Reject", "View details", "Defer"], "Decision: ")
+                        if action == "View details":
+                            print(json.dumps(approval, indent=2, sort_keys=True))
+                            action = palette(["Approve", "Reject", "Defer"], "Decision: ")
+                        if action in {"Approve", "Reject"}:
+                            thread_id = path.split("/")[3]
+                            request_json(
+                                server,
+                                f"/api/threads/{thread_id}/runs/current/approvals/{approval['id']}",
+                                {"decision": "accept" if action == "Approve" else "cancel"},
+                            )
+                            print("Approval sent; continuing stream.")
+                    else:
+                        print(f"Run `engine approve {approval['id']}` or `engine reject {approval['id']} --reason …`.")
                 elif event.get("type") == "error":
                     print(f"\nengine: {event.get('error')}", file=sys.stderr)
                     return EXIT_UNHEALTHY
