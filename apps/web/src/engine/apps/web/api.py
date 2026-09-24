@@ -120,7 +120,7 @@ from engine.domain import (
     instance_id_for_project,
     project_id_for_instance,
 )
-from engine.graph_runtime.inputs import resolve_inputs
+from engine.graph_runtime.inputs import choose_runners, resolve_inputs
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -1862,6 +1862,8 @@ def create_app(
         dependencies_changed.set()
         return JSONResponse(_scoping_plan_json(plan))
 
+    round_robin_turns: dict[str, int] = {}
+
     async def start_graph_run(
         runtime: GraphRuntime,
         graph: GraphWorkflow,
@@ -1922,6 +1924,16 @@ def create_app(
                     # Recheck after saving to cover completion racing with creation.
                     dependencies_changed.set()
                     return state
+            # Policies resolve at start, not at scheduling, so a dependent
+            # WorkOrder is placed by utilization when it actually runs.
+            inputs = choose_runners(
+                getattr(graph, "inputs", ()), inputs,
+                usage=lambda: {
+                    reading.runner: max(window.used_percent for window in reading.windows)
+                    for reading in _utilization.cached() if reading.windows
+                },
+                turns=round_robin_turns,
+            )
             snapshot = await runtime.start(
                 GraphId(str(graph.graph_id)),
                 {

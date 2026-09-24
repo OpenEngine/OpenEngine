@@ -3586,6 +3586,44 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, st
     asyncio.run(scenario())
 
 
+def test_graph_workorder_round_robin_runner_resolves_at_start():
+    from dataclasses import dataclass
+    from engine.graph_runtime.inputs import ROUND_ROBIN, WorkflowInput
+
+    @dataclass(frozen=True)
+    class InputGraph(ScriptedGraph):
+        inputs: tuple[WorkflowInput, ...] = (
+            WorkflowInput(
+                "implementation_runner", "Implementation runner", "codex", True,
+                ("codex", "claude", ROUND_ROBIN),
+            ),
+        )
+
+    graph = InputGraph(
+        GraphId("inputs"), "Inputs",
+        (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+    )
+    app, runtime = _graph_app(InMemoryStateStore(), graph)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                picked = []
+                for _ in range(3):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "inputs", "repository": ".", "prompt": "Task",
+                        "inputs": {"implementation_runner": ROUND_ROBIN},
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    picked.append(snapshot.values["inputs"]["implementation_runner"])
+                assert picked == ["codex", "claude", "codex"]
+
+    asyncio.run(scenario())
+
+
 def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() -> None:
     async def scenario():
         store = InMemoryStateStore()

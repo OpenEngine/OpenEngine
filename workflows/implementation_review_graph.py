@@ -40,6 +40,7 @@ from engine.graph_runtime_langgraph.components import (
     checkout,
 )
 from engine.domain import StepCompleted
+from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -511,6 +512,8 @@ def pipeline(
 
 #: Runner choices for the implementation and review stages.
 RUNNER_CHOICES = ("codex", "claude")
+#: What the runner dropdowns offer: a runner, or a policy that picks one per run.
+RUNNER_INPUT_CHOICES = (*RUNNER_CHOICES, LEAST_UTILIZED, ROUND_ROBIN)
 #: What this workflow was called when the runner was part of its id, before the
 #: stages became creation inputs. WorkOrders started then remember one of these,
 #: so they are retired rather than dropped and go on opening as this workflow.
@@ -540,12 +543,12 @@ def graph_for(
         inputs=(
             WorkflowInput(
                 "implementation_runner", "Implementation runner",
-                default=runner, required=True, choices=RUNNER_CHOICES,
+                default=runner, required=True, choices=RUNNER_INPUT_CHOICES,
             ),
             WorkflowInput(
                 "review_runner", "Review runner",
                 default={"codex": "claude", "claude": "codex"}[runner],
-                required=True, choices=RUNNER_CHOICES,
+                required=True, choices=RUNNER_INPUT_CHOICES,
             ),
         ),
     )

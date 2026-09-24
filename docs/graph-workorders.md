@@ -21,6 +21,9 @@ pause an agent's turn until a person answers.
    **Workflow inputs** to fill in any declared fields. Implementation workflows
    offer independent **Implementation runner** and **Review runner** dropdowns:
    choose Codex or Claude for either stage, including the same runner for both.
+   **least-utilized** picks the runner with the most headroom in its last
+   utilization reading, and **round-robin** alternates runners per stage; both
+   resolve to a concrete runner when the run starts.
    The workflow is `implementation-review-rerank`, with Codex implementation
    and Claude review by default. It is also the configured Slack workflow.
 2. The web server validates the inputs and hands them, the task, and the
