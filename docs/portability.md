@@ -31,13 +31,17 @@ how to install them. The existing `engine-web`, `engine-worker`, and
 compatibility.
 
 OpenEngine owns its Python runtime and web assets. Users do not need Python,
-uv, Node.js, npm, or a repository checkout. Tools that OpenEngine orchestrates
-remain external and independently authenticated:
+uv, or a repository checkout. Tools that OpenEngine orchestrates remain external
+and independently authenticated:
 
 - `git` is required for workspace management.
 - `gh` is required for GitHub-backed source control.
-- At least one supported agent CLI (`codex` or `claude`) is required to run an
-  agent; both may be installed.
+- Node.js with `npx` is required to run an agent. Every agent runs over ACP,
+  and OpenEngine launches the pinned ACP adapters
+  (`@agentclientprotocol/codex-acp` and
+  `@agentclientprotocol/claude-agent-acp`) through `npx`. The Codex adapter
+  brings its own Codex, so no `codex` executable is needed; each provider still
+  needs its own credentials (`codex login`, or a Claude login or API key).
 
 `openengine doctor` distinguishes required tools from optional integrations so
 installation can succeed before the user chooses an agent provider.
@@ -46,8 +50,8 @@ installation can succeed before the user chooses an agent provider.
 
 Each release produces one self-contained archive for every supported OS and
 architecture. The archive contains a standalone OpenEngine executable, the
-built web client, licenses, and release metadata. It does not contain agent
-CLIs or their credentials.
+built web client, licenses, and release metadata. It does not contain Node.js,
+the ACP adapters, or agent credentials.
 
 The release archive is the boundary all installers consume:
 
@@ -62,7 +66,8 @@ The release archive is the boundary all installers consume:
    archive rather than rebuilding the application.
 
 This gives Homebrew and the shell installer identical application bits and
-keeps Node and Python build tooling in CI.
+keeps Node and Python build tooling in CI. Node.js remains a runtime
+requirement only for launching the ACP adapters.
 
 The release matrix begins with:
 
@@ -84,7 +89,8 @@ The portable CLI adds these stable commands before either installer ships:
 
 - `openengine` and `openengine web` start the web interface.
 - `openengine doctor` checks the platform, external commands, writable data
-  directory, configuration, and whether at least one agent CLI is usable.
+  directory, configuration, and whether `npx` can launch the ACP adapters and
+  at least one provider has credentials.
 - `openengine --version` prints the application version and build commit.
 
 Portable installs stop writing `conversations.sqlite3` in the launch directory.
@@ -132,8 +138,8 @@ formula installs the same archives as the shell installer and exposes
 `openengine` through Homebrew's normal prefix.
 
 The formula has no Python or Node build dependency. It declares only runtime
-dependencies that are truly universal; optional agent CLIs are reported by
-`openengine doctor`, not forced on every user. Formula tests run
+dependencies that are truly universal; Node.js for the ACP adapters and provider
+credentials are reported by `openengine doctor`, not forced on every user. Formula tests run
 `openengine --version`, `openengine doctor --format json`, start the server on
 an ephemeral port, and request its health endpoint.
 
@@ -153,7 +159,8 @@ Each slice is independently releasable and has a focused acceptance test.
 - Build a wheel, install it into a clean environment, start it outside the
   checkout, and exercise `/api/config` in CI.
 
-Done means a source tree and Node.js are no longer runtime requirements.
+Done means a source tree and the Node.js build toolchain are no longer runtime
+requirements; Node.js is needed only to launch the ACP adapters.
 
 ### 2. Produce portable release archives
 

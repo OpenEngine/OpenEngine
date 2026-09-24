@@ -20,7 +20,9 @@ composition roots build, reach Codex and Claude over ACP
 agent, `provider_fakes.fake_acp`, in place of both. `Settings.claude_binary` is
 gone; `codex_binary` remains only for milestone scoping. Where a ticket below
 describes a fake *CLI* reading its MCP server off argv, read it as the ACP fake
-receiving the same server in `session/new`'s `mcpServers`.
+receiving the same server in `session/new`'s `mcpServers`. The direct-CLI
+Codex and Claude Code runners have since been removed, so references below into
+`.../codex/` and `.../claude_code/` point at `f3caa83`, not the current tree.
 
 | | ticket | depends on |
 | --- | --- | --- |
@@ -434,6 +436,6 @@ there -- it is seconds rather than a minute, and the failure points at the code
 rather than at a page. The browser tier is for what only a browser can answer:
 did this reach the screen, could a person act on it, and did acting work.
 
-**Live CLIs.** This tier stays scripted on purpose. The live half exists in
-`.github/workflows/cli-compatibility.yml`, on a schedule, with the credentials
+**Live agents.** This tier stays scripted on purpose. The live half exists in
+`.github/workflows/acp-compatibility.yml`, on a schedule, with the credentials
 described in `README.md`.

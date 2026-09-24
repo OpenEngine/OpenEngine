@@ -1,7 +1,7 @@
 """The ACP runner: the approval contract, and what each agent is configured with.
 
-The scenarios are `test_cli_compatibility`'s own -- approve, cancel, and allow
-for the session across a turn boundary -- run through the web app over
+The scenarios are `approval_scenarios`' -- approve, cancel, and allow for the
+session across a turn boundary -- run through the web app over
 `ACPAgentRunner` against `langgraph-acp`'s fake agent. The fake really runs the
 command it is allowed to, so they assert on the filesystem, and they need no
 model, network or npm, so they block every pull request.
@@ -57,11 +57,10 @@ from engine.ports import (
 )
 from engine.ports.permissions import ApprovalCapability
 from provider_fakes import DIRECTIVE
-from test_cli_compatibility import (
+from approval_scenarios import (
     FAKE_PAUSE_TIMEOUT,
     FAKE_TURN_TIMEOUT,
     SCENARIOS,
-    Transcript,
     open_chat,
 )
 
@@ -93,12 +92,10 @@ def test_the_approval_contract_holds_over_acp(
     """Approve, cancel, and a session grant replayed to a new agent process."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    transcript = Transcript(f"acp-{provider}-{scenario}", provider, "fake")
-
     async def run() -> None:
         client, chat = await open_chat(
             RUNNERS[provider](workspace),
-            transcript,
+            f"acp-{provider}-{scenario}",
             runner_name=provider,
             pause_timeout=FAKE_PAUSE_TIMEOUT,
             turn_timeout=FAKE_TURN_TIMEOUT,
@@ -110,10 +107,7 @@ def test_the_approval_contract_holds_over_acp(
         finally:
             await client.aclose()
 
-    try:
-        asyncio.run(run())
-    finally:
-        transcript.write()
+    asyncio.run(run())
 
 
 def _turn(runner: ACPAgentRunner, decide: ApprovalDecision, workspace: Path):

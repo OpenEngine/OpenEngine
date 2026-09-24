@@ -13,8 +13,6 @@ resolution-markers = [
 [manifest]
 members = [
     "engine-adapter-agent-runner-acp",
-    "engine-adapter-agent-runner-claude-code",
-    "engine-adapter-agent-runner-codex",
     "engine-adapter-communications-buzz",
     "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
@@ -458,28 +456,6 @@ requires-dist = [
     { name = "engine-runtime", editable = "packages/runtime" },
     { name = "langgraph-acp", editable = "langgraph-acp" },
 ]
-
-[[package]]
-name = "engine-adapter-agent-runner-claude-code"
-version = "0.0.0"
-source = { editable = "packages/adapters/agent_runner/claude_code" }
-dependencies = [
-    { name = "engine-runtime" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
-
-[[package]]
-name = "engine-adapter-agent-runner-codex"
-version = "0.0.0"
-source = { editable = "packages/adapters/agent_runner/codex" }
-dependencies = [
-    { name = "engine-runtime" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "engine-runtime", editable = "packages/runtime" }]
 
 [[package]]
 name = "engine-adapter-communications-buzz"

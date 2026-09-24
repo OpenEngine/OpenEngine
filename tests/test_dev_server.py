@@ -294,4 +294,4 @@ def test_every_manifest_in_the_workspace_is_watched_for_that() -> None:
     assert dev.REPO_ROOT / "pyproject.toml" in watched
     assert dev.REPO_ROOT / "apps/web/package.json" in watched
     assert dev.REPO_ROOT / "packages/domain/pyproject.toml" in watched
-    assert dev.REPO_ROOT / "packages/adapters/agent_runner/codex/pyproject.toml" in watched
+    assert dev.REPO_ROOT / "packages/adapters/agent_runner/acp/pyproject.toml" in watched

@@ -199,23 +199,26 @@ it says so.
 | a plan reaches the operator | 2 | Claude only |
 | rejecting reopens the implementation | — | the correction loop: `Reject`, then `StepReactivated` and a second implementation turn |
 
-## Live provider CLIs
+## Live providers
 
-This tier is deliberately deterministic: a scripted CLI is what makes "the
+This tier is deliberately deterministic: a scripted agent is what makes "the
 agent asked, the user approved, the file exists" a fact about our code rather
 than about a model's mood. The live half already exists and belongs where it
-is: `.github/workflows/cli-compatibility.yml` runs the same approval contract
-against the pinned real `codex` and `claude` releases on a schedule.
+is: `.github/workflows/acp-compatibility.yml` runs a handshake, a turn, and a
+permission round trip against the pinned ACP adapters on a schedule.
 
-If you want the browser tier pointed at a real CLI as well, the credentials go
+If you want the browser tier pointed at a real agent as well, the credentials go
 in **repository → Settings → Secrets and variables → Actions**, under the names
 that workflow already reads:
 
-* `OPENAI_API_KEY` -- Codex CLI.
-* `ANTHROPIC_API_KEY` -- Claude Code. A subscription token from
-  `claude setup-token` works too, as `CLAUDE_CODE_OAUTH_TOKEN`; whichever you
-  add, the job must export it into the server process's environment, because
-  that is what spawns the CLI.
+* `OPENAI_API_KEY` -- Codex, through `@agentclientprotocol/codex-acp`.
+* `ANTHROPIC_API_KEY` -- Claude, through
+  `@agentclientprotocol/claude-agent-acp`. A subscription token from
+  `claude setup-token` works too, as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Whichever you add, the job must export it into the server process's
+environment, because that is what launches the ACP adapter, which passes it on
+to the agent.
 
 Absent, live scenarios skip rather than fail: an unauthenticated runner is a
 configuration fact, not a test result. Nothing in this directory reads a

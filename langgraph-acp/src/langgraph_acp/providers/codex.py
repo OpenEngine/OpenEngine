@@ -6,16 +6,13 @@ adapter that does, and running it through `npx` is what makes
 
 **The adapter brings its own Codex.** It depends on `@openai/codex` and drives
 that as `codex app-server`, so the `codex` on the operator's `PATH` is not what
-answers here -- adapter 1.9.0 ships Codex 0.153.2 whatever is installed. Two
-consequences worth knowing before reading a surprising transcript:
+answers here: the pinned adapter (`CODEX_ACP_VERSION`) resolves its own
+`@openai/codex` dependency whatever is installed, and the ACP compatibility
+workflow records which one in its step summary. `CODEX_PATH` is how the adapter
+is told to run a specific binary instead, and it needs no support from this
+package -- `env` reaches it:
 
-* This path runs a Codex outside the release matrix in
-  `.github/cli-versions.json`, which pins what the step-workflow CLIs are tested
-  against. The two paths reach different Codex versions by construction.
-* `CODEX_PATH` is how the adapter is told to run a specific binary instead, and
-  it needs no support from this package -- `env` reaches it:
-
-      CodexACPProvider(env={"CODEX_PATH": "/usr/local/bin/codex"})
+    CodexACPProvider(env={"CODEX_PATH": "/usr/local/bin/codex"})
 
 An installation that would rather not shell out to `npx` -- a container image
 with the adapter baked in, an air-gapped runner -- overrides the command and

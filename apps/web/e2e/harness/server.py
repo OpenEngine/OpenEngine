@@ -57,7 +57,7 @@ from engine.runtime import (  # noqa: E402
 from engine.scoper import MilestoneScoper, Scoper  # noqa: E402
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
 from graph_workflow_fakes import scripted_catalog  # noqa: E402
-from provider_fakes import fake_acp, fake_codex  # noqa: E402
+from provider_fakes import fake_acp  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,7 +102,6 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings(
         host="127.0.0.1",
         port=args.port,
-        codex_binary=fake_codex(binaries),
         codex_acp_command=(fake_acp(binaries),),
         claude_acp_command=(fake_acp(binaries),),
         codex_working_directory=args.repository,

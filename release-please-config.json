@@ -38,16 +38,6 @@
         },
         {
           "type": "toml",
-          "path": "packages/adapters/agent_runner/claude_code/pyproject.toml",
-          "jsonpath": "$.project.version"
-        },
-        {
-          "type": "toml",
-          "path": "packages/adapters/agent_runner/codex/pyproject.toml",
-          "jsonpath": "$.project.version"
-        },
-        {
-          "type": "toml",
           "path": "packages/adapters/communications/buzz/pyproject.toml",
           "jsonpath": "$.project.version"
         },

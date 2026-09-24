@@ -54,8 +54,8 @@ def test_absolute_imports_are_collected(tmp_path: Path) -> None:
         ("engine/runtime/__init__.py", "from .dispatcher import D", "engine.runtime.dispatcher"),
         (
             "engine/runtime/__init__.py",
-            "from ..adapters.agent_runner.codex import C",
-            "engine.adapters.agent_runner.codex",
+            "from ..adapters.agent_runner.acp import A",
+            "engine.adapters.agent_runner.acp",
         ),
         # One vendor reaching sideways for the one filed beside it, which is the
         # escape that grouping adapters by capability makes convenient.

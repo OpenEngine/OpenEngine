@@ -12,7 +12,7 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
-OpenEngine uses your locally installed codex and claude CLI. This means that it can utilize your subscription limits instead of being provided an API key. Make sure your claude or codex CLI are installed and authenticated. 
+OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. Make sure you are logged in to Codex or Claude on this machine. 
 
 First, clone the repo:
 ```bash
@@ -156,14 +156,6 @@ For browser-based login setup, see the [GitHub login guide](docs/github-login.md
 To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
 
-To diagnose interactive runner protocol incompatibilities, set
-`ENGINE_AGENT_PROTOCOL_LOG` to a JSONL file before starting Engine. Codex and
-Claude Code record normalized session and interaction events alongside their
-runner-specific request shapes, parser outcomes, response actions, executable,
-and hashed working-directory identity. The trace does not record prompts,
-commands, approval wording, answers, schema property names, or property values.
-The file is created with mode `0600` and rotates at 1 MB with three backups.
-
 ## What is it.
 
 We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.
@@ -175,7 +167,7 @@ The key concepts are:
 - A "Milestone". Some measurable outcome that you want to reach using code. Must come with acceptance criteria.
 - A "WorkOrder". WorkOrders belong to a project+milestone. They are the tasks necessary to complete a milestone.
 
-Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine uses claude and codex CLI under the hood. 
+Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine drives Codex and Claude over ACP with your local logins. 
 
 ![sdlc](docs/images/oe_sdlc.png)
 
