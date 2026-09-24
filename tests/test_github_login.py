@@ -545,3 +545,53 @@ def test_invalid_service_token_fails_startup(tmp_path, monkeypatch):
     monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "short")
     with pytest.raises(EngineConfigError, match="ENGINE_SERVICE_TOKEN"):
         _service_token_reader(SimpleNamespace(path=tmp_path / "engine.toml"))
+
+
+@pytest.mark.parametrize(("answer", "error"), [
+    (False, "forbidden"),
+    (RuntimeError("GitHub is down"), "unverified"),
+])
+def test_a_login_without_repository_write_access_gets_no_session(answer, error):
+    """Signing in proves who someone is, not that they may see WorkOrders:
+    only accounts that can write to the repository get a session, and access
+    that cannot be confirmed is refused."""
+    asked = []
+
+    async def authorize(login):
+        asked.append(login)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), authorize=authorize)
+    client = browser(flow)
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, params["state"][0], code="code")
+
+    assert asked == ["alice"]
+    assert response.status_code == 302
+    assert response.headers["location"] == f"/login?error={error}"
+    assert not any("engine_session=" in cookie and "Max-Age=86400" in cookie
+                   for cookie in response.headers.get_list("set-cookie"))
+
+
+def test_a_login_with_repository_write_access_gets_a_session():
+    async def authorize(login):
+        return login == "alice"
+
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), authorize=authorize)
+    client = browser(flow)
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, params["state"][0], code="code")
+
+    assert response.headers["location"] == "/"
+    assert any(cookie.startswith("engine_session=")
+               for cookie in response.headers.get_list("set-cookie"))

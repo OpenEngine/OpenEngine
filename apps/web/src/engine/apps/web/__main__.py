@@ -140,9 +140,16 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
     if not any((client_id, redirect_uri, secret)):
         return None
     try:
-        return GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
+        config = GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
     except ValueError as error:
         raise EngineConfigError(str(error)) from error
+    if not loaded.config.github.repository:
+        # Sessions go only to accounts that can write to this repository, so
+        # without one every login would be refused as if the user lacked access.
+        raise EngineConfigError(
+            "GitHub login requires [github] repository to check write access against"
+        )
+    return config
 
 
 def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:

@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -3911,3 +3911,52 @@ def test_finished_run_resumed_after_restart_gets_live_frontier():
     assert row["graphProgress"] == {
         "activeNodeIds": [], "waitingNodeIds": [], "nextNodeIds": ["implementation"],
     }
+
+
+def _login_gate(repository: str, source_control: object):
+    """The check the app hands its GitHub login, over `source_control`."""
+    unused = object()
+    session = AgentSession(
+        Capabilities(
+            workflow_runtime=unused, source_control=source_control,
+            agent_runner=ConcurrentRunner(), communications=unused,
+            workspace_provider=ConversationWorkspaces(),
+            state_store=InMemoryStateStore(),
+        ),
+        profiles=PROFILES, runners={"test": ConcurrentRunner()},
+    )
+    app = create_app(
+        session, {"test": ConcurrentRunner()},
+        workflow_catalog=WorkflowCatalog.from_graphs(()),
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+        github_repository=repository,
+    )
+    callback = next(
+        route.endpoint for route in app.app.routes
+        if getattr(route, "path", "") == "/api/auth/github/callback"
+    )
+    return callback.__self__.authorize
+
+
+def test_signing_in_requires_write_access_to_the_configured_repository() -> None:
+    """WorkOrders are visible to the people who can push to the repository they
+    work on, and to nobody else with a GitHub account."""
+    source_control = MagicMock(can_write_repository=AsyncMock(side_effect=[True, False]))
+    authorize = _login_gate("acme/api", source_control)
+
+    assert asyncio.run(authorize("maintainer")) is True
+    assert asyncio.run(authorize("stranger")) is False
+    assert [call.args for call in source_control.can_write_repository.await_args_list] == [
+        ("https://github.com/acme/api/pull/1", "maintainer"),
+        ("https://github.com/acme/api/pull/1", "stranger"),
+    ]
+
+
+def test_signing_in_is_refused_without_a_repository_to_check() -> None:
+    source_control = MagicMock(can_write_repository=AsyncMock(return_value=True))
+    authorize = _login_gate("", source_control)
+
+    assert asyncio.run(authorize("maintainer")) is False
+    source_control.can_write_repository.assert_not_awaited()
