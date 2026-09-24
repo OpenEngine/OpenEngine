@@ -562,6 +562,64 @@ def resume(arguments: argparse.Namespace, preferences: Preferences) -> int:
     return stream_run(server, f"/api/threads/{arguments.thread_id}/runs/current")
 
 
+def pending_approvals(server: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for thread in load_threads(server, "all"):
+        thread_id = thread.get("id")
+        if not isinstance(thread_id, str):
+            continue
+        messages = fetch_json(server, f"/api/threads/{thread_id}/messages")
+        for approval in messages.get("approvals", []):
+            if isinstance(approval, dict) and approval.get("status") == "pending":
+                found.append({**approval, "threadId": thread_id, "threadTitle": thread.get("title", "Untitled")})
+    return found
+
+
+def render_approvals(approvals: list[dict[str, Any]], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps({"approvals": approvals}, sort_keys=True))
+        return
+    if not approvals:
+        print("No pending approvals.")
+        return
+    for approval in approvals:
+        detail = approval.get("command") or approval.get("toolName") or approval.get("reason") or "approval requested"
+        print(f"{approval.get('id')}  {approval.get('threadTitle')}\n  {detail}")
+
+
+def approvals(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            print(f"engine: {check.detail}", file=sys.stderr)
+            return EXIT_UNHEALTHY
+        render_approvals(pending_approvals(server), arguments.json)
+        return EXIT_OK
+    except (ValueError, RuntimeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+
+
+def decide(arguments: argparse.Namespace, preferences: Preferences, decision: str) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            print(f"engine: {check.detail}", file=sys.stderr)
+            return EXIT_UNHEALTHY
+        match = next((item for item in pending_approvals(server) if item.get("id") == arguments.approval_id), None)
+        if match is None:
+            raise RuntimeError("pending approval not found")
+        if decision == "cancel" and getattr(arguments, "reason", None):
+            print(f"Rejecting: {arguments.reason}")
+        request_json(server, f"/api/threads/{match['threadId']}/runs/current/approvals/{arguments.approval_id}", {"decision": decision})
+        print("Approved." if decision == "accept" else "Rejected.")
+        task(argparse.Namespace(server=server, thread_id=match["threadId"], json=False), preferences)
+        return EXIT_OK
+    except (ValueError, RuntimeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+
+
 def palette(options: list[str], prompt: str) -> str | None:
     """A tiny searchable, arrow-key/Enter picker without a UI dependency."""
     query = ""
@@ -631,9 +689,9 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         if line != "/":
             print("Use / to open the command palette. Type /quit to exit.")
             continue
-        command = palette(["/help", "/status", "/threads", "/new", "/web", "/quit"], "Command: ")
+        command = palette(["/help", "/status", "/threads", "/new", "/approvals", "/web", "/quit"], "Command: ")
         if command in {None, "/help"}:
-            print("/status  service readiness\n/threads  inspect conversations\n/new  start a task\n/web  open the web UI\n/quit  exit")
+            print("/status  service readiness\n/threads  inspect conversations\n/new  start a task\n/approvals  pending decisions\n/web  open the web UI\n/quit  exit")
         elif command == "/status":
             status(argparse.Namespace(server=server, json=False), preferences)
         elif command == "/threads":
@@ -651,6 +709,8 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
             prompt = input("Task: ").strip()
             if prompt:
                 run(argparse.Namespace(server=server, prompt=prompt, agent=None, runner=None, repository=None), preferences)
+        elif command == "/approvals":
+            approvals(argparse.Namespace(server=server, json=False), preferences)
         elif command == "/web":
             webbrowser.open(server)
             print(f"Opened {server}")
@@ -737,6 +797,16 @@ def parser() -> argparse.ArgumentParser:
     resume_command = commands.add_parser("resume", help="reconnect to a conversation's current run")
     resume_command.add_argument("thread_id")
     resume_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    approval_list = commands.add_parser("approvals", help="list pending terminal decisions")
+    approval_list.add_argument("--server", metavar="URL")
+    approval_list.add_argument("--json", action="store_true")
+    approve = commands.add_parser("approve", help="approve a pending request")
+    approve.add_argument("approval_id")
+    approve.add_argument("--server", metavar="URL")
+    reject = commands.add_parser("reject", help="reject a pending request")
+    reject.add_argument("approval_id")
+    reject.add_argument("--reason", required=True)
+    reject.add_argument("--server", metavar="URL")
     config = commands.add_parser("config", help="manage persistent CLI preferences")
     config_commands = config.add_subparsers(dest="config_command", required=True)
     server = config_commands.add_parser("server", help="set the selected profile's service URL")
@@ -768,6 +838,12 @@ def main(argv: list[str] | None = None) -> int:
         return run(arguments, preferences)
     if arguments.command == "resume":
         return resume(arguments, preferences)
+    if arguments.command == "approvals":
+        return approvals(arguments, preferences)
+    if arguments.command == "approve":
+        return decide(arguments, preferences, "accept")
+    if arguments.command == "reject":
+        return decide(arguments, preferences, "cancel")
     if arguments.command == "config" and arguments.config_command == "server":
         return configure_server(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "profile":
