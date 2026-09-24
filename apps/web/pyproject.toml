@@ -32,6 +32,8 @@ dependencies = [
     "engine-adapter-workflow-runtime-temporal",
     "engine-adapter-workspace-provider-git-worktree",
     "starlette>=0.52",
+    "httpx>=0.28",
+    "PyJWT[crypto]>=2.10,<3",
     "uvicorn>=0.35",
     "keyring>=25",
     "filelock>=3.18",

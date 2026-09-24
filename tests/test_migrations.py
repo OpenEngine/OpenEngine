@@ -53,7 +53,7 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("473bfdc7cd0d",)
+    assert revision == ("1099c8b7900d",)
 
 
 def test_slack_thread_lookup_migration_backfills_and_indexes_runs(tmp_path: Path) -> None:
