@@ -1,4 +1,4 @@
-"""Serve the real web application against scripted provider CLIs.
+"""Serve the real web application against scripted provider agents.
 
 The browser tier's whole point is that nothing between the click and the
 subprocess is a stand-in, so this composes the application exactly as
@@ -7,8 +7,8 @@ approval policy plumbing -- and changes only what a test must own:
 
     where it works        a fixture repository, so worktrees are disposable
     what it remembers     a SQLite file under the test's own directory
-    which CLI it runs     `tests/provider_fakes.py`, scripted per test
-    which agent ACP finds the same fakes, for the graph workflows
+    which agent it runs   `tests/provider_fakes.py`'s ACP agent, scripted per
+                          test, for chat and the graph workflows alike
     GitHub API calls      stubbed so tests run without a real token or network
 
 Everything else is production wiring, including the parts that are easy to get
@@ -31,8 +31,8 @@ from pathlib import Path
 #: apps/web/e2e/harness/server.py -> the repository root.
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
-# The fakes are shared with the pytest tier, where they live: the provider CLIs,
-# and the graph workflows rebuilt around a scripted ACP agent.
+# The fakes are shared with the pytest tier, where they live: the scripted ACP
+# agent, and the graph workflows rebuilt around it.
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import uvicorn  # noqa: E402
@@ -57,7 +57,7 @@ from engine.runtime import (  # noqa: E402
 from engine.scoper import MilestoneScoper, Scoper  # noqa: E402
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
 from graph_workflow_fakes import scripted_catalog  # noqa: E402
-from provider_fakes import fake_claude, fake_codex  # noqa: E402
+from provider_fakes import fake_acp  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,8 +102,8 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings(
         host="127.0.0.1",
         port=args.port,
-        codex_binary=fake_codex(binaries),
-        claude_binary=fake_claude(binaries),
+        codex_acp_command=(fake_acp(binaries),),
+        claude_acp_command=(fake_acp(binaries),),
         codex_working_directory=args.repository,
         claude_working_directory=args.repository,
         workspace_root=str(state / "workspaces"),

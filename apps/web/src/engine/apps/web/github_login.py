@@ -8,11 +8,11 @@ the status endpoint so the frontend can gate access.
 import base64
 import hashlib
 import hmac
-
+import logging
 import os
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
@@ -23,6 +23,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+log = logging.getLogger(__name__)
 
 _PATH = "/api/auth/github"
 _COOKIE = "engine_github_login"
@@ -85,8 +87,12 @@ class GitHubLogin:
         self,
         config: GitHubLoginConfig | None,
         service_token: Callable[[], str] = lambda: "",
+        authorize: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self.config = config
+        # Whether a verified GitHub login may have a session at all. Asked
+        # once per sign-in, so revoked access lasts until the session expires.
+        self.authorize = authorize
         # A reader rather than a value, so rotating the secret on disk takes
         # effect on the next request without a restart.
         self.service_token = service_token
@@ -248,6 +254,17 @@ class GitHubLogin:
                     raise ValueError("Invalid identity")
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
+        if self.authorize is not None:
+            try:
+                allowed = await self.authorize(user["login"])
+            except Exception:
+                # Access that cannot be confirmed is not granted.
+                # The identity is verified; only the permission check failed.
+                log.exception("could not check repository access for %s", user["login"])
+                return RedirectResponse("/login?error=unverified", status_code=302)
+            if not allowed:
+                log.info("refused a session to %s, who cannot write to the repository", user["login"])
+                return RedirectResponse("/login?error=forbidden", status_code=302)
         # Issue a session cookie and redirect to the app.
         response = RedirectResponse(pending[3], status_code=302)
         session_value = self._make_session_cookie(user["id"], user["login"])

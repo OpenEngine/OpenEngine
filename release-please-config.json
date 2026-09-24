@@ -33,12 +33,7 @@
         },
         {
           "type": "toml",
-          "path": "packages/adapters/agent_runner/claude_code/pyproject.toml",
-          "jsonpath": "$.project.version"
-        },
-        {
-          "type": "toml",
-          "path": "packages/adapters/agent_runner/codex/pyproject.toml",
+          "path": "packages/adapters/agent_runner/acp/pyproject.toml",
           "jsonpath": "$.project.version"
         },
         {

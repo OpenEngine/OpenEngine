@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import pytest
 
-from engine.adapters.agent_runner.claude_code import claude_session_config
+from engine.adapters.agent_runner.acp import claude_session_config
 from engine.ports import ResponseStyle
 from langgraph_acp import ACPPermissionOutcome, ACPPermissionRequest, ClaudeACPProvider
 

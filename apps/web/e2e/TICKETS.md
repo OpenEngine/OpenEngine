@@ -14,6 +14,16 @@ Read `README.md` first for how the harness is put together. Facts referenced
 below were checked against the tree at `f3caa83`; if a line number has moved,
 the symbol name is the durable half.
 
+**Since then** chat, and the runners the web, control-server, and worker
+composition roots build, reach Codex and Claude over ACP
+(`engine.adapters.agent_runner.acp`), and the harness launches one scripted ACP
+agent, `provider_fakes.fake_acp`, in place of both. `Settings.claude_binary` is
+gone; `codex_binary` remains only for milestone scoping. Where a ticket below
+describes a fake *CLI* reading its MCP server off argv, read it as the ACP fake
+receiving the same server in `session/new`'s `mcpServers`. The direct-CLI
+Codex and Claude Code runners have since been removed, so references below into
+`.../codex/` and `.../claude_code/` point at `f3caa83`, not the current tree.
+
 | | ticket | depends on |
 | --- | --- | --- |
 | T1 | Give the harness an `origin` to base runs on | — |
@@ -147,8 +157,9 @@ token (`apps/web/src/engine/apps/web/composition.py:110`), so today the only
 lever is `PATH`.
 
 **Work.** Add `github_binary: str = "gh"` to `Settings` and pass it through --
-consistent with `codex_binary` and `claude_binary`, which exist for exactly this
-reason. Then `harness/server.py` writes a fake `gh` next to the fake CLIs that
+consistent with `codex_binary` and the `*_acp_command` settings, which exist for
+exactly this reason. Then `harness/server.py` writes a fake `gh` next to the
+fake agents (the `bin` directory it already writes them to) that
 appends its argv and stdin to a JSONL the test reads, and exits 0 with plausible
 output (`gh pr view --json headRefOid --jq .headRefOid` must print a SHA, or the
 adapter raises).
@@ -425,6 +436,6 @@ there -- it is seconds rather than a minute, and the failure points at the code
 rather than at a page. The browser tier is for what only a browser can answer:
 did this reach the screen, could a person act on it, and did acting work.
 
-**Live CLIs.** This tier stays scripted on purpose. The live half exists in
-`.github/workflows/cli-compatibility.yml`, on a schedule, with the credentials
+**Live agents.** This tier stays scripted on purpose. The live half exists in
+`.github/workflows/acp-compatibility.yml`, on a schedule, with the credentials
 described in `README.md`.

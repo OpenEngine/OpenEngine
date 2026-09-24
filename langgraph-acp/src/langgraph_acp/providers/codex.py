@@ -6,16 +6,13 @@ adapter that does, and running it through `npx` is what makes
 
 **The adapter brings its own Codex.** It depends on `@openai/codex` and drives
 that as `codex app-server`, so the `codex` on the operator's `PATH` is not what
-answers here -- adapter 1.9.0 ships Codex 0.153.2 whatever is installed. Two
-consequences worth knowing before reading a surprising transcript:
+answers here: the pinned adapter (`CODEX_ACP_VERSION`) resolves its own
+`@openai/codex` dependency whatever is installed, and the ACP compatibility
+workflow records which one in its step summary. `CODEX_PATH` is how the adapter
+is told to run a specific binary instead, and it needs no support from this
+package -- `env` reaches it:
 
-* This path runs a Codex outside the release matrix in
-  `.github/cli-versions.json`, which pins what the step-workflow CLIs are tested
-  against. The two paths reach different Codex versions by construction.
-* `CODEX_PATH` is how the adapter is told to run a specific binary instead, and
-  it needs no support from this package -- `env` reaches it:
-
-      CodexACPProvider(env={"CODEX_PATH": "/usr/local/bin/codex"})
+    CodexACPProvider(env={"CODEX_PATH": "/usr/local/bin/codex"})
 
 An installation that would rather not shell out to `npx` -- a container image
 with the adapter baked in, an air-gapped runner -- overrides the command and
@@ -35,6 +32,7 @@ from dataclasses import dataclass
 
 from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
+from langgraph_acp.elicitation import ACPElicitationHandler
 from langgraph_acp.permissions import ACPPermissionHandler
 
 # Upgrade deliberately and pass the adapter contract check in test_adapter_compatibility.py.
@@ -67,6 +65,8 @@ class CodexACPProvider:
     """Where to launch the adapter. Not the workspace a session is given."""
     permissions: ACPPermissionHandler | None = None
     """Who answers `session/request_permission`. `None` declines every request."""
+    elicitations: ACPElicitationHandler | None = None
+    """Who answers `elicitation/create`. `None` does not offer to."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
@@ -78,6 +78,7 @@ class CodexACPProvider:
             env=self.env,
             cwd=self.cwd,
             permissions=self.permissions,
+            elicitations=self.elicitations,
         ).connect()
 
 

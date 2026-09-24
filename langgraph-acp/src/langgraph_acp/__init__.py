@@ -51,6 +51,11 @@ from langgraph_acp.agent import (
 from langgraph_acp.client import PROTOCOL_VERSION, ACPCapabilities, ACPClient
 from langgraph_acp.config import ACPConfig, ACPRequirements, UnsupportedOption
 from langgraph_acp.continuation import ACPContinuation, resume_continuation
+from langgraph_acp.elicitation import (
+    ACPElicitationHandler,
+    ACPElicitationRequest,
+    ACPElicitationResponse,
+)
 from langgraph_acp.errors import (
     ACPAgentCapabilityError,
     ACPAgentNotFoundError,
@@ -90,6 +95,9 @@ __all__ = [
     "ACPConfig",
     "ACPConnectionError",
     "ACPContinuation",
+    "ACPElicitationHandler",
+    "ACPElicitationRequest",
+    "ACPElicitationResponse",
     "ACPError",
     "ACPEvent",
     "ACPEventType",

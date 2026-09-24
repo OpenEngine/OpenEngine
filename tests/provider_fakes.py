@@ -1,22 +1,14 @@
-"""Fake `codex` and `claude` executables that speak the providers' protocols.
+"""A fake ACP agent executable, for chat's runners and a graph's nodes.
 
-Not mocks of our adapters: real subprocesses, real newline-delimited JSON, a
-real approval round trip, and a real `subprocess.run` of whatever command they
-are allowed to run. What they do not have is a model, so what the agent
-"decides" to do is scripted instead.
+Not a mock of our adapters: a real subprocess, real newline-delimited JSON, a
+real approval round trip, and a real run of whatever command it is allowed to
+run. What it does not have is a model, so what the agent "decides" to do is
+scripted instead.
 
-Two tiers drive them, which is why they live here rather than inside one test
-module:
-
-* `tests/test_cli_compatibility.py` runs the approval contract against them
-  unscripted, taking the command from a `run:` directive in the prompt. The
-  same three scenarios then run against the pinned real CLIs, and only a fake
-  that speaks the real wire protocol makes that pair meaningful.
-* `apps/web/e2e` drives a browser against a real server wired to them, with a
-  script naming exactly what the agent says and does on the way through.
-
-There is a third fake here for a third protocol: `fake_acp` is an ACP agent,
-which is what a *graph* workflow's nodes talk to. It reads the same script.
+It lives here rather than inside one test module because `apps/web/e2e` drives
+a browser against a real server wired to it, with a script naming exactly what
+the agent says and does on the way through, and the graph-runtime tests run
+workflow nodes against it.
 
 The script is JSON, read from `ENGINE_FAKE_SCRIPT` on every invocation, so a
 test can change what the agent will do next without restarting the server it is
@@ -41,15 +33,15 @@ the implementation's.
 A `tool` step calls the run-bound MCP server the runtime attached to this
 invocation, which is the only thing that ends a workflow step: an agent that
 merely stops is corrected and asked again, and fails the run on the third pass.
-The server is read off argv the way each provider encodes it and spawned as
-given, credential and all, because the broker refuses a session it did not
-issue.
+The server is read off `session/new` or `session/load` and spawned as given,
+credential and all, because the broker refuses a session it did not issue.
 
 A turn that is naming a chat or a workflow rather than running a step is
 answered with the script's `title`: naming is not what any of these tests are
-about, and spending a scenario on it would make every script carry one. It is
-recognised by what it was served -- the repository tools alone, with none of
-the tools that end a step -- rather than by which transport carried it.
+about, and spending a scenario on it would make every script carry one. A
+workflow's is recognised by what it was served -- the repository tools alone,
+with none of the tools that end a step; a chat's by the instruction it ends
+with, since it is served nothing at all.
 
 A script that *is* about naming says so with a top-level `naming` list of steps,
 which that turn then runs like any other:
@@ -71,22 +63,24 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-#: What an unscripted run reads as the instruction to run one command. The
-#: prompt is the only channel a live model and a fake share, so the
-#: compatibility matrix drives both through it.
+#: What an unscripted run reads as the instruction to run one command.
 DIRECTIVE = "run:"
 
 #: Where the script is, when there is one.
 SCRIPT_ENVIRONMENT_VARIABLE = "ENGINE_FAKE_SCRIPT"
 
 #: One command, taken from the prompt, gated on approval, then an answer. The
-#: behaviour `test_cli_compatibility` expects from an unscripted fake.
+#: behaviour `approval_scenarios` expects from an unscripted fake.
 DIRECTIVE_SCRIPT: Mapping[str, object] = {
     "scenarios": [{"steps": [{"type": "run"}, {"type": "say", "text": "Ran it."}]}]
 }
 
 #: What a non-interactive turn answers when the script does not name a title.
 UNSCRIPTED_TITLE = "Scripted conversation"
+
+#: How the web app's chat-naming request begins, which is how a turn -- on the
+#: same transport as every other -- is recognised as one.
+CHAT_NAMING_INSTRUCTION = "Name this chat based on the conversation above."
 
 #: The MCP revision this client speaks, which is the one the bound server does.
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -96,9 +90,6 @@ MCP_PROTOCOL_VERSION = "2025-06-18"
 #: about a hang than this does.
 MCP_TIMEOUT_SECONDS = 30.0
 
-_THREAD_ID = "thread-1"
-_TURN_ID = "turn-1"
-_SESSION_ID = "session-1"
 
 
 # --- installing one ---------------------------------------------------------
@@ -109,9 +100,8 @@ def install(provider: str, directory: Path) -> str:
 
     A shim rather than a generated program: the fake is this module, which is
     ordinary source that can be read, imported, and edited with the tools that
-    edit source. The runners find their CLI with `shutil.which`, which accepts
-    a path, so nothing has to be put on `PATH` for this to be the `codex` or
-    `claude` a composed application runs.
+    edit source. A runner is handed the path as its command, so nothing has to
+    be put on `PATH` for this to be the agent a composed application runs.
     """
 
     path = directory / provider
@@ -123,18 +113,6 @@ def install(provider: str, directory: Path) -> str:
     )
     path.chmod(0o755)
     return str(path)
-
-
-def fake_codex(directory: Path) -> str:
-    """`codex exec` and `codex app-server`, as far as a scripted turn goes."""
-
-    return install("codex", directory)
-
-
-def fake_claude(directory: Path) -> str:
-    """`claude -p`, with and without the bidirectional control protocol."""
-
-    return install("claude", directory)
 
 
 # --- reading the script -----------------------------------------------------
@@ -184,27 +162,14 @@ def _command(step: Mapping[str, object], prompt: str) -> str:
     raise SystemExit(f"no {DIRECTIVE!r} directive in the prompt")
 
 
-def _execute(command: str, cwd: str) -> tuple[int, str]:
-    done = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True)
-    return done.returncode, (done.stdout + done.stderr)
-
-
-def _receive() -> dict:
-    line = sys.stdin.readline()
-    if not line:
-        raise SystemExit("the client closed the transport mid-turn")
-    return json.loads(line)
-
-
 def _send(message: Mapping[str, object]) -> None:
     print(json.dumps(message), flush=True)
 
 
 # --- calling the run-bound MCP server ---------------------------------------
 #
-# The runtime hands each provider the same three fields -- a name, a command,
-# and its arguments -- and each encodes them its own way, so there is one reader
-# per encoding and one client for all of them. No SDK: a fake whose whole point
+# The runtime hands the agent three fields -- a name, a command, and its
+# arguments -- in the session's `mcpServers`. No SDK: a fake whose whole point
 # is that it speaks the wire protocol should speak this one by hand too.
 
 
@@ -217,24 +182,8 @@ class McpServer:
     args: tuple[str, ...]
 
 
-def _server_from_mapping(servers: object) -> McpServer | None:
-    """One `{name: {command, args}}` entry, whichever transport carried it."""
-
-    if not isinstance(servers, Mapping):
-        return None
-    for name, server in servers.items():
-        if not isinstance(server, Mapping) or not server.get("command"):
-            continue
-        return McpServer(
-            name=str(name),
-            command=str(server["command"]),
-            args=tuple(str(argument) for argument in server.get("args") or ()),
-        )
-    return None
-
-
 def _acp_mcp_server(servers: object) -> McpServer | None:
-    """ACP's `[{name, command, args}]` form of the same server description."""
+    """ACP's `[{name, command, args}]` server description."""
 
     if not isinstance(servers, list):
         return None
@@ -249,51 +198,6 @@ def _acp_mcp_server(servers: object) -> McpServer | None:
     return None
 
 
-def _claude_mcp_server(arguments: Sequence[str]) -> McpServer | None:
-    """`--mcp-config '{"mcpServers": {"workflow": {...}}}'`, off argv."""
-
-    for flag, value in zip(arguments, arguments[1:]):
-        if flag != "--mcp-config":
-            continue
-        try:
-            configured = json.loads(value)
-        except json.JSONDecodeError as error:
-            raise SystemExit(f"--mcp-config is not valid JSON: {error}") from error
-        server = _server_from_mapping(
-            configured.get("mcpServers") if isinstance(configured, dict) else None
-        )
-        if server is not None:
-            return server
-    return None
-
-
-def _codex_mcp_server(arguments: Sequence[str]) -> McpServer | None:
-    """`-c mcp_servers.<name>.command=<json>` and its `.args` sibling, off argv."""
-
-    servers: dict[str, dict[str, object]] = {}
-    for flag, value in zip(arguments, arguments[1:]):
-        if flag != "-c" or not value.startswith("mcp_servers."):
-            continue
-        setting, _, encoded = value.partition("=")
-        parts = setting.split(".")
-        if len(parts) != 3:
-            continue
-        try:
-            servers.setdefault(parts[1], {})[parts[2]] = json.loads(encoded)
-        except json.JSONDecodeError as error:
-            raise SystemExit(f"{setting} is not valid JSON: {error}") from error
-    return _server_from_mapping(servers)
-
-
-def _codex_thread_mcp_server(params: object) -> McpServer | None:
-    """The same three fields, as `thread/start` carries them on app-server."""
-
-    config = params.get("config") if isinstance(params, Mapping) else None
-    return _server_from_mapping(
-        config.get("mcp_servers") if isinstance(config, Mapping) else None
-    )
-
-
 def _require(server: McpServer | None, provider: str) -> McpServer:
     if server is None:
         raise SystemExit(
@@ -303,30 +207,24 @@ def _require(server: McpServer | None, provider: str) -> McpServer:
     return server
 
 
-def _is_loopback_broker(server: McpServer) -> bool:
-    """Whether this MCP process has to connect back to Engine over TCP."""
-
-    return "engine.runtime.planning_mcp_server" in server.args
-
-
 def _turn_steps(
     prompt: str, server: McpServer | None
 ) -> Sequence[Mapping[str, object]]:
     """This turn's script: the run's `naming` steps when it is a naming turn.
 
-    A naming turn is read off the server the runtime attached rather than off
-    which transport ran the turn: naming is served the repository tools and
-    nothing else, and says so on the argv it hands over, while a step is served
-    the tools that end one. Which transport carries either is the runtime's
-    business and has changed once already.
+    A naming turn is read off the server the runtime attached: naming is served
+    the repository tools and nothing else, and says so on the argv it hands
+    over, while a step is served the tools that end one.
 
     Most scripts say nothing about naming and get a turn that answers `title`,
     because naming is not what they are about. A script that does carry
     `naming` steps drives that turn like any other -- which is the only way to
-    put a real CLI, calling a real tool over the real bridge, in front of the
+    put an agent, calling a real tool over the real bridge, in front of the
     thing a naming turn is for.
     """
 
+    if server is None and CHAT_NAMING_INSTRUCTION in prompt[-500:]:
+        return [{"type": "say", "text": _title()}]
     if server is None or "--repository-tools-only" not in server.args:
         return _steps(prompt)
     naming = _script().get("naming")
@@ -427,12 +325,11 @@ def _close(process: "subprocess.Popen[str]") -> None:
 
 # --- acp ---------------------------------------------------------------------
 #
-# The third protocol, and the one a *graph* workflow's agents are reached over.
-# `ACPNode` does not run `codex` or `claude`: it talks ACP to an adapter that
-# wraps one, so a scripted graph run needs an agent that speaks ACP rather than
-# either CLI's own protocol.
+# Chat's runners and a *graph* workflow's `ACPNode` do not run `codex` or
+# `claude`: they talk ACP to an adapter that wraps one, so a scripted run needs
+# an agent that speaks ACP.
 #
-# The same script drives it, including calls to the invocation-bound MCP server
+# The script drives it, including calls to the invocation-bound MCP server
 # carried by `session/new` or `session/load`. A graph node advances only after
 # one of those tools reports a terminal result; ending the ACP turn is not a
 # completion signal.
@@ -490,7 +387,7 @@ def _acp_invalid_params(message_id: object, reason: str) -> None:
 
 
 def fake_acp(directory: Path) -> str:
-    """An ACP agent, for the graph runtime's `ACPNode`."""
+    """An ACP agent, for chat's runners and the graph runtime's `ACPNode`."""
 
     return install("acp", directory)
 
@@ -498,8 +395,7 @@ def fake_acp(directory: Path) -> str:
 def _acp(arguments: Sequence[str]) -> int:
     """One ACP agent over stdio, for as long as the client keeps it open.
 
-    Long-lived, unlike the two above: a graph run opens a session per node and
-    keeps the connection for the whole turn, including while it is stopped
+    Long-lived: a graph run opens a session per node and keeps the connection for the whole turn, including while it is stopped
     waiting for somebody to answer a permission request.
     """
 
@@ -782,373 +678,7 @@ def _acp_running(session_id: str, command: str) -> None:
     )
 
 
-# --- codex ------------------------------------------------------------------
-
-
-def _codex(arguments: Sequence[str]) -> int:
-    if "app-server" in arguments:
-        return _codex_app_server(arguments)
-    return _codex_exec()
-
-
-def _codex_exec() -> int:
-    """`codex exec --json`: one turn, start to finish, prompt on stdin."""
-
-    sys.stdin.read()
-    _send({"type": "thread.started", "thread_id": _THREAD_ID})
-    _send({"type": "turn.started"})
-    _send(
-        {
-            "type": "item.completed",
-            "item": {"id": "msg-1", "type": "agent_message", "text": _title()},
-        }
-    )
-    _send({"type": "turn.completed", "usage": {}})
-    return 0
-
-
-def _codex_app_server(arguments: Sequence[str]) -> int:
-    """The stdio JSON-RPC transport an approval-bearing turn is driven over."""
-
-    initialize = _receive()
-    _send({"id": initialize["id"], "result": {"userAgent": "fake-codex"}})
-    assert _receive()["method"] == "initialized"
-
-    start = _receive()
-    assert start["method"] == "thread/start"
-    # App-server takes its MCP servers in the thread's config rather than on
-    # argv, which is where `codex exec` takes them. Either may carry one.
-    server = _codex_thread_mcp_server(start.get("params")) or _codex_mcp_server(
-        arguments
-    )
-    _send({"id": start["id"], "result": {"thread": {"id": _THREAD_ID}}})
-
-    turn = _receive()
-    assert turn["method"] == "turn/start"
-    params = turn["params"]
-    cwd = params.get("cwd") or os.getcwd()
-    prompt = params["input"][0]["text"]
-    _send({"id": turn["id"], "result": {"turn": {"id": _TURN_ID}}})
-
-    for index, step in enumerate(_turn_steps(prompt, server), start=1):
-        kind = step.get("type")
-        if kind == "say":
-            _codex_item(
-                "item/completed",
-                {"id": f"msg-{index}", "type": "agentMessage", "text": step["text"]},
-            )
-            continue
-        if kind == "tool":
-            called = _require(server, "codex")
-            name = str(step["name"])
-            call_arguments = step.get("arguments") or {}
-            call = {
-                "id": f"tool-{index}",
-                "type": "mcpToolCall",
-                "server": called.name,
-                "tool": name,
-                "arguments": json.dumps(call_arguments),
-                "status": "inProgress",
-            }
-            _codex_item("item/started", call)
-            sandbox = params.get("sandboxPolicy") or {}
-            if _is_loopback_broker(called) and not sandbox.get("networkAccess"):
-                _codex_item("item/completed", {**call, "status": "cancelled"})
-                continue
-            output, failed = _call_tool(called, name, call_arguments)
-            _codex_item(
-                "item/completed",
-                {
-                    **call,
-                    "status": "failed" if failed else "completed",
-                    "result": output,
-                },
-            )
-            continue
-        if kind != "run":
-            raise SystemExit(f"codex cannot play a {kind!r} step")
-
-        command = _command(step, prompt)
-        item = {
-            "id": f"cmd-{index}",
-            "type": "commandExecution",
-            "command": command,
-            "cwd": cwd,
-            "commandActions": [],
-            "status": "inProgress",
-        }
-        _codex_item("item/started", item)
-        if step.get("approval", True):
-            _send(
-                {
-                    "id": f"approval-{index}",
-                    "method": "item/commandExecution/requestApproval",
-                    "params": {
-                        "threadId": _THREAD_ID,
-                        "turnId": _TURN_ID,
-                        "itemId": item["id"],
-                        "reason": "the command would write outside the sandbox",
-                        "command": command,
-                        "cwd": cwd,
-                        "commandActions": [],
-                        "availableDecisions": [
-                            "accept",
-                            "acceptForSession",
-                            "decline",
-                            "cancel",
-                        ],
-                    },
-                }
-            )
-            decision = _receive()["result"]["decision"]
-            if decision in {"decline", "cancel"}:
-                # What the real app-server does with a refused command: the turn
-                # ends, and the command never runs.
-                _send(
-                    {
-                        "method": "turn/completed",
-                        "params": {
-                            "threadId": _THREAD_ID,
-                            "turn": {"id": _TURN_ID, "items": [], "status": "interrupted"},
-                        },
-                    }
-                )
-                return 0
-
-        exit_code, output = _execute(command, cwd)
-        _codex_item(
-            "item/completed",
-            {
-                **item,
-                "status": "completed",
-                "exitCode": exit_code,
-                "aggregatedOutput": output,
-            },
-        )
-
-    _send(
-        {
-            "method": "thread/tokenUsage/updated",
-            "params": {
-                "threadId": _THREAD_ID,
-                "turnId": _TURN_ID,
-                "tokenUsage": {
-                    "last": {"inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2},
-                    "total": {"inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2},
-                },
-            },
-        }
-    )
-    _send(
-        {
-            "method": "turn/completed",
-            "params": {
-                "threadId": _THREAD_ID,
-                "turn": {"id": _TURN_ID, "items": [], "status": "completed"},
-            },
-        }
-    )
-    return 0
-
-
-def _codex_item(method: str, item: Mapping[str, object]) -> None:
-    _send(
-        {
-            "method": method,
-            "params": {"threadId": _THREAD_ID, "turnId": _TURN_ID, "item": item},
-        }
-    )
-
-
-# --- claude code ------------------------------------------------------------
-
-
-def _claude(arguments: Sequence[str]) -> int:
-    if "--input-format" in arguments:
-        return _claude_interactive(arguments)
-    return _claude_print()
-
-
-def _claude_print() -> int:
-    """`claude -p --output-format stream-json`: one turn, prompt on stdin."""
-
-    sys.stdin.read()
-    title = _title()
-    _send({"type": "system", "subtype": "init", "session_id": _SESSION_ID})
-    _send({"type": "assistant", "message": {"content": [{"type": "text", "text": title}]}})
-    _send(
-        {
-            "type": "result",
-            "subtype": "success",
-            "is_error": False,
-            "result": title,
-            "usage": {},
-        }
-    )
-    return 0
-
-
-def _claude_interactive(arguments: Sequence[str]) -> int:
-    """The same, plus stream-JSON input and the permission control protocol."""
-
-    server = _claude_mcp_server(arguments)
-    initialize = _receive()
-    _send(
-        {
-            "type": "control_response",
-            "response": {
-                "subtype": "success",
-                "request_id": initialize["request_id"],
-                "response": {"commands": []},
-            },
-        }
-    )
-
-    user = _receive()
-    assert user["type"] == "user"
-    prompt = user["message"]["content"]
-    cwd = os.getcwd()
-    _send({"type": "system", "subtype": "init", "session_id": _SESSION_ID})
-
-    answer = ""
-    for index, step in enumerate(_turn_steps(prompt, server), start=1):
-        kind = step.get("type")
-        if kind == "say":
-            answer = str(step["text"])
-            _send(
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": answer}]},
-                }
-            )
-            continue
-        if kind == "tool":
-            called = _require(server, "claude")
-            name = str(step["name"])
-            call_arguments = step.get("arguments") or {}
-            tool_use_id = f"toolu_{index}"
-            # Claude names an MCP tool `mcp__<server>__<tool>`, which is also
-            # the name it has to have been allowed under to be callable at all.
-            _send(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": tool_use_id,
-                                "name": f"mcp__{called.name}__{name}",
-                                "input": call_arguments,
-                            }
-                        ]
-                    },
-                }
-            )
-            output, failed = _call_tool(called, name, call_arguments)
-            _send(
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": output,
-                                "is_error": failed,
-                            }
-                        ]
-                    },
-                }
-            )
-            continue
-        if kind != "run":
-            raise SystemExit(f"claude cannot play a {kind!r} step")
-
-        command = _command(step, prompt)
-        tool_use_id = f"toolu_{index}"
-        _send(
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": tool_use_id,
-                            "name": "Bash",
-                            "input": {"command": command},
-                        }
-                    ]
-                },
-            }
-        )
-        if step.get("approval", True):
-            _send(
-                {
-                    "type": "control_request",
-                    "request_id": f"permission-{index}",
-                    "request": {
-                        "subtype": "can_use_tool",
-                        "tool_name": "Bash",
-                        "input": {"command": command},
-                        "tool_use_id": tool_use_id,
-                        "title": "Claude wants to run a command",
-                        "permission_suggestions": [
-                            {
-                                "type": "addRules",
-                                "rules": [
-                                    {"toolName": "Bash", "ruleContent": command}
-                                ],
-                                "behavior": "allow",
-                                "destination": "localSettings",
-                            }
-                        ],
-                    },
-                }
-            )
-            response = _receive()["response"]["response"]
-            if response["behavior"] == "deny":
-                # deny + interrupt ends the turn, and the command never runs.
-                _send(
-                    {
-                        "type": "result",
-                        "subtype": "error_during_execution",
-                        "is_error": True,
-                        "result": response.get("message", "denied"),
-                        "usage": {},
-                    }
-                )
-                return 0
-
-        exit_code, output = _execute(command, cwd)
-        _send(
-            {
-                "type": "user",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": output or "(no output)",
-                            "is_error": exit_code != 0,
-                        }
-                    ]
-                },
-            }
-        )
-
-    _send(
-        {
-            "type": "result",
-            "subtype": "success",
-            "is_error": False,
-            "result": answer or "Done.",
-            "usage": {},
-        }
-    )
-    return 0
-
-
-PROVIDERS = {"acp": _acp, "codex": _codex, "claude": _claude}
+PROVIDERS = {"acp": _acp}
 
 
 def main(argv: Sequence[str]) -> int:
@@ -1163,8 +693,6 @@ __all__ = [
     "SCRIPT_ENVIRONMENT_VARIABLE",
     "UNSCRIPTED_TITLE",
     "fake_acp",
-    "fake_claude",
-    "fake_codex",
     "install",
 ]
 

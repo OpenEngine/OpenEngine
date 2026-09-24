@@ -26,6 +26,7 @@ PUBLIC_MODULES = (
     "langgraph_acp.client",
     "langgraph_acp.config",
     "langgraph_acp.continuation",
+    "langgraph_acp.elicitation",
     "langgraph_acp.errors",
     "langgraph_acp.events",
     "langgraph_acp.node",

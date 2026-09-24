@@ -1,0 +1,103 @@
+name: ACP compatibility
+
+# The live half of the agent tests: the pinned ACP adapters, launched and spoken
+# to -- a handshake, a turn, and a permission round trip -- plus Claude
+# consuming Engine's output configuration on new and loaded sessions.
+#
+# Deliberately not a pull-request check. Everything here depends on somebody
+# else's authentication, rate limits, model behaviour, and uptime, so a red run
+# is as likely to mean "OpenAI had a bad ten minutes" as "we broke the approval
+# contract". Blocking every unrelated PR on that trains people to ignore it.
+# What *does* block a PR is the deterministic half -- protocol fixtures,
+# normalization, API, and fake-agent end-to-end tests -- in `tests.yml`.
+#
+# Releasing is gated on the most recent run of this workflow being green: see
+# `release-gate.yml`.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Early Monday, so a week's provider releases are covered before anyone
+    # depends on a green run to ship.
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acp-compatibility
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.9.28"
+
+jobs:
+  acp-adapter:
+    name: agents over ACP
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # `langgraph-acp` reaches the agents over ACP, through adapters that are
+    # separate packages on separate release cadences.
+    #
+    # Pinned, like `CODEX_ACP_COMMAND` and `CLAUDE_ACP_COMMAND`: this job tests
+    # the adapter releases Engine actually launches, so a red run means those
+    # releases stopped working against the providers' services -- not that
+    # npm published something new. Moving a pin is a pull request, and this
+    # job is what says whether the new release still holds up.
+    defaults:
+      run:
+        working-directory: langgraph-acp
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Record which adapter releases these are
+        # Read from the pins themselves, so the summary names what the tests
+        # launched. The bundled Codex is recorded too: codex-acp runs its own
+        # `@openai/codex` rather than a `codex` on PATH, so "which Codex broke"
+        # has no other answer here. The adapter declares that dependency as a
+        # range, so it is read off an install of the pinned adapter -- the
+        # release npx resolves for the tests -- rather than off its manifest.
+        shell: bash
+        run: |
+          set -euo pipefail
+          codex_acp=$(uv run --locked python -c 'from langgraph_acp.providers.codex import CODEX_ACP_VERSION; print(CODEX_ACP_VERSION)')
+          claude_acp=$(uv run --locked python -c 'from langgraph_acp.providers.claude import CLAUDE_ACP_VERSION; print(CLAUDE_ACP_VERSION)')
+          prefix="$RUNNER_TEMP/codex-acp"
+          npm install --silent --no-audit --no-fund --prefix "$prefix" "@agentclientprotocol/codex-acp@$codex_acp"
+          codex=$(node -p 'require(process.argv[1]).version' "$prefix/node_modules/@openai/codex/package.json")
+          for pinned in \
+            "@agentclientprotocol/codex-acp $codex_acp" \
+            "@agentclientprotocol/claude-agent-acp $claude_acp" \
+            "bundled @openai/codex $codex"; do
+            echo "::notice::$pinned"
+            echo "### $pinned" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Handshake, a turn, and a permission round trip over ACP
+        env:
+          # Absent, the turns skip and the handshake still runs: initialize is
+          # answered before anyone is asked to authenticate, so protocol drift
+          # is catchable without a credential.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run --locked pytest -m compatibility -v
+
+      - name: Install Engine for generated Claude output configuration
+        working-directory: .
+        run: uv sync --locked --all-packages
+
+      - name: Claude consumes output settings on new and loaded ACP sessions
+        working-directory: .
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run --locked pytest tests/test_claude_output_compatibility.py -m compatibility -v

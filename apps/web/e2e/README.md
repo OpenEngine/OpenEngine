@@ -25,14 +25,14 @@ and each is something a test run must not share or send anywhere:
 | --- | --- |
 | a fixture git repository, and a bare `origin` beside it | conversations and runs make worktrees of it, and a run bases its worktree on `origin/main` |
 | a SQLite file under the test's own directory | one test's chats must not be another's |
-| scripted `codex` and `claude` executables | a model is the one part of this that cannot be asserted on |
+| a scripted ACP agent behind the `codex` and `claude` runners | a model is the one part of this that cannot be asserted on |
 | a `gh` that records instead of commenting | the reviewer leaves its findings on a pull request, and that is somebody's repository |
 
-The fake CLIs are `tests/provider_fakes.py`, shared with the pytest tier that
-runs the approval contract against them. They are not mocks of our adapters:
-they are real subprocesses speaking Codex's app-server JSON-RPC and Claude
-Code's stream-JSON control protocol, and they really run the commands they are
-allowed to run. What a turn says and does comes from a JSON script the test
+The fake is `tests/provider_fakes.py`'s ACP agent, which both chat runners
+launch in place of the Codex and Claude ACP adapters. It is not a mock of our
+adapter: it is a real subprocess speaking ACP, asking permission over
+`session/request_permission`, and it really runs the commands it is allowed to
+run. What a turn says and does comes from a JSON script the test
 writes:
 
 ```ts
@@ -56,8 +56,8 @@ a title turn, a retry, or a second conversation cannot knock a script out of
 step. The first matching scenario wins, which matters for a workflow: the
 reviewer is quoted the original task, so its prompt contains the implementation
 scenario's word too, and the one only a reviewer can match has to be listed
-first. A turn run without the approval transport -- the runtime naming a chat or
-a workflow -- is answered with `title` instead of a scenario.
+first. A turn that is the runtime naming a chat or a workflow is answered with
+`title` instead of a scenario.
 
 Graph workflow scenarios use fake ACP agents and the run-bound MCP tools. The
 harness rebuilds the shipped graph with those agents through `graph_for`.
@@ -199,23 +199,26 @@ it says so.
 | a plan reaches the operator | 2 | Claude only |
 | rejecting reopens the implementation | — | the correction loop: `Reject`, then `StepReactivated` and a second implementation turn |
 
-## Live provider CLIs
+## Live providers
 
-This tier is deliberately deterministic: a scripted CLI is what makes "the
+This tier is deliberately deterministic: a scripted agent is what makes "the
 agent asked, the user approved, the file exists" a fact about our code rather
 than about a model's mood. The live half already exists and belongs where it
-is: `.github/workflows/cli-compatibility.yml` runs the same approval contract
-against the pinned real `codex` and `claude` releases on a schedule.
+is: `.github/workflows/acp-compatibility.yml` runs a handshake, a turn, and a
+permission round trip against the pinned ACP adapters on a schedule.
 
-If you want the browser tier pointed at a real CLI as well, the credentials go
+If you want the browser tier pointed at a real agent as well, the credentials go
 in **repository → Settings → Secrets and variables → Actions**, under the names
 that workflow already reads:
 
-* `OPENAI_API_KEY` -- Codex CLI.
-* `ANTHROPIC_API_KEY` -- Claude Code. A subscription token from
-  `claude setup-token` works too, as `CLAUDE_CODE_OAUTH_TOKEN`; whichever you
-  add, the job must export it into the server process's environment, because
-  that is what spawns the CLI.
+* `OPENAI_API_KEY` -- Codex, through `@agentclientprotocol/codex-acp`.
+* `ANTHROPIC_API_KEY` -- Claude, through
+  `@agentclientprotocol/claude-agent-acp`. A subscription token from
+  `claude setup-token` works too, as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Whichever you add, the job must export it into the server process's
+environment, because that is what launches the ACP adapter, which passes it on
+to the agent.
 
 Absent, live scenarios skip rather than fail: an unauthenticated runner is a
 configuration fact, not a test result. Nothing in this directory reads a

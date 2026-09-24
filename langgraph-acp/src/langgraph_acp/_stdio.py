@@ -42,6 +42,12 @@ from langgraph_acp._json import (
 )
 from langgraph_acp._jsonrpc import METHOD_NOT_FOUND, JSONRPCError, JSONRPCPeer
 from langgraph_acp.client import PROTOCOL_VERSION, ACPCapabilities, ACPClient
+from langgraph_acp.elicitation import (
+    FORM_ELICITATION_CAPABILITY,
+    ACPElicitationHandler,
+    ACPElicitationRequest,
+    ACPElicitationResponse,
+)
 from langgraph_acp.errors import (
     ACPAgentCapabilityError,
     ACPConnectionError,
@@ -75,11 +81,16 @@ log = logging.getLogger(__name__)
 #: What this client tells an agent it can do. Nothing, for now: the filesystem
 #: and terminal methods an agent may call belong to tickets that have not
 #: happened, and advertising a capability this client cannot honour would turn a
-#: clean "not supported" into a hung request.
+#: clean "not supported" into a hung request. Form elicitation is added per
+#: connection, by a client given something to answer it with.
 CLIENT_CAPABILITIES: JSONObject = {
     "fs": {"readTextFile": False, "writeTextFile": False},
     "terminal": False,
 }
+
+#: `session_config` keys applied as ACP config options once a session is open,
+#: in this order: the mode first, so the model is chosen within it.
+SESSION_CONFIG_OPTIONS = ("mode", "model")
 
 #: ACP session updates, mapped onto this package's event vocabulary. Anything
 #: absent here reaches the consumer as `acp.raw` rather than being dropped;
@@ -111,6 +122,7 @@ async def connect_over_stdio(
     env: Mapping[str, str] | None = None,
     cwd: str | os.PathLike[str] | None = None,
     permissions: ACPPermissionHandler | None = None,
+    elicitations: ACPElicitationHandler | None = None,
 ) -> ACPClient:
     """Launch `command` and initialize ACP against it.
 
@@ -120,6 +132,8 @@ async def connect_over_stdio(
 
     `permissions` answers `session/request_permission`; without one the
     connection declines every request. See `langgraph_acp.permissions`.
+    `elicitations` answers `elicitation/create`; without one the client does not
+    advertise it. See `langgraph_acp.elicitation`.
     """
     launched = tuple(checked_sequence(command, field="command"))
     try:
@@ -141,7 +155,10 @@ async def connect_over_stdio(
 
     try:
         client = StdioACPClient(
-            agent=agent, process=process, permissions=permissions
+            agent=agent,
+            process=process,
+            permissions=permissions,
+            elicitations=elicitations,
         )
     except BaseException:
         process.kill()
@@ -163,6 +180,7 @@ class StdioACPClient:
         agent: str,
         process: asyncio.subprocess.Process,
         permissions: ACPPermissionHandler | None = None,
+        elicitations: ACPElicitationHandler | None = None,
     ) -> None:
         if process.stdin is None or process.stdout is None:
             raise ACPConnectionError(
@@ -172,6 +190,7 @@ class StdioACPClient:
             )
         self._agent = agent
         self._permissions = permissions or deny_permission
+        self._elicitations = elicitations
         self._process = process
         self._capabilities = ACPCapabilities()
         self._stderr: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
@@ -202,13 +221,18 @@ class StdioACPClient:
             "initialize",
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "clientCapabilities": CLIENT_CAPABILITIES,
+                "clientCapabilities": self._client_capabilities(),
             },
         )
         self._capabilities = ACPCapabilities.from_initialize_response(
             as_mapping(response, field="the initialize result")
         )
         return self._capabilities
+
+    def _client_capabilities(self) -> JSONObject:
+        if self._elicitations is None:
+            return CLIENT_CAPABILITIES
+        return {**CLIENT_CAPABILITIES, "elicitation": FORM_ELICITATION_CAPABILITY}
 
     async def new_session(
         self,
@@ -272,19 +296,22 @@ class StdioACPClient:
     async def _configure_model(
         self, session_id: str, session_config: Mapping[str, JSONValue] | None
     ) -> None:
-        # Model selection is an ACP operation, not a session/new extension.
-        # Apply it again after load so resumed reviewers keep their requested tier.
-        if session_config and "model" in session_config:
-            await self.call(
-                "session/set_config_option",
-                {
-                    "sessionId": session_id,
-                    "configId": "model",
-                    "value": session_config["model"],
-                },
-                session_id=session_id,
-                failure=ACPSessionError,
-            )
+        # Model and mode selection are ACP operations, not session/new
+        # extensions. Apply them again after load so resumed reviewers keep
+        # their requested tier, and a session its client pinned to a mode is not
+        # handed back in whatever mode the agent's own settings name.
+        for config_id in SESSION_CONFIG_OPTIONS:
+            if session_config and config_id in session_config:
+                await self.call(
+                    "session/set_config_option",
+                    {
+                        "sessionId": session_id,
+                        "configId": config_id,
+                        "value": session_config[config_id],
+                    },
+                    session_id=session_id,
+                    failure=ACPSessionError,
+                )
 
     async def close(self) -> None:
         if self._closed:
@@ -387,6 +414,29 @@ class StdioACPClient:
                 ),
             )
             return outcome.to_acp()
+        if method == "elicitation/create" and self._elicitations is not None:
+            session_id = _session_id_of(params)
+            self._deliver(
+                session_id,
+                self.event(session_id, ACPEventType.ELICITATION_REQUESTED, params),
+            )
+            request = ACPElicitationRequest.from_params(self._agent, params)
+            # Only forms are advertised; an agent that sends anything else gets
+            # the answer it would get from a person who closed the dialog.
+            answer = (
+                await self._elicitations(request)
+                if request.mode == "form"
+                else ACPElicitationResponse.cancel()
+            )
+            self._deliver(
+                session_id,
+                self.event(
+                    session_id,
+                    ACPEventType.ELICITATION_RESOLVED,
+                    {"sessionId": session_id, "action": answer.action},
+                ),
+            )
+            return answer.to_acp()
         raise JSONRPCError(
             METHOD_NOT_FOUND,
             f"langgraph-acp does not implement {method}",

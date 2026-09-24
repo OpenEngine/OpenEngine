@@ -19,8 +19,7 @@ EXPECTED_PACKAGE_ROOTS = [
     "packages/orchestrator",
     "packages/adapters/workflow_runtime/temporal",
     "packages/adapters/source_control/github",
-    "packages/adapters/agent_runner/codex",
-    "packages/adapters/agent_runner/claude_code",
+    "packages/adapters/agent_runner/acp",
     "packages/adapters/communications/buzz",
     "packages/adapters/workspace_provider/git_worktree",
     "packages/adapters/state_store/postgres",
@@ -50,7 +49,7 @@ CAPABILITIES = {
 IMPLEMENTATIONS = {
     "Workflow Runtime": ("engine.adapters.workflow_runtime.temporal", "TemporalWorkflowRuntime"),
     "Source Control": ("engine.adapters.source_control.github", "GitHubSourceControl"),
-    "Agent Runner": ("engine.adapters.agent_runner.codex", "CodexAgentRunner"),
+    "Agent Runner": ("engine.adapters.agent_runner.acp", "ACPAgentRunner"),
     "Communications": ("engine.adapters.communications.buzz", "BuzzCommunications"),
     "Workspace Provider": (
         "engine.adapters.workspace_provider.git_worktree",

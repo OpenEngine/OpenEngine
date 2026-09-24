@@ -1,11 +1,12 @@
 name: release gate
 
 # Approval functionality is not released on a green unit-test run alone. The
-# deterministic tests prove we hold up our end of the protocol; only the
-# compatibility matrix proves the CLIs still hold up theirs, and it runs on a
-# schedule rather than on the commit being shipped. So the gate asks the one
-# question that cannot be answered from this commit: did the most recent
-# compatibility run pass, and was it recent enough to mean anything?
+# deterministic tests prove we hold up our end of ACP; only the ACP
+# compatibility workflow proves the pinned Codex and Claude adapters still hold
+# up theirs against the real services, and it runs on a schedule rather than on
+# the commit being shipped. So the gate asks the one question that cannot be
+# answered from this commit: did the most recent ACP compatibility run pass,
+# and was it recent enough to mean anything?
 
 on:
   workflow_call:
@@ -24,7 +25,7 @@ permissions:
 
 jobs:
   compatibility-is-green:
-    name: the compatibility matrix is green
+    name: ACP compatibility is green
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -32,18 +33,18 @@ jobs:
       - name: The last compatibility run passed, recently
         env:
           GH_TOKEN: ${{ github.token }}
-          # A week plus a day: the matrix runs weekly, so anything older means
+          # A week plus a day: the workflow runs weekly, so anything older means
           # a run was missed rather than merely not due yet.
           MAX_AGE_DAYS: ${{ inputs.max_age_days || '8' }}
         shell: bash
         run: |
           set -euo pipefail
-          run=$(gh run list --workflow "CLI compatibility" \
+          run=$(gh run list --workflow "ACP compatibility" \
             --branch "${{ github.event.repository.default_branch }}" \
             --status completed --limit 1 \
             --json conclusion,updatedAt,url,databaseId)
           if [ "$(jq -r 'length' <<<"$run")" -eq 0 ]; then
-            echo "::error::no completed CLI compatibility run to release against"
+            echo "::error::no completed ACP compatibility run to release against"
             exit 1
           fi
 
@@ -56,11 +57,11 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$conclusion" != "success" ]; then
-            echo "::error::the last CLI compatibility run concluded '$conclusion': $url"
+            echo "::error::the last ACP compatibility run concluded '$conclusion': $url"
             exit 1
           fi
           if [ "$age_days" -gt "$MAX_AGE_DAYS" ]; then
-            echo "::error::the last CLI compatibility run is $age_days days old (limit $MAX_AGE_DAYS): $url"
-            echo "::error::run the 'CLI compatibility' workflow against the default branch and try again"
+            echo "::error::the last ACP compatibility run is $age_days days old (limit $MAX_AGE_DAYS): $url"
+            echo "::error::run the 'ACP compatibility' workflow against the default branch and try again"
             exit 1
           fi

@@ -107,10 +107,10 @@ back to polling every watched file, which still works and is slower.
 ## Restarts are not free, and the plan says so
 
 The web process owns in-flight agent runs. `ThreadService._active_runs` holds
-an `ActiveRun` per agent instance, each driving a provider CLI subprocess and
+an `ActiveRun` per agent instance, each driving an ACP adapter subprocess and
 an open `text/event-stream` or `application/x-ndjson` response to the browser.
-A reload kills all of that: the CLI subprocess dies, the stream ends, and the
-run keeps only what was already persisted.
+A reload kills all of that: the adapter subprocess and the agent it runs die,
+the stream ends, and the run keeps only what was already persisted.
 
 Phase 1 accepts this and documents it, because stock `--reload` is small and
 the common case — editing a route handler while nothing is running — is

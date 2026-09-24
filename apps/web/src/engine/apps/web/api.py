@@ -3707,7 +3707,20 @@ def create_app(
         readings = await _utilization.refresh(tuple(runners))
         return JSONResponse(utilization_json(readings))
 
-    github_login = GitHubLogin(github_login_config, service_token)
+    async def github_login_allowed(login: str) -> bool:
+        """Only people who can push to this deployment's repository see its WorkOrders."""
+        if not github_repository:
+            # Startup refuses login without a repository; kept as a fallback
+            # for apps built directly.
+            return False
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            # The check reads the repository from a pull request URL; the
+            # number names no particular one.
+            return await session.capabilities.source_control.can_write_repository(
+                pull_request_url(github_repository, 1), login,
+            )
+
+    github_login = GitHubLogin(github_login_config, service_token, github_login_allowed)
     routes = [
         Route("/api/health", health),
         *github_login.routes(),
