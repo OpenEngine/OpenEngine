@@ -16,6 +16,9 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
+  "overrides": {
+    "serialize-javascript": "^7.0.5"
+  },
   "engines": {
     "node": ">=20.0"
   },
