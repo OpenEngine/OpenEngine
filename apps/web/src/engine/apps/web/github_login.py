@@ -309,6 +309,12 @@ _AUTH_EXEMPT = frozenset({
     f"{_PATH}/callback",
     f"{_PATH}/status",
     f"{_PATH}/logout",
+    "/api/oauth/metadata",
+    "/api/oauth/jwks",
+    "/api/oauth/register",
+    "/api/oauth/token",
+    # This handler requires a session itself and redirects to login when absent.
+    "/api/oauth/authorize",
     "/api/slack/events",  # Authenticated by the Slack signature in its handler.
     "/api/github/events",  # Authenticated by the GitHub signature in its handler.
 })

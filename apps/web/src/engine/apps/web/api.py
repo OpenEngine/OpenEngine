@@ -52,6 +52,7 @@ from engine.apps.web.github_ingress import (
     GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_requester,
 )
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
+from engine.apps.web.mcp_oauth import OAuthServer
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
     DeviceFlowState,
@@ -1044,6 +1045,8 @@ def create_app(
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
+    mcp_resource_url: str = "",
+    oauth_database: str | Path | None = None,
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     show_projects: bool = True,
     repos: Mapping[str, str] | None = None,
@@ -3679,7 +3682,12 @@ def create_app(
             )
 
     github_login = GitHubLogin(github_login_config, service_token, github_login_allowed)
+    oauth = (
+        OAuthServer(public_url, mcp_resource_url, oauth_database, github_login)
+        if public_url and github_login.configured and oauth_database is not None else None
+    )
     routes = [
+        *(oauth.routes() if oauth else []),
         *github_login.routes(),
         Route("/api/config", config),
         Route("/api/github/status", github_status),

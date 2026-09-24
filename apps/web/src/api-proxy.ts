@@ -24,7 +24,7 @@ export const DEFAULT_API_URL = "http://localhost:8000";
  *  check -- the routes are Python. `tests/test_web_app.py` reads this array and
  *  compares it against the application's own, and is what goes red when a
  *  prefix is added there and not here. */
-export const PROXIED_PREFIXES = ["/api", "/graph"] as const;
+export const PROXIED_PREFIXES = ["/api", "/graph", "/.well-known/oauth-authorization-server"] as const;
 
 export function apiProxyTarget(
   environment: Record<string, string | undefined> = {},

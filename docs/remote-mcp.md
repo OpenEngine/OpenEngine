@@ -238,3 +238,10 @@ The MCP endpoint must return 401 with a `WWW-Authenticate: Bearer` challenge
 containing `resource_metadata` and, when configured, `scope`. A valid token
 missing required scopes receives 403. Configure OAuth clients with the same
 public `/mcp` URL; follow the external provider's client-registration setup.
+
+## OE-issued OAuth tokens
+
+The web app now provides an [OAuth authorization server](mcp-oauth.md) using
+GitHub browser login, client registration/CIMD, and PKCE. Gateway support for
+accepting those tokens is a separate follow-up; keep the authentication setup
+above until that integration lands.

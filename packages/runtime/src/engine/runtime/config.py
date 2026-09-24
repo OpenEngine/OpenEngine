@@ -135,6 +135,7 @@ class EngineConfig:
     github_login_redirect_uri: str = ""
     github_token: str = ""
     public_url: str = ""
+    mcp_resource_url: str = ""
     github: GitHubConfig = GitHubConfig()
     communications: CommunicationsConfig = CommunicationsConfig()
     work_orders: WorkOrdersConfig = WorkOrdersConfig()
@@ -230,6 +231,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_token",
             "orchestrator",
             "public_url",
+            "mcp_resource_url",
             "show_projects",
             "repos",
             "work_orders",
@@ -367,6 +369,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
+        mcp_resource_url=_optional_nonblank_string(document.get("mcp_resource_url", ""), "mcp_resource_url"),
         github=GitHubConfig(
             repository=github_repository,
             host_aliases={
