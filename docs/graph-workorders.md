@@ -77,7 +77,10 @@ partial.
 The event log a conversation is drawn from lives in the server's memory, so
 restarting the server empties it: the run picks back up (see below), but what
 was said before the restart is gone from the page. Nothing else keeps a graph
-run's transcript, so this is the one thing to know before relying on it.
+run's transcript, so this is the one thing to know before relying on it. The
+same goes for **Usage**: it is summed from that log, so after a restart a
+WorkOrder's dollars start again from what it spends next. Don't use it for
+billing or audit.
 
 A question the run is stopped on is not lost with it — approvals are stored, not
 remembered — so after a restart the conversation still shows what is waiting on
