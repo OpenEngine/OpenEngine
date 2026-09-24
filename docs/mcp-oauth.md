@@ -93,16 +93,36 @@ startup; operators may also run
 `engine-migrate sqlite:////absolute/path/to/state.db`. Private signing material
 is stored beside the state file in `<database>.oauth-keys.json` (mode 600). Back up this file securely with
 the database. Keys persist across app restarts. Rotation retains old public keys
-in JWKS and replaces the private signing key; running processes reload it.
+in JWKS for 15 minutes (the access-token lifetime), then excludes them automatically.
+Repeated rotation does not extend old deadlines. Legacy key rings receive a fixed
+15-minute overlap on first startup after upgrade. Rotation replaces the private
+signing key; running processes reload it.
 
 Administrator commands (run under the web app's OS account):
 
 ```sh
 uv run --package engine-web python -m engine.apps.web.mcp_oauth_storage rotate-key /path/to/state.db
 uv run --package engine-web python -m engine.apps.web.mcp_oauth_storage revoke-all /path/to/state.db
+uv run --package engine-web python -m engine.apps.web.mcp_oauth_storage retire-key /path/to/state.db --kid=COMPROMISED_KEY_ID
 ```
 
 Revocation marks every refresh family revoked and removes outstanding codes.
 It does not invalidate already-issued access tokens, which expire after 15
 minutes. Retain consumed refresh rows for reuse detection; do not delete them
 while their families can still be used.
+
+For a compromised signing key, use `retire-key` with its JWKS `kid`. This removes
+its public key immediately; if it is the active key, OE also generates a replacement.
+Verifiers must refresh cached JWKS to observe removal; purge their caches during
+incident response. Use `revoke-all` as well to invalidate outstanding grants.
+
+Dynamic registration is capped at 1,000 stored clients, enforced atomically across
+workers. Registrations expire after 30 days; expired rows are deleted on the next
+registration request, and SQLite reuses the freed space. Existing registrations
+receive 30 days from migration. At capacity, `/register` returns HTTP 503 with
+`temporarily_unavailable`. Clients must register again for new authorizations after
+expiry; already-issued grants retain their own expiry. CIMD needs no registration
+row and is unaffected by the cap. Request metadata remains limited to 16 KiB.
+
+OAuth database transactions run entirely in worker threads. Read-only lookups use
+deferred transactions so they do not acquire SQLite's write lock.

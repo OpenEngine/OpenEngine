@@ -347,3 +347,115 @@ def test_cimd_timeout_fails_closed(issuer):
 def test_invalid_issuer_resource_configuration_is_rejected(issuer, public_url, resource):
     with pytest.raises(ValueError):
         OAuthServer(public_url, resource, issuer.store.path, issuer.login)
+
+
+def test_key_retirement_deadlines_and_compromise(issuer):
+    from engine.apps.web.mcp_oauth_storage import SigningKeys
+    keys = issuer.keys
+    original = keys.jwks()["keys"][0]["kid"]
+    with patch("engine.apps.web.mcp_oauth_storage.time.time", return_value=1000):
+        keys.rotate()
+    second = jwt.get_unverified_header(keys.sign({"sub": "42"}))["kid"]
+    with patch("engine.apps.web.mcp_oauth_storage.time.time", return_value=1100):
+        keys.rotate()
+        assert len(keys.jwks()["keys"]) == 3
+    with patch("engine.apps.web.mcp_oauth_storage.time.time", return_value=1900):
+        restarted = SigningKeys(keys.path)
+        assert original not in {key["kid"] for key in restarted.jwks()["keys"]}
+        assert second in {key["kid"] for key in restarted.jwks()["keys"]}
+        restarted.retire(second)
+        assert len(keys.jwks()["keys"]) == 1
+        active = keys.jwks()["keys"][0]["kid"]
+        restarted.retire(active)
+        assert active not in {key["kid"] for key in keys.jwks()["keys"]}
+        token = keys.sign({"sub": "42"})
+        assert jwt.decode(token, jwt.PyJWK.from_dict(keys.jwks()["keys"][0]).key,
+                          algorithms=["ES256"])["sub"] == "42"
+        with pytest.raises(ValueError, match="unknown"):
+            restarted.retire("missing")
+
+
+def test_legacy_key_ring_gets_fixed_retirement_deadline(issuer):
+    from engine.apps.web.mcp_oauth_storage import SigningKeys
+    issuer.keys.rotate()
+    ring = issuer.keys._read()
+    del ring["retire_at"]
+    issuer.keys._save(ring)
+    with patch("engine.apps.web.mcp_oauth_storage.time.time", return_value=1000):
+        assert len(SigningKeys(issuer.keys.path).jwks()["keys"]) == 2
+    with patch("engine.apps.web.mcp_oauth_storage.time.time", return_value=1900):
+        assert len(SigningKeys(issuer.keys.path).jwks()["keys"]) == 1
+
+
+def test_registration_cap_is_atomic_and_expired_rows_are_reclaimed(issuer):
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=Starlette(routes=issuer.routes())),
+                                    base_url="https://oe.test") as client:
+            document = {"redirect_uris": ["https://client.test/cb"]}
+            with patch("engine.apps.web.mcp_oauth_storage.MAX_CLIENTS", 2):
+                results = await asyncio.gather(*(client.post("/api/oauth/register", json=document) for _ in range(8)))
+                assert sorted(result.status_code for result in results) == [201, 201] + [503] * 6
+                old_id = next(result.json()["client_id"] for result in results if result.status_code == 201)
+                await issuer.store.run(lambda db: db.execute("UPDATE oauth_clients SET expires = 0").rowcount)
+                with pytest.raises(ValueError, match="unknown client"):
+                    await issuer.client(old_id)
+                assert (await client.post("/api/oauth/register", json=document)).status_code == 201
+                count = await issuer.store.run(lambda db: db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0], write=False)
+                assert count == 1
+    asyncio.run(run())
+
+
+def test_database_lock_does_not_block_event_loop_or_client_reads(issuer):
+    import sqlite3
+    import threading
+    import time
+    client_id = browser(issuer).post("/api/oauth/register", json={"redirect_uris": ["https://client.test/cb"]}).json()["client_id"]
+    async def run():
+        locked = threading.Event()
+        release = threading.Event()
+        def hold_lock():
+            with sqlite3.connect(issuer.store.path) as db:
+                db.execute("BEGIN IMMEDIATE")
+                locked.set()
+                release.wait(3)
+        thread = threading.Thread(target=hold_lock)
+        thread.start()
+        await asyncio.to_thread(locked.wait)
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=Starlette(routes=issuer.routes())),
+                                        base_url="https://oe.test") as client:
+                start = time.monotonic()
+                pending = asyncio.create_task(client.post("/api/oauth/register", json={"redirect_uris": ["https://client.test/cb"]}))
+                await asyncio.sleep(0.05)
+                assert (await client.get(WELL_KNOWN)).status_code == 200
+                assert await issuer.client(client_id)
+                assert time.monotonic() - start < 1
+                assert not pending.done()
+                release.set()
+                assert (await pending).status_code == 201
+        finally:
+            release.set()
+            await asyncio.to_thread(thread.join)
+    asyncio.run(run())
+
+
+def test_registration_expiry_migrates_existing_clients(tmp_path):
+    import sqlite3
+    import time
+    database = tmp_path / "upgrade.db"
+    upgrade(f"sqlite:///{database}", "1099c8b7900d")
+    with sqlite3.connect(database) as db:
+        db.execute("INSERT INTO oauth_clients VALUES ('existing', '{}')")
+    before = int(time.time())
+    upgrade(f"sqlite:///{database}")
+    with sqlite3.connect(database) as db:
+        expires = db.execute("SELECT expires FROM oauth_clients WHERE client_id = 'existing'").fetchone()[0]
+    assert before + 30 * 86400 <= expires <= int(time.time()) + 30 * 86400
+
+
+def test_retire_key_admin_command(issuer):
+    from engine.apps.web.mcp_oauth_storage import main
+    kid = issuer.keys.jwks()["keys"][0]["kid"]
+    with patch("sys.argv", ["mcp_oauth_storage", "retire-key", issuer.store.path, "--kid=" + kid]):
+        main()
+    assert kid not in {key["kid"] for key in issuer.keys.jwks()["keys"]}

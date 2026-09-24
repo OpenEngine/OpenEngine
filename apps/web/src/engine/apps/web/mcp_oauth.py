@@ -11,13 +11,14 @@ import secrets
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import httpx
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 from engine.apps.web.github_login import GitHubLogin, _return_to
 from engine.apps.web.mcp_oauth_clients import MAX_DOCUMENT, fetch_cimd, validate_client
-from engine.apps.web.mcp_oauth_storage import OAuthStore, SigningKeys
+from engine.apps.web.mcp_oauth_storage import ACCESS_TOKEN_TTL, OAuthStore, SigningKeys
 
 PREFIX = "/api/oauth"
 WELL_KNOWN = "/.well-known/oauth-authorization-server/api/oauth"
@@ -82,7 +83,7 @@ class OAuthServer:
         })
 
     async def jwks(self, request):
-        return response(self.keys.jwks())
+        return response(await run_in_threadpool(self.keys.jwks))
 
     async def register(self, request):
         try:
@@ -92,8 +93,8 @@ class OAuthServer:
         except (ValueError, UnicodeError, RecursionError):
             return response({"error": "invalid_client_metadata"}, 400)
         client_id = secrets.token_urlsafe(32)
-        with self.store.transaction() as db:
-            db.execute("INSERT INTO oauth_clients VALUES (?, ?)", (client_id, json.dumps(document)))
+        if not await run_in_threadpool(self.store.register, client_id, document):
+            return response({"error": "temporarily_unavailable"}, 503)
         return response({**document, "client_id": client_id}, 201)
 
     async def client(self, client_id):
@@ -102,8 +103,9 @@ class OAuthServer:
                 return await fetch_cimd(client_id)
             except (ValueError, OSError, TimeoutError, httpx.HTTPError, RecursionError) as exc:
                 raise ValueError("invalid client metadata") from exc
-        with self.store.transaction() as db:
-            row = db.execute("SELECT metadata FROM oauth_clients WHERE client_id = ?", (client_id,)).fetchone()
+        row = await self.store.run(lambda db: db.execute(
+            "SELECT metadata FROM oauth_clients WHERE client_id = ? AND expires > ?",
+            (client_id, int(time.time()))).fetchone(), write=False)
         if row is None:
             raise ValueError("unknown client")
         return json.loads(row["metadata"])
@@ -179,9 +181,8 @@ class OAuthServer:
         grant = {"sub": str(user["id"]), "login": str(user["login"]), "client_id": params["client_id"],
                  "resource": self.resource, "scope": "mcp", "redirect_uri": redirect,
                  "challenge": params["code_challenge"], "refresh": "refresh_token" in client["grant_types"]}
-        with self.store.transaction() as db:
-            db.execute("INSERT INTO oauth_codes VALUES (?, ?, ?)",
-                       (digest(code), json.dumps(grant), int(time.time()) + 60))
+        await self.store.run(lambda db: db.execute("INSERT INTO oauth_codes VALUES (?, ?, ?)",
+                            (digest(code), json.dumps(grant), int(time.time()) + 60)).rowcount)
         return self.authorization_response(params, code=code)
 
     def authorization_response(self, params, **values):
@@ -203,7 +204,7 @@ class OAuthServer:
             return response({"error": "invalid_target"}, 400)
         grant_type = params.get("grant_type")
         if grant_type == "authorization_code":
-            return self.exchange_code(params)
+            return await run_in_threadpool(self.exchange_code, params)
         if grant_type == "refresh_token":
             return await self.refresh(params)
         return response({"error": "unsupported_grant_type"}, 400)
@@ -228,8 +229,8 @@ class OAuthServer:
 
     async def refresh(self, params):
         token_hash = digest(params.get("refresh_token", ""))
-        with self.store.transaction() as db:
-            row = db.execute("SELECT * FROM oauth_refresh_tokens WHERE token_hash = ?", (token_hash,)).fetchone()
+        row = await self.store.run(lambda db: db.execute(
+            "SELECT * FROM oauth_refresh_tokens WHERE token_hash = ?", (token_hash,)).fetchone(), write=False)
         if row is None:
             return response({"error": "invalid_grant"}, 400)
         grant = json.loads(row["payload"])
@@ -238,6 +239,9 @@ class OAuthServer:
         if params.get("scope", grant["scope"]) != grant["scope"]:
             return response({"error": "invalid_scope"}, 400)
         allowed = await self.allowed(grant["login"])
+        return await run_in_threadpool(self.rotate_refresh, token_hash, grant, allowed)
+
+    def rotate_refresh(self, token_hash, grant, allowed):
         # Re-read inside the write transaction AFTER the network permission
         # check: concurrent refreshes cannot both rotate a token successfully.
         with self.store.transaction() as db:
@@ -253,9 +257,9 @@ class OAuthServer:
     def issue(self, db, grant, family, expires):
         now = int(time.time())
         claims = {key: grant[key] for key in ("sub", "login", "client_id", "scope")}
-        claims.update(iss=self.issuer, aud=self.resource, iat=now, exp=now + 900)
+        claims.update(iss=self.issuer, aud=self.resource, iat=now, exp=now + ACCESS_TOKEN_TTL)
         result = {"access_token": self.keys.sign(claims), "token_type": "Bearer",
-                  "expires_in": 900, "scope": grant["scope"]}
+                  "expires_in": ACCESS_TOKEN_TTL, "scope": grant["scope"]}
         if grant["refresh"]:
             refresh = secrets.token_urlsafe(32)
             db.execute("INSERT INTO oauth_refresh_tokens (token_hash, family, payload, expires) VALUES (?, ?, ?, ?)",
