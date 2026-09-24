@@ -14,7 +14,7 @@ equals the string it was just set to would notice none of it.
 Marked `compatibility` and deselected by default, for the reason the root
 `pyproject.toml` gives: these need npm, a network, and -- for the turns --
 somebody else's uptime, so a red run here should not read as "we broke
-something". `cli-compatibility.yml` runs them on a schedule.
+something". `acp-compatibility.yml` runs them on a schedule.
 
 The split is deliberate:
 

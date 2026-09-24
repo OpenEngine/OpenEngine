@@ -7,8 +7,9 @@ keep the workspace packages, standalone `langgraph-acp`, and both uv lockfiles
 in sync. Add new
 Python distributions to that config when adding them to the workspace.
 
-The release workflow calls the existing CLI compatibility gate before creating
-a release. Merging the release PR creates a `v<version>` GitHub release and builds
+The release workflow calls the release gate before creating a release: the
+most recent scheduled `ACP compatibility` run on the default branch must be
+green and no more than eight days old. Merging the release PR creates a `v<version>` GitHub release and builds
 its exact commit. The same bundle build runs on pull requests. Enable “Allow
 GitHub Actions to create and approve pull requests” in repository settings.
 The default GitHub token does not trigger CI on bot-created release PRs; run the

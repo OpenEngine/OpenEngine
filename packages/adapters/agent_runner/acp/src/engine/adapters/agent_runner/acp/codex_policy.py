@@ -9,9 +9,8 @@ Neither reaches the broker, so neither can be governed by it.
 What codex-acp does let a client choose is the Codex it runs, through
 `CODEX_PATH`. `codex_acp_runner` points that at this module, which starts the
 real app-server and rewrites each `turn/start` on its way in: the sandbox policy
-Engine named, `on-request` approval, and a person as the reviewer -- what the
-app-server runner in `engine.adapters.agent_runner.codex` sends. Everything else
-passes through untouched, and the app-server answers codex-acp directly.
+Engine named, `on-request` approval, and a person as the reviewer. Everything
+else passes through untouched, and the app-server answers codex-acp directly.
 
 The real Codex is `ENGINE_CODEX_PATH` when the operator named one, and otherwise
 the one codex-acp would have run: `@openai/codex`, resolved from where the
