@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Publishes langgraph-acp alone, from a chosen ref, without cutting a release:
+  # the first PyPI upload, or a re-run after a failed publish.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Release tag (vX.Y.Z) or full commit SHA on main to publish to PyPI
+        required: true
 
 permissions:
   contents: read
@@ -51,7 +58,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           version: "0.9.28"
           python-version: "3.12"
@@ -86,3 +93,83 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
         run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json --clobber
+
+  # Built without the PyPI credential: the build backend is third-party code, so
+  # it is hash-locked and runs in a job that cannot request the OIDC token. The
+  # publish job below only uploads the artifacts this job produced.
+  build-langgraph-acp:
+    needs: release-please
+    if: >-
+      always() && !cancelled() &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'push' && needs.release-please.outputs.created == 'true'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: langgraph-acp
+    steps:
+      # Check out main with full history and tags, never the requested ref: the
+      # ref is verified against main before any of its code is checked out.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      # Only a release tag (vX.Y.Z) or a full commit SHA, and in both cases the
+      # commit must already be on main. This blocks publishing an unreviewed
+      # branch, a PR ref, or a tag pushed onto a commit that main never merged.
+      - name: Verify the ref is released code on main
+        working-directory: .
+        env:
+          REF: ${{ inputs.ref || needs.release-please.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && git rev-parse -q --verify "refs/tags/$REF" >/dev/null; then
+            sha=$(git rev-parse "refs/tags/$REF^{commit}")
+          elif [[ "$REF" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$REF^{commit}" 2>/dev/null; then
+            sha=$REF
+          else
+            echo "::error::'$REF' is not a release tag (vX.Y.Z) or a full commit SHA in this repository"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::$sha is not on main"
+            exit 1
+          fi
+          git checkout --quiet --detach "$sha"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.9.28"
+      - run: uv build --no-sources --build-constraints build-constraints.txt --require-hashes --out-dir dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: langgraph-acp-dist
+          path: langgraph-acp/dist/*
+          if-no-files-found: error
+
+  publish-langgraph-acp:
+    needs: build-langgraph-acp
+    if: ${{ !cancelled() && needs.build-langgraph-acp.result == 'success' }}
+    runs-on: ubuntu-latest
+    # PyPI trusted publishing: the `pypi` environment and this workflow file are
+    # what the project's trusted publisher on pypi.org names. No token is stored.
+    # The environment's deployment branches must be limited to main (Settings >
+    # Environments > pypi) so a copy of this workflow edited on another branch
+    # cannot mint the token. Actions here are pinned to commit SHAs because they
+    # run with id-token: write.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/langgraph-acp/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: langgraph-acp-dist
+          path: dist
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.9.28"
+      - run: uv publish --trusted-publishing always dist/*
