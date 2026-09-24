@@ -793,6 +793,8 @@ def palette(options: list[str], prompt: str, *, initial_query: str = "") -> str 
         key = read_key()
         if key == "enter":
             return matches[selected] if matches else None
+        if key == "quit":
+            return "/quit"
         if key == "escape":
             return None
         if key == "up" and matches:
@@ -812,7 +814,7 @@ def read_key() -> str:
         key = msvcrt.getwch()
         if key in {"\x00", "\xe0"}:
             return {"H": "up", "P": "down"}.get(msvcrt.getwch(), "")
-        return {"\r": "enter", "\x1b": "escape", "\x08": "backspace"}.get(key, key)
+        return {"\r": "enter", "\x1a": "quit", "\x1b": "escape", "\x08": "backspace"}.get(key, key)
     import termios
     import tty
 
@@ -824,7 +826,7 @@ def read_key() -> str:
         if key == "\x1b":
             suffix = sys.stdin.read(2)
             return {"[A": "up", "[B": "down"}.get(suffix, "escape")
-        return {"\r": "enter", "\n": "enter", "\x7f": "backspace"}.get(key, key)
+        return {"\r": "enter", "\n": "enter", "\x1a": "quit", "\x7f": "backspace"}.get(key, key)
     finally:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
 
@@ -856,6 +858,9 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         # `/status`, are consumed by the fuzzy picker as its search query.
         print("engine> ", end="", flush=True)
         key = read_key()
+        if key == "quit":
+            print()
+            return EXIT_OK
         if key != "/":
             if key and key != "enter":
                 print(key)

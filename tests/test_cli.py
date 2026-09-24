@@ -229,6 +229,21 @@ def test_interactive_opens_the_command_palette_on_slash_without_enter(monkeypatc
     assert seen == ["/"]
 
 
+def test_interactive_ctrl_z_quits_without_opening_the_palette(monkeypatch):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, ready))
+    monkeypatch.setattr(cli, "read_key", lambda: "quit")
+    monkeypatch.setattr(cli, "palette", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not open")))
+
+    assert cli.interactive(cli.argparse.Namespace(server=None), cli.Preferences()) == 0
+
+
+def test_palette_ctrl_z_selects_quit(monkeypatch):
+    monkeypatch.setattr(cli, "read_key", lambda: "quit")
+
+    assert cli.palette(["/status", "/quit"], "Command: ") == "/quit"
+
+
 def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path, capsys):
     ready = cli.Check("service", True, "OpenEngine is ready")
     monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "cli.json"))
