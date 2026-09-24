@@ -12,7 +12,7 @@
  *  200, so the client gets a page where it asked for JSON and reports a parse
  *  error rather than a 404. */
 
-export const DEFAULT_API_URL = "http://localhost:8000";
+export const DEFAULT_API_URL = "http://localhost:4364";
 
 /** Every prefix the application serves that is not the client itself.
  *
