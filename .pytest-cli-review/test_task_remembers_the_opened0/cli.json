@@ -1,0 +1,10 @@
+{
+  "selectedProfile": "default",
+  "profiles": {
+    "default": {
+      "server": "http://127.0.0.1:4364",
+      "lastRepository": "/work/repo",
+      "lastTask": "thread-1"
+    }
+  }
+}

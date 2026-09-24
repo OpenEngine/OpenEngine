@@ -72,6 +72,26 @@ def preferences_path() -> Path:
     return Path(override) if override else user_config_path("openengine") / "cli.json"
 
 
+def service_token() -> str:
+    """Reuse the server's existing local bearer credential without a new login."""
+    if token := os.environ.get("ENGINE_SERVICE_TOKEN"):
+        return token
+    try:
+        for line in (Path.cwd() / ".env").read_text(encoding="utf-8").splitlines():
+            if line.startswith("ENGINE_SERVICE_TOKEN="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def request_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    headers = dict(extra or {})
+    if token := service_token():
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def state_path() -> Path:
     override = os.environ.get(STATE_ENVIRONMENT_VARIABLE)
     return Path(override) if override else user_state_path("openengine") / "cli"
@@ -322,7 +342,7 @@ def source_control_check(server: str, service_ok: bool) -> Check:
 def fetch_json(server: str, path: str) -> dict[str, Any]:
     """Read a small service resource, preserving a useful command-line error."""
     try:
-        with urlopen(Request(f"{server}{path}", headers={"Accept": "application/json"}), timeout=5.0) as response:
+        with urlopen(Request(f"{server}{path}", headers=request_headers({"Accept": "application/json"})), timeout=5.0) as response:
             payload = json.loads(response.read())
     except HTTPError as error:
         if error.code == 404:
@@ -340,7 +360,7 @@ def fetch_json(server: str, path: str) -> dict[str, Any]:
 def request_json(server: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
     request = Request(
         f"{server}{path}", data=json.dumps(body).encode(), method="POST",
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers=request_headers({"Accept": "application/json", "Content-Type": "application/json"}),
     )
     try:
         with urlopen(request, timeout=10.0) as response:
@@ -359,7 +379,7 @@ def request_json(server: str, path: str, body: dict[str, Any]) -> dict[str, Any]
 
 
 def post_empty(server: str, path: str, body: dict[str, Any]) -> None:
-    request = Request(f"{server}{path}", data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"})
+    request = Request(f"{server}{path}", data=json.dumps(body).encode(), method="POST", headers=request_headers({"Content-Type": "application/json"}))
     try:
         with urlopen(request, timeout=10.0):
             return
@@ -379,7 +399,7 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
     request = Request(
         f"{server}{path}", data=json.dumps(body).encode() if body is not None else None,
         method="POST" if body is not None else "GET",
-        headers={"Accept": "application/x-ndjson", **({"Content-Type": "application/json"} if body is not None else {})},
+        headers=request_headers({"Accept": "application/x-ndjson", **({"Content-Type": "application/json"} if body is not None else {})}),
     )
     try:
         with urlopen(request, timeout=30.0) as response:

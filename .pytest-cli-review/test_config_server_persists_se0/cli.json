@@ -1,0 +1,10 @@
+{
+  "selectedProfile": "default",
+  "profiles": {
+    "default": {
+      "server": "https://engine.example",
+      "lastRepository": "",
+      "lastTask": ""
+    }
+  }
+}
