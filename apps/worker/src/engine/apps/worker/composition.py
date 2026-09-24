@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from engine.adapters.agent_runner.codex import CodexAgentRunner
+from engine.adapters.agent_runner.acp import codex_acp_runner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.postgres import PostgresStateStore
@@ -59,7 +59,9 @@ def build_capabilities(settings: Settings) -> Capabilities:
             settings.github_token, workspace_provider=workspace_provider,
             host_aliases=settings.engine_config.github.host_aliases
         ),
-        agent_runner=CodexAgentRunner(attribution=settings.engine_config.attribution),
+        agent_runner=codex_acp_runner(
+            sandbox="read-only", attribution=settings.engine_config.attribution
+        ),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
         workspace_provider=workspace_provider,
         state_store=PostgresStateStore(settings.postgres_dsn),

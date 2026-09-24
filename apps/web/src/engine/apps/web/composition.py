@@ -5,10 +5,11 @@ other two compositions rather than shared code with them -- for the same reason
 the worker's is: these processes will diverge, and sharing now would couple
 three deployables that should be free to move independently.
 
-Three of the six capabilities here are real. `agent_runner` shells out to a
-coding CLI, `state_store` persists conversations in SQLite, and
-`workspace_provider` gives every chat an isolated Git worktree. The other three
-remain wired for the composition report but are not exposed by the chat API.
+Three of the six capabilities here are real. `agent_runner` reaches Codex or
+Claude over ACP, through the same `langgraph-acp` providers the graph workflows
+use, `state_store` persists conversations in SQLite, and `workspace_provider`
+gives every chat an isolated Git worktree. The other three remain wired for the
+composition report but are not exposed by the chat API.
 
 `Capabilities` holds one runner because a port has one implementation, and that
 is the one anything non-interactive uses. The interface additionally offers a
@@ -25,13 +26,15 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
-from engine.adapters.agent_runner.claude_code import (
+from langgraph_acp.providers import CLAUDE_ACP_COMMAND, CODEX_ACP_COMMAND
+
+from engine.adapters.agent_runner.acp import (
     READ_ONLY_TOOLS,
-    ClaudeCodeAgentRunner,
     allowed_tools_for,
+    claude_acp_runner,
     claude_session_config,
+    codex_acp_runner,
 )
-from engine.adapters.agent_runner.codex import CodexAgentRunner
 from engine.adapters.communications.slack import (
     SlackCommunications,
     SlackCredentialStore,
@@ -89,18 +92,24 @@ class Settings:
     host: str = "localhost"
     port: int = 8000
     codex_binary: str = "codex"
+    """The Codex CLI milestone scoping runs. Chat's runners reach Codex through
+    `codex_acp_command`, whose adapter brings its own."""
+    codex_acp_command: tuple[str, ...] = CODEX_ACP_COMMAND
+    """The ACP adapter chat's Codex runners launch."""
     codex_sandbox: str = "read-only"
     """What a turn nobody is watching may do: read, and nothing else.
 
     `build_capabilities` wires the one runner a non-interactive caller reaches
     for, so it gets the sandbox that needs no one present. Chat is the other
-    case and takes `interactive_codex_sandbox`.
+    case and takes `interactive_codex_sandbox`. codex-acp cannot be asked for a
+    sandbox, so `codex_acp_runner` enforces it under the adapter.
     """
     codex_working_directory: str = "."
     codex_timeout_seconds: float | None = None
     """No ceiling: a turn runs until it is done or someone cancels it."""
     codex_model: str = ""
-    claude_binary: str = "claude"
+    claude_acp_command: tuple[str, ...] = CLAUDE_ACP_COMMAND
+    """The ACP adapter chat's Claude runners launch."""
     claude_working_directory: str = "."
     claude_timeout_seconds: float | None = None
     """Same as `codex_timeout_seconds`."""
@@ -241,8 +250,8 @@ def build_capabilities(
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=source_control,
-        agent_runner=CodexAgentRunner(
-            binary_path=settings.codex_binary,
+        agent_runner=codex_acp_runner(
+            command=settings.codex_acp_command,
             timeout_seconds=settings.codex_timeout_seconds,
             sandbox=settings.codex_sandbox,
             working_directory=settings.codex_working_directory,
@@ -327,8 +336,8 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     entry is the default, so it is also what a conversation gets when nobody
     picks.
 
-    One entry per CLI: the dropdown names the agent you are talking to, not the
-    transport it is driven over. Both pause for approval, because a runner that
+    One entry per agent: the dropdown names the agent you are talking to, not
+    the transport it is driven over -- ACP, for both. Both pause for approval, because a runner that
     could only run unattended is not a second choice worth offering -- what it
     would do without asking, these do after asking.
 
@@ -343,8 +352,8 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
-        "codex": CodexAgentRunner(
-            binary_path=settings.codex_binary,
+        "codex": codex_acp_runner(
+            command=settings.codex_acp_command,
             timeout_seconds=settings.codex_timeout_seconds,
             sandbox=settings.interactive_codex_sandbox,
             working_directory=settings.codex_working_directory,
@@ -352,8 +361,8 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
-        "claude": ClaudeCodeAgentRunner(
-            binary_path=settings.claude_binary,
+        "claude": claude_acp_runner(
+            command=settings.claude_acp_command,
             timeout_seconds=settings.claude_timeout_seconds,
             allowed_tools=allowed_tools_for(settings.engine_config.approvals.allow),
             working_directory=settings.claude_working_directory,
@@ -380,12 +389,13 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
 
     Withholding the tools is half of it. The other half is that a `read_only`
     profile's approvals are refused by the broker, so a policy cannot hand back
-    at the pause what this withheld before the turn.
+    at the pause what this withheld before the turn. For Codex the withholding
+    is its read-only sandbox, which `codex_acp_runner` holds every turn to.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
-        "codex": CodexAgentRunner(
-            binary_path=settings.codex_binary,
+        "codex": codex_acp_runner(
+            command=settings.codex_acp_command,
             timeout_seconds=settings.codex_timeout_seconds,
             sandbox=settings.codex_sandbox,
             working_directory=settings.codex_working_directory,
@@ -393,10 +403,11 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
         ),
-        "claude": ClaudeCodeAgentRunner(
-            binary_path=settings.claude_binary,
+        "claude": claude_acp_runner(
+            command=settings.claude_acp_command,
             timeout_seconds=settings.claude_timeout_seconds,
             allowed_tools=READ_ONLY_TOOLS,
+            tools=READ_ONLY_TOOLS,
             working_directory=settings.claude_working_directory,
             model=settings.claude_model,
             attribution=settings.engine_config.attribution,

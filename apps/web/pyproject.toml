@@ -21,10 +21,9 @@ dependencies = [
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second. SQLite gives chat durable conversations
     # without requiring an external database service.
-    # Two vendors under one capability: the chat page offers a choice between
+    # Two agents behind one capability: the chat page offers a choice between
     # them, and the composition root is the only thing that knows their names.
-    "engine-adapter-agent-runner-codex",
-    "engine-adapter-agent-runner-claude-code",
+    "engine-adapter-agent-runner-acp",
     "engine-adapter-communications-buzz",
     "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
@@ -64,8 +63,7 @@ engine-github-concierge = { workspace = true }
 engine-slack-concierge = { workspace = true }
 engine-graph-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }
-engine-adapter-agent-runner-codex = { workspace = true }
-engine-adapter-agent-runner-claude-code = { workspace = true }
+engine-adapter-agent-runner-acp = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
 engine-adapter-communications-slack = { workspace = true }
 engine-adapter-source-control-github = { workspace = true }

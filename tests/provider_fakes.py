@@ -16,7 +16,8 @@ module:
   script naming exactly what the agent says and does on the way through.
 
 There is a third fake here for a third protocol: `fake_acp` is an ACP agent,
-which is what a *graph* workflow's nodes talk to. It reads the same script.
+which is what chat's runners and a *graph* workflow's nodes talk to. It reads
+the same script.
 
 The script is JSON, read from `ENGINE_FAKE_SCRIPT` on every invocation, so a
 test can change what the agent will do next without restarting the server it is
@@ -47,9 +48,11 @@ issue.
 
 A turn that is naming a chat or a workflow rather than running a step is
 answered with the script's `title`: naming is not what any of these tests are
-about, and spending a scenario on it would make every script carry one. It is
-recognised by what it was served -- the repository tools alone, with none of
-the tools that end a step -- rather than by which transport carried it.
+about, and spending a scenario on it would make every script carry one. A
+workflow's is recognised by what it was served -- the repository tools alone,
+with none of the tools that end a step -- rather than by which transport
+carried it; a chat's, over ACP, by the instruction it ends with, since it is
+served nothing at all.
 
 A script that *is* about naming says so with a top-level `naming` list of steps,
 which that turn then runs like any other:
@@ -87,6 +90,10 @@ DIRECTIVE_SCRIPT: Mapping[str, object] = {
 
 #: What a non-interactive turn answers when the script does not name a title.
 UNSCRIPTED_TITLE = "Scripted conversation"
+
+#: How the web app's chat-naming request begins, which is how an ACP turn -- on
+#: the same transport as every other -- is recognised as one.
+CHAT_NAMING_INSTRUCTION = "Name this chat based on the conversation above."
 
 #: The MCP revision this client speaks, which is the one the bound server does.
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -327,6 +334,8 @@ def _turn_steps(
     thing a naming turn is for.
     """
 
+    if server is None and CHAT_NAMING_INSTRUCTION in prompt[-500:]:
+        return [{"type": "say", "text": _title()}]
     if server is None or "--repository-tools-only" not in server.args:
         return _steps(prompt)
     naming = _script().get("naming")
@@ -490,7 +499,7 @@ def _acp_invalid_params(message_id: object, reason: str) -> None:
 
 
 def fake_acp(directory: Path) -> str:
-    """An ACP agent, for the graph runtime's `ACPNode`."""
+    """An ACP agent, for chat's runners and the graph runtime's `ACPNode`."""
 
     return install("acp", directory)
 
