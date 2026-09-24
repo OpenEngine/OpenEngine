@@ -358,6 +358,17 @@ def request_json(server: str, path: str, body: dict[str, Any]) -> dict[str, Any]
     return payload
 
 
+def post_empty(server: str, path: str, body: dict[str, Any]) -> None:
+    request = Request(f"{server}{path}", data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(request, timeout=10.0):
+            return
+    except HTTPError as error:
+        raise RuntimeError(f"server returned HTTP {error.code}") from None
+    except (URLError, TimeoutError, OSError) as error:
+        raise RuntimeError(f"could not post {path}: {error}") from None
+
+
 def content_text(content: object) -> str:
     if not isinstance(content, list):
         return ""
@@ -620,6 +631,56 @@ def decide(arguments: argparse.Namespace, preferences: Preferences, decision: st
         return EXIT_UNHEALTHY
 
 
+def connect(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            raise RuntimeError(check.detail)
+        provider = arguments.provider
+        if provider == "gh":
+            post_empty(server, "/api/source-control/provider", {"provider": "gh-cli"})
+            print("GitHub CLI selected. Run `gh auth login` if needed.")
+            return EXIT_OK
+        path = "/api/github/connect" if provider == "github" else "/api/gitlab/connect"
+        body = {} if provider == "github" else {"origin": arguments.origin}
+        flow = request_json(server, path, body)
+        print(f"Open {flow['verificationUri']} and enter code: {flow['userCode']}")
+        if arguments.open:
+            webbrowser.open(str(flow["verificationUri"]))
+        poll_path = "/api/github/connect/poll" if provider == "github" else "/api/gitlab/connect/poll"
+        while True:
+            time.sleep(float(flow.get("interval", 5)))
+            result = request_json(server, poll_path, body)
+            if result.get("status") == "complete":
+                post_empty(server, "/api/source-control/provider", {"provider": "github-oauth" if provider == "github" else "gitlab-oauth", **({"origin": arguments.origin} if provider == "gitlab" else {})})
+                print("Connected.")
+                return EXIT_OK
+            print("Waiting for authorization…")
+    except (ValueError, RuntimeError, KeyError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+
+
+def repo(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            raise RuntimeError(check.detail)
+        repositories = fetch_json(server, "/api/config").get("repositories", [])
+        selected = next((item for item in repositories if isinstance(item, dict) and arguments.repository in {item.get("name"), item.get("path")}), None)
+        if selected is None:
+            raise RuntimeError("repository is not offered by the service")
+        profiles = dict(preferences.profiles or {})
+        current = profiles.get(preferences.selected_profile, Profile())
+        profiles[preferences.selected_profile] = Profile(current.server, str(selected["path"]), current.last_task)
+        save_preferences(Preferences(preferences.selected_profile, profiles))
+        print(f"Repository: {selected['name']} ({selected['path']})")
+        return EXIT_OK
+    except (ValueError, RuntimeError, KeyError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+
+
 def palette(options: list[str], prompt: str) -> str | None:
     """A tiny searchable, arrow-key/Enter picker without a UI dependency."""
     query = ""
@@ -689,7 +750,7 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         if line != "/":
             print("Use / to open the command palette. Type /quit to exit.")
             continue
-        command = palette(["/help", "/status", "/threads", "/new", "/approvals", "/web", "/quit"], "Command: ")
+        command = palette(["/help", "/status", "/threads", "/new", "/approvals", "/setup", "/connect", "/web", "/quit"], "Command: ")
         if command in {None, "/help"}:
             print("/status  service readiness\n/threads  inspect conversations\n/new  start a task\n/approvals  pending decisions\n/web  open the web UI\n/quit  exit")
         elif command == "/status":
@@ -710,7 +771,25 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
             if prompt:
                 run(argparse.Namespace(server=server, prompt=prompt, agent=None, runner=None, repository=None), preferences)
         elif command == "/approvals":
-            approvals(argparse.Namespace(server=server, json=False), preferences)
+            pending = pending_approvals(server)
+            render_approvals(pending, False)
+            choices = [f"{item.get('id')} — {item.get('threadTitle')}" for item in pending]
+            selected = palette(choices, "Approval: ") if choices else None
+            if selected:
+                approval_id = selected.split(" — ", 1)[0]
+                action = palette(["Approve", "Reject", "View details", "Back"], "Decision: ")
+                item = next(item for item in pending if item.get("id") == approval_id)
+                if action == "View details":
+                    print(json.dumps(item, indent=2, sort_keys=True))
+                elif action == "Approve":
+                    decide(argparse.Namespace(server=server, approval_id=approval_id), preferences, "accept")
+                elif action == "Reject":
+                    reason = input("Reason: ").strip() or "Rejected in terminal"
+                    decide(argparse.Namespace(server=server, approval_id=approval_id, reason=reason), preferences, "cancel")
+        elif command in {"/setup", "/connect"}:
+            provider = palette(["gh", "github", "gitlab", "Skip"], "Provider: ")
+            if provider and provider != "Skip":
+                connect(argparse.Namespace(server=server, provider=provider, origin="https://gitlab.com", open=True), preferences)
         elif command == "/web":
             webbrowser.open(server)
             print(f"Opened {server}")
@@ -807,6 +886,15 @@ def parser() -> argparse.ArgumentParser:
     reject.add_argument("approval_id")
     reject.add_argument("--reason", required=True)
     reject.add_argument("--server", metavar="URL")
+    for name in ("connect", "setup"):
+        connection = commands.add_parser(name, help="connect shared source control")
+        connection.add_argument("provider", choices=("gh", "github", "gitlab"))
+        connection.add_argument("--server", metavar="URL")
+        connection.add_argument("--origin", default="https://gitlab.com")
+        connection.add_argument("--open", action="store_true")
+    repo_command = commands.add_parser("repo", help="select a service repository for new tasks")
+    repo_command.add_argument("repository")
+    repo_command.add_argument("--server", metavar="URL")
     config = commands.add_parser("config", help="manage persistent CLI preferences")
     config_commands = config.add_subparsers(dest="config_command", required=True)
     server = config_commands.add_parser("server", help="set the selected profile's service URL")
@@ -844,6 +932,10 @@ def main(argv: list[str] | None = None) -> int:
         return decide(arguments, preferences, "accept")
     if arguments.command == "reject":
         return decide(arguments, preferences, "cancel")
+    if arguments.command in {"connect", "setup"}:
+        return connect(arguments, preferences)
+    if arguments.command == "repo":
+        return repo(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "server":
         return configure_server(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "profile":

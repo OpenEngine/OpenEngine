@@ -42,6 +42,11 @@ login and does not check external provider credentials.
 
 ## Terminal diagnostics
 
+CLI v1 contract: the binary is `engine`; its local service default is
+`http://127.0.0.1:4364`; `--server` and profiles select remote services;
+interactive terminals enter the workbench while all subcommands remain
+scriptable. Specification authoring is outside this CLI contract.
+
 The `engine` terminal client inspects a local or remote service:
 
 ```bash
