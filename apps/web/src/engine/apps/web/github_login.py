@@ -259,8 +259,9 @@ class GitHubLogin:
                 allowed = await self.authorize(user["login"])
             except Exception:
                 # Access that cannot be confirmed is not granted.
+                # The identity is verified; only the permission check failed.
                 log.exception("could not check repository access for %s", user["login"])
-                return RedirectResponse("/login?error=failed", status_code=302)
+                return RedirectResponse("/login?error=unverified", status_code=302)
             if not allowed:
                 log.info("refused a session to %s, who cannot write to the repository", user["login"])
                 return RedirectResponse("/login?error=forbidden", status_code=302)

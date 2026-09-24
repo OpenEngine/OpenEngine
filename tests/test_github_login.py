@@ -549,7 +549,7 @@ def test_invalid_service_token_fails_startup(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(("answer", "error"), [
     (False, "forbidden"),
-    (RuntimeError("GitHub is down"), "failed"),
+    (RuntimeError("GitHub is down"), "unverified"),
 ])
 def test_a_login_without_repository_write_access_gets_no_session(answer, error):
     """Signing in proves who someone is, not that they may see WorkOrders:
