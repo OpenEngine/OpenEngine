@@ -32,6 +32,7 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Collection,
     Container,
     Iterable,
     Mapping,
@@ -956,6 +957,11 @@ UTILIZATION_REFRESH_TIMEOUT_SECONDS = 10
 #: every scrape reads the runners' stored credentials, so starts share one.
 UTILIZATION_MAX_AGE_SECONDS = 60 * 60
 
+#: How long a browser sign-in, or a signed-in request's access recheck, waits
+#: on GitHub. Someone is watching a page load, so a hung lookup should fail
+#: quickly and be retried rather than hold them for the webhook budget above.
+GITHUB_LOGIN_TIMEOUT_SECONDS = 10
+
 
 @dataclass(slots=True)
 class _GraphSurface:
@@ -1057,6 +1063,8 @@ def create_app(
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     show_projects: bool = True,
     repos: Mapping[str, str] | None = None,
+    login_repositories: Sequence[str] = (),
+    login_operators: Collection[int] = (),
     utilization: UtilizationService | None = None,
     milestone_scoper: MilestoneScoping | None = None,
     concierge_provider: ACPAgentProvider | None = None,
@@ -3783,20 +3791,52 @@ def create_app(
         readings = await _utilization.refresh(tuple(runners))
         return JSONResponse(utilization_json(readings))
 
-    async def github_login_allowed(login: str) -> bool:
-        """Only people who can push to this deployment's repository see its WorkOrders."""
-        if not github_repository:
-            # Startup refuses login without a repository; kept as a fallback
+    # Anyone who can push to one of the repositories this deployment works on
+    # may see its WorkOrders: the webhook repository and the configured checkouts.
+    access_repositories = tuple(dict.fromkeys(
+        project for project in (github_repository, *login_repositories) if project
+    ))
+
+    async def github_login_allowed(user_id: int, login: str) -> bool:
+        """Only people who can push to one of this deployment's repositories see its WorkOrders.
+
+        Write access to any one repository admits. A lookup that fails counts
+        only when no other repository admitted: then the answer is unknown,
+        and the error is raised rather than read as a no.
+        """
+        if not access_repositories:
+            # Startup refuses login with nothing to check; kept as a fallback
             # for apps built directly.
             return False
-        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+
+        async def check(project: str) -> bool:
             # The check reads the repository from a pull request URL; the
             # number names no particular one.
             return await session.capabilities.source_control.can_write_repository(
-                pull_request_url(github_repository, 1), login,
+                pull_request_url(project, 1), login, user_id=user_id,
             )
 
-    github_login = GitHubLogin(github_login_config, service_token, github_login_allowed)
+        async with asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS):
+            checks = [asyncio.ensure_future(check(project)) for project in access_repositories]
+            failure: Exception | None = None
+            try:
+                for answer in asyncio.as_completed(checks):
+                    try:
+                        if await answer:
+                            return True
+                    except Exception as error:
+                        failure = failure or error
+            finally:
+                for pending in checks:
+                    pending.cancel()
+        if failure is not None:
+            raise failure
+        return False
+
+    github_login = GitHubLogin(
+        github_login_config, service_token, github_login_allowed,
+        operators=frozenset(login_operators),
+    )
     routes = [
         Route("/api/health", health),
         *github_login.routes(),

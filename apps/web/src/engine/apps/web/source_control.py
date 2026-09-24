@@ -215,11 +215,14 @@ class RoutingSourceControl:
             )
         )
 
-    async def can_write_repository(self, pr_url: str, username: str) -> bool:
-        return await self._call(
-            lambda source: source.can_write_repository(pr_url, username),
-            pr_url=pr_url,
-        )
+    async def can_write_repository(
+        self, pr_url: str, username: str, *, user_id: int | None = None
+    ) -> bool:
+        if user_id is None:
+            call = lambda source: source.can_write_repository(pr_url, username)
+        else:
+            call = lambda source: source.can_write_repository(pr_url, username, user_id=user_id)
+        return await self._call(call, pr_url=pr_url)
 
     async def authenticated_login(self, repository_url: str) -> str:
         return await self._call(

@@ -62,7 +62,7 @@ class GitLabSourceControl:
         if not url: raise GitLabSourceControlError("GitLab returned no merge-request URL")
         return url
 
-    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+    async def can_write_repository(self, pr_url: str, username: str, *, user_id: int | None = None) -> bool:
         raise NotImplementedError("GitLab repository permission checks are not supported")
 
     async def authenticated_login(self, repository_url: str) -> str:

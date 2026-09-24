@@ -106,6 +106,19 @@ class GitHubConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AccessConfig:
+    """Who may use the web interface beyond what repository access grants."""
+
+    operators: tuple[int, ...] = ()
+    """GitHub user IDs admitted without a repository permission check.
+
+    IDs rather than logins, because a login can be renamed and then claimed by
+    somebody else. Operators can sign in before they have write access anywhere,
+    and while the server's own `gh` login cannot answer permission checks.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class WorkOrdersConfig:
     """What a work order gets when nobody filled in a form to ask for one.
 
@@ -136,6 +149,7 @@ class EngineConfig:
     github_token: str = ""
     public_url: str = ""
     github: GitHubConfig = GitHubConfig()
+    access: AccessConfig = AccessConfig()
     communications: CommunicationsConfig = CommunicationsConfig()
     work_orders: WorkOrdersConfig = WorkOrdersConfig()
     approvals: ApprovalConfig = ApprovalConfig()
@@ -218,6 +232,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     _reject_unknown(
         document,
         {
+            "access",
             "attribution",
             "approvals",
             "claude",
@@ -262,6 +277,10 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
+
+    access = _table(document.get("access", {}), "access")
+    _reject_unknown(access, {"operators"}, "access")
+    operators = _user_ids(access.get("operators", ()), "access.operators")
 
     communications = _table(document.get("communications", {}), "communications")
     _reject_unknown(communications, {"channel", "provider"}, "communications")
@@ -377,6 +396,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                 ).items()
             },
         ),
+        access=AccessConfig(operators=operators),
         communications=CommunicationsConfig(
             provider=communications_provider,
             channel=communications_channel,
@@ -509,6 +529,19 @@ def _strings(value: object, location: str) -> tuple[str, ...]:
     return strings
 
 
+def _user_ids(value: object, location: str) -> tuple[int, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise EngineConfigError(f"{location} must be an array of GitHub user IDs")
+    ids = tuple(value)
+    if not all(type(item) is int and item > 0 for item in ids):
+        raise EngineConfigError(
+            f"{location} must contain numeric GitHub user IDs, not logins"
+        )
+    if len(set(ids)) != len(ids):
+        raise EngineConfigError(f"{location} must not contain duplicates")
+    return ids
+
+
 def _patterns(value: object, location: str) -> tuple[str, ...]:
     patterns = _strings(value, location)
     if any(not pattern.strip() for pattern in patterns):
@@ -524,6 +557,7 @@ def _reject_unknown(
 
 
 __all__ = [
+    "AccessConfig",
     "ApprovalCapability",
     "ApprovalConfig",
     "BashApprovalConfig",

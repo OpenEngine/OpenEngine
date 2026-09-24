@@ -8,6 +8,7 @@ import engine.apps.control_server.__main__ as control_server_main
 import engine.apps.web.__main__ as web_main
 import engine.apps.worker.__main__ as worker_main
 from engine.runtime import (
+    LoadedEngineConfig,
     ApprovalCapability,
     EngineConfigError,
     ResponseStyle,
@@ -508,3 +509,52 @@ def test_repository_choices_load_from_toml(tmp_path: Path) -> None:
 def test_invalid_repository_choices_are_rejected(repos) -> None:
     with pytest.raises(EngineConfigError, match="repos"):
         parse_engine_config({"repos": repos})
+
+
+def test_access_operators_are_github_user_ids() -> None:
+    assert parse_engine_config({"access": {"operators": [583231, 42]}}).access.operators == (583231, 42)
+    assert parse_engine_config({}).access.operators == ()
+
+
+@pytest.mark.parametrize("operators", [["octocat"], [0], [True], [1, 1], "42"])
+def test_access_operators_reject_logins_and_bad_ids(operators) -> None:
+    with pytest.raises(EngineConfigError, match="access.operators"):
+        parse_engine_config({"access": {"operators": operators}})
+
+
+def test_login_repositories_are_read_from_the_checkouts_remotes(tmp_path) -> None:
+    """`[repos]` names local paths; login asks GitHub about the repository
+    each one pushes to, and skips what GitHub cannot answer for."""
+    import subprocess
+
+    remotes = {
+        "api": "git@github.com:Acme/API.git",
+        "web": "https://github.com/acme/web.git",
+        "same": "https://github.com/acme/web",
+        "gitlab": "https://gitlab.example/acme/tools.git",
+        "enterprise": "https://github-web.example/acme/core.git",
+    }
+    repos = {}
+    for name, remote in remotes.items():
+        subprocess.run(["git", "init", "-q", str(tmp_path / name)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path / name), "remote", "add", "origin", remote], check=True)
+        repos[name] = str(tmp_path / name)
+    repos["missing"] = str(tmp_path / "missing")
+    loaded = LoadedEngineConfig(config=parse_engine_config({
+        "repos": repos,
+        "github": {"host_aliases": {"github-web.example": "github-api.example"}},
+    }))
+
+    assert web_main._login_repositories(loaded) == (
+        "acme/api", "acme/web", "github-web.example/acme/core",
+    )
+
+
+def test_web_starts_login_with_only_operators(tmp_path, monkeypatch):
+    path = tmp_path / "engine.toml"
+    path.write_text("[access]\noperators = [42]\n")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "client")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "private-secret")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "https://engine.test/api/auth/github/callback")
+
+    assert web_main._github_login_config(load_engine_config(path)) is not None

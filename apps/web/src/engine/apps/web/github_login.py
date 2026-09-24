@@ -5,6 +5,7 @@ The session cookie is set after a successful OAuth callback and checked by
 the status endpoint so the frontend can gate access.
 """
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -12,7 +13,7 @@ import logging
 import os
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
@@ -31,6 +32,9 @@ _COOKIE = "engine_github_login"
 _SESSION_COOKIE = "engine_session"
 _TTL = 600
 _SESSION_TTL = 86400  # 24 hours
+# How long GitHub's answer about a user's repository access is trusted before a
+# signed-in request asks again, so revoked access ends within this, not a day.
+_ACCESS_TTL = 300
 _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 # The one route a service credential may reach: the MCP gateway creating work
 # orders. Everything else still requires a browser session.
@@ -87,12 +91,25 @@ class GitHubLogin:
         self,
         config: GitHubLoginConfig | None,
         service_token: Callable[[], str] = lambda: "",
-        authorize: Callable[[str], Awaitable[bool]] | None = None,
+        authorize: Callable[[int, str], Awaitable[bool]] | None = None,
+        operators: Collection[int] = frozenset(),
     ) -> None:
         self.config = config
-        # Whether a verified GitHub login may have a session at all. Asked
-        # once per sign-in, so revoked access lasts until the session expires.
+        # Whether a verified GitHub account (id, login) may have a session.
+        # Asked at sign-in and again, at most every _ACCESS_TTL seconds, by
+        # signed-in requests, so revoked access does not outlive the cache.
         self.authorize = authorize
+        # GitHub user IDs let in without asking: new people before they can
+        # push anywhere, and everyone who can fix it when the server's own
+        # GitHub login stops answering.
+        self.operators = frozenset(operators)
+        # user id -> (allowed, monotonic expiry). Only GitHub's answers are
+        # kept; a failed lookup is retried by the next request.
+        self._access: dict[int, tuple[bool, float]] = {}
+        # One lock per user, so one slow lookup holds up only that user.
+        self._access_locks: dict[int, asyncio.Lock] = {}
+        # Whether the most recent lookup failed, shown to operators.
+        self.access_check_failing = False
         # A reader rather than a value, so rotating the secret on disk takes
         # effect on the next request without a restart.
         self.service_token = service_token
@@ -139,6 +156,32 @@ class GitHubLogin:
         if expires <= time.time() or user_id <= 0 or not login:
             return None
         return {"id": user_id, "login": login}
+
+    async def has_access(self, user: dict[str, object], *, fresh: bool = False) -> bool | None:
+        """Whether `user` may use the app: GitHub's answer, or None if it could not be had.
+
+        `fresh` skips the cache, as a sign-in does, so newly granted access
+        works at once.
+        """
+        user_id, login = user["id"], user["login"]
+        if self.authorize is None or user_id in self.operators:
+            return True
+        lock = self._access_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            cached = self._access.get(user_id)
+            if not fresh and cached is not None and cached[1] > time.monotonic():
+                return cached[0]
+            try:
+                allowed = await self.authorize(user_id, login)
+            except Exception:
+                # Access that cannot be confirmed is not granted, but neither
+                # is the failure remembered: the next request asks again.
+                log.exception("could not check repository access for %s", login)
+                self.access_check_failing = True
+                return None
+            self.access_check_failing = False
+            self._access[user_id] = (allowed, time.monotonic() + _ACCESS_TTL)
+            return allowed
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
@@ -254,17 +297,13 @@ class GitHubLogin:
                     raise ValueError("Invalid identity")
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
-        if self.authorize is not None:
-            try:
-                allowed = await self.authorize(user["login"])
-            except Exception:
-                # Access that cannot be confirmed is not granted.
-                # The identity is verified; only the permission check failed.
-                log.exception("could not check repository access for %s", user["login"])
-                return RedirectResponse("/login?error=unverified", status_code=302)
-            if not allowed:
-                log.info("refused a session to %s, who cannot write to the repository", user["login"])
-                return RedirectResponse("/login?error=forbidden", status_code=302)
+        allowed = await self.has_access(user, fresh=True)
+        if allowed is None:
+            # The identity is verified; only the permission check failed.
+            return RedirectResponse("/login?error=unverified", status_code=302)
+        if not allowed:
+            log.info("refused a session to %s, who cannot write to any repository", user["login"])
+            return RedirectResponse("/login?error=forbidden", status_code=302)
         # Issue a session cookie and redirect to the app.
         response = RedirectResponse(pending[3], status_code=302)
         session_value = self._make_session_cookie(user["id"], user["login"])
@@ -276,11 +315,22 @@ class GitHubLogin:
     async def status(self, request: Request) -> Response:
         """Return the current session state for the frontend auth gate."""
         user = self._read_session(request)
-        return JSONResponse({
+        revoked = user is not None and await self.has_access(user) is False
+        if revoked:
+            user = None
+        body: dict[str, object] = {
             "authenticated": user is not None,
             "user": user,
             "loginRequired": self.config is not None,
-        }, headers=_HEADERS)
+        }
+        if user is not None and user["id"] in self.operators:
+            # Everyone else is refused while this is true, and cannot see why.
+            body["accessCheckFailing"] = self.access_check_failing
+        response = JSONResponse(body, headers=_HEADERS)
+        if revoked:
+            response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
+                                   samesite="lax", secure=self._is_secure())
+        return response
 
     async def logout(self, request: Request) -> Response:
         if self._read_session(request) is None:
@@ -329,12 +379,24 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        if self.login._read_session(request) is not None or self.login._has_service_token(request):
+        if self.login._has_service_token(request):
             await self.app(scope, receive, send)
             return
-        response = JSONResponse(
-            {"error": "authentication required"},
-            status_code=401,
-            headers=_HEADERS,
-        )
+        user = self.login._read_session(request)
+        allowed = None if user is None else await self.login.has_access(user)
+        if allowed:
+            await self.app(scope, receive, send)
+            return
+        if user is not None and allowed is None:
+            response = JSONResponse(
+                {"error": "repository access could not be verified"},
+                status_code=503,
+                headers=_HEADERS,
+            )
+        else:
+            response = JSONResponse(
+                {"error": "authentication required"},
+                status_code=401,
+                headers=_HEADERS,
+            )
         await response(scope, receive, send)

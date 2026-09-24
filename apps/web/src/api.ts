@@ -552,6 +552,8 @@ export type AuthStatus = {
   authenticated: boolean;
   user: { id: number; login: string } | null;
   loginRequired: boolean;
+  /** Sent to operators only: whether the server's repository access checks are failing. */
+  accessCheckFailing?: boolean;
 };
 
 export function getAuthStatus(): Promise<AuthStatus> {

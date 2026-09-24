@@ -557,8 +557,8 @@ def test_a_login_without_repository_write_access_gets_no_session(answer, error):
     that cannot be confirmed is refused."""
     asked = []
 
-    async def authorize(login):
-        asked.append(login)
+    async def authorize(user_id, login):
+        asked.append((user_id, login))
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -572,7 +572,7 @@ def test_a_login_without_repository_write_access_gets_no_session(answer, error):
     with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
         response = callback(client, params["state"][0], code="code")
 
-    assert asked == ["alice"]
+    assert asked == [(42, "alice")]
     assert response.status_code == 302
     assert response.headers["location"] == f"/login?error={error}"
     assert not any("engine_session=" in cookie and "Max-Age=86400" in cookie
@@ -580,8 +580,8 @@ def test_a_login_without_repository_write_access_gets_no_session(answer, error):
 
 
 def test_a_login_with_repository_write_access_gets_a_session():
-    async def authorize(login):
-        return login == "alice"
+    async def authorize(user_id, login):
+        return (user_id, login) == (42, "alice")
 
     flow = GitHubLogin(GitHubLoginConfig(
         "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
@@ -595,3 +595,110 @@ def test_a_login_with_repository_write_access_gets_a_session():
     assert response.headers["location"] == "/"
     assert any(cookie.startswith("engine_session=")
                for cookie in response.headers.get_list("set-cookie"))
+
+
+def _signed_in(flow):
+    """A browser holding alice's session, behind the session middleware."""
+    client = _app_with_middleware(flow)
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        response = callback(client, params["state"][0], code="code")
+    assert response.headers["location"] == "/"
+    return client
+
+
+def _login_flow(authorize, operators=()):
+    return GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), authorize=authorize, operators=operators)
+
+
+def test_an_operator_signs_in_without_a_repository_check():
+    """Operators are let in by GitHub user ID even when the server cannot ask
+    GitHub about repository access at all."""
+    async def authorize(user_id, login):
+        raise RuntimeError("gh auth expired")
+
+    client = _signed_in(_login_flow(authorize, operators={42}))
+
+    assert client.get("/api/data").json() == {"ok": True}
+    status = client.get("/api/auth/github/status").json()
+    assert status["authenticated"] is True
+    # Only an operator is told that everyone else is being refused.
+    assert status["accessCheckFailing"] is False
+
+
+def test_revoked_access_ends_the_session_once_the_cache_expires(monkeypatch):
+    answers = [True, True, False]
+    asked = []
+
+    async def authorize(user_id, login):
+        asked.append((user_id, login))
+        return answers.pop(0)
+
+    now = [1000.0]
+    monkeypatch.setattr("engine.apps.web.github_login.time.monotonic", lambda: now[0])
+    client = _signed_in(_login_flow(authorize))
+
+    # Within the cache lifetime GitHub is not asked again.
+    assert client.get("/api/data").status_code == 200
+    assert client.get("/api/auth/github/status").json()["authenticated"] is True
+    assert asked == [(42, "alice")]
+
+    now[0] += 301
+    assert client.get("/api/data").status_code == 200
+    now[0] += 301
+    assert client.get("/api/data").status_code == 401
+    status = client.get("/api/auth/github/status")
+    assert status.json()["authenticated"] is False
+    assert "accessCheckFailing" not in status.json()
+    assert asked == [(42, "alice")] * 3
+
+
+def test_a_failed_recheck_is_retried_rather_than_cached(monkeypatch):
+    """A temporary `gh` failure refuses the request it happened on, but does not
+    lock the user out for the cache lifetime or end their session."""
+    answers = [True, RuntimeError("gh is down"), True]
+
+    async def authorize(user_id, login):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    now = [1000.0]
+    monkeypatch.setattr("engine.apps.web.github_login.time.monotonic", lambda: now[0])
+    flow = _login_flow(authorize)
+    client = _signed_in(flow)
+    now[0] += 301
+
+    response = client.get("/api/data")
+    assert response.status_code == 503
+    assert response.json()["error"] == "repository access could not be verified"
+    assert flow.access_check_failing is True
+    assert client.get("/api/data").status_code == 200
+    assert flow.access_check_failing is False
+    assert answers == []
+
+
+def test_a_slow_lookup_holds_up_only_its_own_user():
+    import asyncio
+
+    async def scenario():
+        release = asyncio.Event()
+
+        async def authorize(user_id, login):
+            if login == "slow":
+                await release.wait()
+            return True
+
+        flow = _login_flow(authorize)
+        slow = asyncio.create_task(flow.has_access({"id": 1, "login": "slow"}))
+        await asyncio.sleep(0)
+        assert await asyncio.wait_for(flow.has_access({"id": 2, "login": "fast"}), 1) is True
+        assert not slow.done()
+        release.set()
+        assert await slow is True
+
+    asyncio.run(scenario())
