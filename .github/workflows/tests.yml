@@ -55,6 +55,16 @@ jobs:
 
       - name: Run OpenEngine
         shell: bash
+        env:
+          # engine.toml commits this deployment's real GitHub login client id
+          # and callback URL; the secret that completes it deliberately stays
+          # out of the repository and out of CI. Blanking all three of the
+          # login values here starts the fresh-install server unauthenticated,
+          # same as before login was configured, without touching engine.toml
+          # or needing a secret.
+          ENGINE_GITHUB_LOGIN_CLIENT_ID: ""
+          ENGINE_GITHUB_LOGIN_REDIRECT_URI: ""
+          ENGINE_GITHUB_LOGIN_CLIENT_SECRET: ""
         run: |
           set -euo pipefail
           uv run engine-web > "$RUNNER_TEMP/engine-web.log" 2>&1 &
@@ -263,6 +273,14 @@ jobs:
         # would not otherwise fail a test.
         # `engine-web` would start a server, so it gets `--check`: compose,
         # report, exit.
+        env:
+          # See the matching comment on the "Run OpenEngine" step: blank the
+          # login values so this check starts the same unauthenticated way it
+          # did before login was configured, without touching engine.toml or
+          # needing a secret.
+          ENGINE_GITHUB_LOGIN_CLIENT_ID: ""
+          ENGINE_GITHUB_LOGIN_REDIRECT_URI: ""
+          ENGINE_GITHUB_LOGIN_CLIENT_SECRET: ""
         run: |
           uv run engine-control-server
           uv run engine-worker

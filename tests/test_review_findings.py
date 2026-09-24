@@ -59,13 +59,13 @@ def test_review_rejects_invalid_output(value):
 
 
 @pytest.mark.parametrize("runner,reviewer,default,security", [
-    ("codex", "claude", "claude-sonnet-5", "claude-opus-5"),
+    ("codex", "claude", "sonnet", "opus"),
     ("claude", "codex", "gpt-5.6-terra", "gpt-5.6-sol"),
 ])
 def test_cross_provider_and_model_tiers(runner, reviewer, default, security):
     nodes = nodes_of(definition_module().pipeline(runner))
     assert nodes["implementation"].agent == runner
-    for facet in ("security", "bugs", "performance", "conciseness"):
+    for facet in ("security", "bugs", "performance", "conciseness", "dryness"):
         node = nodes[f"review-{facet}"]
         assert node.agent == reviewer
         assert node.session_config["model"] == (security if facet == "security" else default)
@@ -122,7 +122,7 @@ def test_empty_results_and_reranker_lineage_requirement():
 
 @pytest.mark.parametrize("node_name", [
     "review-security", "review-bugs", "review-performance", "review-conciseness",
-    "reranker",
+    "review-dryness", "reranker",
 ])
 @pytest.mark.parametrize("invalid,error", [
     ("not json", "Expecting value"),

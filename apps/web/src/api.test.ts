@@ -78,6 +78,7 @@ describe("newChatAgent", () => {
     defaultAgent: "coder",
     planAgent: "planner",
     showProjects: true,
+    repositories: [{ name: ". (/srv/engine)", path: "." }],
     defaultRunner: "claude",
     workflows: [],
   } satisfies EngineConfig;

@@ -245,7 +245,7 @@ async function create(
 ): Promise<string> {
   await page.goto("/runs/new");
   await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
-  await page.getByLabel("Repository").fill(repository);
+  await page.getByLabel("Repository").selectOption(repository);
   await page.getByLabel("Task prompt").fill(prompt);
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
@@ -288,7 +288,7 @@ test("a graph workflow accepts independent stage runners", async ({
   await expect(review).toHaveValue("codex");
   await shot(page, testInfo, "1 the beta choice");
 
-  await page.getByLabel("Repository").fill(engine.repository);
+  await page.getByLabel("Repository").selectOption(engine.repository);
   await page.getByLabel("Task prompt").fill(TASK);
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
@@ -421,6 +421,7 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
     "Review (Bugs & task adherence)",
     "Review (Performance)",
     "Review (Conciseness)",
+    "Review (DRYness & code duplication)",
     "Reranker",
     "Impact analysis",
   ]);
@@ -554,9 +555,16 @@ test("a graph run waiting on a person says so, and can be answered", async ({
   await expect(step(page, "Implementation")).toContainText(IMPLEMENTED);
   await expect(step(page, "Impact analysis")).toContainText(IMPACT_ASSESSMENT);
 
-  // The reranker's comment left the process the way a real one would, through
+  // The review and impact comments left the process the way real ones would, through
   // `gh` -- which here records rather than commenting on somebody's repository.
-  expect(readFileSync(engine.ghLog, "utf-8")).toContain(REVIEWED);
+  const comments = readFileSync(engine.ghLog, "utf-8").trim().split("\n")
+    .map((line) => JSON.parse(line));
+  for (const body of [REVIEWED, IMPACT_ASSESSMENT]) {
+    expect(comments).toContainEqual({
+      path: "/repos/acme/repository/issues/7/comments",
+      body,
+    });
+  }
 
   // What a person is shown, and what they press. Pressing one of these is the
   // only thing in the browser that can end a run.

@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 
 import {
   api,
@@ -74,6 +74,14 @@ export function runArchived(run: ApiWorkflowRunListing) {
  *  and falls back to this when the engine has not answered for the run yet. */
 export function runStatusLabel(run: ApiWorkflowRunListing) {
   return phaseLabel(run.phase);
+}
+
+/** A stored requester (`github:<id>:<login>`, `slack:<team>:<user>`) as a
+ *  person reads it: the account name and where it is from. */
+export function requesterLabel(requester: string) {
+  const [provider, , account] = requester.split(":");
+  const source = { github: "GitHub", slack: "Slack" }[provider];
+  return account && source ? `${account} (${source})` : requester;
 }
 
 /** How loudly a run's phase should read. Failure is the only thing that gets
@@ -345,7 +353,7 @@ export function NewWorkflowPage({
   const [prompt, setPrompt] = useState(
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
   );
-  const [repository, setRepository] = useState(".");
+  const [repository, setRepository] = useState(config.repositories[0]?.path ?? ".");
   const [workflowId, setWorkflowId] = useState(config.workflows[0]?.id ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -416,12 +424,15 @@ export function NewWorkflowPage({
         </label>
         <label>
           <span>Repository</span>
-          <input
+          <select
             required
             value={repository}
             onChange={(event) => setRepository(event.target.value)}
-            placeholder="owner/repository or local path"
-          />
+          >
+            {config.repositories.map((repo) => (
+              <option key={repo.name} value={repo.path}>{repo.name}</option>
+            ))}
+          </select>
         </label>
         {!!selected?.inputs?.length && (
           <details className="workflow-inputs" open>
@@ -778,6 +789,27 @@ async function ifPresent<T>(read: Promise<T>): Promise<T | undefined> {
   }
 }
 
+function WorkOrderPrompt({ prompt }: { prompt: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  return (
+    <div className="workorder-prompt">
+      <p id={id} className="lede workorder-prompt-text" data-expanded={expanded}>
+        {prompt}
+      </p>
+      <button
+        type="button"
+        className="btn"
+        aria-controls={id}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        {expanded ? "Show less" : "Show full prompt"}
+      </button>
+    </div>
+  );
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
   // Read here rather than inside the panel so the strip's link and the panel
   // it scrolls to are two views of one answer: the link is only offered when
@@ -925,10 +957,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
               ← All WorkOrders
             </a>
             <div className="detail-title">
-              <div>
+              <div className="workorder-heading">
                 <p className="eyebrow">{run.workflowName}</p>
                 <h1>{run.name}</h1>
-                <p className="lede">{run.taskPrompt}</p>
+                <WorkOrderPrompt key={run.runId} prompt={run.taskPrompt} />
               </div>
               <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>
                 {runStatusLabel(run)}
@@ -938,6 +970,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
           <StatStrip>
             <Stat label="Run ID" value={run.runId} />
             <Stat label="Repository" value={run.repository} />
+            {run.requester && (
+              <Stat label="Requested by" value={requesterLabel(run.requester)} />
+            )}
             {run.parentRunId && (
               <Stat label="Created by" value={
                 <a href={`/runs/${encodeURIComponent(run.parentRunId)}`}>

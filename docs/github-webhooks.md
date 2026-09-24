@@ -1,14 +1,13 @@
 # GitHub webhooks
 
-Engine reads two things from GitHub over a signed webhook: comments, which are
-somebody asking for something, and merges, which are somebody accepting the
-work. The route only exists once something is wired to act on a delivery, so
+Engine reads comments, issue assignments, and merges from GitHub over a signed
+webhook. Comments and assignments request work; merges accept it. The route only exists once something is wired to act on a delivery, so
 configure the webhook after that is in place: an endpoint that accepted
 deliveries it could never act on would collect failures until GitHub disabled
 the hook.
 
 Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, subscribe it to the
-`issue_comment`, `pull_request_review_comment`, and `pull_request` events, and
+`issue_comment`, `pull_request_review_comment`, `issues`, and `pull_request` events, and
 give it a secret.
 
 ## Naming the repository
@@ -45,15 +44,10 @@ arrives.
 
 ## The account Engine posts as
 
-```bash
-GITHUB_BOT_LOGIN=... uv run engine-web
-```
-
-`GITHUB_BOT_LOGIN` is the GitHub account Engine posts as, whose own comments are
-never answered. Set it whenever Engine authenticates with a personal access
-token belonging to a machine user: such an account is an ordinary user and
-usually a collaborator, so without this it would answer itself in a loop. A
-GitHub app is recognised by its user type and needs no setting.
+Engine resolves its account using its authenticated GitHub credentials. That
+identity is used to match issue assignments and ignore Engine's own comments
+and merges. No bot-login environment variable is needed. A GitHub app is also
+recognised by its user type.
 
 ## What the route does with a delivery
 
@@ -90,7 +84,9 @@ from the conversation — and asks the graph engine what it is doing now:
 - running, or waiting on a person: the request is steered into that run, and
   the reply names it.
 - finished, failed, no longer registered, or never recorded at all — a pull
-  request opened by hand has no such run: a work order is started for the
+  request opened by hand has no such run: only comments that explicitly
+  @mention Engine's GitHub account are processed. Other comments are ignored
+  without a reply. An actionable mention starts a work order for the
   repository the comment arrived from, on the workflow named by
   `work_orders.workflow`, and the reply says a work order was started.
 
@@ -106,6 +102,27 @@ there.
 The agent reading the comment decides only whether it is asking for a change at
 all; a comment that asks for nothing reaches no work order. Comments on issues
 are not answered.
+
+## Starting work from an issue assignment
+
+Subscribe the webhook to `issues`. Engine resolves its account from its
+authenticated GitHub credentials.
+If no login can be resolved, Engine logs a warning and returns 503 so the
+delivery can be retried. Assigning an open issue to that account
+starts a work order using `work_orders.workflow`, or the sole available workflow
+when no default is configured. The issue title, body, and URL become the task,
+including an instruction to close the issue in the resulting PR body.
+
+Only `assigned` events targeting the resolved account are accepted; matching
+is case-insensitive. The assigning user must have repository write access.
+Ordinary issue comments, other assignees, and closed issues do not start work.
+The run uses the issue's repository, without claiming a pull request or sending
+progress to Slack. No concierge model turn is needed: assignment itself requests
+implementation.
+
+Repeated assignments and redeliveries for the same issue are deduplicated in
+the bounded ingress memory. Failed handling can be retried by redelivery. As
+with comment ingress, this deduplication does not survive a process restart.
 
 ## Merging as the human review
 

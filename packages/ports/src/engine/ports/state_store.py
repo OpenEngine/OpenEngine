@@ -49,6 +49,12 @@ class StateStore(Protocol):
         """Return persisted workflow runs, newest first, optionally by milestone."""
         ...
 
+    async def list_runs_for_origin(
+        self, channel: str, thread_id: str
+    ) -> Sequence[RunState]:
+        """Return runs linked to one communications thread, newest first."""
+        ...
+
     async def delete_run(self, run_id: RunId) -> bool:
         """Forget one run, returning whether it existed."""
         ...

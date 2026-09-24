@@ -2,10 +2,11 @@
 
     workspace -> naming -> implementation -> ci-check -> [review facets] -> reranker -> impact-analysis -> human-review
 
-The review stage fans out to four parallel reviewers, each examining the
+The review stage fans out to five parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
-conciseness).  Their findings are collected by a *reranker* that aggressively
-squashes noise and posts the survivors as PR comments with lineage.
+conciseness, DRYness & code duplication). Their findings are collected by a
+*reranker* that aggressively squashes noise and posts the survivors as PR
+comments with lineage.
 Surviving findings go back to implementation for one automatic fix-and-review
 cycle before impact analysis and human review.
 """
@@ -70,9 +71,10 @@ AGENTS = agent_registry([CodexACPProvider(), ClaudeACPProvider()])
 #: elevated tier handles security, where missing something costs more.
 #:
 #: Claude reviewers are sonnet-sized by default, opus-sized for security.
+#: Tier aliases intentionally track the current Claude model of each size.
 #: Codex reviewers are terra-sized by default, sol-sized for security.
 REVIEW_MODELS: dict[str, dict[str, str]] = {
-    "claude": {"default": "claude-sonnet-5", "elevated": "claude-opus-5"},
+    "claude": {"default": "sonnet", "elevated": "opus"},
     "codex": {"default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
 }
 
@@ -167,7 +169,11 @@ IMPACT_ANALYSIS_PROMPT = (
     "untested behavior is safe. Give evidence for UI/product and architectural "
     "scope, complexity, sensitive components, test coverage and blind spots, "
     "and human setup or deployment work.\n\n"
-    "Call complete_step with impact_level set to exactly Green, Orange, or Red "
+    "Before completing, use add_comment to post one general comment on pull "
+    "request {pr_url} with your impact analysis results. Include the color "
+    "label and emoji, your rationale and evidence, testing gaps, and required "
+    "human actions. Then call complete_step with impact_level set to exactly "
+    "Green, Orange, or Red "
     "and impact_rationale containing your evidence and required human actions. "
     "Include the color label and emoji and the rationale in the summary.\n\n"
     "Original task:\n{task}\n\nImplementation report:\n{implementation}\n\n"
@@ -287,7 +293,7 @@ def _after_ci(state: dict[str, Any]) -> str | list[Send]:
 
 
 def _fan_out_reviews(state: dict[str, Any]) -> list[Send]:
-    """Dispatch the implementation to all four review facets in parallel."""
+    """Dispatch the implementation to all review facets in parallel."""
     return [Send(_review_node_name(facet.id), state) for facet in REVIEW_FACETS]
 
 
@@ -467,6 +473,7 @@ def pipeline(
                     validate_completion=_validate_impact_analysis,
                     repository_tools=(
                         "view_change_request", "list_pipeline_status", "get_job_logs",
+                        "add_comment",
                     ),
                 ),
             ),

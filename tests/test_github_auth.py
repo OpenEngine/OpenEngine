@@ -296,127 +296,85 @@ class TestRefreshAccessToken:
         }
 
 
-class TestRefreshRecovery:
-    def test_stale_refresh_failure_does_not_delete_a_newer_token_pair(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """A second process may rotate the shared pair before our delete path."""
-        from engine.apps.web.composition import Settings, build_capabilities
+@pytest.mark.parametrize("provider", [None, "github-oauth", "gh-cli"])
+def test_agent_pr_uses_only_the_gh_cli_login(tmp_path, monkeypatch, caplog, provider):
+    """Agents act as `gh auth`, never as a UI connection or GITHUB_TOKEN."""
+    from engine.apps.web.composition import Settings, build_capabilities
+    from engine.apps.web.source_control import SourceControlPreferences
 
-        monkeypatch.setattr(
-            "engine.apps.web.oauth_lock.user_state_path", lambda _app_name: tmp_path
-        )
+    saved = {}
+    monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: saved.get((s, u)))
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
+    monkeypatch.setenv("GITHUB_TOKEN", "engine-token")
+    monkeypatch.setenv("GITHUB_ENTERPRISE_TOKEN", "engine-enterprise-token")
+    preferences = SourceControlPreferences(tmp_path / "preferences.json")
+    if provider:
+        preferences.set(provider)
+    caplog.set_level(logging.INFO)
+    capabilities = build_capabilities(Settings(
+        github_token="engine-token",
+        sqlite_path=str(tmp_path / "state.sqlite3"),
+        source_control_preferences=preferences if provider else None,
+    ))
+    source = capabilities.source_control
+    adapter = source._providers[provider] if provider else source
+    monkeypatch.setattr(adapter, "_root_path", AsyncMock(return_value=str(tmp_path)))
+    monkeypatch.setattr(adapter, "_repo_coords", AsyncMock(return_value=("acme", "api")))
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient",
+        MagicMock(side_effect=AssertionError("agent PRs must not call the REST API directly")),
+    )
+    launches = []
 
-        old = StoredCredentials("old-access", "old-refresh")
-        newer = StoredCredentials("new-access", "new-refresh")
+    class Process:
+        returncode = 0
 
-        class Store:
-            def __init__(self) -> None:
-                self.reads = 0
-                self.deleted = False
+        async def communicate(self, _input):
+            return (
+                b'{"html_url": "https://github.com/acme/api/pull/42",'
+                b' "user": {"login": "openengine-worker"}}',
+                b"",
+            )
 
-            def get(self) -> str:
-                return "old-access"
+    async def launch(*argv, **kwargs):
+        launches.append((argv, kwargs["env"]))
+        return Process()
 
-            def get_credentials(self) -> StoredCredentials:
-                self.reads += 1
-                return old if self.reads == 1 else newer
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.asyncio.create_subprocess_exec",
+        launch,
+    )
 
-            def get_client_id(self) -> str:
-                return "client-id"
+    async def open_pr():
+        return await source.request_review("workspace", "agent/fix", "main", "fix: bug", "body")
 
-            def delete(self) -> None:
-                self.deleted = True
+    # Before and after a Settings device flow, the agent still acts as `gh`.
+    assert asyncio.run(open_pr()) == "https://github.com/acme/api/pull/42"
+    from starlette.testclient import TestClient
+    app = _make_github_app(tmp_path)
+    with TestClient(app) as client, patch(
+        "engine.apps.web.api.start_device_flow",
+        AsyncMock(return_value=DeviceFlowState("device", "code", "https://github.com/login/device", 900, 5)),
+    ), patch(
+        "engine.apps.web.api.poll_device_flow",
+        AsyncMock(return_value=DeviceFlowComplete("personal-token", "personal-refresh")),
+    ):
+        assert client.post("/api/github/connect").status_code == 200
+        assert client.post("/api/github/connect/poll").json() == {"status": "complete"}
+    assert GitHubCredentialStore().get() == "personal-token"
+    assert asyncio.run(open_pr()) == "https://github.com/acme/api/pull/42"
 
-        async def rejected(*_args: object) -> StoredCredentials:
-            raise GitHubRefreshTokenInvalidError("stale refresh token")
-
-        monkeypatch.setattr(
-            "engine.apps.web.composition.refresh_access_token", rejected
-        )
-        store = Store()
-        capabilities = build_capabilities(
-            Settings(workspace_root=str(tmp_path)),
-            credential_store=store,  # type: ignore[arg-type]
-        )
-        callback = capabilities.source_control._transport._on_token_unauthorized
-        assert callback is not None
-        assert asyncio.run(callback("old-access")) is True
-        assert store.deleted is False
-
-    def test_invalid_current_refresh_token_deletes_credentials(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """A revoked pair is removed only when it is still the attempted pair."""
-        from engine.apps.web.composition import Settings, build_capabilities
-
-        monkeypatch.setattr(
-            "engine.apps.web.oauth_lock.user_state_path", lambda _app_name: tmp_path
-        )
-
-        credentials = StoredCredentials("old-access", "old-refresh")
-
-        class Store:
-            def __init__(self) -> None:
-                self.deleted = False
-
-            def get(self) -> str:
-                return credentials.access_token
-
-            def get_credentials(self) -> StoredCredentials:
-                return credentials
-
-            def get_client_id(self) -> str:
-                return "client-id"
-
-            def delete(self) -> None:
-                self.deleted = True
-
-        async def rejected(*_args: object) -> StoredCredentials:
-            raise GitHubRefreshTokenInvalidError("revoked refresh token")
-
-        monkeypatch.setattr(
-            "engine.apps.web.composition.refresh_access_token", rejected
-        )
-        store = Store()
-        capabilities = build_capabilities(
-            Settings(workspace_root=str(tmp_path)),
-            credential_store=store,  # type: ignore[arg-type]
-        )
-        callback = capabilities.source_control._transport._on_token_unauthorized
-        assert callback is not None
-        assert asyncio.run(callback("old-access")) is False
-        assert store.deleted is True
-
-    def test_does_not_delete_a_legacy_token_that_cannot_refresh(self, tmp_path) -> None:
-        from engine.apps.web.composition import Settings, build_capabilities
-
-        class Store:
-            def __init__(self) -> None:
-                self.credentials = StoredCredentials("legacy-token")
-                self.deleted = False
-
-            def get(self) -> str:
-                return self.credentials.access_token
-
-            def get_credentials(self) -> StoredCredentials:
-                return self.credentials
-
-            def get_client_id(self) -> str:
-                return "client-id"
-
-            def delete(self) -> None:
-                self.deleted = True
-
-        store = Store()
-        capabilities = build_capabilities(
-            Settings(workspace_root=str(tmp_path)),
-            credential_store=store,  # type: ignore[arg-type]
-        )
-        callback = capabilities.source_control._transport._on_token_unauthorized
-        assert callback is not None
-        assert asyncio.run(callback("legacy-token")) is False
-        assert store.deleted is False
+    assert len(launches) == 2
+    for argv, env in launches:
+        assert argv[:2] == ("gh", "api")
+        assert "GITHUB_TOKEN" not in env
+        assert "GITHUB_ENTERPRISE_TOKEN" not in env
+        assert not any("token" in argument.lower() for argument in argv)
+    assert "composition=web github_identity=gh-cli" in caplog.text
+    assert "author=openengine-worker" in caplog.text
+    assert "engine-token" not in caplog.text
+    assert "personal-token" not in caplog.text
 
 
 def test_oauth_lifecycle_log_never_contains_token_material(caplog) -> None:
@@ -540,7 +498,7 @@ def test_credential_store_ignores_boolean_expiry_values(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _make_github_app(tmp_path, client_id: str = "test-client-id"):
+def _make_github_app(tmp_path, client_id: str = "test-client-id", login_config=None):
     """Minimal app wired with stub capabilities (only GitHub auth endpoints under test)."""
     from engine.adapters.state_store.sqlite import SQLiteStateStore
     from engine.apps.web.api import create_app
@@ -566,6 +524,7 @@ def _make_github_app(tmp_path, client_id: str = "test-client-id"):
         _runner_stub,
         credential_store=credential_store,
         github_client_id=client_id,
+        github_login_config=login_config,
         source_control_preferences=SourceControlPreferences(tmp_path / "settings.json"),
     )
     return app
@@ -783,3 +742,53 @@ class _AsyncContextManager:
 
 def _client_returning(response: httpx.Response) -> _AsyncContextManager:
     return _AsyncContextManager(response)
+
+
+def test_browser_users_have_isolated_credentials_and_device_flows(tmp_path, monkeypatch):
+    from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
+    from starlette.testclient import TestClient
+
+    saved = {}
+    monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: saved.get((s, u)))
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
+    monkeypatch.setattr(keyring, "delete_password", lambda s, u: saved.pop((s, u), None))
+    GitHubCredentialStore().set("legacy-personal-token")
+    config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback")
+    login = GitHubLogin(config)
+    monkeypatch.setattr("engine.apps.web.api.GitHubLogin", lambda *_: login)
+    app = _make_github_app(tmp_path, client_id="", login_config=config)
+    start = AsyncMock(side_effect=[
+        DeviceFlowState("alice-device", "alice-code", "https://github.com/login/device", 900, 5),
+        DeviceFlowState("bob-device", "bob-code", "https://github.com/login/device", 900, 5),
+    ])
+    poll = AsyncMock(side_effect=[DeviceFlowComplete("alice-token"), DeviceFlowComplete("bob-token")])
+    monkeypatch.setattr("engine.apps.web.api.start_device_flow", start)
+    monkeypatch.setattr("engine.apps.web.api.poll_device_flow", poll)
+    with TestClient(app, base_url="https://engine.test") as client:
+        def as_user(user_id, name):
+            client.cookies.set("engine_session", login._make_session_cookie(user_id, name))
+
+        as_user(1, "alice")
+        assert client.get("/api/github/status").json() == {"connected": False, "clientIdConfigured": False}
+        assert client.post("/api/github/client-id", json={"clientId": "alice-client"}).status_code == 204
+        assert client.post("/api/github/connect").json()["userCode"] == "alice-code"
+        as_user(2, "bob")
+        assert client.post("/api/github/connect/poll").status_code == 409
+        assert client.get("/api/github/status").json()["clientIdConfigured"] is False
+        assert client.post("/api/github/client-id", json={"clientId": "bob-client"}).status_code == 204
+        assert client.post("/api/github/connect").json()["userCode"] == "bob-code"
+        as_user(1, "alice")
+        assert client.post("/api/github/connect/poll").json()["status"] == "complete"
+        as_user(2, "bob")
+        assert client.get("/api/github/status").json()["connected"] is False
+        assert client.post("/api/github/connect/poll").json()["status"] == "complete"
+        assert client.post("/api/github/disconnect").status_code == 204
+        as_user(1, "alice-renamed")
+        assert client.get("/api/github/status").json()["connected"] is True
+    assert poll.await_args_list[0].args == ("alice-client", "alice-device", 5)
+    assert poll.await_args_list[1].args == ("bob-client", "bob-device", 5)
+    assert GitHubCredentialStore(user_id=1).get() == "alice-token"
+    assert GitHubCredentialStore(user_id=2).get() is None
+    assert GitHubCredentialStore().get() == "legacy-personal-token"
+    assert GitHubCredentialStore(user_id=1).credential_identity != GitHubCredentialStore(user_id=2).credential_identity

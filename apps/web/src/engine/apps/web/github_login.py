@@ -12,6 +12,7 @@ import hmac
 import os
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
@@ -29,6 +30,14 @@ _SESSION_COOKIE = "engine_session"
 _TTL = 600
 _SESSION_TTL = 86400  # 24 hours
 _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+# The one route a service credential may reach: the MCP gateway creating work
+# orders. Everything else still requires a browser session.
+_SERVICE_ROUTE = ("POST", "/api/runs")
+
+
+def valid_service_token(token: str) -> bool:
+    """Whether `token` is long enough to accept as a bearer secret."""
+    return len(token) >= 32 and not any(c.isspace() for c in token)
 
 
 def _return_to(value: str) -> str:
@@ -72,8 +81,15 @@ class GitHubLoginConfig:
 
 
 class GitHubLogin:
-    def __init__(self, config: GitHubLoginConfig | None) -> None:
+    def __init__(
+        self,
+        config: GitHubLoginConfig | None,
+        service_token: Callable[[], str] = lambda: "",
+    ) -> None:
         self.config = config
+        # A reader rather than a value, so rotating the secret on disk takes
+        # effect on the next request without a restart.
+        self.service_token = service_token
         self._signing_key = secrets.token_bytes(32)
 
     def routes(self) -> list[Route]:
@@ -117,6 +133,18 @@ class GitHubLogin:
         if expires <= time.time() or user_id <= 0 or not login:
             return None
         return {"id": user_id, "login": login}
+
+    def _has_service_token(self, request: Request) -> bool:
+        """Whether the request carries the configured service bearer token."""
+        if (request.method, request.url.path) != _SERVICE_ROUTE:
+            return False
+        expected = self.service_token()
+        if not valid_service_token(expected):
+            return False
+        headers = request.headers.getlist("authorization")
+        return len(headers) == 1 and secrets.compare_digest(
+            headers[0].encode(), f"Bearer {expected}".encode()
+        )
 
     def _is_secure(self) -> bool:
         return bool(self.config and self.config.redirect_uri.startswith("https:"))
@@ -249,7 +277,8 @@ class GitHubLogin:
         """ASGI middleware that enforces session auth on the web and graph API routes.
 
         Unauthenticated requests to protected API endpoints receive a 401.
-        Auth-related endpoints, static assets, and SPA pages are exempt.
+        Auth-related endpoints, static assets, and SPA pages are exempt. The
+        service token admits only `POST /api/runs`, for the MCP gateway.
         """
         if not self.configured:
             return app
@@ -283,7 +312,7 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        if self.login._read_session(request) is not None:
+        if self.login._read_session(request) is not None or self.login._has_service_token(request):
             await self.app(scope, receive, send)
             return
         response = JSONResponse(

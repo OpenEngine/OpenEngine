@@ -319,7 +319,7 @@ def test_oidc_public_discovery_and_challenge(oidc):
         response = client.get(path)
         assert response.status_code == 200
         assert response.json()["resource"] == settings.resource_url
-        assert response.json()["authorization_servers"] == [settings.oidc_issuer + "/"]
+        assert response.json()["authorization_servers"] == [settings.oidc_issuer]
         assert not requests
         response = client.get("/mcp")
         assert response.status_code == 401
@@ -438,3 +438,86 @@ def test_oidc_env_without_issuer_fails_startup(monkeypatch, tmp_path, capsys, na
     assert error.value.code == 2
     assert f"{name} requires OE_MCP_OIDC_ISSUER" in capsys.readouterr().err
     monkeypatch.delenv(name)
+
+
+# --- OE service token -----------------------------------------------------------
+
+ENGINE_TOKEN = "engine-secret-" * 3
+
+
+def test_engine_token_is_sent_to_oe_and_client_token_is_not():
+    from dataclasses import replace
+    requests = []
+
+    def upstream(request):
+        requests.append(request)
+        return httpx.Response(201, json={"runId": "run-123", "phase": "working"})
+
+    settings = replace(SETTINGS, engine_token=ENGINE_TOKEN)
+    with TestClient(create_app(settings, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "create_workorder", "arguments": {"prompt": "Fix the bug"},
+        }).json()["result"]
+        assert result["structuredContent"] == {"run_id": "run-123"}
+    assert requests[0].headers.get_list("authorization") == [f"Bearer {ENGINE_TOKEN}"]
+    assert TOKEN not in str(requests[0].headers)
+
+
+@pytest.mark.parametrize("engine_token", ["short", "has whitespace " * 3, TOKEN])
+def test_invalid_engine_token_fails_closed(engine_token):
+    with pytest.raises(ValueError, match="OE_MCP_ENGINE_TOKEN"):
+        Settings(**{**SETTINGS.__dict__, "engine_token": engine_token})
+
+
+def test_engine_token_is_not_in_repr():
+    from dataclasses import replace
+    assert ENGINE_TOKEN not in repr(replace(SETTINGS, engine_token=ENGINE_TOKEN))
+
+
+@pytest.mark.parametrize("status, engine_token, expected", [
+    ({"loginRequired": True}, "", "OE_MCP_ENGINE_TOKEN"),
+    ({"loginRequired": True}, ENGINE_TOKEN, None),
+    ({"loginRequired": False}, "", None),
+    ("unreachable", "", None),
+    ("not-json", "", None),
+])
+def test_engine_login_problem(status, engine_token, expected):
+    from dataclasses import replace
+    from engine.apps.mcp_server.server import engine_login_problem
+
+    def upstream(request):
+        assert request.url.path == "/api/auth/github/status"
+        if status == "unreachable":
+            raise httpx.ConnectError("refused", request=request)
+        if status == "not-json":
+            return httpx.Response(200, text="<html>")
+        return httpx.Response(200, json={"authenticated": False, "user": None, **status})
+
+    problem = engine_login_problem(
+        replace(SETTINGS, engine_token=engine_token), transport=httpx.MockTransport(upstream)
+    )
+    assert problem == expected or (expected and expected in problem)
+
+
+def test_login_required_without_engine_token_fails_startup(monkeypatch, tmp_path, capsys):
+    from engine.apps.mcp_server import __main__ as entry
+
+    for variable in (
+        "OE_MCP_OIDC_ISSUER", "OE_MCP_OIDC_AUDIENCE", "OE_MCP_ALLOWED_EMAILS",
+        "OE_MCP_OIDC_REQUIRED_SCOPES", "OE_MCP_ENGINE_TOKEN",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    for variable, setting in {
+        "OE_MCP_TOKEN": TOKEN, "OE_MCP_REPOSITORY": "/repos/oe",
+        "OE_MCP_WORKFLOW": "workflow", "OE_MCP_PUBLIC_URL": SETTINGS.public_url,
+    }.items():
+        monkeypatch.setenv(variable, setting)
+    env_file = tmp_path / "mcp.env"
+    env_file.write_text("")
+    monkeypatch.setattr("sys.argv", ["engine-mcp-server", "--env-file", str(env_file)])
+    monkeypatch.setattr(entry, "engine_login_problem", lambda settings: "OE requires GitHub login")
+    monkeypatch.setattr(entry.uvicorn, "run", lambda *a, **k: pytest.fail("server must not start"))
+    with pytest.raises(SystemExit) as error:
+        entry.main()
+    assert error.value.code == 2
+    assert "OE requires GitHub login" in capsys.readouterr().err

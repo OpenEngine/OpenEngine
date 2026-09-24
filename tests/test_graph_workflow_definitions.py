@@ -168,6 +168,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "review-bugs",
         "review-performance",
         "review-conciseness",
+        "review-dryness",
         "reranker",
         "impact-analysis",
         "human-review",
@@ -181,6 +182,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review (Bugs & task adherence)",
         "Review (Performance)",
         "Review (Conciseness)",
+        "Review (DRYness & code duplication)",
         "Reranker",
         "Impact analysis",
         "Human review",
@@ -195,16 +197,18 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review",
         "Review",
         "Review",
+        "Review",
         "",
         "",
     ]
-    # The kinds: a checkout, eight agents (implementation + 4 reviewers +
+    # The kinds: a checkout, nine agents (implementation + 5 reviewers +
     # reranker + naming + impact analysis), and the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
         "workspace",
         "agent",
         "agent",
         "tool",
+        "agent",
         "agent",
         "agent",
         "agent",
@@ -221,6 +225,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         False,
         True,
         False,
+        True,
         True,
         True,
         True,
@@ -291,7 +296,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 8
+    assert len(agents) == 9
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
@@ -454,6 +459,17 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     files, so a graph this repository could not actually run fails this.
     """
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
+    # engine.toml commits this deployment's real GitHub login client id and
+    # callback URL, completed by a secret that stays out of the file, this
+    # test, and CI -- wherever it is picked up from (a developer's own
+    # server-local .env included). Blanking all three of the config's login
+    # values here through their env overrides, rather than touching
+    # engine.toml or supplying any secret, keeps this test -- which is about
+    # the workflow dropdown, not login -- unauthenticated the way it was
+    # before login was configured.
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
     monkeypatch.chdir(tmp_path)
     app = build_app()
 
@@ -494,6 +510,13 @@ def test_every_composition_root_still_starts(
     # The interface has no exit code to check. Building the app is what
     # `engine-web` does before it serves anything, so building it is the test.
     monkeypatch.setenv("ENGINE_CONFIG", str(CONFIG))
+    # See the matching comment above: blank all three of the committed and
+    # locally-supplied login values through their env overrides so this
+    # composition root starts the same unauthenticated way it did before
+    # login was configured, without touching engine.toml or needing a secret.
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
     assert build_app() is not None
 
 
@@ -592,7 +615,9 @@ def test_impact_analysis_rejects_then_accepts_corrected_assessment(
     monkeypatch, level, invalid_outputs, error,
 ):
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock
     from engine.domain import RunId
+    from engine.ports import CommentResult
     from engine.graph_runtime_langgraph import terminal_mcp
     from engine.runtime.terminal_mcp import TerminalMcpBroker
     from tests.test_terminal_mcp import _request
@@ -610,13 +635,38 @@ def test_impact_analysis_rejects_then_accepts_corrected_assessment(
     monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
 
     async def scenario():
+        pr_url = "https://github.com/acme/api/pull/42"
+        source_control = SimpleNamespace(add_comment=AsyncMock(
+            return_value=CommentResult(123, f"{pr_url}#issuecomment-123"),
+        ))
+        store = SimpleNamespace(
+            pull_requests=AsyncMock(return_value=(("acme/api", 42),)),
+            remember_comment=AsyncMock(),
+        )
         execution = SimpleNamespace(
-            run_id=RunId("run"), execution_id="impact", runtime=SimpleNamespace(
-                source_control=object(),
+            run_id=RunId("run"), execution_id="impact", node_id=module.IMPACT_ANALYSIS,
+            runtime=SimpleNamespace(
+                source_control=source_control, store=store,
             ),
         )
         async with binding({"workspaceId": "workspace"}, execution, None):
             broker, = brokers
+            premature = await broker._submit(_request(broker, "premature", "complete_step", {
+                "outcome": "success", "summary": f"{level}: assessment",
+                "outputs": {"impact_level": level, "impact_rationale": "Evidence"},
+            }))
+            assert premature["ok"] is False
+            assert "comment" in premature["error"]
+            assert not broker._result.done()
+            comment = f"{level}: assessment\n\nEvidence and required human actions"
+            posted = await broker._submit(_request(broker, "comment", "add_comment", {
+                "pr_url": pr_url, "comment": comment,
+            }))
+            assert posted["ok"] is True
+            source_control.add_comment.assert_awaited_once_with(
+                pr_url, comment, None, None, None,
+            )
+            store.remember_comment.assert_awaited_once()
             rejected = await broker._submit(_request(broker, 1, "complete_step", {
                 "outcome": "success", "summary": "Assessment",
                 "outputs": invalid_outputs,
@@ -649,6 +699,7 @@ def test_impact_analysis_receives_final_evidence_and_selected_review_runner():
     assert binding.required_outputs == ("impact_level", "impact_rationale")
     assert binding.repository_tools == (
         "view_change_request", "list_pipeline_status", "get_job_logs",
+        "add_comment",
     )
     prompt = node.prompt({
         "task": "Repair saving", "pr_url": "https://example.com/pull/42",
@@ -658,5 +709,6 @@ def test_impact_analysis_receives_final_evidence_and_selected_review_runner():
     for evidence in ("Repair saving", "https://example.com/pull/42", "Fixed saving",
                      '"passed": true', "Remaining finding",
                      "Green 🟢", "Orange 🟠", "Red 🔴",
+                     "use add_comment to post one general comment",
                      "must not be merged without a human"):
         assert evidence in prompt

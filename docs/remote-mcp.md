@@ -43,7 +43,14 @@ control. Rotate it by changing the private env file and restarting the gateway.
    `openssl rand -hex 32`, repository with an absolute checkout path on the mini,
    workflow with an installed workflow ID, and public URL with the mini's exact
    HTTPS Funnel origin. Include the port if using a non-default HTTPS port.
-   Set `OE_MCP_ENGINE_URL` as described in step 1.
+   Set `OE_MCP_ENGINE_URL` as described in step 1. If OE has
+   [GitHub login](github-login.md) enabled, also set `OE_MCP_ENGINE_TOKEN` to
+   the value of OE's `ENGINE_SERVICE_TOKEN` (see
+   [Service token for the MCP gateway](github-login.md#service-token-for-the-mcp-gateway)).
+   It must differ from `OE_MCP_TOKEN`: clients authenticate to the gateway with
+   one, the gateway authenticates to OE with the other, and a client's
+   credential is never forwarded. When OE reports that login is required and
+   this token is unset, the gateway refuses to start.
 4. Start the gateway from the checkout:
 
    ```sh
@@ -160,7 +167,9 @@ An unauthenticated `curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp` must retu
 `create_workorder`. A successful call returns a run ID which appears immediately
 in OE's work-order list. The gateway itself does not serve that list.
 
-401 means the token is missing or incorrect; 403/421 means the configured public
+A tool error with OE HTTP 401 means OE requires GitHub login and rejected the
+gateway's service token: check that `OE_MCP_ENGINE_TOKEN` matches OE's
+`ENGINE_SERVICE_TOKEN`. 401 from the gateway itself means the token is missing or incorrect; 403/421 means the configured public
 origin or Host does not match. Tool errors with OE HTTP 400 usually indicate an
 unknown workflow or missing required workflow inputs; use a workflow whose
 inputs have defaults. Connection errors mean OE is unavailable or could not

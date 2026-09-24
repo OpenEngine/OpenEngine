@@ -70,6 +70,7 @@ class SlackIngress:
             isinstance(event, dict)
             and event.get("type") == "message"
             and not event.get("bot_id")
+            and not event.get("bot_profile")
             and not event.get("subtype")
         ):
             channel, thread = event.get("channel"), event.get("thread_ts")
@@ -85,7 +86,7 @@ class SlackIngress:
         if payload.get("type") != "event_callback" or not isinstance(event, dict):
             return True
         kind = event.get("type")
-        if kind not in ("app_mention", "message") or event.get("bot_id") or event.get("subtype"):
+        if kind not in ("app_mention", "message") or event.get("bot_id") or event.get("bot_profile") or event.get("subtype"):
             return True
         channel, author, ts = (event.get(k) for k in ("channel", "user", "ts"))
         if not all(isinstance(x, str) and x for x in (channel, author, ts)):
@@ -103,8 +104,12 @@ class SlackIngress:
             return False
         raw_text = str(event.get("text", ""))
         text = re.sub(r"<@[^>]+>", "", raw_text).strip()
+        team = event.get("team") or payload.get("team_id")
         message = IncomingMessage(
-            RunOrigin(channel=channel, thread_id=thread, author=author),
+            RunOrigin(
+                channel=channel, thread_id=thread, author=author,
+                requester=f"slack:{team}:{author}" if isinstance(team, str) and team else "",
+            ),
             text or "Hello", message_ts=ts, raw_text=raw_text,
             mentioned_users=tuple(re.findall(r"<@([^>|]+)(?:\|[^>]+)?>", raw_text)),
             event_type=kind,

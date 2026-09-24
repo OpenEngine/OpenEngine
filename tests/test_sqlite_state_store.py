@@ -325,6 +325,28 @@ def test_a_work_order_and_its_conversations_survive_reopening(tmp_path) -> None:
     assert instances[0].conversation_id == "review-conversation"
 
 
+def test_list_runs_for_origin_returns_only_the_linked_thread(tmp_path) -> None:
+    store = SQLiteStateStore(tmp_path / "runs.sqlite3")
+    linked = RunState(
+        run_id=RunId("run-linked"), task_id=TaskId("task-linked"),
+        workflow_id=WorkflowId("workflow"),
+        origin=RunOrigin(channel="C1", thread_id="17.5", author="U9"),
+    )
+    unrelated = RunState(
+        run_id=RunId("run-unrelated"), task_id=TaskId("task-unrelated"),
+        workflow_id=WorkflowId("workflow"),
+        origin=RunOrigin(channel="C1", thread_id="18.0", author="U9"),
+    )
+    try:
+        asyncio.run(store.save(linked))
+        asyncio.run(store.save(unrelated))
+        runs = asyncio.run(store.list_runs_for_origin("C1", "17.5"))
+    finally:
+        store.close()
+
+    assert runs == (linked,)
+
+
 def test_a_row_this_build_cannot_read_is_skipped_rather_than_hiding_the_rest(
     tmp_path,
 ) -> None:
@@ -401,3 +423,24 @@ def test_scheduled_dependency_and_inputs_survive_reopening(tmp_path) -> None:
         assert asyncio.run(store.load(state.run_id)) == state
     finally:
         store.close()
+
+
+def test_requester_survives_reopening(tmp_path) -> None:
+    path = tmp_path / "requester.sqlite3"
+    state = RunState(
+        run_id=RunId("asked"), task_id=TaskId("task"),
+        workflow_id=WorkflowId("workflow"), requester="github:42:alice",
+    )
+    store = SQLiteStateStore(path)
+    asyncio.run(store.save(state))
+    store.close()
+    store = SQLiteStateStore(path)
+    try:
+        assert asyncio.run(store.load(state.run_id)) == state
+        assert [run.requester for run in asyncio.run(store.list_runs())] == ["github:42:alice"]
+    finally:
+        store.close()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT requester FROM run_states").fetchall() == [
+            ("github:42:alice",)
+        ]

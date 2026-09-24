@@ -31,6 +31,7 @@ export type EngineConfig = {
   /** The agent the New Project button talks to, empty when none is composed. */
   planAgent: string;
   showProjects: boolean;
+  repositories: { name: string; path: string }[];
   defaultRunner: string;
   /** Each workflow declares the inputs its creation form asks for. */
   workflows: {
@@ -227,6 +228,8 @@ export type ApiWorkflowRunListing = {
 export type ApiWorkflowRun = ApiWorkflowRunListing & {
   taskPrompt: string;
   failureReason: string;
+  /** Who started it, as `github:<id>:<login>` or `slack:<team>:<user>`. */
+  requester?: string | null;
 };
 
 /** A WorkOrder as its page draws it: the row, with the stages, frontier and

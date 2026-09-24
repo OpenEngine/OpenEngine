@@ -711,32 +711,11 @@ def test_allowing_for_the_session_is_never_a_provider_wide_bypass() -> None:
     assert "danger-full-access" not in codex_argv
 
 
-# --- the version manifest ---------------------------------------------------
+# --- the version matrix -----------------------------------------------------
 
 
-MANIFEST = Path(__file__).resolve().parents[1] / ".github" / "cli-versions.json"
-
-
-def test_the_pinned_matrix_is_a_manifest_rather_than_a_moving_target() -> None:
-    """A release joins or leaves the matrix through this file, reviewably."""
-    manifest = json.loads(MANIFEST.read_text())
-    wanted = manifest["policy"]["versions"]
-
-    assert wanted == 3, "the ticket's matrix is the latest three of each CLI"
-    for provider in ("codex", "claude"):
-        pinned = manifest[provider]
-        assert isinstance(pinned, list)
-        assert all(isinstance(version, str) and version for version in pinned)
-        assert len(set(pinned)) == len(pinned), f"{provider} pins a version twice"
-        # Exactly the policy, checked here rather than only in the scheduled
-        # workflow: a change that drops a release without replacing it is how
-        # the matrix quietly shrinks, and that belongs in the review of the
-        # commit that does it.
-        assert len(pinned) == wanted, f"{provider} pins {len(pinned)} of {wanted}"
-
-
-def test_the_compatibility_workflow_installs_what_the_manifest_pins() -> None:
-    """Otherwise the manifest would be documentation rather than a control."""
+def test_the_compatibility_workflow_installs_exact_resolved_versions() -> None:
+    """Resolve once per run, then install those exact versions in every cell."""
     workflow = (
         Path(__file__).resolve().parents[1]
         / ".github"
@@ -744,7 +723,8 @@ def test_the_compatibility_workflow_installs_what_the_manifest_pins() -> None:
         / "cli-compatibility.yml"
     ).read_text()
 
-    assert ".github/cli-versions.json" in workflow
+    assert "python3 scripts/cli_compatibility_matrix.py" in workflow
+    assert "fromJSON(needs.releases.outputs.matrix)" in workflow
     assert "${{ matrix.package }}@${{ matrix.version }}" in workflow
     # A floating install would make a red cell unreproducible and a green one
     # meaningless.
@@ -796,6 +776,64 @@ def installed_version(binary: str) -> str | None:
     return reported.stdout.strip() if reported.returncode == 0 else None
 
 
+def has_credentials(provider: str) -> bool:
+    """Use the same API-key or local-login prerequisites as the ACP tests."""
+    if provider == "codex":
+        home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        return bool(os.environ.get("OPENAI_API_KEY")) or (home / "auth.json").is_file()
+    return bool(os.environ.get("ANTHROPIC_API_KEY")) or (
+        Path.home() / ".claude" / ".credentials.json"
+    ).is_file()
+
+
+@pytest.mark.parametrize("provider", sorted(LIVE))
+@pytest.mark.parametrize("credential", [None, "", "api-key", "local-login", "codex-home"])
+def test_live_credentials_are_provider_specific(provider, credential, monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    key = "OPENAI_API_KEY" if provider == "codex" else "ANTHROPIC_API_KEY"
+    other_key = "ANTHROPIC_API_KEY" if provider == "codex" else "OPENAI_API_KEY"
+    monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(other_key, "other-provider-key")
+    if credential in ("", "api-key"):
+        monkeypatch.setenv(key, credential)
+    elif credential in ("local-login", "codex-home"):
+        if credential == "codex-home":
+            home = tmp_path / "custom-codex"
+            monkeypatch.setenv("CODEX_HOME", str(home))
+            login = home / "auth.json"
+        else:
+            login = tmp_path / (
+                ".codex/auth.json" if provider == "codex" else ".claude/.credentials.json"
+            )
+        login.parent.mkdir(parents=True)
+        login.write_text("{}")
+
+    assert has_credentials(provider) is (
+        credential in ("api-key", "local-login")
+        or (credential == "codex-home" and provider == "codex")
+    )
+
+
+@pytest.mark.parametrize("provider", sorted(LIVE))
+@pytest.mark.parametrize("scenario", sorted(SCENARIOS))
+def test_live_scenarios_skip_before_starting_a_cli_without_credentials(
+    provider, scenario, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for name in ("CODEX_HOME", "ENGINE_COMPAT_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(name, "")
+
+    def unexpected_cli(binary):
+        pytest.fail("an unauthenticated scenario must skip before invoking the CLI")
+
+    monkeypatch.setitem(globals(), "installed_version", unexpected_cli)
+    with pytest.raises(pytest.skip.Exception, match=f"no {provider} credentials"):
+        test_the_approval_contract_holds_against_the_installed_cli(provider, scenario, tmp_path)
+
+
 def live_instruction(command: str) -> str:
     """Ask a model for one specific command, and nothing else.
 
@@ -821,6 +859,9 @@ def test_the_approval_contract_holds_against_the_installed_cli(
     only = os.environ.get("ENGINE_COMPAT_PROVIDER")
     if only and only != provider:
         pytest.skip(f"this job runs {only}, not {provider}")
+
+    if not has_credentials(provider):
+        pytest.skip(f"no {provider} credentials; live approval scenarios require authentication")
 
     binary, build_runner = LIVE[provider]
     version = installed_version(binary)

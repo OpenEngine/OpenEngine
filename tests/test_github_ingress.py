@@ -572,3 +572,156 @@ def test_signed_deliveries_only_queue_for_the_configured_repository(event, repos
     assert [c.repository for c in handled] == (
         ["acme/api"] if repository.lower() == "acme/api" else []
     )
+
+
+def _assigned_issue(**issue) -> dict:
+    return {
+        "action": "assigned",
+        "repository": {"full_name": "acme/api"},
+        "assignee": {"login": "OpenEngineBot"},
+        "sender": {"login": "maintainer"},
+        "issue": dict(number=7, state="open", title="Fix the bug", body="Reproduction steps",
+                      html_url="https://github.com/acme/api/issues/7", **issue),
+    }
+
+
+def test_assignment_reads_issue_and_assigning_actor():
+    from engine.apps.web.github_ingress import assignment_from_payload
+
+    assigned = assignment_from_payload("issues", _assigned_issue(), self_login="openenginebot")
+    assert assigned is not None
+    assert (assigned.repository, assigned.number, assigned.assignee, assigned.sender) == (
+        "acme/api", 7, "OpenEngineBot", "maintainer")
+    assert (assigned.title, assigned.body) == ("Fix the bug", "Reproduction steps")
+
+
+def test_requesters_carry_the_github_account_id():
+    from engine.apps.web.github_ingress import (
+        assignment_from_payload, comment_from_payload, github_requester,
+    )
+
+    assigned = assignment_from_payload(
+        "issues", dict(_assigned_issue(), sender={"login": "maintainer", "id": 7}),
+        self_login="openenginebot",
+    )
+    comment = comment_from_payload(
+        "issue_comment", _issue_comment(user={"login": "someone", "id": 9, "type": "User"}),
+    )
+    assert assigned is not None and comment is not None
+    assert github_requester(assigned.sender_id, assigned.sender) == "github:7:maintainer"
+    assert github_requester(comment.author_id, comment.author) == "github:9:someone"
+    # Without an id there is no stable identity to record.
+    assert github_requester(0, "someone") is None
+
+
+@pytest.mark.parametrize("change", [
+    {"action": "opened"}, {"action": "unassigned"},
+    {"assignee": {"login": "someone"}}, {"assignee": None}, {"sender": {}},
+    {"issue": {"number": True, "state": "open"}},
+    {"issue": {"number": 7, "state": "closed"}},
+    {"issue": {"number": 7, "state": "open", "pull_request": {}}},
+])
+def test_other_assignments_are_ignored(change):
+    from engine.apps.web.github_ingress import assignment_from_payload
+
+    assert assignment_from_payload(
+        "issues", dict(_assigned_issue(), **change), self_login="OpenEngineBot",
+    ) is None
+
+
+def test_assignment_parser_requires_resolved_login():
+    from engine.apps.web.github_ingress import assignment_from_payload
+
+    assert assignment_from_payload("issues", _assigned_issue()) is None
+
+
+def test_assignment_queue_deduplicates_and_retries_failures():
+    async def scenario():
+        calls = []
+
+        async def handle(assignment):
+            calls.append(assignment)
+            if len(calls) == 1:
+                raise RuntimeError("temporarily unavailable")
+
+        ingress = GithubIngress(repository="acme/api", handle_assignment=handle)
+        try:
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
+            await ingress.drain()
+            assert len(calls) == 1
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
+            await ingress.drain()
+            assert ingress.accept("issues", _assigned_issue(), self_login="OpenEngineBot")
+            await ingress.drain()
+            assert len(calls) == 2
+            assert ingress.accept("issues", dict(_assigned_issue(), repository={"full_name": "other/repo"}),
+                                  self_login="OpenEngineBot")
+            await ingress.drain()
+            assert len(calls) == 2
+        finally:
+            await ingress.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("resolved, expected", [("openenginebot", 1), ("someone", 0)])
+def test_assignment_webhook_resolves_login(resolved, expected):
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    handled = []
+    lookup = AsyncMock(return_value=resolved)
+    ingress = GithubIngress(
+        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+        authenticated_login=lookup,
+        handle_assignment=_record(handled),
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    body = json.dumps(_assigned_issue()).encode()
+    with TestClient(app) as client:
+        response = client.post("/events", content=body,
+                               headers=dict(_signed(body), **{"x-github-event": "issues"}))
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert response.status_code == 200
+    assert len(handled) == expected
+    lookup.assert_awaited_once_with("acme/api")
+
+
+@pytest.mark.parametrize("failure", [None, "", RuntimeError("lookup failed"), TimeoutError()])
+def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    lookup = None if failure is None else AsyncMock(
+        side_effect=failure if isinstance(failure, Exception) else None,
+        return_value="",
+    )
+    handled = []
+    ingress = GithubIngress(
+        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+        authenticated_login=lookup, handle_assignment=_record(handled),
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    body = json.dumps(_assigned_issue()).encode()
+    with TestClient(app) as client:
+        response = client.post("/events", content=body,
+                               headers=dict(_signed(body), **{"x-github-event": "issues"}))
+        assert response.status_code == 503
+        assert not handled
+        assert any(record.levelname == "WARNING" and "self-login" in record.message
+                   for record in caplog.records)
+        if lookup is not None:
+            lookup.side_effect = None
+            lookup.return_value = "OpenEngineBot"
+            response = client.post("/events", content=body,
+                                   headers=dict(_signed(body), **{"x-github-event": "issues"}))
+            assert response.status_code == 200
+            client.portal.call(ingress.drain)
+            assert len(handled) == 1
+        client.portal.call(ingress.close)

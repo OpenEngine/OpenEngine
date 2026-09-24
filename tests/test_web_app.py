@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.__main__ import build_app
 from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
+from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.utilization import (
     RunnerUtilization,
     UtilizationService,
@@ -143,6 +145,25 @@ def test_web_selects_the_configured_communications_provider() -> None:
         )
 
 
+def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / "engine.toml"
+    path.write_text('[repos]\n"OpenEngine/OpenEngine" = "~/code/OpenEngine"\nn8n = "code/n8n"\n')
+    app = build_app(path)
+
+    async def ask():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return (await client.get("/api/config")).json()
+
+    assert asyncio.run(ask())["repositories"] == [
+        {"name": "OpenEngine/OpenEngine", "path": str(tmp_path / "code/OpenEngine")},
+        {"name": "n8n", "path": str(tmp_path / "code/n8n")},
+    ]
+
+
 @pytest.mark.parametrize("show_projects", [None, True, False])
 def test_the_application_can_be_built_from_configuration_alone(
     tmp_path, monkeypatch, show_projects
@@ -171,6 +192,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     answered = asyncio.run(ask())
     assert answered.status_code == 200
     assert answered.json()["showProjects"] is (show_projects is not False)
+    assert answered.json()["repositories"] == [{"name": f". ({tmp_path})", "path": "."}]
     assert answered.json()["runners"] == [
         {"id": "codex", "implementation": "CodexAgentRunner"},
         {"id": "claude", "implementation": "ClaudeCodeAgentRunner"},
@@ -611,6 +633,7 @@ def _workflow_app(
     approval_policy: ApprovalConfig = ApprovalConfig(),
     public_url: str = "",
     utilization: UtilizationService | None = None,
+    github_login_config: GitHubLoginConfig | None = None,
 ):
     """Wire the app the way the composition root does."""
     unused = object()
@@ -640,6 +663,7 @@ def _workflow_app(
         approval_policy=approval_policy,
         public_url=public_url,
         utilization=utilization,
+        github_login_config=github_login_config,
     )
 
 
@@ -813,7 +837,8 @@ def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
     (run,) = listed.json()["runs"]
     body = detail.json()
 
-    prose = {"taskPrompt", "failureReason"}
+    # The requester, like the prose, is drawn only by the WorkOrder page.
+    prose = {"taskPrompt", "failureReason", "requester"}
     assert prose.isdisjoint(run)
     assert prose <= set(body)
     # What the rail and the WorkOrder cards do read, which is how far the
@@ -938,6 +963,53 @@ def test_create_workflow_run_records_its_milestone() -> None:
 
     assert created.status_code == 201
     assert created.json()["milestoneId"] == milestone.milestone_id
+    # Without GitHub login there is nobody to name.
+    assert created.json()["requester"] is None
+
+
+def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
+    """A WorkOrder started from the web UI names its GitHub account, and still
+    does after a restart."""
+    path = tmp_path / "requester.sqlite3"
+    store = SQLiteStateStore(path)
+    runtime = ScriptedGraphRuntime(_review_graph())
+    app = _graph_app_over(
+        store, runtime, _review_graph(),
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+    )
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://engine.test"
+        ) as client:
+            # The login middleware wraps the app whose lifespan starts the engine.
+            async with app.app.router.lifespan_context(app.app):
+                return await client.post(
+                    "/api/runs",
+                    json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Document the milestone.",
+                        "repository": ".",
+                    },
+                )
+
+    with patch.object(
+        GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
+    ):
+        created = asyncio.run(scenario())
+
+    assert created.status_code == 201, created.text
+    assert created.json()["requester"] == "github:42:alice"
+    store.close()
+    reopened = SQLiteStateStore(path)
+    try:
+        (run,) = asyncio.run(reopened.list_runs())
+        assert run.requester == "github:42:alice"
+    finally:
+        reopened.close()
 
 
 #: The dev server's proxy table. TypeScript because Vite is what reads it, so
@@ -2437,6 +2509,7 @@ def _graph_app_over(
     runtime: ScriptedGraphRuntime,
     *graphs: ScriptedGraph,
     approval_policy: ApprovalConfig = ApprovalConfig(),
+    github_login_config: GitHubLoginConfig | None = None,
 ):
     """A web app over an engine that already exists, so a restart can be one.
 
@@ -2455,6 +2528,7 @@ def _graph_app_over(
         workflow_catalog=WorkflowCatalog.from_graphs(graphs),
         graph_runtime=running(),
         approval_policy=approval_policy,
+        github_login_config=github_login_config,
     )
 
 
@@ -3533,6 +3607,45 @@ def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() ->
                 assert await runtime.snapshot(state.run_id) is not None
                 assert (await client.post("/api/runs/run-scheduled-graph/start")).status_code == 409
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("proposer", "expected"), [
+    ("github:7:bob", "github:7:bob"),
+    (None, "github:42:alice"),
+])
+def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) -> None:
+    """Whoever clicks Start does not replace the proposer as requester."""
+    graph = _review_graph()
+    store = InMemoryStateStore()
+    app = _graph_app_over(
+        store, ScriptedGraphRuntime(graph), graph,
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+    )
+
+    async def scenario():
+        await store.save(RunState(
+            run_id=RunId("run-proposed"), task_id=TaskId("task-proposed"),
+            workflow_id=WorkflowId(str(graph.graph_id)), phase=RunPhase.SCHEDULED,
+            name="Proposed work", prompt="Do the work", repository=".",
+            requester=proposer,
+        ))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://engine.test"
+        ) as client:
+            async with app.app.router.lifespan_context(app.app):
+                return await client.post("/api/runs/run-proposed/start")
+
+    with patch.object(
+        GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
+    ):
+        started = asyncio.run(scenario())
+
+    assert started.status_code == 200, started.text
+    assert started.json()["requester"] == expected
+    assert asyncio.run(store.load(RunId("run-proposed"))).requester == expected
 
 
 def test_agent_created_workorder_links_to_its_creator() -> None:

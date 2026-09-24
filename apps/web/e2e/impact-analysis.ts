@@ -8,6 +8,14 @@ export const IMPACT_ANALYSIS_SCENARIO: Scenario = {
     { type: "say", text: IMPACT_ASSESSMENT },
     {
       type: "tool",
+      name: "add_comment",
+      arguments: {
+        pr_url: "https://github.com/acme/repository/pull/7",
+        comment: IMPACT_ASSESSMENT,
+      },
+    },
+    {
+      type: "tool",
       name: "complete_step",
       arguments: {
         outcome: "success",

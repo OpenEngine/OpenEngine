@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import uvicorn
 
-from .server import Settings, create_app
+from .server import Settings, create_app, engine_login_problem
 
 
 def main() -> None:
@@ -32,9 +32,12 @@ def main() -> None:
                                  os.environ.get("OE_MCP_ALLOWED_EMAILS", "").split(",") if email.strip()),
             oidc_required_scopes=tuple(os.environ.get("OE_MCP_OIDC_REQUIRED_SCOPES", "").split()),
             engine_url=os.environ.get("OE_MCP_ENGINE_URL", "http://127.0.0.1:4364"),
+            engine_token=os.environ.get("OE_MCP_ENGINE_TOKEN", ""),
         )
     except (KeyError, ValueError) as error:
         parser.error(str(error))
+    if problem := engine_login_problem(settings):
+        parser.error(problem)
     uvicorn.run(create_app(settings), host="127.0.0.1", port=args.port, proxy_headers=False)
 
 

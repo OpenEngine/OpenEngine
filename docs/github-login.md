@@ -37,6 +37,25 @@ session checks and retain Slack signature verification. The frontend rechecks
 session status every 30 seconds and unmounts the app if the session is invalid.
 Repository permission checks (#302) remain separate work.
 
+## Service token for the MCP gateway
+
+The [remote MCP gateway](remote-mcp.md) creates work orders server to server
+and cannot hold a browser session. Set `ENGINE_SERVICE_TOKEN` in the same
+server-local `.env` (or the process environment, which takes precedence) and
+give the gateway the same value as `OE_MCP_ENGINE_TOKEN`:
+
+```sh
+openssl rand -hex 32
+```
+
+The middleware accepts `Authorization: Bearer <token>` in place of a session
+only for `POST /api/runs`; every other protected route still requires login.
+The token must have at least 32 non-whitespace characters; a shorter value
+fails startup. Like the client secret, it is never read from TOML and is reread
+on each request, so rotating it in `.env` needs no restart (update the
+gateway's value and restart the gateway). Leaving it unset admits no service
+requests.
+
 Login state and the PKCE verifier live in a signed, HttpOnly browser cookie that expires after ten minutes;
 abandoned logins reserve no server slots. Replay protection relies on GitHub
 consuming authorization codes once and binding them to the PKCE verifier.
@@ -45,3 +64,43 @@ login and multiple workers require sticky routing or a shared signing key.
 Without login configuration the app remains accessible and the status endpoint
 reports `loginRequired: false`; starting the OAuth flow returns 503.
 
+## Agent GitHub identity
+
+Agent GitHub API actions in the web composition use only the host's `gh auth`
+login: the account shown by `gh auth status` for the OS user that runs the web
+process. That account is the PR/comment author. Both GitHub choices in Settings
+(**GH CLI** and **GitHub OAuth**) route agent actions through `gh`; GitLab
+routing is unchanged. Neither the browser login, a Settings device-flow token,
+nor `GITHUB_TOKEN` is used for agent actions. OpenEngine removes
+`GITHUB_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` from the environment it passes to
+`gh`, so an engine setting cannot override the CLI login. `GH_TOKEN` remains
+`gh`'s own setting and is honored. The worker composition still uses its
+configured `GITHUB_TOKEN`.
+
+Git commits still use Git's author/committer configuration and configured
+agent attribution; pushes still use the host's Git credential helper or SSH
+credentials (`gh auth setup-git` makes Git use the same login).
+
+Browser login requests `read:user` and only creates a session cookie. The
+separate Settings device flow stores repository connection credentials in the
+OS keychain. With browser login enabled, its token and client-ID keys include
+the verified session's stable GitHub user ID (for example,
+`github-token:user:123`). Pending device flows are also scoped to that ID.
+Logging out or renaming an account does not transfer its connection to another
+user. Authenticated users never inherit the legacy `github-token` entry: they
+must reconnect. Local mode without browser login retains the legacy entry.
+These UI connection credentials do not authorize agent GitHub API actions.
+
+The web `--check` wiring report shows whether `gh` is authenticated and as
+which account. Successful PR creation logs the returned URL, GitHub's actual
+author login, and transport at INFO level. Enable INFO logging to retain this
+audit evidence.
+
+For graph runs served by the web app, `compose_app` passes its composed
+`source_control` to `build_graph_runtime`; terminal MCP resolves that runtime
+capability for `open_pull_request`. Worker-dispatched work uses the worker
+composition's independent capability. A historical PR cannot be attributed to
+a particular process or token from the code alone: correlate its URL and run
+with process logs. No historical run ID, PR URL, or credential audit was
+available for this change; the old web keychain and CLI paths could both use a
+personal identity, whereas the worker used only its configured token.
