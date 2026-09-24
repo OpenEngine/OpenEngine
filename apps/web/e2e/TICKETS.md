@@ -206,9 +206,7 @@ Covers **1a**, **1b**, and **1e** of the original list. Depends on T1, T2.
 **Assert.**
 
 * **Provisioning (1a).** The run page moves off `pending` through
-  `preparing_workspace` to `implementing`; the checkout section
-  (`.run-workspace`, `aria-label="Workflow checkout"`) names a path, and that
-  path exists on disk. `shot(page, testInfo, "1 provisioned")`.
+  `preparing_workspace` to `implementing`. `shot(page, testInfo, "1 provisioned")`.
 * **Streaming (1b).** Follow the implementation step's conversation link
   (`.link-flame`, `/runs/{run}/conversations/{instance}`) *while the step is
   still running*, and assert the agent's first message and the command it ran

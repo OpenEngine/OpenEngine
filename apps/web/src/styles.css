@@ -986,11 +986,6 @@ select:disabled { cursor: default; }
 }
 .dock-error { flex-basis: 100%; }
 
-.run-workspace {
-  padding: 14px var(--gutter);
-  border-bottom: 1px solid var(--rule);
-}
-
 .backlink {
   display: block;
   padding: 12px var(--gutter);
