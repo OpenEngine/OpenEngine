@@ -20,6 +20,7 @@ import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from urllib.parse import quote, urlparse
 
+from engine.adapters.source_control.github.permissions import can_write_repository
 from engine.adapters.source_control.github.transports import (
     GitHubApiTransport,
     GitHubOAuthTransport,
@@ -206,12 +207,7 @@ class GitHubSourceControl:
     async def can_write_repository(self, pr_url: str, username: str) -> bool:
         """Check effective access, including team and organization grants."""
         owner, repo, _ = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
-        response = await self._api(
-            "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
-        )
-        # GitHub maps maintain to write and triage to read, including custom
-        # roles' base permissions. Unknown/missing permissions never grant access.
-        return response.get("permission") in ("write", "admin")
+        return await can_write_repository(self._api, f"{owner}/{repo}", username)
 
     async def authenticated_login(self, repository_url: str) -> str:
         """Who this token posts as, so Engine can recognise its own comments.

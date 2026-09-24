@@ -53,8 +53,11 @@ Permission results are cached per user in a bounded server-side cache for
 15 minutes, shared across that user's browser sessions. The next session status
 or protected API request after expiry rechecks permission; revocation or an API
 failure then denies access even if the 24-hour session cookie has not expired.
-Denials are cached for the same interval, so restored access may take up to
-15 minutes to become available. Cache eviction can cause an earlier recheck.
+GitHub permission denials are cached for the same interval, so restored access
+may take up to 15 minutes to become available. Lookup errors are not cached:
+access is denied for that request, but the next request retries GitHub.
+Cache eviction can cause an earlier recheck. Browser login and PR-comment
+authorization share the GitHub adapter's repository permission rule.
 `RepositoryLoginPermission.allowed(user_id, login)` is the reusable check for
 future token-refresh callers.
 

@@ -632,7 +632,48 @@ def test_existing_session_rechecks_permission(flow, permission_api, failure):
         assert client.get("/api/data").status_code == 401
         assert client.get("/graph/api/graphs").status_code == 401
         assert not other.get("/api/auth/github/status").json()["authenticated"]
+        assert permission_api.await_count == (4 if failure == "api-error" else 2)
+
+
+@pytest.mark.parametrize("error", [
+    GitHubTransportError("timeout"), GitHubTransportError("HTTP 429"),
+    OSError("network unavailable"), ValueError("invalid JSON"),
+])
+@pytest.mark.parametrize("expired", [False, True])
+def test_permission_lookup_error_allows_retry(permission_api, error, expired):
+    import asyncio
+
+    async def scenario():
+        permission = RepositoryLoginPermission("owner/repo")
+        if expired:
+            assert await permission.allowed(42, "alice")
+            permission._cache[(42, "alice")] = (0, True)
+        permission_api.reset_mock()
+        permission_api.side_effect = [error, permission_api.return_value]
+        assert not await permission.allowed(42, "alice")
+        assert await permission.allowed(42, "alice")
+        assert await permission.allowed(42, "alice")
         assert permission_api.await_count == 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("body", [
+    {"permission": "none"}, {"permission": "read"},
+    {"permission": "write", "user": {"id": 99, "login": "alice"}},
+])
+def test_real_permission_denials_remain_cached(permission_api, body):
+    import asyncio
+
+    async def scenario():
+        permission = RepositoryLoginPermission("owner/repo")
+        permission_api.return_value = body
+        assert not await permission.allowed(42, "alice")
+        permission_api.return_value = {"permission": "write", "user": {"id": 42, "login": "alice"}}
+        assert not await permission.allowed(42, "alice")
+        permission_api.assert_awaited_once()
+
+    asyncio.run(scenario())
 
 
 def test_permission_cache_is_per_identity(permission_api):

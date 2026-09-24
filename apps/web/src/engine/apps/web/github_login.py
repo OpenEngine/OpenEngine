@@ -23,6 +23,7 @@ from weakref import WeakValueDictionary
 
 import httpx
 from dotenv import dotenv_values
+from engine.adapters.source_control.github.permissions import can_write_repository
 from engine.adapters.source_control.github.transports import GitHubCliTransport, GitHubTransportError
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
@@ -59,7 +60,8 @@ class RepositoryLoginPermission:
     """Reusable, fail-closed authorization for a verified GitHub identity.
 
     Uses the host CLI credential, never a browser or Settings OAuth token.
-    Results (including denials) are cached per identity for 15 minutes. The
+    Answers (including denials) are cached per identity for 15 minutes; lookup
+    errors deny access without caching so the next request can retry. The
     bounded process-local cache cannot outlive the process-local session key.
     """
 
@@ -85,22 +87,12 @@ class RepositoryLoginPermission:
             if cached is not None and time.monotonic() < cached[0]:
                 self._cache.move_to_end(key)
                 return cached[1]
-            allowed = False
             try:
-                body = await self._transport.request(
-                    "GET", f"/repos/{self.repository}/collaborators/{login}/permission"
+                allowed = await can_write_repository(
+                    self._transport.request, self.repository, login, user_id=user_id
                 )
-                if isinstance(body, dict):
-                    user = body.get("user")
-                    allowed = (
-                        body.get("permission") in ("write", "maintain", "admin")
-                        and isinstance(user, dict)
-                        and type(user.get("id")) is int and user["id"] == user_id
-                        and isinstance(user.get("login"), str)
-                        and user["login"].lower() == login.lower()
-                    )
             except (GitHubTransportError, OSError, ValueError):
-                pass
+                return False
             self._cache[key] = (time.monotonic() + _PERMISSION_TTL, allowed)
             self._cache.move_to_end(key)
             if len(self._cache) > 4096:

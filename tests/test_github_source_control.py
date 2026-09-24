@@ -450,7 +450,7 @@ def test_invalid_reply_is_rejected_before_api_call(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.parametrize("permission, allowed", [
-    ("write", True), ("admin", True), ("read", False), ("none", False),
+    ("write", True), ("maintain", True), ("admin", True), ("read", False), ("none", False),
     (None, False), ("unexpected", False),
 ])
 def test_effective_repository_write_permission(monkeypatch, permission, allowed):
