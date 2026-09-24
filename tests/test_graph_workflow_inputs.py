@@ -33,6 +33,16 @@ def test_least_utilized_prefers_a_read_runner_over_an_unread_one():
     assert chosen["implementation_runner"] == "claude"
 
 
+def test_least_utilized_rotates_when_no_runner_has_a_reading():
+    turns: dict[str, int] = {}
+    inputs = {"implementation_runner": LEAST_UTILIZED, "review_runner": "codex"}
+    picked = [
+        choose_runners(DECLARED, inputs, usage=dict, turns=turns)["implementation_runner"]
+        for _ in range(3)
+    ]
+    assert picked == ["codex", "claude", "codex"]
+
+
 def test_round_robin_rotates_each_input_through_its_runners():
     turns: dict[str, int] = {}
     inputs = {"implementation_runner": ROUND_ROBIN, "review_runner": "claude"}

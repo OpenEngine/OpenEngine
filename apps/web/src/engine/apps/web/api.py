@@ -120,7 +120,7 @@ from engine.domain import (
     instance_id_for_project,
     project_id_for_instance,
 )
-from engine.graph_runtime.inputs import choose_runners, resolve_inputs
+from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, resolve_inputs
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -947,6 +947,10 @@ log = logging.getLogger(__name__)
 #: after it waits too. Long enough to cover a slow-but-working forge, short
 #: enough that a hung one costs a redelivery rather than the queue.
 GITHUB_AUTHORIZATION_TIMEOUT_SECONDS = 45
+
+#: How long a least-utilized WorkOrder waits on a fresh utilization scrape
+#: before it starts from whatever was last cached instead.
+UTILIZATION_REFRESH_TIMEOUT_SECONDS = 10
 
 
 @dataclass(slots=True)
@@ -1905,6 +1909,21 @@ def create_app(
         """
         if requester is None and scheduled is not None:
             requester = scheduled.requester
+        async def runner_usage() -> dict[str, float]:
+            # Scraped now rather than trusting the cache, which only fills when
+            # someone opens the Utilization page. A slow or failing scrape
+            # falls back to the cache instead of holding up the run.
+            try:
+                async with asyncio.timeout(UTILIZATION_REFRESH_TIMEOUT_SECONDS):
+                    readings = await _utilization.refresh(tuple(runners))
+            except Exception:  # noqa: BLE001 -- placement must not fail the run
+                log.warning("utilization refresh failed; using cached readings", exc_info=True)
+                readings = _utilization.cached()
+            return {
+                reading.runner: max(window.used_percent for window in reading.windows)
+                for reading in readings if reading.windows
+            }
+
         async with dependency_lock:
             if depends_on_run_id is not None:
                 prerequisite = await session.state_store.load(depends_on_run_id)
@@ -1926,12 +1945,12 @@ def create_app(
                     return state
             # Policies resolve at start, not at scheduling, so a dependent
             # WorkOrder is placed by utilization when it actually runs.
+            usage = (
+                await runner_usage() if LEAST_UTILIZED in (inputs or {}).values() else {}
+            )
             inputs = choose_runners(
                 getattr(graph, "inputs", ()), inputs,
-                usage=lambda: {
-                    reading.runner: max(window.used_percent for window in reading.windows)
-                    for reading in _utilization.cached() if reading.windows
-                },
+                usage=lambda: usage,
                 turns=round_robin_turns,
             )
             snapshot = await runtime.start(

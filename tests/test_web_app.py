@@ -2499,6 +2499,7 @@ def _graph_app(
     store: InMemoryStateStore,
     *graphs: ScriptedGraph,
     approval_policy: ApprovalConfig = ApprovalConfig(),
+    utilization: UtilizationService | None = None,
 ):
     """The web app with a scripted graph engine wired in.
 
@@ -2508,7 +2509,10 @@ def _graph_app(
     """
     runtime = ScriptedGraphRuntime(*graphs)
     return (
-        _graph_app_over(store, runtime, *graphs, approval_policy=approval_policy),
+        _graph_app_over(
+            store, runtime, *graphs, approval_policy=approval_policy,
+            utilization=utilization,
+        ),
         runtime,
     )
 
@@ -2519,6 +2523,7 @@ def _graph_app_over(
     *graphs: ScriptedGraph,
     approval_policy: ApprovalConfig = ApprovalConfig(),
     github_login_config: GitHubLoginConfig | None = None,
+    utilization: UtilizationService | None = None,
 ):
     """A web app over an engine that already exists, so a restart can be one.
 
@@ -2538,6 +2543,7 @@ def _graph_app_over(
         graph_runtime=running(),
         approval_policy=approval_policy,
         github_login_config=github_login_config,
+        utilization=utilization,
     )
 
 
@@ -3622,6 +3628,54 @@ def test_graph_workorder_round_robin_runner_resolves_at_start():
                 assert picked == ["codex", "claude", "codex"]
 
     asyncio.run(scenario())
+
+
+def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path):
+    """Nothing else keeps the utilization cache warm, so starting the run reads it."""
+    from dataclasses import dataclass
+    from engine.graph_runtime.inputs import LEAST_UTILIZED, WorkflowInput
+
+    @dataclass(frozen=True)
+    class InputGraph(ScriptedGraph):
+        inputs: tuple[WorkflowInput, ...] = (
+            WorkflowInput(
+                "implementation_runner", "Implementation runner", "codex", True,
+                ("codex", "test", LEAST_UTILIZED),
+            ),
+        )
+
+    async def read_test(_client) -> RunnerUtilization:
+        return RunnerUtilization(
+            runner="test",
+            windows=(UtilizationWindow("five_hour", "5-hour", 5.0, ""),),
+        )
+
+    graph = InputGraph(
+        GraphId("inputs"), "Inputs",
+        (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+    )
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        utilization=UtilizationService(
+            cache_path=tmp_path / "utilization.json", readers={"test": read_test}
+        ),
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post("/api/runs", json={
+                    "workflowId": "inputs", "repository": ".", "prompt": "Task",
+                    "inputs": {"implementation_runner": LEAST_UTILIZED},
+                })
+                assert response.status_code == 201
+                snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                return snapshot.values["inputs"]["implementation_runner"]
+
+    assert asyncio.run(scenario()) == "test"
+    assert (tmp_path / "utilization.json").exists()
 
 
 def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() -> None:
