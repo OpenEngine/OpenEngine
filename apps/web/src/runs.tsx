@@ -401,11 +401,17 @@ export function NewWorkflowPage({
       });
       // The run now owns this prompt, so the draft has nothing left to keep.
       window.localStorage.removeItem(WORKFLOW_DRAFT_KEY);
-      window.localStorage.setItem(WORKFLOW_CHOICES_KEY, JSON.stringify({
-        ...savedChoices(),
-        ...Object.fromEntries(inputs.filter((input) => input.choices.length)
-          .map((input) => [input.name, inputValue(input)])),
-      }));
+      // The run already exists, so a full or blocked store only costs the
+      // remembered runners -- it must not read as a failed create.
+      try {
+        window.localStorage.setItem(WORKFLOW_CHOICES_KEY, JSON.stringify({
+          ...savedChoices(),
+          ...Object.fromEntries(inputs.filter((input) => input.choices.length)
+            .map((input) => [input.name, inputValue(input)])),
+        }));
+      } catch {
+        // Remembering is best effort.
+      }
       window.location.assign(`/runs/${encodeURIComponent(run.runId)}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not create WorkOrder");

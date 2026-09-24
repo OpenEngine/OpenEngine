@@ -267,6 +267,36 @@ describe("NewWorkflowPage", () => {
     window.localStorage.removeItem("engine.workflowChoices");
   });
 
+  it("still opens the created WorkOrder when the runner selection cannot be saved", async () => {
+    const user = userEvent.setup();
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (key === "engine.workflowChoices") throw new DOMException("full", "QuotaExceededError");
+      setItem.call(this, key, value);
+    });
+    const configured: EngineConfig = {
+      ...withGraph,
+      workflows: [{
+        id: "implementation-review-codex",
+        name: "Implementation review (codex)",
+        inputs: [
+          { name: "implementation_runner", label: "Implementation runner", default: "codex", required: true, choices: ["codex", "claude"] },
+        ],
+      }],
+    };
+    render(<NewWorkflowPage config={configured} />);
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Create WorkOrder" }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
+    await waitFor(() => expect(window.localStorage.getItem("engine.workflowDraft")).toBeNull());
+    expect(screen.queryByText(/full|Could not create WorkOrder/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
+  });
+
   it("restores a prompt after unmounting and remounting", async () => {
     vi.stubGlobal("fetch", stubPageApi());
     const user = userEvent.setup();
