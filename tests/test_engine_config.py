@@ -619,6 +619,43 @@ def test_web_state_paths_resolve_against_the_config_file(
 
 
 @pytest.mark.parametrize(
+    ("host", "refused"),
+    [
+        ("localhost", False),
+        ("127.0.0.1", False),
+        ("::1", False),
+        ("0.0.0.0", True),
+        ("::", True),
+        ("engine.example.com", True),
+    ],
+)
+def test_web_refuses_a_non_loopback_host_without_github_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, refused: bool
+) -> None:
+    for name in (
+        "ENGINE_PORT", "ENGINE_STATE_DIRECTORY", "ENGINE_SQLITE_PATH",
+        "ENGINE_GRAPH_STATE_DIRECTORY", "ENGINE_GITHUB_LOGIN_CLIENT_ID",
+        "ENGINE_GITHUB_LOGIN_REDIRECT_URI", "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ENGINE_HOST", host)
+    # A service token does not switch the session middleware on by itself.
+    monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "s" * 32)
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    loaded = load_engine_config(config)
+    settings = web_main._settings(loaded)
+
+    if refused:
+        with pytest.raises(EngineConfigError, match="GitHub login"):
+            web_main._require_login_off_loopback(settings, None)
+        assert web_main.main(["--config", str(config), "--check"]) == 2
+    else:
+        web_main._require_login_off_loopback(settings, None)
+    web_main._require_login_off_loopback(settings, object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
     ("document", "message"),
     [
         ({"server": {"port": "4364"}}, "server.port"),

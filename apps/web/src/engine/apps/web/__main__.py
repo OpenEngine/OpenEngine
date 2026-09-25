@@ -9,6 +9,7 @@ which constructs the same application again in every fresh child process.
 """
 
 import argparse
+import ipaddress
 import os
 import subprocess
 import sys
@@ -221,6 +222,32 @@ def _login_repositories(loaded: LoadedEngineConfig) -> tuple[str, ...]:
     return tuple(dict.fromkeys(projects))
 
 
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def _require_login_off_loopback(
+    settings: Settings, github_login_config: GitHubLoginConfig | None
+) -> None:
+    """Refuse to serve an unauthenticated interface beyond this machine.
+
+    Without GitHub login the session middleware admits every request, and the
+    service token alone does not switch it on, so binding anywhere but loopback
+    would let anyone who reaches the port run agents and change credentials.
+    """
+
+    if github_login_config is None and not _is_loopback(settings.host):
+        raise EngineConfigError(
+            f"server host {settings.host!r} is not loopback, and GitHub login is "
+            "not configured; configure GitHub login or bind to 127.0.0.1"
+        )
+
+
 def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
     """How the login middleware reads `ENGINE_SERVICE_TOKEN`, per request.
 
@@ -278,6 +305,7 @@ def compose_app(
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
     github_login_config = _github_login_config(loaded)
+    _require_login_off_loopback(settings, github_login_config)
     credential_store = GitHubCredentialStore()
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
@@ -341,7 +369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         loaded, workflow_catalog = read_configuration(args.config)
         settings = _settings(loaded)
         if args.check:
-            _github_login_config(loaded)
+            _require_login_off_loopback(settings, _github_login_config(loaded))
             _service_token_reader(loaded)
             report_wiring(settings)
             return 0

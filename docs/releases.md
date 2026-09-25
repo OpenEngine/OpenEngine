@@ -51,7 +51,8 @@ paths resolve against the config file's directory. `[server]` sets `host` and
 `port`; `[state]` sets `directory`, and `sqlite_path` and
 `graph_state_directory` within it. `ENGINE_HOST`, `ENGINE_PORT`,
 `ENGINE_STATE_DIRECTORY`, `ENGINE_SQLITE_PATH`, and
-`ENGINE_GRAPH_STATE_DIRECTORY` override them. The Temporal orchestrator is not
+`ENGINE_GRAPH_STATE_DIRECTORY` override them. The server refuses to start on a
+host other than loopback unless GitHub login is configured. The Temporal orchestrator is not
 started or needed. The deployment supplies Node.js with `npx`,
 which Engine uses to launch the pinned ACP adapters, and each provider's
 credentials. No `codex` or `claude` executable is needed.
