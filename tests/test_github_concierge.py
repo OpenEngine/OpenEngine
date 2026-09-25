@@ -1314,13 +1314,14 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
 
 def test_issue_progress_withholds_run_details_and_reports_a_resume(tmp_path, monkeypatch):
     """The issue is public: a failure's error and an approval's reason can hold
-    paths, command output, or secrets, so they stay behind the work order link.
+    paths, command output, or secrets, so they stay behind the work order link,
+    as does an agent's transcript text, whose run still reports finishing.
     A resume is an update too, and is reported there like the others."""
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
 
     from engine.apps.web.github_communications import GithubCommunications
-    from engine.graph_runtime import EventKind, RuntimeEvent
+    from engine.graph_runtime import EventKind, NodeId, RuntimeEvent
 
     posted = AsyncMock(return_value="41")
     monkeypatch.setattr(GithubCommunications, "post", posted)
@@ -1349,11 +1350,19 @@ def test_issue_progress_withholds_run_details_and_reports_a_resume(tmp_path, mon
             client.portal.call(observe, RuntimeEvent(
                 run_id=RunId(STARTED_RUN), kind=kind, payload=payload,
             ))
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId(STARTED_RUN), kind=EventKind.TRANSCRIPT,
+            node_id=NodeId("implementation"), payload={"text": "found ghp_secret in .env"},
+        ))
+        client.portal.call(observe, RuntimeEvent(
+            run_id=RunId(STARTED_RUN), kind=EventKind.RUN_FINISHED, payload={},
+        ))
 
     texts = [call.args[1].text for call in posted.await_args_list]
     assert "*Workflow* needs your approval." in texts
     assert "Work order failed." in texts
     assert "Work order resumed." in texts
+    assert "Work order finished." in texts
     assert not any("secret" in text or "evil" in text or "@team" in text for text in texts)
     assert all(call.args[0] == "github:acme/api" for call in posted.await_args_list)
 

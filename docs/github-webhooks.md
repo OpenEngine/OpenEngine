@@ -122,8 +122,8 @@ concierge model turn is needed: assignment itself requests implementation.
 Progress is reported on the issue rather than in Slack: each stage start,
 approval request, failure, resume, and finish posts a new comment, so the issue
 timeline reads as the work order's history. Because the issue may be public,
-failure errors and approval reasons are not copied into it; they stay on the
-work order. Each comment links to the work order when
+failure errors, approval reasons, and agent transcript text are not copied
+into it; they stay on the work order. Each comment links to the work order when
 `public_url` is set, and to the pull request once the run has opened one.
 Comments asking for a decision or reporting a failure mention the user who
 assigned the issue.
