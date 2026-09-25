@@ -1015,6 +1015,9 @@ def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
 
     assert created.status_code == 201, created.text
     assert created.json()["requester"] == "github:42:alice"
+    # Handed to the graph, whose workspace credits them on every commit.
+    started = asyncio.run(runtime.snapshot(RunId(created.json()["runId"])))
+    assert started.values["coAuthor"] == "alice <42+alice@users.noreply.github.com>"
     store.close()
     reopened = SQLiteStateStore(path)
     try:
@@ -1143,7 +1146,9 @@ class ConversationWorkspaces:
         self.detached: set[str] = set()
         self.attachments: list[tuple[str, str, str]] = []
 
-    async def provision(self, repository: str, base_ref: str) -> Workspace:
+    async def provision(
+        self, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
         self.count += 1
         return self._workspace(f"ws-{self.count}", repository, base_ref)
 
@@ -1161,7 +1166,9 @@ class ConversationWorkspaces:
             ),
         )
 
-    async def attach(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+    async def attach(
+        self, workspace_id: str, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
         self.attachments.append((workspace_id, repository, base_ref))
         self.detached.discard(workspace_id)
         return self._workspace(workspace_id, repository, base_ref)

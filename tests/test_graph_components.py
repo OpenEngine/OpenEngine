@@ -90,9 +90,13 @@ class RecordingWorkspaceProvider:
     """
 
     provisioned: list[tuple[str, str]] = field(default_factory=list)
+    co_authors: list[str] = field(default_factory=list)
 
-    async def provision(self, repository: str, base_ref: str) -> Workspace:
+    async def provision(
+        self, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
         self.provisioned.append((repository, base_ref))
+        self.co_authors.append(co_author)
         workspace_id = WorkspaceId(f"ws-{uuid4().hex[:8]}")
         return Workspace(
             workspace_id=workspace_id,
@@ -113,7 +117,8 @@ class RecordingWorkspaceProvider:
         )
 
     async def attach(
-        self, workspace_id: WorkspaceId, repository: str, base_ref: str
+        self, workspace_id: WorkspaceId, repository: str, base_ref: str,
+        *, co_author: str = "",
     ) -> Workspace:
         raise NotImplementedError
 
@@ -210,7 +215,8 @@ def test_graph_workspace_detaches_and_reattaches_across_restart(tmp_path: Path) 
             self.detached = True
 
         async def attach(
-            self, workspace_id: WorkspaceId, repository: str, base_ref: str
+            self, workspace_id: WorkspaceId, repository: str, base_ref: str,
+            *, co_author: str = "",
         ) -> Workspace:
             self.detached = False
             self.restored = (workspace_id, repository, base_ref)
@@ -475,7 +481,8 @@ def test_a_workspace_node_checks_out_where_the_next_node_works(
     async def scenario() -> tuple[Any, list[RuntimeEvent]]:
         async with running([workflow], tmp_path) as (runtime, log):
             run = await runtime.start(
-                workflow.graph_id, {"task": TASK, "repository": REPOSITORY}
+                workflow.graph_id,
+                {"task": TASK, "repository": REPOSITORY, "coAuthor": "Ada <ada@example.test>"},
             )
             events = await until(log, run.run_id, "approval.requested")
             return await runtime.snapshot(run.run_id), events
@@ -483,6 +490,7 @@ def test_a_workspace_node_checks_out_where_the_next_node_works(
     snapshot, events = asyncio.run(scenario())
 
     assert provider.provisioned == [(REPOSITORY, "origin/main")]
+    assert provider.co_authors == ["Ada <ada@example.test>"]
     assert snapshot.values[CHECKOUT].startswith("/checkouts/ws-")
     assert snapshot.values["workspaceRef"].startswith("engine/ws-")
     # The node downstream worked in the checkout this run was given, not in one
@@ -735,8 +743,10 @@ def test_a_provider_that_answers_with_no_path_is_refused(tmp_path: Path) -> None
     """
 
     class Pathless(RecordingWorkspaceProvider):
-        async def provision(self, repository: str, base_ref: str) -> Workspace:
-            given = await super().provision(repository, base_ref)
+        async def provision(
+            self, repository: str, base_ref: str, *, co_author: str = ""
+        ) -> Workspace:
+            given = await super().provision(repository, base_ref, co_author=co_author)
             return replace(given, root_path="")
 
     seen: list[str] = []

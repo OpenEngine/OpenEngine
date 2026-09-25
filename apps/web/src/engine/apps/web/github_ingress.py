@@ -128,6 +128,18 @@ def github_requester(account_id: int, login: str) -> str | None:
     return f"github:{account_id}:{login}" if account_id > 0 and login else None
 
 
+def github_co_author(requester: str | None) -> str:
+    """A GitHub requester as `login <noreply email>`, or empty for anyone else.
+
+    The noreply address links a commit to the account without its real email.
+    """
+    provider, _, rest = (requester or "").partition(":")
+    account_id, _, login = rest.partition(":")
+    if provider != "github" or not account_id.isdigit() or not login:
+        return ""
+    return f"{login} <{account_id}+{login}@users.noreply.github.com>"
+
+
 def _account_id(user: Mapping[str, object]) -> int:
     value = user.get("id")
     return value if isinstance(value, int) and not isinstance(value, bool) else 0

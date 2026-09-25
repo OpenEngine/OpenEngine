@@ -200,6 +200,39 @@ def test_add_reaction_reports_a_disconnected_workspace() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            {"ok": True, "user": {"name": "ada", "profile": {
+                "real_name": "Ada Lovelace", "email": "ada@example.test",
+            }}},
+            ("Ada Lovelace", "ada@example.test"),
+        ),
+        # Without `users:read.email` the profile has no email to credit.
+        ({"ok": True, "user": {"name": "ada", "profile": {"real_name": "Ada"}}}, None),
+        ({"ok": False, "error": "missing_scope"}, None),
+    ],
+)
+def test_user_identity_needs_a_profile_email(body, expected) -> None:
+    store = MagicMock(spec=SlackCredentialStore)
+    store.token.return_value = "xoxb-token"
+    response = MagicMock(is_error=False)
+    response.json.return_value = body
+
+    with patch("engine.adapters.communications.slack.httpx.AsyncClient") as client_type:
+        client = client_type.return_value.__aenter__.return_value
+        client.get = AsyncMock(return_value=response)
+        identity = __import__("asyncio").run(SlackCommunications(store).user_identity("U1"))
+
+    assert identity == expected
+    client.get.assert_awaited_once_with(
+        "https://slack.com/api/users.info",
+        headers={"Authorization": "Bearer xoxb-token"},
+        params={"user": "U1"},
+    )
+
+
 def test_authorization_url_requests_notification_scope_and_state() -> None:
     url = authorization_url("123", "http://localhost/api/slack/callback", "nonce")
     assert url.startswith("https://slack.com/oauth/v2/authorize?")
@@ -208,6 +241,7 @@ def test_authorization_url_requests_notification_scope_and_state() -> None:
         "%2Cchannels%3Aread%2Cchannels%3Ahistory%2Cgroups%3Ahistory"
         "%2Creactions%3Awrite" in url
     )
+    assert "users%3Aread%2Cusers%3Aread.email" in url
     assert "state=nonce" in url
 
 
