@@ -57,12 +57,30 @@ under the command it is about, with the buttons to answer it. The run's final
 human verdict is answered from the WorkOrder page itself, in the **Action
 required** panel.
 
+## What it cost
+
+Each agent node publishes a `usage.updated` event whenever its ACP session
+reports usage: a finished turn's tokens, or the session's running cost in USD.
+`GET /api/runs/{run}` sums them as `usage` — one figure per node under `nodes`,
+and the WorkOrder's total beside them — and the WorkOrder page shows the total
+as **Usage**.
+
+The dollars are approximate. A cost the agent reports is used as it is;
+otherwise tokens are priced at list rates by model, or by runner when no model
+is configured (`engine/graph_runtime/usage.py`). `estimated` says list prices
+were applied. An agent that reports nothing is not counted as free: its node's
+`costUsd` is `null`, and the total is marked `complete: false` and shown as
+partial.
+
 ## What it cannot do yet
 
 The event log a conversation is drawn from lives in the server's memory, so
 restarting the server empties it: the run picks back up (see below), but what
 was said before the restart is gone from the page. Nothing else keeps a graph
-run's transcript, so this is the one thing to know before relying on it.
+run's transcript, so this is the one thing to know before relying on it. The
+same goes for **Usage**: it is summed from that log, so after a restart a
+WorkOrder's dollars start again from what it spends next. Don't use it for
+billing or audit.
 
 A question the run is stopped on is not lost with it — approvals are stored, not
 remembered — so after a restart the conversation still shows what is waiting on

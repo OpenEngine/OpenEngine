@@ -853,10 +853,12 @@ def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
     assert prose <= set(body)
     # What the rail and the WorkOrder cards do read, which is how far the
     # listing can be trimmed before a screen loses something it draws.
+    # Usage is summed from the run's events, so only the page about it pays.
     assert run == {
-        key: value for key, value in body.items() if key not in prose
+        key: value for key, value in body.items() if key not in prose | {"usage"}
     }
     assert body["failureReason"] == "the reviewer gave up"
+    assert body["usage"]["costUsd"] is None and body["usage"]["nodes"] == {}
 
 def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
     store = InMemoryStateStore()

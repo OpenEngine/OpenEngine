@@ -20,6 +20,7 @@ import {
   type ApiWorkflowRunListing,
   type ApprovalDecision,
   type EngineConfig,
+  type ApiUsage,
   type RunView,
 } from "./api";
 import { Stat, StatStrip } from "./brand";
@@ -91,6 +92,15 @@ export function runStatusLabel(run: ApiWorkflowRunListing) {
 
 /** A stored requester (`github:<id>:<login>`, `slack:<team>:<user>`) as a
  *  person reads it: the account name and where it is from. */
+/** A usage figure in approximate dollars, saying when it is not the whole. */
+export function usageLabel(usage: ApiUsage) {
+  if (usage.costUsd === null) return "Not reported";
+  const dollars = usage.costUsd < 0.01 && usage.costUsd > 0
+    ? "< $0.01"
+    : `$${usage.costUsd.toFixed(2)}`;
+  return `${usage.estimated ? "≈ " : ""}${dollars}${usage.complete ? "" : " (partial)"}`;
+}
+
 export function requesterLabel(requester: string) {
   const [provider, , account] = requester.split(":");
   const source = { github: "GitHub", slack: "Slack" }[provider];
@@ -1010,6 +1020,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             )}
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
+            {run.usage && <Stat label="Usage" value={usageLabel(run.usage)} />}
             {/* Where the comments are. Steering by comment happens entirely
                 off screen -- the webhook answers GitHub in milliseconds and
                 the work lands minutes later -- so without something in the

@@ -8,6 +8,7 @@ import {
   phaseAccent,
   phaseLabel,
   requesterLabel,
+  usageLabel,
   RunDetailPage,
   RunsPage,
   runStatusLabel,
@@ -114,6 +115,17 @@ describe("run display helpers", () => {
     expect(requesterLabel("github:42:alice")).toBe("alice (GitHub)");
     expect(requesterLabel("slack:T1:U1")).toBe("U1 (Slack)");
     expect(requesterLabel("other")).toBe("other");
+  });
+
+  it("shows usage in approximate dollars, flagging gaps", () => {
+    const usage = {
+      costUsd: 1.234, estimated: true, complete: true,
+      inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0,
+    };
+    expect(usageLabel(usage)).toBe("≈ $1.23");
+    expect(usageLabel({ ...usage, estimated: false, complete: false })).toBe("$1.23 (partial)");
+    expect(usageLabel({ ...usage, costUsd: 0.001 })).toBe("≈ < $0.01");
+    expect(usageLabel({ ...usage, costUsd: null })).toBe("Not reported");
   });
 });
 
