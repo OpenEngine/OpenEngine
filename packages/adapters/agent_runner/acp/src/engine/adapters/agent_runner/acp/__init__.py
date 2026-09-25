@@ -1,7 +1,8 @@
 """Agent Runner capability, backed by an ACP agent.
 
 ``ACPAgentRunner`` runs a turn through a `langgraph-acp` provider --
-`CodexACPProvider`, `ClaudeACPProvider`, or any `StdioACPProvider` -- rather
+`CodexACPProvider`, `ClaudeACPProvider`, `OpenCodeACPProvider`, or any
+`StdioACPProvider` -- rather
 than driving a CLI's own protocol. The protocol is `langgraph-acp`'s; this
 package binds it to the runner port:
 
@@ -25,9 +26,11 @@ ours, so a profile with grants is refused -- except the runtime-bound MCP
 server, which is attached to the session and whose tools are never re-asked
 about: that server is Engine's own broker and decides for itself.
 
-`codex_acp_runner` and `claude_acp_runner` translate Engine's settings into
-what each adapter reads: a sandbox enforced under codex-acp for Codex (see
-`codex_policy`), SDK options under `_meta.claudeCode.options` for Claude.
+`codex_acp_runner`, `claude_acp_runner` and `opencode_acp_runner` translate
+Engine's settings into what each agent reads: a sandbox enforced under
+codex-acp for Codex (see `codex_policy`), SDK options under
+`_meta.claudeCode.options` for Claude, and `OPENCODE_CONFIG_CONTENT` for
+OpenCode.
 """
 
 import asyncio
@@ -59,8 +62,10 @@ from langgraph_acp import (
 from langgraph_acp.providers import (
     CLAUDE_ACP_COMMAND,
     CODEX_ACP_COMMAND,
+    OPENCODE_ACP_COMMAND,
     ClaudeACPProvider,
     CodexACPProvider,
+    OpenCodeACPProvider,
 )
 
 from engine.adapters.agent_runner.acp.claude import (
@@ -702,7 +707,11 @@ class _Turn:
         call = dict(request.tool_call)
         call_id = call.get("toolCallId")
         if isinstance(call_id, str) and call_id in self._calls:
-            call = {**self._calls[call_id], **call}
+            streamed = self._calls[call_id]
+            call = {**streamed, **call}
+            if call.get("kind") == "other" and streamed.get("kind"):
+                # OpenCode asks with `other` for every tool; its stream says which.
+                call["kind"] = streamed["kind"]
         return call
 
     def _approval_request(
@@ -864,7 +873,7 @@ def _count(usage: Mapping[str, Any], name: str) -> int:
     return int(value) if isinstance(value, (int, float)) else 0
 
 
-# --- the two agents Engine ships with --------------------------------------
+# --- the agents Engine ships with ------------------------------------------
 
 
 def codex_acp_runner(
@@ -975,6 +984,63 @@ def claude_acp_runner(
     )
 
 
+def opencode_acp_runner(
+    *,
+    command: Sequence[str] = OPENCODE_ACP_COMMAND,
+    read_only: bool = False,
+    working_directory: str = ".",
+    model: str = "",
+    timeout_seconds: float | None = None,
+    workspace_provider: WorkspaceProvider | None = None,
+    attribution: bool = True,
+    env: Mapping[str, str] | None = None,
+) -> ACPAgentRunner:
+    """OpenCode, through `opencode acp`, asking before it changes anything.
+
+    OpenCode lets its tools run unasked by default, so a request would never
+    reach Engine. `OPENCODE_CONFIG_CONTENT`, which OpenCode merges over the
+    operator's own configuration, sets every permission that changes something
+    to `ask` -- or, for `read_only`, to `deny`, so only reading is left, as
+    `READ_ONLY_TOOLS` leaves Claude. Attribution reaches OpenCode as an instructions file, the only way it
+    takes instructions from configuration.
+    """
+    unasked = "deny" if read_only else "ask"
+    config: dict[str, Any] = {
+        "permission": {
+            "edit": unasked,
+            "bash": unasked,
+            "webfetch": unasked,
+            "external_directory": "ask",
+        }
+    }
+    if not attribution:
+        config["instructions"] = [_no_attribution_instructions()]
+    return ACPAgentRunner(
+        OpenCodeACPProvider(
+            command=command,
+            env={**(env or {}), "OPENCODE_CONFIG_CONTENT": json.dumps(config)},
+        ),
+        working_directory=working_directory,
+        model=model,
+        timeout_seconds=timeout_seconds,
+        workspace_provider=workspace_provider,
+    )
+
+
+@functools.cache
+def _no_attribution_instructions() -> str:
+    """A file holding `NO_ATTRIBUTION_INSTRUCTIONS`, written once per process.
+
+    In a directory `mkdtemp` creates, for the reason `_codex_policy_launcher`
+    gives: a fixed path under a shared temp directory is one anybody can fill.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="engine-opencode-"))
+    atexit.register(shutil.rmtree, directory, ignore_errors=True)
+    instructions = directory / "no-attribution.md"
+    instructions.write_text(NO_ATTRIBUTION_INSTRUCTIONS + "\n", encoding="utf-8")
+    return str(instructions)
+
+
 __all__ = [
     "ACP_PERMISSION_TRANSLATOR",
     "CODEX_AGENT_MODE",
@@ -989,5 +1055,6 @@ __all__ = [
     "claude_acp_runner",
     "claude_session_config",
     "codex_acp_runner",
+    "opencode_acp_runner",
     "render_prompt",
 ]

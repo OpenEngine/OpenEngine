@@ -18,11 +18,14 @@ from langgraph_acp import (
     CODEX_ACP_COMMAND,
     ClaudeACPProvider,
     CodexACPProvider,
+    OPENCODE_ACP_COMMAND,
+    OpenCodeACPProvider,
     StdioACPProvider,
     default_registry,
 )
 from langgraph_acp.providers.claude import CLAUDE_ACP_VERSION
 from langgraph_acp.providers.codex import CODEX_ACP_VERSION
+from langgraph_acp.providers.opencode import OPENCODE_VERSION
 
 
 def test_codex_resolves_to_a_provider() -> None:
@@ -43,7 +46,7 @@ def test_claude_resolves_to_a_provider() -> None:
 def test_the_default_registry_is_shared() -> None:
     """An application registers its agents once, and every node sees them."""
     assert default_registry() is default_registry()
-    assert default_registry().names == ("claude", "codex")
+    assert default_registry().names == ("claude", "codex", "opencode")
 
 
 def test_an_unregistered_name_says_what_is_registered() -> None:
@@ -105,6 +108,18 @@ def test_claude_is_reached_through_its_acp_adapter() -> None:
     )
     assert ClaudeACPProvider().command == CLAUDE_ACP_COMMAND
     assert isinstance(ClaudeACPProvider(), ACPAgentProvider)
+
+
+def test_opencode_speaks_acp_itself() -> None:
+    assert OPENCODE_ACP_COMMAND == (
+        "npx.cmd" if os.name == "nt" else "npx",
+        "--yes",
+        f"opencode-ai@{OPENCODE_VERSION}",
+        "acp",
+    )
+    assert default_registry().resolve("opencode").name == "opencode"
+    assert OpenCodeACPProvider().command == OPENCODE_ACP_COMMAND
+    assert isinstance(OpenCodeACPProvider(), ACPAgentProvider)
 
 
 def test_a_provider_can_be_pointed_at_a_local_adapter() -> None:

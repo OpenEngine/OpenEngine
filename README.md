@@ -14,6 +14,8 @@ Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
 OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. Make sure you are logged in to Codex or Claude on this machine. 
 
+OpenCode is offered too: it speaks ACP itself, so OpenEngine launches the pinned `opencode-ai` package with `npx` and it uses your own `opencode.json` providers and `opencode auth login` credentials. Pick it as a chat's runner; it asks before every edit, shell command, and fetch.
+
 First, clone the repo:
 ```bash
 cd OpenEngine

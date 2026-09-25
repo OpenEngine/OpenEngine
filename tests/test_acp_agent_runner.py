@@ -28,6 +28,7 @@ from engine.adapters.agent_runner.acp import (
     ACPToolsUnsupportedError,
     claude_acp_runner,
     codex_acp_runner,
+    opencode_acp_runner,
 )
 from engine.domain import (
     AgentId,
@@ -73,6 +74,9 @@ RUNNERS = {
         command=FAKE_COMMAND, working_directory=str(workspace)
     ),
     "claude": lambda workspace: claude_acp_runner(
+        command=FAKE_COMMAND, working_directory=str(workspace)
+    ),
+    "opencode": lambda workspace: opencode_acp_runner(
         command=FAKE_COMMAND, working_directory=str(workspace)
     ),
 }
@@ -469,6 +473,94 @@ def test_a_read_only_claude_has_only_the_read_only_tools() -> None:
 
     assert options["tools"] == list(READ_ONLY_TOOLS)
     assert options["allowedTools"] == list(READ_ONLY_TOOLS)
+
+
+def test_opencode_asks_before_every_change() -> None:
+    """OpenCode's own default runs every tool unasked."""
+    runner = opencode_acp_runner(model="provider/picked")
+
+    config = json.loads(runner.provider.env["OPENCODE_CONFIG_CONTENT"])
+    assert config["permission"] == {
+        "edit": "ask", "bash": "ask", "webfetch": "ask", "external_directory": "ask",
+    }
+    assert "instructions" not in config
+    assert runner.session_config_for(PROFILE) == {"model": "provider/picked"}
+
+
+def test_a_read_only_opencode_cannot_change_anything() -> None:
+    config = json.loads(
+        opencode_acp_runner(read_only=True).provider.env["OPENCODE_CONFIG_CONTENT"]
+    )
+
+    assert config["permission"]["edit"] == config["permission"]["bash"] == "deny"
+    assert config["permission"]["webfetch"] == "deny"
+
+
+def test_opencode_attribution_reaches_it_as_an_instructions_file() -> None:
+    config = json.loads(
+        opencode_acp_runner(attribution=False).provider.env["OPENCODE_CONFIG_CONTENT"]
+    )
+
+    [instructions] = config["instructions"]
+    assert "AI attribution" in Path(instructions).read_text(encoding="utf-8")
+    if os.name != "nt":
+        assert Path(instructions).parent.stat().st_mode & 0o077 == 0
+
+
+def test_opencode_s_permission_request_is_classified_by_what_it_streamed() -> None:
+    """OpenCode asks with `kind: other` for every tool; its stream says which."""
+    from langgraph_acp import ACPEvent, ACPEventType, ACPPermissionRequest
+
+    from engine.adapters.agent_runner.acp import _Turn
+
+    asked: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalDecision:
+        asked.append(request)
+        return ApprovalDecision.CANCEL
+
+    async def run() -> None:
+        turn = _Turn(
+            agent="opencode",
+            agent_run_id=AgentRunId("run-1"),
+            working_directory="/work",
+            on_message=lambda _message: None,
+            on_approval=approve,
+            mcp_server=None,
+        )
+        await turn.observe(
+            ACPEvent(
+                agent="opencode",
+                type=ACPEventType.TOOL_STARTED,
+                data={"toolCallId": "call-1", "kind": "execute", "title": "bash"},
+            )
+        )
+        await turn.observe(
+            ACPEvent(agent="opencode", type=ACPEventType.PERMISSION_REQUESTED)
+        )
+        await turn.answer(
+            ACPPermissionRequest.from_params(
+                "opencode",
+                {
+                    "sessionId": "s",
+                    "toolCall": {
+                        "toolCallId": "call-1",
+                        "kind": "other",
+                        "title": "touch made.txt",
+                        "rawInput": {"command": "touch made.txt"},
+                    },
+                    "options": [
+                        {"optionId": "once", "kind": "allow_once"},
+                        {"optionId": "reject", "kind": "reject_once"},
+                    ],
+                },
+            )
+        )
+
+    asyncio.run(run())
+    [request] = asked
+    assert request.kind is ApprovalKind.COMMAND_EXECUTION
+    assert request.command == "touch made.txt"
 
 
 def test_the_bound_mcp_server_is_attached_to_the_session(tmp_path) -> None:

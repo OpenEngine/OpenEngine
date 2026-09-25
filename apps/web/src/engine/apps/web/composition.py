@@ -26,7 +26,11 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
-from langgraph_acp.providers import CLAUDE_ACP_COMMAND, CODEX_ACP_COMMAND
+from langgraph_acp.providers import (
+    CLAUDE_ACP_COMMAND,
+    CODEX_ACP_COMMAND,
+    OPENCODE_ACP_COMMAND,
+)
 
 from engine.adapters.agent_runner.acp import (
     READ_ONLY_TOOLS,
@@ -34,6 +38,7 @@ from engine.adapters.agent_runner.acp import (
     claude_acp_runner,
     claude_session_config,
     codex_acp_runner,
+    opencode_acp_runner,
 )
 from engine.adapters.communications.slack import (
     SlackCommunications,
@@ -114,6 +119,13 @@ class Settings:
     claude_timeout_seconds: float | None = None
     """Same as `codex_timeout_seconds`."""
     claude_model: str = ""
+    opencode_acp_command: tuple[str, ...] = OPENCODE_ACP_COMMAND
+    """The OpenCode chat's OpenCode runners launch; it speaks ACP itself."""
+    opencode_working_directory: str = "."
+    opencode_timeout_seconds: float | None = None
+    """Same as `codex_timeout_seconds`."""
+    opencode_model: str = ""
+    """`provider/model`, as OpenCode names them. Empty is OpenCode's own default."""
     interactive_codex_sandbox: str = "workspace-write"
     """An approved command has to be able to do the thing it was approved for.
 
@@ -333,12 +345,12 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     """Every agent runner this process offers, by the name the interface shows.
 
     The one place a runner name is bound to an implementation -- below this file
-    "codex" and "claude" are opaque strings, exactly like tool grants. The first
+    "codex", "claude" and "opencode" are opaque strings, exactly like tool grants. The first
     entry is the default, so it is also what a conversation gets when nobody
     picks.
 
     One entry per agent: the dropdown names the agent you are talking to, not
-    the transport it is driven over -- ACP, for both. Both pause for approval, because a runner that
+    the transport it is driven over -- ACP, for all of them. All pause for approval, because a runner that
     could only run unattended is not a second choice worth offering -- what it
     would do without asking, these do after asking.
 
@@ -349,7 +361,8 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     preapproval -- so its whole policy is applied to its requests instead. Shell
     is on neither list on purpose: a shell rule is written per command rather
     than per capability, so `Bash` reaches the callback either way and
-    `approvals.bash` is applied there.
+    `approvals.bash` is applied there. OpenCode is Codex's case: it is set to
+    ask before every change, and the policy answers those requests.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
@@ -372,7 +385,22 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
+        "opencode": _opencode_runner(settings, workspace_provider, read_only=False),
     }
+
+
+def _opencode_runner(
+    settings: Settings, workspace_provider: GitWorktreeWorkspaceProvider, *, read_only: bool
+) -> AgentRunner:
+    return opencode_acp_runner(
+        command=settings.opencode_acp_command,
+        read_only=read_only,
+        timeout_seconds=settings.opencode_timeout_seconds,
+        working_directory=settings.opencode_working_directory,
+        model=settings.opencode_model,
+        attribution=settings.engine_config.attribution,
+        workspace_provider=workspace_provider,
+    )
 
 
 def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
@@ -391,7 +419,8 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     Withholding the tools is half of it. The other half is that a `read_only`
     profile's approvals are refused by the broker, so a policy cannot hand back
     at the pause what this withheld before the turn. For Codex the withholding
-    is its read-only sandbox, which `codex_acp_runner` holds every turn to.
+    is its read-only sandbox, which `codex_acp_runner` holds every turn to; for
+    OpenCode it is denying edit, shell and fetch outright.
     """
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     return {
@@ -415,6 +444,7 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
         ),
+        "opencode": _opencode_runner(settings, workspace_provider, read_only=True),
     }
 
 
