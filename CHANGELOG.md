@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/OpenEngine/OpenEngine/compare/v0.2.0...v0.3.0) (2026-09-25)
+
+
+### Features
+
+* add one-line installer for macOS and Linux ([#553](https://github.com/OpenEngine/OpenEngine/issues/553)) ([bd798b6](https://github.com/OpenEngine/OpenEngine/commit/bd798b6528787640e1633795023c0cde5d8a99d0))
+* credit the work order's requester as co-author on agent commits ([#526](https://github.com/OpenEngine/OpenEngine/issues/526)) ([c4d28a9](https://github.com/OpenEngine/OpenEngine/commit/c4d28a9bed9cbfe14dfeeb6e842a2d8f0a4779e8))
+* run OpenEngine as a background service with engine daemon ([#555](https://github.com/OpenEngine/OpenEngine/issues/555)) ([0f1c56c](https://github.com/OpenEngine/OpenEngine/commit/0f1c56ccbe206512c907d9492ce81262d582427a))
+
+
+### Bug Fixes
+
+* replace openengine launcher with engine ([#557](https://github.com/OpenEngine/OpenEngine/issues/557)) ([aba6780](https://github.com/OpenEngine/OpenEngine/commit/aba678059129fad24aba3a22c2bdc2aaaf6a0472))
+
 ## [0.2.0](https://github.com/OpenEngine/OpenEngine/compare/v0.1.0...v0.2.0) (2026-09-25)
 
 
