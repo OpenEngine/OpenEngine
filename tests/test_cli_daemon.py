@@ -269,3 +269,15 @@ def test_tail_reads_only_the_last_lines(tmp_path: Path):
         assert file.tell() == log.stat().st_size
         assert daemon.tail(file, 0) == []
         assert len(daemon.tail(file, 5000)) == 1000
+
+
+def test_start_rotates_an_oversized_log(home: Path, monkeypatch):
+    daemon.prepare_directories()
+    log = daemon.log_path()
+    log.write_bytes(b"x" * 11)
+    monkeypatch.setattr(daemon, "LOG_ROTATE_BYTES", 10)
+
+    daemon.rotate_log(log)
+
+    assert not log.exists()
+    assert log.with_name("engine-web.log.1").read_bytes() == b"x" * 11

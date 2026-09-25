@@ -41,6 +41,8 @@ TOOLS = ("git", "node", "npx", "claude", "codex")
 REQUIRED_TOOLS = ("git", "node", "npx")
 SYSTEM_PATH = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 START_TIMEOUT_SECONDS = 60.0
+# The service appends to one log; keep one previous copy past this size.
+LOG_ROTATE_BYTES = 10 * 1024 * 1024
 STOP_TIMEOUT_SECONDS = 30.0
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -68,6 +70,15 @@ def log_directory() -> Path:
 
 def log_path() -> Path:
     return log_directory() / "engine-web.log"
+
+
+def rotate_log(path: Path) -> None:
+    """Keep the log bounded; call only while the service is down and not writing it."""
+    try:
+        if path.stat().st_size > LOG_ROTATE_BYTES:
+            os.replace(path, path.with_name(path.name + ".1"))
+    except FileNotFoundError:
+        pass
 
 
 def pidfile_path() -> Path:
@@ -531,6 +542,7 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
         if state == "foreign":
             raise RuntimeError(f"another program is using {spec.url}; free port {spec.port} or change [server] port in {spec.config}")
         if state == "down":
+            rotate_log(Path(spec.log))
             backend.start(spec)
         state, body = wait_for(spec.url, {"ready", "foreign"}, START_TIMEOUT_SECONDS, backend)
         if state != "ready":
@@ -588,6 +600,7 @@ def command_setup(arguments: argparse.Namespace) -> int:
                 print(f"engine daemon: an OpenEngine not started by engine daemon is already at {spec.url}; "
                       "stop it and run engine daemon start to use the service", file=sys.stderr)
             else:
+                rotate_log(Path(spec.log))
                 try:
                     backend.start(spec)
                 except RuntimeError as error:

@@ -267,6 +267,15 @@ def ensure_service(server: str) -> tuple[Check, dict[str, Any] | None, bool]:
     check, identity = probe(server)
     if check.ok or server != DEFAULT_SERVER:
         return check, identity, False
+    if daemon.read_record() is not None:
+        # `engine daemon setup` registered the service, so start that one rather
+        # than a second, untracked engine-web.
+        try:
+            _state, _body, url = daemon.start_service()
+        except (OSError, RuntimeError, ValueError) as error:
+            return Check("service", False, f"could not start the OpenEngine service: {error}"), None, False
+        check, identity = probe(url)
+        return check, identity, True
     try:
         with startup_lock():
             discard_stale_record()
