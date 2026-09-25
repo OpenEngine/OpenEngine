@@ -242,6 +242,17 @@ else
   tries=0
   until curl --fail --silent --output /dev/null "$url/api/health"; do
     if ! kill -0 "$server" 2>/dev/null || [ "$tries" -ge 60 ]; then
+      # Every step execs, so $server is engine-web itself: stop it rather
+      # than leave it holding the port after a failed install.
+      if kill "$server" 2>/dev/null; then
+        tries=0
+        while kill -0 "$server" 2>/dev/null && [ "$tries" -lt 10 ]; do
+          tries=$((tries + 1))
+          sleep 1
+        done
+        kill -9 "$server" 2>/dev/null || true
+        wait "$server" 2>/dev/null || true
+      fi
       tail -n 20 "$log" >&2 || true
       die "OpenEngine did not start; see $log"
     fi
