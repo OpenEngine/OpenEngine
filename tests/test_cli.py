@@ -6,7 +6,16 @@ import json
 from pathlib import Path
 from urllib.error import URLError
 
+import pytest
+
 from engine.apps.cli import __main__ as cli
+from engine.apps.cli import daemon
+
+
+@pytest.fixture(autouse=True)
+def isolated_daemon_state(monkeypatch, tmp_path: Path) -> None:
+    """Never let a real `engine daemon` record on this machine steer these tests."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
 
 
 class _Response:
@@ -53,7 +62,7 @@ class _ContentThenDoneResponse:
 
 
 def test_status_json_identifies_a_ready_compatible_service(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _Response({
+    monkeypatch.setattr(daemon, "urlopen", lambda *_args, **_kwargs: _Response({
         "service": "openengine", "version": "1.2.3", "ready": True, "api_version": 1,
     }))
 
@@ -68,7 +77,7 @@ def test_status_json_identifies_a_ready_compatible_service(monkeypatch, capsys):
 
 
 def test_status_rejects_an_occupied_port_that_is_not_openengine(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _Response({"service": "other"}))
+    monkeypatch.setattr(daemon, "urlopen", lambda *_args, **_kwargs: _Response({"service": "other"}))
 
     assert cli.main(["status", "--server", "http://127.0.0.1:4364"]) == 1
 
@@ -76,7 +85,7 @@ def test_status_rejects_an_occupied_port_that_is_not_openengine(monkeypatch, cap
 
 
 def test_status_reports_a_remote_connection_failure(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("unreachable")))
+    monkeypatch.setattr(daemon, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("unreachable")))
 
     assert cli.main(["status", "--json", "--server", "https://example.invalid"]) == 1
 
@@ -447,6 +456,7 @@ def test_doctor_reports_prerequisites_and_keeps_a_stable_exit_code(monkeypatch, 
         return _Response({"service": "openengine", "version": "1.2.3", "ready": True, "api_version": 1})
 
     monkeypatch.setattr(cli, "urlopen", response)
+    monkeypatch.setattr(daemon, "urlopen", response)
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/tools/{name}")
 
     assert cli.main(["doctor", "--json"]) == 0
@@ -455,3 +465,17 @@ def test_doctor_reports_prerequisites_and_keeps_a_stable_exit_code(monkeypatch, 
     assert {check["name"] for check in report["checks"]} == {
         "service", "git", "codex", "claude", "source_control", "config", "data",
     }
+
+
+def test_default_local_service_starts_the_registered_daemon(monkeypatch):
+    unavailable = cli.Check("service", False, "cannot reach local service")
+    ready = cli.Check("service", True, "OpenEngine 1.2.3 is ready")
+    responses = iter([(unavailable, None), (ready, {"service": "openengine"})])
+    monkeypatch.setattr(cli, "probe", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(daemon, "read_record", lambda: object())
+    monkeypatch.setattr(daemon, "start_service", lambda: ("ready", {}, cli.DEFAULT_SERVER))
+    monkeypatch.setattr(cli, "launch_local_service", lambda _server: (_ for _ in ()).throw(AssertionError("untracked launch")))
+
+    check, _identity, launched = cli.ensure_service(cli.DEFAULT_SERVER)
+
+    assert check.ok and launched

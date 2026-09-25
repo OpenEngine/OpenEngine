@@ -28,6 +28,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from platformdirs import user_config_path, user_data_path, user_state_path
 
+from engine.apps.cli import daemon
+
 DEFAULT_SERVER = "http://127.0.0.1:4364"
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CLI_CONFIG"
 STATE_ENVIRONMENT_VARIABLE = "ENGINE_CLI_STATE_DIR"
@@ -156,29 +158,8 @@ def normalize_server(value: str) -> str:
 
 
 def probe(server: str, timeout: float = 3.0) -> tuple[Check, dict[str, Any] | None]:
-    try:
-        with urlopen(Request(f"{server}/api/health", headers={"Accept": "application/json"}), timeout=timeout) as response:
-            body = json.loads(response.read())
-    except HTTPError as error:
-        if error.code == 503:
-            try:
-                body = json.loads(error.read())
-            except (json.JSONDecodeError, OSError):
-                body = None
-            if isinstance(body, dict) and body.get("service") == "openengine":
-                return Check("service", False, "OpenEngine is starting or not ready"), body
-        return Check("service", False, f"server returned HTTP {error.code}"), None
-    except (URLError, TimeoutError, OSError) as error:
-        return Check("service", False, f"cannot reach {server}: {error.reason if isinstance(error, URLError) else error}"), None
-    except json.JSONDecodeError:
-        return Check("service", False, "health endpoint did not return JSON"), None
-    if not isinstance(body, dict) or body.get("service") != "openengine":
-        return Check("service", False, "endpoint is not an OpenEngine service"), body if isinstance(body, dict) else None
-    if body.get("api_version") != 1:
-        return Check("service", False, f"unsupported API compatibility version: {body.get('api_version')!r}"), body
-    if body.get("ready") is not True:
-        return Check("service", False, "OpenEngine is not ready"), body
-    return Check("service", True, f"OpenEngine {body.get('version', 'unknown')} is ready"), body
+    state, body, detail = daemon.check_health(server, timeout)
+    return Check("service", state == "ready", detail), body
 
 
 def is_openengine(identity: dict[str, Any] | None) -> bool:
@@ -193,16 +174,7 @@ def read_service_record() -> ServiceRecord | None:
         return None
 
 
-def process_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+process_alive = daemon.process_alive
 
 
 def discard_stale_record() -> None:
@@ -295,6 +267,15 @@ def ensure_service(server: str) -> tuple[Check, dict[str, Any] | None, bool]:
     check, identity = probe(server)
     if check.ok or server != DEFAULT_SERVER:
         return check, identity, False
+    if daemon.read_record() is not None:
+        # `engine daemon setup` registered the service, so start that one rather
+        # than a second, untracked engine-web.
+        try:
+            _state, _body, url = daemon.start_service()
+        except (OSError, RuntimeError, ValueError) as error:
+            return Check("service", False, f"could not start the OpenEngine service: {error}"), None, False
+        check, identity = probe(url)
+        return check, identity, True
     try:
         with startup_lock():
             discard_stale_record()
@@ -1177,6 +1158,7 @@ def parser() -> argparse.ArgumentParser:
         connection.add_argument("--server", metavar="URL")
         connection.add_argument("--origin", default="https://gitlab.com")
         connection.add_argument("--open", action="store_true")
+    daemon.add_parser(commands)
     repo_command = commands.add_parser("repo", help="select a service repository for new tasks")
     repo_command.add_argument("repository")
     repo_command.add_argument("--server", metavar="URL")
@@ -1225,6 +1207,8 @@ def main(argv: list[str] | None = None) -> int:
         return connect(arguments, preferences)
     if arguments.command == "repo":
         return repo(arguments, preferences)
+    if arguments.command == "daemon":
+        return daemon.main(arguments)
     if arguments.command == "config" and arguments.config_command == "server":
         return configure_server(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "profile":

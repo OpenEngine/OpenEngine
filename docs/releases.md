@@ -49,17 +49,40 @@ uv configuration on the machine, fetches the latest release (or `--version
 X.Y.Z`), checks the archive against the `archive_sha256` in the published
 `release-manifest.json` before extracting it to `versions/<version>`, and
 installs it into a venv on uv's own Python 3.12 with `--require-hashes`. A
-`current` symlink points at that version and `~/.local/bin/openengine` runs
-it. `~/.config/openengine/engine.toml` is written from the bundled default,
+`current` symlink points at that version; `~/.local/bin/openengine` runs the
+web service and `~/.local/bin/engine` runs the terminal client. `~/.config/openengine/engine.toml` is written from the bundled default,
 keeping state in `~/.local/state/openengine`, only when it does not already
 exist. The `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
 `XDG_CACHE_HOME`, and `XDG_BIN_HOME` directories are honoured, and `--prefix DIR`
-replaces the data directory. It then starts OpenEngine in the background and
-opens it in a browser; `--no-start` and `--no-browser` skip those. Running it
-again reuses an installed version and never touches the config or state. The
-release workflow runs it on clean Ubuntu and macOS runners against the bundle it
-just built (`OPENENGINE_RELEASE_URL` names that directory) and checks
-`/api/health`.
+replaces the data directory. It then runs `engine daemon setup`, which starts
+OpenEngine in the background and opens it in a browser; `--no-start` and
+`--no-browser` skip those. Running it again reuses an installed version and
+never touches the config or state. The release workflow runs it on clean Ubuntu
+and macOS runners against the bundle it just built (`OPENENGINE_RELEASE_URL`
+names that directory), checks `/api/health`, and then runs `engine daemon setup
+--no-browser`, `status`, and `stop`.
+
+## Background service
+
+`engine daemon setup` records the absolute paths of `git`, `node`, `npx`,
+`claude`, and `codex`, then registers a per-user LaunchAgent
+(`~/Library/LaunchAgents/sh.openengine.engine.plist`) on macOS or a systemd user
+unit (`~/.config/systemd/user/openengine.service`) on Linux, and starts it.
+Where neither is usable, the service is a detached process tracked by a pidfile.
+The service runs `engine-web` only (never `engine-orchestrator`; Temporal is not
+used) with `ENGINE_CONFIG` set, bound to `127.0.0.1`, and with a `PATH` built
+from the recorded tool directories rather than the shell's. Rerun setup after
+installing a new tool or version. There is one instance per user; logs go to
+`~/.local/state/openengine/logs`.
+
+```sh
+engine daemon          # start if needed, wait for /api/health, open the browser
+engine daemon start    # start without opening a browser
+engine daemon stop     # SIGTERM, waiting for a graceful shutdown
+engine daemon status   # version, health, and URL (--json)
+engine daemon logs -f
+engine daemon doctor   # config, port, and git/node/npx/claude/codex
+```
 
 ## Manual install
 
