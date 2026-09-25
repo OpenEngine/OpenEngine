@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import socket
 import sys
@@ -216,3 +217,55 @@ def test_start_refuses_a_port_held_by_another_service(home: Path, monkeypatch, c
     assert cli.main(["daemon", "start"]) == 1
 
     assert "another program is using http://127.0.0.1:4412" in capsys.readouterr().err
+
+
+def test_setup_unregisters_the_service_when_it_falls_back_to_a_process(home: Path, monkeypatch):
+    config = home / "config" / "openengine" / "engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[server]\nport = 4413\n")
+    monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path("/venv/bin/engine-web"))
+    monkeypatch.setattr(daemon.LaunchdBackend, "available", classmethod(lambda _cls: True))
+    monkeypatch.setattr(daemon.LaunchdBackend, "running", lambda _self: False)
+    monkeypatch.setattr(daemon.LaunchdBackend, "start",
+                        lambda _self, _spec: (_ for _ in ()).throw(RuntimeError("launchctl bootstrap failed")))
+    monkeypatch.setattr(daemon.ProcessBackend, "start", lambda _self, _spec: None)
+    monkeypatch.setattr(daemon, "health", lambda _url, timeout=2.0: ("down", None))
+    monkeypatch.setattr(daemon, "start_service", lambda: ("ready", {}, "http://127.0.0.1:4413"))
+
+    assert cli.main(["daemon", "setup", "--no-browser"]) == 0
+
+    assert daemon.read_record().backend == "process"
+    assert not daemon.launch_agent_path().exists()
+
+
+def test_commands_follow_a_port_edited_after_setup(home: Path):
+    config = home / "config" / "openengine" / "engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[server]\nport = 4414\n")
+    daemon.prepare_directories()
+    daemon.write_record(daemon.Record("process", daemon.ServiceSpec("/venv/bin/engine-web", str(config), 4414, str(daemon.log_path()), {})))
+
+    config.write_text("[server]\nport = 4415\n")
+
+    assert daemon.current()[1].url == "http://127.0.0.1:4415"
+
+
+def test_stop_leaves_alone_a_process_that_reused_the_recorded_pid(home: Path):
+    daemon.prepare_directories()
+    daemon.pidfile_path().write_text(f"{os.getpid()}\n/venv/bin/engine-web\n")
+
+    daemon.ProcessBackend().stop()
+
+    assert daemon.process_alive(os.getpid())
+    assert not daemon.pidfile_path().exists()
+
+
+def test_tail_reads_only_the_last_lines(tmp_path: Path):
+    log = tmp_path / "engine-web.log"
+    log.write_bytes(b"".join(f"line {number}\n".encode() for number in range(1000)))
+
+    with log.open("rb") as file:
+        assert daemon.tail(file, 3, block=16) == [b"line 997\n", b"line 998\n", b"line 999\n"]
+        assert file.tell() == log.stat().st_size
+        assert daemon.tail(file, 0) == []
+        assert len(daemon.tail(file, 5000)) == 1000

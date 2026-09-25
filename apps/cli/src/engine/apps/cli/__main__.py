@@ -158,29 +158,8 @@ def normalize_server(value: str) -> str:
 
 
 def probe(server: str, timeout: float = 3.0) -> tuple[Check, dict[str, Any] | None]:
-    try:
-        with urlopen(Request(f"{server}/api/health", headers={"Accept": "application/json"}), timeout=timeout) as response:
-            body = json.loads(response.read())
-    except HTTPError as error:
-        if error.code == 503:
-            try:
-                body = json.loads(error.read())
-            except (json.JSONDecodeError, OSError):
-                body = None
-            if isinstance(body, dict) and body.get("service") == "openengine":
-                return Check("service", False, "OpenEngine is starting or not ready"), body
-        return Check("service", False, f"server returned HTTP {error.code}"), None
-    except (URLError, TimeoutError, OSError) as error:
-        return Check("service", False, f"cannot reach {server}: {error.reason if isinstance(error, URLError) else error}"), None
-    except json.JSONDecodeError:
-        return Check("service", False, "health endpoint did not return JSON"), None
-    if not isinstance(body, dict) or body.get("service") != "openengine":
-        return Check("service", False, "endpoint is not an OpenEngine service"), body if isinstance(body, dict) else None
-    if body.get("api_version") != 1:
-        return Check("service", False, f"unsupported API compatibility version: {body.get('api_version')!r}"), body
-    if body.get("ready") is not True:
-        return Check("service", False, "OpenEngine is not ready"), body
-    return Check("service", True, f"OpenEngine {body.get('version', 'unknown')} is ready"), body
+    state, body, detail = daemon.check_health(server, timeout)
+    return Check("service", state == "ready", detail), body
 
 
 def is_openengine(identity: dict[str, Any] | None) -> bool:
@@ -195,16 +174,7 @@ def read_service_record() -> ServiceRecord | None:
         return None
 
 
-def process_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+process_alive = daemon.process_alive
 
 
 def discard_stale_record() -> None:

@@ -24,10 +24,10 @@ import time
 import tomllib
 import webbrowser
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, BinaryIO, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -214,6 +214,9 @@ class Backend:
     def install(self, spec: ServiceSpec) -> None:
         """Register the service so it starts at login; the process backend cannot."""
 
+    def uninstall(self) -> None:
+        """Undo `install`, so nothing starts at the next login."""
+
     def start(self, spec: ServiceSpec) -> None:
         raise NotImplementedError
 
@@ -249,6 +252,10 @@ class LaunchdBackend(Backend):
                 raise RuntimeError(f"launchctl bootstrap failed: {result.stderr.strip() or result.returncode}")
         _run(["launchctl", "kickstart", f"{self._domain()}/{LABEL}"])
 
+    def uninstall(self) -> None:
+        self.stop()
+        launch_agent_path().unlink(missing_ok=True)
+
     def stop(self) -> None:
         # bootout sends SIGTERM and waits up to ExitTimeOut before SIGKILL. The
         # agent stays on disk, so it starts again at the next login.
@@ -273,6 +280,11 @@ class SystemdBackend(Backend):
         path.write_text(render_systemd_unit(spec), encoding="utf-8")
         _run(["systemctl", "--user", "daemon-reload"])
         _run(["systemctl", "--user", "enable", SYSTEMD_UNIT])
+
+    def uninstall(self) -> None:
+        _run(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT])
+        systemd_unit_path().unlink(missing_ok=True)
+        _run(["systemctl", "--user", "daemon-reload"])
 
     def start(self, spec: ServiceSpec) -> None:
         if not systemd_unit_path().is_file():
@@ -301,6 +313,21 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+def _command_line(pid: int) -> str | None:
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        pass
+    result = _run(["ps", "-o", "command=", "-p", str(pid)])
+    return result.stdout if result.returncode == 0 else None
+
+
+def runs_program(pid: int, program: str) -> bool:
+    """Whether `pid` is still `program`, and not a process that reused its number."""
+    command = _command_line(pid)
+    return command is not None and program in command
+
+
 class ProcessBackend(Backend):
     """A detached engine-web tracked by a pidfile, where no service manager is usable."""
 
@@ -308,12 +335,14 @@ class ProcessBackend(Backend):
 
     @staticmethod
     def pid() -> int | None:
+        """The recorded engine-web, if that process number still belongs to it."""
         try:
-            pid = int(pidfile_path().read_text(encoding="ascii").strip())
+            number, program = pidfile_path().read_text(encoding="utf-8").splitlines()[:2]
+            pid = int(number)
         except (OSError, ValueError):
             return None
         _reap(pid)
-        if process_alive(pid):
+        if process_alive(pid) and runs_program(pid, program):
             return pid
         pidfile_path().unlink(missing_ok=True)
         return None
@@ -331,7 +360,7 @@ class ProcessBackend(Backend):
             )
         finally:
             log.close()
-        pidfile_path().write_text(f"{process.pid}\n", encoding="ascii")
+        pidfile_path().write_text(f"{process.pid}\n{spec.program}\n", encoding="utf-8")
 
     def stop(self) -> None:
         pid = self.pid()
@@ -399,8 +428,16 @@ def current() -> tuple[Backend, ServiceSpec]:
     """The recorded service, or a detached process when setup never ran."""
     record = read_record()
     if record is not None and record.backend in BACKENDS:
-        return BACKENDS[record.backend](), record.spec
+        return BACKENDS[record.backend](), _with_live_port(record.spec)
     return ProcessBackend(), build_spec()
+
+
+def _with_live_port(spec: ServiceSpec) -> ServiceSpec:
+    """engine-web reads `[server] port` itself at start, so follow edits to it."""
+    try:
+        return replace(spec, port=configured_port(Path(spec.config)))
+    except FileNotFoundError:
+        return spec
 
 
 @contextmanager
@@ -432,26 +469,46 @@ def instance_lock() -> Iterator[None]:
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def health(url: str, timeout: float = 2.0) -> tuple[str, dict[str, Any] | None]:
-    """`ready`, `starting`, `foreign` (another service holds the port) or `down`."""
+API_VERSION = 1
+
+
+def check_health(url: str, timeout: float = 2.0) -> tuple[str, dict[str, Any] | None, str]:
+    """Read the `/api/health` envelope; the one parser `engine` and `engine daemon` share.
+
+    The state is `ready`, `starting`, `incompatible` (an OpenEngine with another
+    API version), `foreign` (another program holds the port) or `down`.
+    """
     try:
         with urlopen(Request(f"{url}/api/health", headers={"Accept": "application/json"}), timeout=timeout) as response:
             body = json.loads(response.read())
     except HTTPError as error:
-        try:
-            body = json.loads(error.read())
-        except (OSError, ValueError):
-            return "foreign", None
-        if isinstance(body, dict) and body.get("service") == "openengine":
-            return "starting", body
-        return "foreign", None
-    except (URLError, TimeoutError, OSError):
-        return "down", None
+        if error.code == 503:
+            try:
+                body = json.loads(error.read())
+            except (OSError, ValueError):
+                body = None
+            if isinstance(body, dict) and body.get("service") == "openengine":
+                return "starting", body, "OpenEngine is starting or not ready"
+        return "foreign", None, f"server returned HTTP {error.code}"
+    except (URLError, TimeoutError, OSError) as error:
+        return "down", None, f"cannot reach {url}: {error.reason if isinstance(error, URLError) else error}"
     except ValueError:
-        return "foreign", None
+        return "foreign", None, "health endpoint did not return JSON"
     if not isinstance(body, dict) or body.get("service") != "openengine":
-        return "foreign", None
-    return ("ready" if body.get("ready") is True else "starting"), body
+        return "foreign", body if isinstance(body, dict) else None, "endpoint is not an OpenEngine service"
+    if body.get("api_version") != API_VERSION:
+        return "incompatible", body, f"unsupported API compatibility version: {body.get('api_version')!r}"
+    if body.get("ready") is not True:
+        return "starting", body, "OpenEngine is not ready"
+    return "ready", body, f"OpenEngine {body.get('version', 'unknown')} is ready"
+
+
+def health(url: str, timeout: float = 2.0) -> tuple[str, dict[str, Any] | None]:
+    """`ready`, `starting`, `foreign` or `down`; any OpenEngine on the port is ours to manage."""
+    state, body, _detail = check_health(url, timeout)
+    if state == "incompatible":
+        state = "ready" if body and body.get("ready") is True else "starting"
+    return state, body
 
 
 def wait_for(url: str, wanted: set[str], timeout: float, backend: Backend | None = None) -> tuple[str, dict[str, Any] | None]:
@@ -535,6 +592,8 @@ def command_setup(arguments: argparse.Namespace) -> int:
                     backend.start(spec)
                 except RuntimeError as error:
                     print(f"engine daemon: {error}; running a detached process instead", file=sys.stderr)
+                    # Otherwise the OS would start a second, untracked copy at login.
+                    backend.uninstall()
                     backend = ProcessBackend()
                     backend.start(spec)
             write_record(Record(backend.name, spec))
@@ -592,21 +651,34 @@ def command_status(arguments: argparse.Namespace) -> int:
     return EXIT_OK if state == "ready" else EXIT_FAILED
 
 
+def tail(file: BinaryIO, count: int, block: int = 64 * 1024) -> list[bytes]:
+    """The last `count` lines, read backwards from the end so cost follows `count`."""
+    end = file.seek(0, os.SEEK_END)
+    position, data = end, b""
+    while count > 0 and position > 0 and data.count(b"\n") <= count:
+        step = min(block, position)
+        position -= step
+        file.seek(position)
+        data = file.read(step) + data
+    file.seek(end)
+    return data.splitlines(keepends=True)[-count:] if count > 0 else []
+
+
 def command_logs(arguments: argparse.Namespace) -> int:
     path = log_path()
     if not path.is_file():
         print(f"engine daemon: no log at {path} yet", file=sys.stderr)
         return EXIT_FAILED
-    with path.open("r", encoding="utf-8", errors="replace") as file:
-        for line in file.readlines()[-arguments.lines:] if arguments.lines else []:
-            print(line, end="")
+    with path.open("rb") as file:
+        for line in tail(file, arguments.lines):
+            print(line.decode("utf-8", errors="replace"), end="")
         if not arguments.follow:
             return EXIT_OK
         try:
             while True:
                 line = file.readline()
                 if line:
-                    print(line, end="", flush=True)
+                    print(line.decode("utf-8", errors="replace"), end="", flush=True)
                 else:
                     time.sleep(0.5)
         except KeyboardInterrupt:

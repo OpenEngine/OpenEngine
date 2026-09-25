@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.error import URLError
 
 from engine.apps.cli import __main__ as cli
+from engine.apps.cli import daemon
 
 
 class _Response:
@@ -53,7 +54,7 @@ class _ContentThenDoneResponse:
 
 
 def test_status_json_identifies_a_ready_compatible_service(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _Response({
+    monkeypatch.setattr(daemon, "urlopen", lambda *_args, **_kwargs: _Response({
         "service": "openengine", "version": "1.2.3", "ready": True, "api_version": 1,
     }))
 
@@ -68,7 +69,7 @@ def test_status_json_identifies_a_ready_compatible_service(monkeypatch, capsys):
 
 
 def test_status_rejects_an_occupied_port_that_is_not_openengine(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: _Response({"service": "other"}))
+    monkeypatch.setattr(daemon, "urlopen", lambda *_args, **_kwargs: _Response({"service": "other"}))
 
     assert cli.main(["status", "--server", "http://127.0.0.1:4364"]) == 1
 
@@ -76,7 +77,7 @@ def test_status_rejects_an_occupied_port_that_is_not_openengine(monkeypatch, cap
 
 
 def test_status_reports_a_remote_connection_failure(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("unreachable")))
+    monkeypatch.setattr(daemon, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("unreachable")))
 
     assert cli.main(["status", "--json", "--server", "https://example.invalid"]) == 1
 
@@ -447,6 +448,7 @@ def test_doctor_reports_prerequisites_and_keeps_a_stable_exit_code(monkeypatch, 
         return _Response({"service": "openengine", "version": "1.2.3", "ready": True, "api_version": 1})
 
     monkeypatch.setattr(cli, "urlopen", response)
+    monkeypatch.setattr(daemon, "urlopen", response)
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/tools/{name}")
 
     assert cli.main(["doctor", "--json"]) == 0
