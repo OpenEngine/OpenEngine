@@ -13,9 +13,10 @@ from email.parser import BytesParser
 from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = ROOT / "packages/runtime/src/engine/runtime/default-engine.toml"
 
 
-def build(commit: str) -> Path:
+def build(commit: str, output: Path = ROOT / "dist") -> Path:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     version = project["project"]["version"]
     workspace = project["tool"]["uv"]["workspace"]
@@ -28,8 +29,7 @@ def build(commit: str) -> Path:
         for p in sources
     }
     subprocess.run(["npm", "--prefix", "apps/web", "run", "build"], cwd=ROOT, check=True)
-    output = ROOT / "dist"
-    output.mkdir(exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
         bundle = Path(temporary) / f"openengine-{version}"
         wheels = bundle / "wheels"
@@ -58,13 +58,30 @@ def build(commit: str) -> Path:
         shutil.copytree(ROOT / "workflows", bundle / "workflows", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         for name in ("LICENSE", "NOTICE"):
             shutil.copy2(ROOT / name, bundle / name)
+        shutil.copy2(DEFAULT_CONFIG, bundle / "engine.toml")
+        # Every third-party dependency pinned by hash, so an install resolves
+        # nothing. The first-party wheels are listed by hash too: in
+        # --require-hashes mode a wheel named on the command line is refused.
+        requirements = bundle / "requirements.txt"
+        subprocess.run(
+            ["uv", "export", "--frozen", "--all-packages", "--no-emit-workspace",
+             "--no-dev", "--no-emit-package", "langgraph-acp", "--no-header",
+             "--output-file", str(requirements)],
+            cwd=ROOT,
+            check=True,
+        )
+        with requirements.open("a") as pins:
+            for name, distribution in sorted(distributions.items()):
+                digest = hashlib.sha256((bundle / distribution["wheel"]).read_bytes()).hexdigest()
+                pins.write(f"{name} @ ./{distribution['wheel']} \\\n    --hash=sha256:{digest}\n")
         files = [
             {"path": str(p.relative_to(bundle)), "size": p.stat().st_size,
              "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
             for p in sorted(bundle.rglob("*")) if p.is_file()
         ]
         manifest = {"schema_version": 1, "version": version, "commit": commit,
-                    "distributions": distributions, "files": files}
+                    "distributions": distributions, "requirements": "requirements.txt",
+                    "config": "engine.toml", "files": files}
         (bundle / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         archive_path = output / f"openengine-{version}.tar.gz"
         with tarfile.open(archive_path, "w:gz") as archive:

@@ -18,6 +18,8 @@ from engine.ports.permissions import ApprovalCapability
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
+DEFAULT_CONFIG_TEMPLATE = Path(__file__).with_name("default-engine.toml")
+"""A distributable `engine.toml`: loopback only, nothing machine-specific."""
 
 
 class EngineConfigError(ValueError):
@@ -47,6 +49,27 @@ class WorkflowsConfig:
     """Where trusted repository-owned Python workflow definitions live."""
 
     directory: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ServerConfig:
+    """Where the web interface listens."""
+
+    host: str = "localhost"
+    port: int = 4364
+
+
+@dataclass(frozen=True, slots=True)
+class StateConfig:
+    """Where the web interface keeps its databases.
+
+    `directory` resolves against the configuration file's directory, and the
+    two paths inside it against `directory`, so one setting moves them all.
+    """
+
+    directory: str = "."
+    sqlite_path: str = "conversations.sqlite3"
+    graph_state_directory: str = "graph-state"
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +171,8 @@ class EngineConfig:
     github_login_redirect_uri: str = ""
     github_token: str = ""
     public_url: str = ""
+    server: ServerConfig = ServerConfig()
+    state: StateConfig = StateConfig()
     github: GitHubConfig = GitHubConfig()
     access: AccessConfig = AccessConfig()
     communications: CommunicationsConfig = CommunicationsConfig()
@@ -247,6 +272,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "public_url",
             "show_projects",
             "repos",
+            "server",
+            "state",
             "work_orders",
             "workflows",
         },
@@ -281,6 +308,30 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     access = _table(document.get("access", {}), "access")
     _reject_unknown(access, {"operators"}, "access")
     operators = _user_ids(access.get("operators", ()), "access.operators")
+
+    server = _table(document.get("server", {}), "server")
+    _reject_unknown(server, {"host", "port"}, "server")
+    server_host = _nonblank_string(server.get("host", "localhost"), "server.host")
+    server_port = server.get("port", 4364)
+    if (
+        not isinstance(server_port, int)
+        or isinstance(server_port, bool)
+        or not 0 <= server_port <= 65535
+    ):
+        raise EngineConfigError("server.port must be an integer from 0 to 65535")
+
+    state = _table(document.get("state", {}), "state")
+    _reject_unknown(state, {"directory", "sqlite_path", "graph_state_directory"}, "state")
+    state_config = StateConfig(
+        directory=_nonblank_string(state.get("directory", "."), "state.directory"),
+        sqlite_path=_nonblank_string(
+            state.get("sqlite_path", "conversations.sqlite3"), "state.sqlite_path"
+        ),
+        graph_state_directory=_nonblank_string(
+            state.get("graph_state_directory", "graph-state"),
+            "state.graph_state_directory",
+        ),
+    )
 
     communications = _table(document.get("communications", {}), "communications")
     _reject_unknown(communications, {"channel", "provider"}, "communications")
@@ -386,6 +437,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
+        server=ServerConfig(host=server_host, port=server_port),
+        state=state_config,
         github=GitHubConfig(
             repository=github_repository,
             host_aliases={
@@ -564,11 +617,14 @@ __all__ = [
     "CONFIG_ENVIRONMENT_VARIABLE",
     "ClaudeConfig",
     "DEFAULT_CONFIG_NAME",
+    "DEFAULT_CONFIG_TEMPLATE",
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
     "LoadedEngineConfig",
     "ResponseStyle",
+    "ServerConfig",
+    "StateConfig",
     "WorkOrdersConfig",
     "WorkflowsConfig",
     "describe_loaded_config",

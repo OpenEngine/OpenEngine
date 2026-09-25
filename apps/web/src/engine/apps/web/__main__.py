@@ -98,12 +98,47 @@ def report_wiring(settings: Settings) -> None:
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
+def _port(loaded: LoadedEngineConfig) -> int:
+    configured = os.environ.get("ENGINE_PORT")
+    if configured is None:
+        return loaded.config.server.port
+    try:
+        port = int(configured)
+    except ValueError:
+        port = -1
+    if not 0 <= port <= 65535:
+        raise EngineConfigError("ENGINE_PORT must be an integer from 0 to 65535")
+    return port
+
+
+def _state_paths(loaded: LoadedEngineConfig) -> tuple[str, str]:
+    """The conversation database and graph state folder, as absolute paths.
+
+    The state directory resolves against the configuration file's directory,
+    like every other path in it, and both locations resolve inside that.
+    """
+
+    state = loaded.config.state
+    base = loaded.path.parent if loaded.path else Path.cwd()
+    directory = base / os.environ.get("ENGINE_STATE_DIRECTORY", state.directory)
+    sqlite_path = directory / os.environ.get("ENGINE_SQLITE_PATH", state.sqlite_path)
+    graph_state = directory / os.environ.get(
+        "ENGINE_GRAPH_STATE_DIRECTORY", state.graph_state_directory
+    )
+    return str(sqlite_path), str(graph_state)
+
+
 def _settings(loaded: LoadedEngineConfig) -> Settings:
     """Apply deployment overrides to the immutable TOML configuration."""
 
+    sqlite_path, graph_state_directory = _state_paths(loaded)
     return Settings(
         engine_config=loaded.config,
         config_path=loaded.path,
+        host=os.environ.get("ENGINE_HOST", loaded.config.server.host),
+        port=_port(loaded),
+        sqlite_path=sqlite_path,
+        graph_state_directory=graph_state_directory,
         github_client_id=os.environ.get(
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),

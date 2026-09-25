@@ -558,3 +558,93 @@ def test_web_starts_login_with_only_operators(tmp_path, monkeypatch):
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "https://engine.test/api/auth/github/callback")
 
     assert web_main._github_login_config(load_engine_config(path)) is not None
+
+
+
+def test_web_bind_address_and_state_paths_default_to_the_source_checkout_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "ENGINE_HOST", "ENGINE_PORT", "ENGINE_STATE_DIRECTORY",
+        "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    settings = web_main._settings(load_engine_config(environ={}, cwd=tmp_path))
+
+    assert (settings.host, settings.port) == ("localhost", 4364)
+    assert Path(settings.sqlite_path) == tmp_path / "conversations.sqlite3"
+    assert Path(settings.graph_state_directory) == tmp_path / "graph-state"
+
+
+def test_web_state_paths_resolve_against_the_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "ENGINE_HOST", "ENGINE_PORT", "ENGINE_STATE_DIRECTORY",
+        "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config = tmp_path / "etc" / "engine.toml"
+    config.parent.mkdir()
+    config.write_text(
+        '[server]\nhost = "127.0.0.1"\nport = 5000\n'
+        '[state]\ndirectory = "state"\nsqlite_path = "chat.db"\n'
+        'graph_state_directory = "graphs"\n'
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    settings = web_main._settings(load_engine_config(config))
+
+    assert (settings.host, settings.port) == ("127.0.0.1", 5000)
+    assert Path(settings.sqlite_path) == config.parent / "state" / "chat.db"
+    assert Path(settings.graph_state_directory) == config.parent / "state" / "graphs"
+
+    monkeypatch.setenv("ENGINE_HOST", "0.0.0.0")
+    monkeypatch.setenv("ENGINE_PORT", "6000")
+    monkeypatch.setenv("ENGINE_STATE_DIRECTORY", str(tmp_path / "var"))
+    monkeypatch.setenv("ENGINE_SQLITE_PATH", "other.db")
+    settings = web_main._settings(load_engine_config(config))
+
+    assert (settings.host, settings.port) == ("0.0.0.0", 6000)
+    assert Path(settings.sqlite_path) == tmp_path / "var" / "other.db"
+    assert Path(settings.graph_state_directory) == tmp_path / "var" / "graphs"
+
+    monkeypatch.setenv("ENGINE_PORT", "http")
+    with pytest.raises(EngineConfigError, match="ENGINE_PORT"):
+        web_main._settings(load_engine_config(config))
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ({"server": {"port": "4364"}}, "server.port"),
+        ({"server": {"port": 70000}}, "server.port"),
+        ({"server": {"host": " "}}, "server.host"),
+        ({"server": {"address": "x"}}, "unknown key in server"),
+        ({"state": {"directory": ""}}, "state.directory"),
+        ({"state": {"path": "x"}}, "unknown key in state"),
+    ],
+)
+def test_server_and_state_settings_are_validated(document, message) -> None:
+    with pytest.raises(EngineConfigError, match=message):
+        parse_engine_config(document)
+
+
+def test_the_distributable_default_config_is_loopback_and_machine_neutral() -> None:
+    from engine.runtime.config import DEFAULT_CONFIG_TEMPLATE
+
+    loaded = load_engine_config(DEFAULT_CONFIG_TEMPLATE)
+    config = loaded.config
+
+    assert config.server.host == "127.0.0.1"
+    assert config.public_url == ""
+    assert config.repos == {}
+    assert config.github.repository == ""
+    assert config.communications.channel == ""
+    assert config.communications.provider == "slack"
+    assert config.workflows.directory == "workflows"
+    assert "[orchestrator]" not in DEFAULT_CONFIG_TEMPLATE.read_text()
