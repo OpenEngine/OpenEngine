@@ -10,6 +10,7 @@ which constructs the same application again in every fresh child process.
 
 import argparse
 import os
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -43,6 +44,7 @@ from engine.runtime import (
     load_workflow_catalog,
     WorkflowLoadError,
 )
+from engine.runtime.change_requests import remote_project
 
 #: Vite's production output, served by the same process as the API.
 STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
@@ -143,13 +145,45 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
         config = GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
     except ValueError as error:
         raise EngineConfigError(str(error)) from error
-    if not loaded.config.github.repository:
-        # Sessions go only to accounts that can write to this repository, so
-        # without one every login would be refused as if the user lacked access.
+    if not (
+        loaded.config.github.repository
+        or _login_repositories(loaded)
+        or loaded.config.access.operators
+    ):
+        # Sessions go only to operators and accounts that can write to one of
+        # these repositories, so without any every login would be refused as
+        # if the user lacked access.
         raise EngineConfigError(
-            "GitHub login requires [github] repository to check write access against"
+            "GitHub login requires [github] repository, a GitHub checkout in [repos], "
+            "or [access] operators to decide who may sign in"
         )
     return config
+
+
+def _login_repositories(loaded: LoadedEngineConfig) -> tuple[str, ...]:
+    """The GitHub repositories behind the `[repos]` checkouts, keyed `owner/name`.
+
+    Read from each checkout's `origin` remote, because `[repos]` names a local
+    path. A checkout on another forge, or one whose remote cannot be read, is
+    left out: its permissions are not something GitHub can answer.
+    """
+    hosts = set(loaded.config.github.host_aliases)
+    projects: list[str] = []
+    for path in loaded.config.repos.values():
+        try:
+            remote = subprocess.run(
+                ["git", "-C", str(Path(path).expanduser()), "remote", "get-url", "origin"],
+                capture_output=True, text=True, timeout=10, check=True,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        project = remote_project(remote)
+        if project is None:
+            continue
+        host, _, rest = project.partition("/")
+        if "/" not in rest or host in hosts:
+            projects.append(project)
+    return tuple(dict.fromkeys(projects))
 
 
 def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
@@ -248,6 +282,8 @@ def compose_app(
         work_orders=loaded.config.work_orders,
         show_projects=loaded.config.show_projects,
         repos=loaded.config.repos,
+        login_repositories=_login_repositories(loaded) if github_login_config else (),
+        login_operators=loaded.config.access.operators,
     )
 
 

@@ -756,7 +756,7 @@ def test_browser_users_have_isolated_credentials_and_device_flows(tmp_path, monk
     GitHubCredentialStore().set("legacy-personal-token")
     config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback")
     login = GitHubLogin(config)
-    monkeypatch.setattr("engine.apps.web.api.GitHubLogin", lambda *_: login)
+    monkeypatch.setattr("engine.apps.web.api.GitHubLogin", lambda *_, **__: login)
     app = _make_github_app(tmp_path, client_id="", login_config=config)
     start = AsyncMock(side_effect=[
         DeviceFlowState("alice-device", "alice-code", "https://github.com/login/device", 900, 5),

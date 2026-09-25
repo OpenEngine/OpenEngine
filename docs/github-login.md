@@ -41,15 +41,44 @@ session status every 30 seconds and unmounts the app if the session is invalid.
 A GitHub account alone does not open the app: WorkOrder links are posted to
 GitHub issues, which anyone can read. At the callback, the server asks GitHub
 whether the signed-in account has write access (write, maintain, or admin) to
-the `[github] repository` named in `engine.toml`, counting team and
-organization grants. The check uses the server's own `gh` login, not the
-user's token. An account without write access is sent to
-`/login?error=forbidden` and receives no session. When the check fails or
-times out, login is refused with `/login?error=unverified`. Configuring GitHub
-login without a `[github] repository` is a configuration error: the server
-does not start.
-Access is checked at sign-in only, so revoking it takes effect when the
-session expires (24 hours) or the server restarts.
+any of this deployment's repositories: the `[github] repository` named in
+`engine.toml`, and the GitHub repository behind each `[repos]` checkout (read
+from its `origin` remote). Team and organization grants count. The check uses
+the server's own `gh` login, not the user's token, and binds GitHub's answer to
+the signed-in account's numeric user ID, so a renamed login cannot inherit
+another account's access. An account without write access is sent to
+`/login?error=forbidden` and receives no session. When no repository admits the
+account and a lookup failed or took longer than 10 seconds, login is refused
+with `/login?error=unverified`.
+
+Signed-in requests recheck access. `/api/auth/github/status` and protected API
+requests reuse GitHub's answer for up to five minutes per user, then ask
+again. When access has been revoked, the API answers 401 and the status
+endpoint clears the session. A failed lookup is not cached: that request,
+including the status check, gets 503, and the next request asks GitHub again.
+Responses that stay open, such as event streams, recheck every 30 seconds and
+end when access is revoked or can no longer be confirmed.
+
+### Operators
+
+`[access] operators` lists GitHub user IDs that sign in without a repository
+check:
+
+```toml
+[access]
+operators = [583231]
+```
+
+Use numeric IDs, not logins, because a login can be renamed and then claimed
+by someone else. Find an account's ID with `gh api users/<login> --jq .id`.
+Operators can let in a new person before that person has write access
+anywhere. Operators can also sign in when the server's `gh` login has expired.
+While access checks are failing, operators see a warning beside the Sign out
+button. Run `gh auth status` on the server to diagnose the failure.
+
+Configuring GitHub login with no `[github] repository`, no GitHub checkout in
+`[repos]`, and no operators is a configuration error, and the server does not
+start.
 
 ## Service token for the MCP gateway
 

@@ -203,7 +203,9 @@ class GitHubSourceControl:
         )
         return url
 
-    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+    async def can_write_repository(
+        self, pr_url: str, username: str, *, user_id: int | None = None
+    ) -> bool:
         """Check effective access, including team and organization grants."""
         owner, repo, _ = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
         response = await self._api(
@@ -211,7 +213,12 @@ class GitHubSourceControl:
         )
         # GitHub maps maintain to write and triage to read, including custom
         # roles' base permissions. Unknown/missing permissions never grant access.
-        return response.get("permission") in ("write", "admin")
+        if response.get("permission") not in ("write", "admin"):
+            return False
+        if user_id is None:
+            return True
+        user = response.get("user")
+        return isinstance(user, dict) and type(user.get("id")) is int and user["id"] == user_id
 
     async def authenticated_login(self, repository_url: str) -> str:
         """Who this token posts as, so Engine can recognise its own comments.
