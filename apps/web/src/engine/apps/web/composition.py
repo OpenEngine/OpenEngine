@@ -83,8 +83,8 @@ class Settings:
     """Everything the interface needs from the environment.
 
     `host` and `port` are handed to Uvicorn by `__main__`; the rest are adapter
-    arguments. Loading them from the environment lands with the deployment
-    ticket, along with the other two roots.
+    arguments. `__main__` fills the bind address and state paths from
+    `engine.toml`, overridden by `ENGINE_*` environment variables.
 
     Frozen so one immutable settings value can be shared by the server wiring.
     """
@@ -247,6 +247,7 @@ def build_capabilities(
             github,
             gitlab,
         )
+    Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=source_control,
