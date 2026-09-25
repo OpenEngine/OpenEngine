@@ -23,7 +23,8 @@ hash-locked `requirements.txt`, license notices, and the manifest.
 `uv.lock` and every first-party wheel in the bundle, each with its SHA-256. The web wheel includes the
 production React client and serves it when installed. The manifest records the
 source commit, package versions, the requirements and config files, and SHA-256
-and size of every payload file. It does not hash itself. Third-party packages are
+and size of every payload file. It does not hash itself. The copy attached to
+the release also records `archive_sha256`, the digest of the archive. Third-party packages are
 downloaded at installation time, but only at the pinned versions and hashes;
 this is not an offline dependency mirror.
 
@@ -33,6 +34,34 @@ To build locally with Python 3.11+, uv, and Node 22:
 npm --prefix apps/web ci
 python scripts/build_release.py --commit <source-commit-sha>
 ```
+
+## One-line install
+
+On macOS or Linux (x86_64 or arm64), with only `curl` and `tar`:
+
+```sh
+curl -LsSf https://openengine.sh/install.sh | sh
+```
+
+`scripts/install.sh` is published on the site and attached to each release. It
+downloads a pinned uv into `~/.local/share/openengine/bin`, isolated from any
+uv configuration on the machine, fetches the latest release (or `--version
+X.Y.Z`), checks the archive against the `archive_sha256` in the published
+`release-manifest.json` before extracting it to `versions/<version>`, and
+installs it into a venv on uv's own Python 3.12 with `--require-hashes`. A
+`current` symlink points at that version and `~/.local/bin/openengine` runs
+it. `~/.config/openengine/engine.toml` is written from the bundled default,
+keeping state in `~/.local/state/openengine`, only when it does not already
+exist. The `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
+`XDG_CACHE_HOME`, and `XDG_BIN_HOME` directories are honoured, and `--prefix DIR`
+replaces the data directory. It then starts OpenEngine in the background and
+opens it in a browser; `--no-start` and `--no-browser` skip those. Running it
+again reuses an installed version and never touches the config or state. The
+release workflow runs it on clean Ubuntu and macOS runners against the bundle it
+just built (`OPENENGINE_RELEASE_URL` names that directory) and checks
+`/api/health`.
+
+## Manual install
 
 To install from the extracted bundle directory:
 

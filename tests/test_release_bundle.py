@@ -1,5 +1,6 @@
 """An installed release runs with no source checkout anywhere in sight."""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -47,6 +48,9 @@ def test_installed_bundle_serves_health_from_outside_a_checkout(tmp_path: Path) 
     (bundle,) = (tmp_path / "release").iterdir()
 
     manifest = json.loads((bundle / "release-manifest.json").read_text())
+    published = json.loads((archive.parent / "release-manifest.json").read_text())
+    assert published.pop("archive_sha256") == hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert published == manifest
     assert manifest["requirements"] == "requirements.txt"
     assert manifest["config"] == "engine.toml"
     recorded = {entry["path"] for entry in manifest["files"]}
