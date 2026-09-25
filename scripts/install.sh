@@ -201,6 +201,11 @@ EOF
   mv -f "$work/shim" "$1"
 }
 write_shim "$engine_shim" engine
+# Remove the launcher left by older installers, but keep unrelated commands.
+legacy_shim="$bin_dir/openengine"
+if [ -f "$legacy_shim" ] && grep -q '^# Written by the OpenEngine installer' "$legacy_shim"; then
+  rm -f "$legacy_shim"
+fi
 
 # The state directory holds conversations, graph state and logs: owner-only,
 # including one an earlier run or a source checkout created world-readable.

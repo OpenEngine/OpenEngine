@@ -13,6 +13,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class InstallerTests(unittest.TestCase):
     def test_engine_is_the_only_installed_launcher(self):
+        self.check_installed_launchers()
+
+    def test_upgrade_removes_installer_owned_openengine(self):
+        self.check_installed_launchers(
+            '#!/bin/sh\n# Written by the OpenEngine installer; rerunning it rewrites this file.\n'
+            'exec /old/release/venv/bin/engine-web "$@"\n'
+        )
+
+    def test_upgrade_preserves_unrelated_openengine(self):
+        self.check_installed_launchers('#!/bin/sh\necho unrelated\n', preserve_legacy=True)
+
+    def check_installed_launchers(self, legacy_content=None, *, preserve_legacy=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prefix = root / "release with ' quotes"
@@ -38,6 +50,10 @@ class InstallerTests(unittest.TestCase):
             ))
             bin_dir = root / "bin"
             bin_dir.mkdir()
+            legacy_shim = bin_dir / "openengine"
+            if legacy_content is not None:
+                legacy_shim.write_text(legacy_content)
+                legacy_shim.chmod(0o755)
             environment = {
                 **os.environ,
                 "HOME": str(root),
@@ -50,7 +66,7 @@ class InstallerTests(unittest.TestCase):
                 "UV_VERSION": "0.0.0",
             }
             environment.pop("ENGINE_CONFIG", None)
-            # A second install must preserve the same single launcher.
+            # A second install must preserve the expected launchers.
             for _ in range(2):
                 installed = subprocess.run(
                     ["sh", str(ROOT / "scripts/install.sh"), "--prefix", str(prefix), "--no-start"],
@@ -64,4 +80,7 @@ class InstallerTests(unittest.TestCase):
                 assert result.stdout.splitlines() == [
                     str(root / "config/openengine/engine.toml"), "argument with spaces", "--json",
                 ]
-                self.assertEqual([path.name for path in bin_dir.iterdir()], ["engine"])
+                expected_launchers = ["engine", "openengine"] if preserve_legacy else ["engine"]
+                self.assertEqual(sorted(path.name for path in bin_dir.iterdir()), expected_launchers)
+                if preserve_legacy:
+                    self.assertEqual(legacy_shim.read_text(), legacy_content)
