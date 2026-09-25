@@ -530,6 +530,14 @@ class StdioACPClient:
         rendered = f"the agent refused {method}: {exc.message} (code {exc.code})"
         if exc.data is not None:
             rendered += f"; data: {_capped(json.dumps(exc.data))}"
+        if isinstance(exc.data, Mapping) and exc.data.get("errorKind") == "rate_limit":
+            rendered += (
+                "; the provider reported a usage limit for this agent's credentials. "
+                "If you switched accounts, check the credentials and environment of "
+                "the process hosting the agent: a login in another terminal does not "
+                "update its inherited environment. Restart the host with the intended "
+                "credentials before retrying, or wait for the provider's reset"
+            )
         tail = self._stderr_tail()
         if not tail:
             return rendered
