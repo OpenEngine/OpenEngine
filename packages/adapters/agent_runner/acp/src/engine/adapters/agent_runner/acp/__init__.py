@@ -134,6 +134,7 @@ FINISH_REASONS: Mapping[str, FinishReason] = {
 
 #: ACP tool kinds that change files, and the names a Codex call is recorded by.
 FILE_KINDS = frozenset({"edit", "delete", "move"})
+READ_KINDS = frozenset({"read", "search"})
 TOOL_NAMES: Mapping[str, str] = {
     "execute": "command_execution",
     "edit": "file_change",
@@ -709,8 +710,14 @@ class _Turn:
         if isinstance(call_id, str) and call_id in self._calls:
             streamed = self._calls[call_id]
             call = {**streamed, **call}
-            if call.get("kind") == "other" and streamed.get("kind"):
+            if call.get("kind") == "other" and streamed.get("kind") not in (
+                None,
+                *READ_KINDS,
+            ):
                 # OpenCode asks with `other` for every tool; its stream says which.
+                # Except a read: OpenCode reads unasked, so a read that asks is
+                # outside the workspace or into a secret, and must not be
+                # classified as the read that policy lets through.
                 call["kind"] = streamed["kind"]
         return call
 
@@ -984,6 +991,11 @@ def claude_acp_runner(
     )
 
 
+#: OpenCode's primary agent, which an ACP session runs, and the subagents its
+#: `task` tool starts.
+OPENCODE_SESSION_AGENTS = ("build", "general", "explore")
+
+
 def opencode_acp_runner(
     *,
     command: Sequence[str] = OPENCODE_ACP_COMMAND,
@@ -995,30 +1007,55 @@ def opencode_acp_runner(
     attribution: bool = True,
     env: Mapping[str, str] | None = None,
 ) -> ACPAgentRunner:
-    """OpenCode, through `opencode acp`, asking before it changes anything.
+    """OpenCode, through `opencode acp`, asking before it does anything but read.
 
     OpenCode lets its tools run unasked by default, so a request would never
     reach Engine. `OPENCODE_CONFIG_CONTENT`, which OpenCode merges over the
-    operator's own configuration, sets every permission that changes something
-    to `ask` -- or, for `read_only`, to `deny`, so only reading is left, as
-    `READ_ONLY_TOOLS` leaves Claude. Attribution reaches OpenCode as an instructions file, the only way it
+    operator's own configuration, sets every permission to `ask` -- or, for
+    `read_only`, to `deny` -- and then lets reading inside the workspace back
+    in, as `READ_ONLY_TOOLS` leaves Claude. `*` comes first because OpenCode
+    takes the last rule that matches, and it covers what is not named here:
+    web search, MCP tools, skills. The same rules are pinned on the agents a
+    session runs, since an agent's own `permission` is applied after these.
+
+    The repository under work is not trusted to configure its own agent:
+    `OPENCODE_DISABLE_PROJECT_CONFIG` keeps OpenCode from loading the
+    worktree's `opencode.json` and `.opencode/` agents, plugins and MCP servers.
+
+    Attribution reaches OpenCode as an instructions file, the only way it
     takes instructions from configuration.
     """
     unasked = "deny" if read_only else "ask"
+    permission = {
+        "*": unasked,
+        # OpenCode's own `read` rules: `.env` files are asked about.
+        "read": {
+            "*": "allow",
+            "*.env": unasked,
+            "*.env.*": unasked,
+            "*.env.example": "allow",
+        },
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "external_directory": unasked,
+    }
     config: dict[str, Any] = {
-        "permission": {
-            "edit": unasked,
-            "bash": unasked,
-            "webfetch": unasked,
-            "external_directory": "ask",
-        }
+        "permission": permission,
+        "agent": {
+            name: {"permission": permission} for name in OPENCODE_SESSION_AGENTS
+        },
     }
     if not attribution:
         config["instructions"] = [_no_attribution_instructions()]
     return ACPAgentRunner(
         OpenCodeACPProvider(
             command=command,
-            env={**(env or {}), "OPENCODE_CONFIG_CONTENT": json.dumps(config)},
+            env={
+                **(env or {}),
+                "OPENCODE_CONFIG_CONTENT": json.dumps(config),
+                "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+            },
         ),
         working_directory=working_directory,
         model=model,

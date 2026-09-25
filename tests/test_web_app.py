@@ -290,9 +290,8 @@ def test_interactive_runners_may_do_what_the_user_approves() -> None:
     assert options["allowedTools"] == ["Read", "Glob", "Grep"]
     assert "tools" not in options
     # OpenCode: asks before any change, where by default it would not.
-    assert _opencode_permissions(runners["opencode"]) == {
-        "edit": "ask", "bash": "ask", "webfetch": "ask", "external_directory": "ask",
-    }
+    permissions = _opencode_permissions(runners["opencode"])
+    assert permissions["*"] == permissions["external_directory"] == "ask"
 
 
 def _opencode_permissions(runner: ACPAgentRunner) -> dict:
@@ -404,9 +403,8 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
     assert codex.provider.env["INITIAL_AGENT_MODE"] == "read-only"
     assert codex.provider.env["ENGINE_CODEX_SANDBOX"] == "read-only"
     opencode = session.runner_for(PLANNER.agent_id, "opencode")
-    assert _opencode_permissions(opencode) == {
-        "edit": "deny", "bash": "deny", "webfetch": "deny", "external_directory": "ask",
-    }
+    permissions = _opencode_permissions(opencode)
+    assert permissions["*"] == permissions["external_directory"] == "deny"
 
 
 def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:
