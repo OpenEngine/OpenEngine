@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/OpenEngine/OpenEngine/compare/v0.3.0...v0.4.0) (2026-09-25)
+
+
+### Features
+
+* post WorkOrder progress as comments on the originating GitHub issue ([#559](https://github.com/OpenEngine/OpenEngine/issues/559)) ([8aa9da9](https://github.com/OpenEngine/OpenEngine/commit/8aa9da9eca5e69b8a0102afbbdf1c3a007124932))
+
 ## [0.3.0](https://github.com/OpenEngine/OpenEngine/compare/v0.2.0...v0.3.0) (2026-09-25)
 
 
