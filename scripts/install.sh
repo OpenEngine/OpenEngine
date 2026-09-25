@@ -92,6 +92,7 @@ cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/openengine
 bin_dir=${XDG_BIN_HOME:-$HOME/.local/bin}
 config="$config_dir/engine.toml"
 shim="$bin_dir/openengine"
+engine_shim="$bin_dir/engine"
 
 mkdir -p "$prefix/bin" "$prefix/versions"
 prefix=$(cd "$prefix" && pwd -P)
@@ -185,18 +186,24 @@ ln -sfn "versions/$release" "$prefix/current"
 # The shim: single-quoted paths, with any quote in them closed and escaped.
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 mkdir -p "$bin_dir"
-if [ -e "$shim" ] && ! grep -q '^# Written by the OpenEngine installer' "$shim"; then
-  die "$shim exists and was not written by this installer; move it aside and rerun"
-fi
-cat >"$work/shim" <<EOF
+# `openengine` runs the web service in the foreground; `engine` is the terminal
+# client, and `engine daemon` runs that service in the background.
+write_shim() {
+  if [ -e "$1" ] && ! grep -q '^# Written by the OpenEngine installer' "$1"; then
+    die "$1 exists and was not written by this installer; move it aside and rerun"
+  fi
+  cat >"$work/shim" <<EOF
 #!/bin/sh
 # Written by the OpenEngine installer; rerunning it rewrites this file.
 if [ -z "\${ENGINE_CONFIG:-}" ]; then ENGINE_CONFIG=$(shell_quote "$config"); fi
 export ENGINE_CONFIG
-exec $(shell_quote "$prefix/current/venv/bin/engine-web") "\$@"
+exec $(shell_quote "$prefix/current/venv/bin/$2") "\$@"
 EOF
-chmod 755 "$work/shim"
-mv -f "$work/shim" "$shim"
+  chmod 755 "$work/shim"
+  mv -f "$work/shim" "$1"
+}
+write_shim "$shim" engine-web
+write_shim "$engine_shim" engine
 
 # The state directory holds conversations, graph state and logs: owner-only,
 # including one an earlier run or a source checkout created world-readable.
@@ -225,45 +232,15 @@ fi
 say "installed OpenEngine $release: $shim"
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
-  *) warn "$bin_dir is not on PATH; add it to your shell profile to run openengine" ;;
+  *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine and openengine" ;;
 esac
 
 [ "$start" = 1 ] || exit 0
-port=${ENGINE_PORT:-$(sed -n 's/^port[ \t]*=[ \t]*\([0-9][0-9]*\).*/\1/p' "$config" | head -n 1)}
-url="http://127.0.0.1:${port:-4364}"
-if curl --fail --silent --output /dev/null "$url/api/health"; then
-  say "OpenEngine is already running at $url; restart it if it predates this install"
-else
-  log="$state_dir/openengine.log"
-  say "starting OpenEngine (log: $log)"
-  # umask 077: the log and anything the server creates stay owner-only.
-  (umask 077 && exec nohup "$shim" </dev/null >>"$log" 2>&1) &
-  server=$!
-  tries=0
-  until curl --fail --silent --output /dev/null "$url/api/health"; do
-    if ! kill -0 "$server" 2>/dev/null || [ "$tries" -ge 60 ]; then
-      # Every step execs, so $server is engine-web itself: stop it rather
-      # than leave it holding the port after a failed install.
-      if kill "$server" 2>/dev/null; then
-        tries=0
-        while kill -0 "$server" 2>/dev/null && [ "$tries" -lt 10 ]; do
-          tries=$((tries + 1))
-          sleep 1
-        done
-        kill -9 "$server" 2>/dev/null || true
-        wait "$server" 2>/dev/null || true
-      fi
-      tail -n 20 "$log" >&2 || true
-      die "OpenEngine did not start; see $log"
-    fi
-    tries=$((tries + 1))
-    sleep 1
-  done
-  say "OpenEngine is running at $url"
-fi
-if [ "$browser" = 1 ]; then
-  case $platform in
-    apple-darwin) open "$url" >/dev/null 2>&1 || true ;;
-    *) if command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 || true; fi ;;
-  esac
+# Registers a LaunchAgent (macOS) or systemd user unit (Linux), or runs a
+# detached process where neither is usable, then waits for /api/health. Run
+# again after an upgrade, it moves the service onto the new version.
+if [ "$browser" = 1 ]; then set -- daemon setup; else set -- daemon setup --no-browser; fi
+if ! "$engine_shim" "$@"; then
+  "$engine_shim" daemon logs -n 20 >&2 || true
+  die "OpenEngine did not start; see $state_dir/logs"
 fi

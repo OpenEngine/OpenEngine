@@ -28,6 +28,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from platformdirs import user_config_path, user_data_path, user_state_path
 
+from engine.apps.cli import daemon
+
 DEFAULT_SERVER = "http://127.0.0.1:4364"
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CLI_CONFIG"
 STATE_ENVIRONMENT_VARIABLE = "ENGINE_CLI_STATE_DIR"
@@ -1177,6 +1179,7 @@ def parser() -> argparse.ArgumentParser:
         connection.add_argument("--server", metavar="URL")
         connection.add_argument("--origin", default="https://gitlab.com")
         connection.add_argument("--open", action="store_true")
+    daemon.add_parser(commands)
     repo_command = commands.add_parser("repo", help="select a service repository for new tasks")
     repo_command.add_argument("repository")
     repo_command.add_argument("--server", metavar="URL")
@@ -1225,6 +1228,8 @@ def main(argv: list[str] | None = None) -> int:
         return connect(arguments, preferences)
     if arguments.command == "repo":
         return repo(arguments, preferences)
+    if arguments.command == "daemon":
+        return daemon.main(arguments)
     if arguments.command == "config" and arguments.config_command == "server":
         return configure_server(arguments, preferences)
     if arguments.command == "config" and arguments.config_command == "profile":

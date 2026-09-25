@@ -100,13 +100,26 @@ jobs:
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
         run: sh scripts/install.sh --no-browser
-      - name: openengine is on PATH and healthy
+      - name: openengine and engine are on PATH and healthy
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
           command -v openengine
+          command -v engine
           status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4364/api/health)
-          [ "$status" = 200 ] || { cat "$HOME/.local/state/openengine/openengine.log"; exit 1; }
+          [ "$status" = 200 ] || { engine daemon logs; exit 1; }
+      # Setup again (as an upgrade would), then the background service's
+      # status and a graceful stop that leaves nothing answering.
+      - name: engine daemon setup, status and stop
+        run: |
+          set -eu
+          export PATH="$HOME/.local/bin:$PATH"
+          engine daemon setup --no-browser || { engine daemon logs; exit 1; }
+          engine daemon status
+          engine daemon doctor || true
+          engine daemon stop
+          if engine daemon status; then exit 1; fi
+          if curl --silent --output /dev/null http://127.0.0.1:4364/api/health; then exit 1; fi
       - name: Running it again keeps the config
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
