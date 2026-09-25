@@ -99,8 +99,11 @@ work=$(mktemp -d "$prefix/.install.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 trap 'exit 130' INT TERM
 
+# HTTPS only, redirects included, so no plain-HTTP hop can swap the manifest
+# and the archive it vouches for. file:// is for OPENENGINE_RELEASE_URL in CI.
 fetch() {
-  curl --fail --silent --show-error --location --retry 3 --output "$2" "$1" \
+  curl --proto '=https,file' --proto-redir '=https' --tlsv1.2 \
+    --fail --silent --show-error --location --retry 3 --output "$2" "$1" \
     || die "could not download $1"
 }
 
@@ -134,6 +137,10 @@ esac
 
 if [ -n "${OPENENGINE_RELEASE_URL:-}" ]; then
   release_url=${OPENENGINE_RELEASE_URL%/}
+  case $release_url in
+    https://* | file://*) ;;
+    *) die "OPENENGINE_RELEASE_URL must start with https:// or file://" ;;
+  esac
 elif [ -n "$version" ]; then
   release_url="https://github.com/$REPOSITORY/releases/download/v$version"
 else
