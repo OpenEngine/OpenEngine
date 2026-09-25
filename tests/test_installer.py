@@ -58,10 +58,11 @@ class InstallerTests(unittest.TestCase):
                 environment.pop("ENGINE_CONFIG", None)
                 # A second install must preserve the same single launcher.
                 for _ in range(2):
-                    subprocess.run(
+                    installed = subprocess.run(
                         ["sh", str(ROOT / "scripts/install.sh"), "--prefix", str(prefix), "--no-start"],
-                        env=environment, check=True, capture_output=True, text=True,
+                        env=environment, capture_output=True, text=True,
                     )
+                    self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
                     result = subprocess.run(
                         [str(bin_dir / "engine"), "argument with spaces", "--json"],
                         env=environment, check=True, capture_output=True, text=True,
